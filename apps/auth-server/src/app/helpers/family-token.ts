@@ -3,7 +3,13 @@ import { ForbiddenError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
-import { API_FAMILY_AUDIENCES, type ApiFamily } from '../api-conventions/families';
+import {
+  API_FAMILY_AUDIENCES,
+  API_FAMILY_SCOPES,
+  type ApiFamily,
+  type FamilyOperationClass,
+  type ScopedApiFamily,
+} from '../api-conventions/families';
 import { accessTokenIssuedAt, accountCredentialRefusal } from './account-validity';
 import { isClientUsable } from './client-status';
 import { realmIssuer } from './realm-url';
@@ -61,8 +67,8 @@ export interface FamilyTokenOptions {
   /**
    * Scopes the token must carry, every one of them. A token that lacks one is
    * refused with 403 `forbidden`, and the `insufficient_scope` challenge names
-   * them all (RFC 6750 §3.1). The account and developer families define no
-   * scopes yet, so their routes pass none.
+   * them all (RFC 6750 §3.1). An account or developer route passes its
+   * class's scope through {@link familyOperation} (#933).
    */
   readonly requiredScopes?: readonly string[];
   /**
@@ -256,4 +262,70 @@ export function requireFamilyToken(
 
     request.jwtPayload = claims;
   };
+}
+
+/** What one account or developer operation needs, as its schema states it (#933). */
+export interface FamilyOperationAccess {
+  /** `x-qauth-class`: whether the operation reads or writes. */
+  readonly operationClass: FamilyOperationClass;
+  /** `x-qauth-permission`: the permission it needs, such as `clients.write`. */
+  readonly permission: string;
+}
+
+/** The guard of one account or developer operation and what its schema states. */
+export interface FamilyOperationGuard {
+  /** The family's token guard, requiring the scope of the operation's class. */
+  readonly guard: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  /** The scopes the guard requires: the family's scope of the operation's class. */
+  readonly requiredScopes: readonly string[];
+  /** The members of the route's schema that publish what the guard checks. */
+  readonly schema: {
+    readonly 'x-qauth-class': FamilyOperationClass;
+    readonly 'x-qauth-permission': string;
+  };
+}
+
+/** A permission id: dotted camelCase words, such as `clients.apiKeys.write`. */
+const FAMILY_PERMISSION_ID = /^[a-z][A-Za-z0-9]*(?:\.[a-z][A-Za-z0-9]*)+$/;
+
+/**
+ * The guard of one operation of the account or developer API (#933): the
+ * family's token guard ({@link requireFamilyToken}) requiring the family's
+ * scope of the operation's class (`API_FAMILY_SCOPES`), and the schema
+ * members that publish that class and the operation's permission. A route
+ * spreads both, so the scope the guard checks and the `x-qauth-class` and
+ * `x-qauth-permission` the OpenAPI document shows are one value.
+ *
+ * A permission is a read or a write permission, and needs the family's scope
+ * of that class: `clients.read` needs `qauth:developer:read`, `clients.write`
+ * and `clients.apiKeys.write` need `qauth:developer:write`. A token without it
+ * gets 403 `forbidden` with an `insufficient_scope` challenge naming the
+ * scope, so the route lists 403 in its `x-qauth-errors`.
+ *
+ * @throws {Error} at build time for a class that is not `read` or `write`, or
+ *   a permission that is not a dotted id
+ */
+export function familyOperation(
+  family: ScopedApiFamily,
+  access: FamilyOperationAccess,
+  options: Omit<FamilyTokenOptions, 'requiredScopes'>
+): FamilyOperationGuard {
+  const scopes = API_FAMILY_SCOPES[family];
+  if (scopes === undefined || !Object.hasOwn(scopes, access.operationClass)) {
+    throw new Error(
+      `familyOperation: ${String(access.operationClass)} is no class of an operation of the ${String(family)} API`
+    );
+  }
+  if (!FAMILY_PERMISSION_ID.test(access.permission)) {
+    throw new Error(`familyOperation: ${access.permission} is not a permission id`);
+  }
+  const requiredScopes = Object.freeze([scopes[access.operationClass]]);
+  return Object.freeze({
+    guard: requireFamilyToken(family, { ...options, requiredScopes }),
+    requiredScopes,
+    schema: Object.freeze({
+      'x-qauth-class': access.operationClass,
+      'x-qauth-permission': access.permission,
+    }),
+  });
 }

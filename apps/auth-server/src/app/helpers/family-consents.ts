@@ -20,7 +20,7 @@ import {
   pageConsentsForUser,
   revokeConsentForUser,
 } from './consent-management';
-import { requireFamilyToken } from './family-token';
+import { familyOperation } from './family-token';
 import { requestRealm } from './request-realm';
 
 /**
@@ -103,14 +103,26 @@ export function familyConsentRoutes(family: ConsentFamily): {
   list: RouteWithHandler<ConsentListRoute>;
   revoke: RouteWithHandler<ConsentRevokeRoute>;
 } {
-  const guard = requireFamilyToken(family, { subjects: ['user'] });
+  // Each operation needs the family's scope of its class (#933). The account
+  // API's route module replaces these with its operation guards, which check
+  // the same scopes and the contract's rules.
+  const read = familyOperation(
+    family,
+    { operationClass: 'read', permission: 'consents.read' },
+    { subjects: ['user'] }
+  );
+  const write = familyOperation(
+    family,
+    { operationClass: 'write', permission: 'consents.write' },
+    { subjects: ['user'] }
+  );
   const tags = [family === 'account' ? 'Account API' : 'Developer API'];
 
   return {
     list: {
       // Before validation, so a caller without a token for this family learns
       // nothing about what the route accepts.
-      preValidation: guard,
+      preValidation: read.guard,
       schema: {
         operationId: `${family}.consents.list`,
         description:
@@ -118,9 +130,8 @@ export function familyConsentRoutes(family: ConsentFamily): {
         tags,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'read',
-        'x-qauth-permission': 'consents.read',
-        'x-qauth-errors': [400, 401],
+        ...read.schema,
+        'x-qauth-errors': [400, 401, 403],
         querystring: pageQuerySchema,
         response: { 200: pageSchema(familyConsentSchema) },
       },
@@ -139,7 +150,7 @@ export function familyConsentRoutes(family: ConsentFamily): {
       },
     },
     revoke: {
-      preValidation: guard,
+      preValidation: write.guard,
       schema: {
         operationId: `${family}.consents.delete`,
         description:
@@ -147,9 +158,8 @@ export function familyConsentRoutes(family: ConsentFamily): {
         tags,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'write',
-        'x-qauth-permission': 'consents.write',
-        'x-qauth-errors': [400, 401, 404],
+        ...write.schema,
+        'x-qauth-errors': [400, 401, 403, 404],
         params: consentParamsSchema,
         response: { 204: z.null() },
       },

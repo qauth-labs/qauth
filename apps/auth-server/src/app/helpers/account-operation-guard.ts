@@ -8,7 +8,8 @@ import {
   DelegatedTokenRefusedError,
   InsufficientUserAuthenticationError,
 } from './account-operation-errors';
-import { requireFamilyToken } from './family-token';
+import type { FamilyOperationClass } from '../api-conventions/families';
+import { familyOperation } from './family-token';
 import { requestRealm } from './request-realm';
 import { emitUserEvent } from './user-events';
 
@@ -21,7 +22,12 @@ import { emitUserEvent } from './user-events';
  * In order:
  *
  * 1. The family's token guard (`requireFamilyToken`): a token whose only
- *    audience is the account API, of an enabled user of the request's realm.
+ *    audience is the account API, of an enabled user of the request's realm,
+ *    that carries the account scope of the operation's class (#933,
+ *    `familyOperation`): `qauth:account:read` or `qauth:account:write`. A
+ *    token without it gets 403 `forbidden` with an `insufficient_scope`
+ *    challenge, before the rules below, which no new sign-in would lift
+ *    for it.
  * 2. An act-chain token (RFC 8693 `act`) at an operation that takes none gets
  *    403 `delegated_token_refused` (ADR-019 Decision 7), before any
  *    fresh-authentication check, so a delegated caller never gets a challenge
@@ -82,6 +88,10 @@ export type ActChainRule = (typeof ACT_CHAIN_RULES)[number];
 export interface AccountOperationRules {
   /** The contract's `operationId`, such as `account.password.change`. */
   readonly operationId: string;
+  /** The contract's `x-qauth-class`: its scope is the account scope of this class (#933). */
+  readonly operationClass: FamilyOperationClass;
+  /** The contract's `x-qauth-permission`, such as `password.write`. */
+  readonly permission: string;
   readonly freshAuthentication: FreshAuthenticationRule;
   readonly actChain: ActChainRule;
 }
@@ -308,6 +318,8 @@ export interface AccountOperationGuard {
   /** The members of the route's schema that state the rules, as the contract does. */
   readonly schema: {
     readonly operationId: string;
+    readonly 'x-qauth-class': FamilyOperationClass;
+    readonly 'x-qauth-permission': string;
     readonly 'x-qauth-fresh-authentication': FreshAuthenticationRule;
     readonly 'x-qauth-act-chain': ActChainRule;
   };
@@ -337,14 +349,20 @@ export function accountOperation(rules: AccountOperationRules): AccountOperation
     );
   }
   const frozen: AccountOperationRules = Object.freeze({ ...rules });
-  const tokenGuard = requireFamilyToken('account', { subjects: ['user'] });
+  // The scope of the operation's class (#933); throws for another class.
+  const access = familyOperation(
+    'account',
+    { operationClass: frozen.operationClass, permission: frozen.permission },
+    { subjects: ['user'] }
+  );
   return Object.freeze({
     guard: async function accountOperationGuard(request: FastifyRequest, reply: FastifyReply) {
-      await tokenGuard(request, reply);
+      await access.guard(request, reply);
       await checkAccountOperation(request, frozen);
     },
     schema: Object.freeze({
       operationId: frozen.operationId,
+      ...access.schema,
       'x-qauth-fresh-authentication': frozen.freshAuthentication,
       'x-qauth-act-chain': frozen.actChain,
     }),

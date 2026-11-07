@@ -33,7 +33,7 @@ import {
   withClientPolicies,
 } from '../../helpers/developer-clients';
 import type { EnvironmentPolicy } from '../../helpers/environment-policy';
-import { requireFamilyToken } from '../../helpers/family-token';
+import { familyOperation } from '../../helpers/family-token';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
 import {
@@ -145,7 +145,17 @@ function hashingRateLimit() {
 }
 
 export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
-  const guard = requireFamilyToken('developer', { subjects: ['user'] });
+  // Each operation needs the developer scope of its class (#933).
+  const readClients = familyOperation(
+    'developer',
+    { operationClass: 'read', permission: 'clients.read' },
+    { subjects: ['user'] }
+  );
+  const writeClients = familyOperation(
+    'developer',
+    { operationClass: 'write', permission: 'clients.write' },
+    { subjects: ['user'] }
+  );
   const typed = fastify.withTypeProvider<ZodTypeProvider>();
 
   typed.get(
@@ -153,7 +163,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
     {
       // Before validation: a caller without a developer token learns nothing
       // about what the route accepts.
-      preValidation: guard,
+      preValidation: readClients.guard,
       schema: {
         operationId: 'developer.clients.list',
         description:
@@ -161,9 +171,8 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         tags: TAGS,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'read',
-        'x-qauth-permission': 'clients.read',
-        'x-qauth-errors': [400, 401],
+        ...readClients.schema,
+        'x-qauth-errors': [400, 401, 403],
         querystring: pageQuerySchema,
         response: { 200: pageSchema(developerClientSchema) },
       },
@@ -195,7 +204,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
   typed.post(
     '/clients',
     {
-      preValidation: guard,
+      preValidation: writeClients.guard,
       schema: {
         operationId: 'developer.clients.create',
         description:
@@ -203,8 +212,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         tags: TAGS,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'write',
-        'x-qauth-permission': 'clients.write',
+        ...writeClients.schema,
         'x-qauth-errors': [400, 401, 403],
         body: createDeveloperClientRequestSchema,
         response: { 201: createdDeveloperClientSchema },
@@ -248,7 +256,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
   typed.get(
     '/clients/:clientId',
     {
-      preValidation: guard,
+      preValidation: readClients.guard,
       schema: {
         operationId: 'developer.clients.get',
         description:
@@ -256,9 +264,8 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         tags: TAGS,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'read',
-        'x-qauth-permission': 'clients.read',
-        'x-qauth-errors': [400, 401, 404],
+        ...readClients.schema,
+        'x-qauth-errors': [400, 401, 403, 404],
         params: clientParamsSchema,
         response: { 200: developerClientSchema },
       },
@@ -288,7 +295,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
       // the body before these hooks, though: a media type no parser of the
       // module takes is 415, and a body the parser cannot read is 400, before
       // the token is checked.
-      preValidation: [guard, requireMergePatch, requireIfMatch],
+      preValidation: [writeClients.guard, requireMergePatch, requireIfMatch],
       schema: {
         operationId: 'developer.clients.update',
         description:
@@ -296,9 +303,8 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         tags: TAGS,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'write',
-        'x-qauth-permission': 'clients.write',
-        'x-qauth-errors': [400, 401, 404, 412, 415, 422, 428],
+        ...writeClients.schema,
+        'x-qauth-errors': [400, 401, 403, 404, 412, 415, 422, 428],
         consumes: [MERGE_PATCH_MEDIA_TYPE],
         params: clientParamsSchema,
         headers: ifMatchHeadersSchema,
@@ -344,7 +350,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
   typed.delete(
     '/clients/:clientId',
     {
-      preValidation: guard,
+      preValidation: writeClients.guard,
       schema: {
         operationId: 'developer.clients.delete',
         description:
@@ -352,9 +358,8 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         tags: TAGS,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'write',
-        'x-qauth-permission': 'clients.write',
-        'x-qauth-errors': [400, 401, 404],
+        ...writeClients.schema,
+        'x-qauth-errors': [400, 401, 403, 404],
         params: clientParamsSchema,
         response: { 204: z.null() },
       },
@@ -371,7 +376,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
   typed.post(
     '/clients/:clientId/regenerate-secret',
     {
-      preValidation: guard,
+      preValidation: writeClients.guard,
       schema: {
         operationId: 'developer.clients.regenerateSecret',
         description:
@@ -379,9 +384,8 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         tags: TAGS,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'write',
-        'x-qauth-permission': 'clients.write',
-        'x-qauth-errors': [400, 401, 404],
+        ...writeClients.schema,
+        'x-qauth-errors': [400, 401, 403, 404],
         params: clientParamsSchema,
         response: { 200: regeneratedDeveloperClientSchema },
       },
