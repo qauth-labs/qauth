@@ -39,7 +39,7 @@ import { InteractionExpiredError } from './interaction-expired';
 import { EVENT_CLIENT_ID_MAX_LENGTH } from './interaction-record';
 import { createServerPasskeyAccounts, createServerPasskeys } from './passkey-sign-in';
 import { createServerEmailCodeDigest, createServerLadderParts } from './password-attempts';
-import { resetAllowed, resetNotBefore } from './password-reset';
+import { resetAllowed, signInNotBefore } from './password-reset';
 import { createServerRecoveryCodes } from './recovery-codes';
 import { registrationAllowed } from './registration';
 import { requestRealm } from './request-realm';
@@ -412,7 +412,9 @@ export function createInteractionEngines(
   // after its password (the downgrade rule): only a recovery code stands in
   // for it, and without one the round ends.
   const passkeys =
-    fastify.passkeySignIn === true ? createServerPasskeys(fastify, { mailer }) : undefined;
+    fastify.passkeySignIn === true
+      ? createServerPasskeys(fastify, { mailer, requestOf: () => roundRequests.getStore() })
+      : undefined;
   // A registration by passkey alone, with no address (#655), while passkeys
   // are on: the same gate and challenge as a password registration.
   const registrations: AccountRegistrations =
@@ -435,6 +437,7 @@ export function createInteractionEngines(
     ladder: ladder.ladder,
     hostedPages: env.INTERACTION_UI_ENABLED === true,
     passkeys: passkeys !== undefined,
+    requestOf: () => roundRequests.getStore(),
   });
   const build = (requireVerifiedAccount: boolean) =>
     createCheckedSignInEngine({
@@ -464,9 +467,10 @@ export function createInteractionEngines(
       resets,
       recoveryCodes,
       // The session epoch (#642): a sign-in in progress that began before
-      // its account's last reset ends.
+      // its account's last reset ends, as does one that began before the
+      // account page last changed its password (#844).
       sessionEpochs: {
-        notBefore: ({ realmId, userId }) => resetNotBefore(fastify, realmId, userId),
+        notBefore: ({ realmId, userId }) => signInNotBefore(fastify, realmId, userId),
       },
       hooks: { ladder: ladder.ladder, limits },
       steps: [captcha],

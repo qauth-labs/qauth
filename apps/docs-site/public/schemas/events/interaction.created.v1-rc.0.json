@@ -153,11 +153,12 @@
         },
         "purpose": {
           "type": "string",
-          "description": "`authorization`: an authorization request at the authorization endpoint. `logout`: an RP-initiated logout at the end-session endpoint, which asks the person to confirm (#675). `mailed_pass`: the reset or registration start a mailed pass link carries (#637). The set may grow in a minor release.",
+          "description": "`authorization`: an authorization request at the authorization endpoint. `logout`: an RP-initiated logout at the end-session endpoint, which asks the person to confirm (#675). `mailed_pass`: the reset or registration start a mailed pass link carries (#637). `account`: a sign-in, a fresh sign-in before a change, an enrolment or an upstream link on the hosted account page (#844), for no client. The set may grow in a minor release.",
           "x-extensible-enum": [
             "authorization",
             "logout",
-            "mailed_pass"
+            "mailed_pass",
+            "account"
           ]
         },
         "step": {

@@ -418,9 +418,9 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Browser sessions
 
-| Key                      | Role       | Default | Since | Description                                                                                                                                                                                                                                                                          |
-| ------------------------ | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `INTERACTION_UI_ENABLED` | deployment | `false` | 0.2.0 | Temporary: have `/oauth/authorize` start an interaction where a person must sign in or consent, and redirect to the ceremony page `/ui/interaction/{id}` with that id only, instead of the `/ui/login` and `/ui/consent` pages; the cut-over to the ceremony app removes the switch. |
+| Key                      | Role       | Default | Since | Description                                                                                                                                                                                                                                                                                                                               |
+| ------------------------ | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INTERACTION_UI_ENABLED` | deployment | `false` | 0.2.0 | Temporary: have `/oauth/authorize` start an interaction where a person must sign in or consent, and redirect to the ceremony page `/ui/interaction/{id}` with that id only, instead of the `/ui/login` and `/ui/consent` pages, and serve the hosted account pages at `/ui/account`; the cut-over to the ceremony app removes the switch. |
 
 ### Plugins
 

@@ -1,8 +1,14 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EngineMailer, MailRealm } from './engine-mail';
 import { createServerTotp, totpCipher, totpSecretContext } from './totp-sign-in';
+import { emitUserEvent } from './user-events';
+
+vi.mock('./user-events', () => ({ emitUserEvent: vi.fn(async () => 'event-id') }));
+
+/** The request the engine's round runs for. */
+const REQUEST = { id: 'request-1' } as unknown as FastifyRequest;
 
 const REALM_ID = 'realm-1';
 const USER_ID = 'user-1';
@@ -83,6 +89,7 @@ describe('the server TOTPs (#653)', () => {
       ladder: { resetAccount },
       hostedPages,
       passkeys,
+      requestOf: () => REQUEST,
     });
 
   /** Drive the ceiling through the service: the store holds one enabled TOTP. */
@@ -144,6 +151,13 @@ describe('the server TOTPs (#653)', () => {
       factor: 'totp',
     });
     expect(mailer.sendUncounted).toHaveBeenCalledWith(REALM, ADDRESS, { template: 'totp_added' });
+    // The binding's record went into its transaction (#844).
+    expect(emitUserEvent).toHaveBeenCalledWith(
+      REQUEST,
+      'urn:qauth:event:user.credential_added:v1-rc.0',
+      { type: 'totp', credentialId: 'row-1' },
+      { tx: TX, realmId: REALM_ID, userId: USER_ID, actor: 'user' }
+    );
 
     // A reset that fails is reported, and the notice still goes.
     resetAccount.mockRejectedValueOnce(new Error('redis down'));

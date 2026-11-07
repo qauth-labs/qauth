@@ -235,4 +235,13 @@ export const REDIS_KEYS = {
    * the ceremony's timeout.
    */
   WEBAUTHN_CEREMONY: (transactionId: string) => `webauthn-ceremony:${digest(transactionId)}`,
+  /**
+   * When the account page last changed a user's password (#844), in epoch
+   * milliseconds, as a decimal string: a sign-in in progress that began no
+   * later than it ends, as one that began before a reset does (#642). Written
+   * with `SET … PX` once the change committed; expires when the longest
+   * sign-in transaction could have, after which none that predates the
+   * change is left. Both components are UUIDs.
+   */
+  PASSWORD_CHANGED: (realmId: string, userId: string) => `password-changed:${realmId}:${userId}`,
 } as const;

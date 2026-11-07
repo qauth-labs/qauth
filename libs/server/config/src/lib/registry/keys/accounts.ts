@@ -271,7 +271,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'sessions',
     default: 'false',
     since: '0.2.0',
-    docs: 'Temporary: have `/oauth/authorize` start an interaction where a person must sign in or consent, and redirect to the ceremony page `/ui/interaction/{id}` with that id only, instead of the `/ui/login` and `/ui/consent` pages; the cut-over to the ceremony app removes the switch.',
+    docs: 'Temporary: have `/oauth/authorize` start an interaction where a person must sign in or consent, and redirect to the ceremony page `/ui/interaction/{id}` with that id only, instead of the `/ui/login` and `/ui/consent` pages, and serve the hosted account pages at `/ui/account`; the cut-over to the ceremony app removes the switch.',
   },
   {
     name: 'SESSION_RETENTION_DAYS',

@@ -105,7 +105,7 @@ export const UPSTREAM_STEP = stepUrn('upstream');
  * alternative and its list, as the engine's first round offers them. A list
  * the step cannot show leaves the alternative out.
  */
-function identifierStep(providers: readonly UpstreamProviderEntry[] = []): InteractionStep {
+export function identifierStep(providers: readonly UpstreamProviderEntry[] = []): InteractionStep {
   const step: InteractionStep = { name: IDENTIFIER_STEP, params: {}, alternatives: [] };
   if (providers.length === 0) return step;
   const offered: InteractionStep = {

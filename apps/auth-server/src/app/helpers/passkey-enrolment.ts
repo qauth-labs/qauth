@@ -39,8 +39,9 @@ export interface PasskeyEnrolmentDependencies {
  *
  * A refusal in step 2 or 3 rolls back the lock with it.
  *
- * The enrolment routes of phase F2b call this. It writes no audit row: the
- * caller records the enrolment with its own context (who, from which client).
+ * The enrolment routes of phase F2b call this. It writes no audit row
+ * itself: the caller records the enrolment with its own context (who, from
+ * which request) through `recorded`, in the same transaction (#844).
  *
  * @throws BadRequestError when the passkey was created under another RP ID
  * than the realm's
@@ -58,6 +59,11 @@ export async function storePasskeyEnrolment(
      * transaction, so the lost one signs in no more.
      */
     readonly replacing?: boolean;
+    /**
+     * Record the stored passkey in the enrolment's transaction, after step 3
+     * (and the rebind's disabling): a throw rolls the enrolment back.
+     */
+    readonly recorded?: (credential: UserCredential, tx: EnrolmentTransaction) => Promise<void>;
   }
 ): Promise<UserCredential> {
   return deps.db.transaction(async (tx: EnrolmentTransaction) => {
@@ -86,6 +92,7 @@ export async function storePasskeyEnrolment(
         );
       }
     }
+    await input.recorded?.(created, tx);
     return created;
   });
 }

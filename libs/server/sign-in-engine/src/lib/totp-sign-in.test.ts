@@ -696,3 +696,66 @@ describe('the TOTP set-up under an MFA policy', () => {
     );
   });
 });
+
+describe('the TOTP set-up the person asked for (#844)', () => {
+  it('sets one up after the password with no MFA policy, the mailbox, then the first set', async () => {
+    const built = await build();
+    const ctx = context(built, { enrol: 'totp' });
+    const offered = await signIn(built, ctx);
+    expect(stepOf(offered)).toBe('totp_setup');
+    const checked = await firstCode(built, offered, ctx);
+    // A password-only account's first second factor: its mailbox first.
+    expect(checked).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'email_code', params: { purpose: 'recovery' } } },
+    });
+    const bound = await built.engine.advance(
+      kept(checked),
+      answer('email_code', { otp: built.sender.last }),
+      ctx
+    );
+    expect(built.totp.rows.get(`${REALM}:${USER}`)).toMatchObject({ disabled: false });
+    expect(stepOf(bound)).toBe('recovery_codes');
+    const done = await built.engine.advance(
+      kept(bound),
+      answer('recovery_codes', { acknowledged: true }),
+      ctx
+    );
+    expect(done).toMatchObject({
+      kind: 'complete',
+      signIn: { subject: USER, amr: ['pwd', 'otp', 'mfa'] },
+    });
+  });
+
+  it('is not asked without the request: the password alone completes', async () => {
+    const built = await build();
+    expect(await signIn(built)).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
+    expect(built.totp.sealed).toHaveLength(0);
+  });
+
+  it('is skipped for an account that holds one: the sign-in asks for it and completes', async () => {
+    const built = await build({ totp: 'bound' });
+    const ctx = context(built, { enrol: 'totp' });
+    const owed = await signIn(built, ctx);
+    expect(stepOf(owed)).toBe('totp');
+    const secret = built.secret;
+    if (secret === null) throw new Error('no secret');
+    const done = await built.engine.advance(
+      kept(owed),
+      answer('totp', { otp: totpCode(secret, totpStep(built.clock.now())) }),
+      ctx
+    );
+    expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd', 'otp', 'mfa'] } });
+    expect(built.totp.sealed).toHaveLength(1);
+  });
+
+  it('is skipped where the transport cannot show the set-up: the sign-in completes', async () => {
+    const built = await build();
+    const ctx = context(built, { enrol: 'totp', serves: FIPA_STEP_NAMES });
+    expect(await signIn(built, ctx)).toMatchObject({
+      kind: 'complete',
+      signIn: { amr: ['pwd'] },
+    });
+    expect(built.totp.sealed).toHaveLength(0);
+  });
+});

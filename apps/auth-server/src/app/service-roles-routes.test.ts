@@ -156,6 +156,22 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   // authenticator app".
   'GET /ui/totp/:interactionId',
   'GET /ui/totp-setup/:interactionId',
+  // The hosted account pages (#844), registered with the hosted pages.
+  'GET /ui/account',
+  'GET /ui/account/password',
+  'POST /ui/account/password',
+  'POST /ui/account/reauthenticate',
+  'POST /ui/account/passkeys/add',
+  'POST /ui/account/passkeys/:passkeyId/rename',
+  'POST /ui/account/passkeys/:passkeyId/remove',
+  'POST /ui/account/totp/setup',
+  'POST /ui/account/totp/remove',
+  'POST /ui/account/recovery-codes/regenerate',
+  'POST /ui/account/recovery-codes/confirm',
+  'POST /ui/account/sessions/:sessionId/end',
+  'POST /ui/account/sessions/end-all',
+  'POST /ui/account/linked-accounts/link',
+  'POST /ui/account/linked-accounts/:linkedAccountId/unlink',
   // The server-rendered pages' stylesheet and fonts (#472).
   'GET /assets/ui/:file',
 ];
@@ -185,7 +201,7 @@ const PINNED_OPERATIONS: ReadonlySet<string> = new Set(
 
 /** The keys a boot sets or clears, restored after the file. */
 const BOOT_KEYS =
-  /^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|SSF_|JWT_|KEK|SERVICE_ROLES$|SIGNER_URL$|INTERNAL_)/;
+  /^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|SSF_|JWT_|KEK|SERVICE_ROLES$|SIGNER_URL$|INTERNAL_|INTERACTION_UI_ENABLED$)/;
 
 /** The environment of a deployment with every route-registering switch on. */
 function maximalEnvironment(serviceRoles: string): Record<string, string> {
@@ -236,6 +252,7 @@ function maximalEnvironment(serviceRoles: string): Record<string, string> {
     RATE_LIMIT_ENABLED: 'false',
     METRICS_ENABLED: 'true',
     SSF_TRANSMITTER_ENABLED: 'true',
+    INTERACTION_UI_ENABLED: 'true',
     WALLET_FEDERATION_ENABLED: 'true',
     OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
     OID4VP_SUBJECT_RESOLUTION: 'asserted-lookup',

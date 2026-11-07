@@ -42,6 +42,7 @@ import {
   type InteractionState,
   readInteractionPersonalData,
   readInteractionStep,
+  startAccountInteraction,
   startInteraction,
   startMailedPassInteraction,
   switchInteractionUser,
@@ -216,6 +217,15 @@ async function buildHarness(): Promise<Harness> {
       step: { name: stepUrn('password_reset'), params: {}, alternatives: [] },
     })
   );
+  // As the hosted account page starts one (#844).
+  app.post('/start-account', async (request, reply) => {
+    const body = (request.body ?? {}) as { carriedSession?: CarriedSession };
+    return startAccountInteraction(request, reply, {
+      request: { intent: 'reauthenticate', returnTo: '/ui/account/password' },
+      step: IDENTIFIER,
+      ...(body.carriedSession === undefined ? {} : { carriedSession: body.carriedSession }),
+    });
+  });
   app.get(`${INTERACTION_API_PREFIX}/:id`, async (request) =>
     readInteractionStep(request, (request.params as { id: string }).id)
   );
@@ -2471,5 +2481,81 @@ describe('an interaction a mailed pass link opened (#637)', () => {
       interactionIdHash(id)
     );
     expect(turn).toBe(0);
+  });
+});
+
+describe('an interaction of the account page (#844)', () => {
+  const startAccount = async (browser: Browser, body: object = {}) => {
+    const response = await browser.request('POST', '/start-account', body);
+    expect(response.statusCode, response.body).toBe(200);
+    return (response.json() as { id: string }).id;
+  };
+
+  it('names no client, and is created as an `account` interaction', async () => {
+    const browser = new Browser();
+    const id = await startAccount(browser);
+    const read = await browser.request('GET', `${INTERACTION_API_PREFIX}/${id}`);
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).not.toHaveProperty('clientId');
+    const created = vi
+      .mocked(emitUserEvent)
+      .mock.calls.find(([, type]) => type === 'urn:qauth:event:interaction.created:v1-rc.0');
+    expect(created?.[2]).toMatchObject({ purpose: 'account', step: IDENTIFIER_STEP });
+    expect(created?.[3]).toMatchObject({ clientId: null, userId: null });
+  });
+
+  it('gives the engine its request and the session it started for, and finishes with them', async () => {
+    const browser = new Browser();
+    const carriedSession = { userId: USER_A, sid: '44444444-4444-4444-8444-444444444444' };
+    const id = await startAccount(browser, { carriedSession });
+    const finished = await browser.answer(id, 0, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+    });
+    expect(finished.statusCode, finished.body).toBe(200);
+    expect(harness.decided[0]).toMatchObject({
+      purpose: 'account',
+      request: { intent: 'reauthenticate', returnTo: '/ui/account/password' },
+      carriedSession,
+    });
+    expect(finished.json()).toMatchObject({
+      kind: 'finished',
+      purpose: 'account',
+      request: { intent: 'reauthenticate', returnTo: '/ui/account/password' },
+      transaction: { userId: USER_A, amr: ['pwd'] },
+    });
+    expect(browser.cookies.has(SESSION_COOKIE_NAME)).toBe(true);
+  });
+
+  it('cancels back to the account page its request names', async () => {
+    const browser = new Browser();
+    const id = await startAccount(browser);
+    const cancelled = await browser.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`);
+    expect(cancelled.json()).toEqual({
+      kind: 'cancelled',
+      purpose: 'account',
+      request: { intent: 'reauthenticate', returnTo: '/ui/account/password' },
+    });
+  });
+
+  it('registers nobody: a registration decision changes nothing', async () => {
+    const browser = new Browser();
+    const id = await startAccount(browser);
+    const refused = await browser.answer(id, 0, {
+      kind: 'registered',
+      userId: USER_B,
+      sessionEpoch: 0,
+    });
+    expect(refused.statusCode).toBe(500);
+    const read = await browser.request('GET', `${INTERACTION_API_PREFIX}/${id}`);
+    expect(read.statusCode).toBe(200);
+  });
+
+  it('has no user switch: the switch gets the generic expired answer', async () => {
+    const browser = new Browser();
+    const id = await startAccount(browser);
+    const switched = await browser.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
+    expect(switched.statusCode).toBe(410);
   });
 });

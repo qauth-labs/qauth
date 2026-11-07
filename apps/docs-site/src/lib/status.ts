@@ -202,6 +202,13 @@ export const FEATURE_STATUS: FeatureStatus[] = [
       'Built (#653): the sign-in engine\'s `totp` step after the first factor of an account that holds one (SHA-1, six digits, 30 seconds, one step of tolerance, a time step never accepted twice), `amr` `["pwd","otp","mfa"]` for a password then a code, and the `totp_setup` step that binds a new secret after a first valid code, a fresh factor and, for a password-only account, a mailed code, with a recovery set at the first binding. The secret is sealed under the realm\'s `data_at_rest` key. Wrong codes count per account on their own failure ladder, a password never clears them, and at 100 in a row the app is turned off only while the hosted pages are on and the account keeps another way in; three notices no realm can switch off. The two `/ui` pages serve the steps. `/auth/login` and `/ui/login` refuse a right password of an account that holds one. Open: the stored MFA policy that asks for the set-up (the admin console), the account API\'s own enrolment, the FiPA endpoint (#646) and the design-system screens (#654).',
   },
   {
+    feature: 'Hosted account pages',
+    state: 'partial',
+    summary:
+      "Built (#844): `/ui/account`, the signed-in person's own account on the hosted pages, in their current server-rendered style: the sign-in methods, a password change under the realm's password policy, passkeys (add through the sign-in's enrolment step, rename, remove), the authenticator app (set up, turn off), a new recovery code set shown once, linked upstream accounts (link by signing in, unlink) and the sessions (sign one out, sign out everywhere, which tells each relying party with a back-channel logout URI). Every form works without JavaScript and carries a CSRF value, every change asks for the fresh authentication the account API asks of it, a removal never leaves the account without a way in, and each change is a user event. On while the hosted pages are (`INTERACTION_UI_ENABLED`); the routes are experimental. The design-system account console replaces them: the overview and the password (#685), the passkeys (#686), the authenticator app and recovery codes (#687), the sessions (#688).",
+    flag: { name: 'INTERACTION_UI_ENABLED', default: 'off' },
+  },
+  {
     feature: 'API keys',
     state: 'shipped',
     summary:

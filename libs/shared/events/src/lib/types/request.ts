@@ -14,6 +14,8 @@ export const CSRF_FORMS = [
   'consent_revocation',
   /** An answer or a cancel at the Interaction API (#616). */
   'interaction',
+  /** A change on the hosted account page (#844). */
+  'account',
 ] as const;
 
 export const requestCsrfRejected = defineEventType({
