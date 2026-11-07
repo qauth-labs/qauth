@@ -199,13 +199,76 @@ export const PASSKEY_ENROLMENT_TITLE = 'Add a passkey';
 export const PASSKEY_ENROLMENT_REFUSED =
   'The passkey could not be added. Try again, or choose "Not now".';
 
-/** "Add a passkey": the ceremony, and "Not now", which declines the offer. */
+/** The "create your account with a passkey" page's title (#655). */
+export const PASSKEY_REGISTRATION_TITLE = 'Create your account with a passkey';
+
+/** The refused-registration error of a registration by passkey (#655). */
+export const PASSKEY_REGISTRATION_REFUSED =
+  'The passkey could not be created. Try again, or use an email address instead.';
+
+/** The link from a registration by passkey to the address step (#655). */
+export const PASSKEY_REGISTRATION_OTHER_WAY = 'Use an email address instead';
+
+/** The "add a new passkey" page's title, after a recovery code (#655). */
+export const PASSKEY_REBIND_TITLE = 'Add a new passkey';
+
+/** The refused error of the new passkey after a recovery code (#655). */
+export const PASSKEY_REBIND_REFUSED = 'The passkey could not be added. Try again.';
+
+/**
+ * "Add a passkey": the ceremony, and "Not now", which declines the offer.
+ * With `purpose` `register`, the registration of an account by passkey alone
+ * (#655), with a link to the address step; with `rebind`, the new passkey a
+ * recovery code binds in place of a lost one, which cannot be declined.
+ */
 export function passkeyEnrolmentPage(
   opts: PasskeyPageOptions & {
     /** Whether the person may decline: the step's `optional`. */
     readonly optional: boolean;
+    /** What the passkey is for: the offer after a sign-in by default. */
+    readonly purpose?: 'enrol' | 'register' | 'rebind';
+    /** The interaction's ceremony page, for a registration's other way. */
+    readonly otherWay?: string;
   }
 ): string {
+  if (opts.purpose === 'register') {
+    return page({
+      cspNonce: opts.cspNonce,
+      scriptNonce: opts.scriptNonce,
+      title: PASSKEY_REGISTRATION_TITLE,
+      body: html`<h1>${PASSKEY_REGISTRATION_TITLE}</h1>
+        <p>
+          Your device saves a passkey for this account and asks for your fingerprint, face, PIN or
+          screen lock. You sign in with it, with no email address and no password. You then get
+          recovery codes to keep: they are the only way back in if you lose the passkey.
+        </p>
+        ${
+          opts.refused
+            ? html`<p class="error" role="alert">${PASSKEY_REGISTRATION_REFUSED}</p>`
+            : ''
+        }
+        ${ceremonyForm({ ...opts, mode: 'create', label: 'Create a passkey' })}
+        ${
+          opts.otherWay === undefined
+            ? ''
+            : html`<p><a href="${opts.otherWay}">${PASSKEY_REGISTRATION_OTHER_WAY}</a></p>`
+        }`,
+    });
+  }
+  if (opts.purpose === 'rebind') {
+    return page({
+      cspNonce: opts.cspNonce,
+      scriptNonce: opts.scriptNonce,
+      title: PASSKEY_REBIND_TITLE,
+      body: html`<h1>${PASSKEY_REBIND_TITLE}</h1>
+        <p>
+          Your recovery code worked. Add a new passkey on this device in place of the one you lost:
+          you sign in with it next. Keep your other recovery codes.
+        </p>
+        ${opts.refused ? html`<p class="error" role="alert">${PASSKEY_REBIND_REFUSED}</p>` : ''}
+        ${ceremonyForm({ ...opts, mode: 'create', label: 'Add a passkey' })}`,
+    });
+  }
   return page({
     cspNonce: opts.cspNonce,
     scriptNonce: opts.scriptNonce,

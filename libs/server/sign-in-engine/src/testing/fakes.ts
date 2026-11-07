@@ -32,6 +32,7 @@ import type {
   SignInCandidate,
 } from '../lib/ports';
 import type { EmailCodeSender, EmailCodeSendOutcome } from '../lib/round';
+import type { MemoryPasskey } from './memory-passkeys';
 
 /**
  * Fakes of the engine's ports, for tests of the engine and of the
@@ -374,6 +375,52 @@ export class FakeRegistrations implements AccountRegistrations {
         normalization: input.normalization,
       },
       others: [],
+    });
+    return { kind: 'created', userId };
+  }
+
+  /** The passkeys a registration by passkey (#655) binds to the account it creates. */
+  passkeys?: { readonly passkeys: Map<string, MemoryPasskey> };
+  readonly createdWithPasskey: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly credentialId: string;
+    readonly userId: string;
+  }[] = [];
+
+  /**
+   * Create an account with no address from a registration the memory
+   * passkeys verified with no account named (#655): its passkey, held under
+   * `passkey:<userId>` in the directory with no password.
+   */
+  async createWithPasskey(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly registration: string;
+  }): Promise<AccountRegistration> {
+    const held = JSON.parse(input.registration) as { id?: unknown; userId?: unknown };
+    if (typeof held.id !== 'string' || held.userId !== undefined) {
+      throw new Error('not the registration of a new account');
+    }
+    if (this.conflict || this.passkeys?.passkeys.has(held.id) === true) return { kind: 'conflict' };
+    const count = this.created.length + this.createdWithPasskey.length;
+    const userId = `0199fa20-5e1a-7000-8000-${String(900 + count).padStart(12, '0')}`;
+    this.createdWithPasskey.push(
+      Object.freeze({
+        realmId: input.realmId,
+        clientId: input.clientId,
+        credentialId: held.id,
+        userId,
+      })
+    );
+    this.passkeys?.passkeys.set(held.id, { id: held.id, userId, disabled: false });
+    this.directory.accounts.set(`passkey:${userId}`, {
+      userId,
+      enabled: true,
+      verified: true,
+      admin: false,
+      password: null,
+      others: [{ type: 'passkey', disabled: false }],
     });
     return { kind: 'created', userId };
   }

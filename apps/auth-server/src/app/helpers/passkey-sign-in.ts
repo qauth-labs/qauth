@@ -14,6 +14,8 @@ import {
   WebAuthnRejection,
 } from '@qauth-labs/fastify-plugin-federation';
 import type {
+  AccountRegistration,
+  AccountRegistrations,
   PasskeyAssertion,
   PasskeyBinding,
   PasskeyCeremonies,
@@ -28,7 +30,11 @@ import { z } from 'zod';
 
 import { REDIS_KEYS } from '../constants/redis-keys';
 import type { EngineMailer } from './engine-mail';
-import { storePasskeyEnrolment } from './passkey-enrolment';
+import {
+  type EnrolmentTransaction,
+  storePasskeyAccount,
+  storePasskeyEnrolment,
+} from './passkey-enrolment';
 import { passkeyCeremonyOrigins } from './webauthn-relying-party';
 
 /**
@@ -53,7 +59,11 @@ import { passkeyCeremonyOrigins } from './webauthn-relying-party';
  *   while the mailbox is proved, and bound last: one transaction locks the
  *   realm's RP ID and writes the `user_credentials` row. The owner is told
  *   at their password credential's address ("passkey added"), after the
- *   answer.
+ *   answer; an account with no address is told nothing by mail.
+ * - A registration's own ceremony (#655) names no account: a new user
+ *   handle, nothing excluded, and a name made from the handle. Its
+ *   verified registration creates the account with
+ *   {@link createServerPasskeyAccounts}.
  *
  * Every refusal is the same `refused` for the engine; the provider's reason
  * goes to the log only.
@@ -137,6 +147,15 @@ function displayName(value: string, fallback: string): string {
       .trim();
   }
   return cleaned !== '' && DISPLAY_TEXT.test(cleaned) ? cleaned : fallback;
+}
+
+/**
+ * The name of an account with no address in its passkey (#655): `account-`
+ * and the first 8 characters of its user handle (base64url, random), which
+ * names nobody and tells two such accounts on one authenticator apart.
+ */
+export function accountNameOf(handle: string): string {
+  return `account-${handle.slice(0, 8)}`;
 }
 
 /** The `id` a browser's JSON response names, without trusting anything else in it. */
@@ -279,14 +298,20 @@ export function createServerPasskeys(
       identifier,
     }): Promise<PasskeyRegistrationStart> {
       const { realm, rpId, origins } = await relyingParty(realmId, clientId);
-      const existing = await passkeysOf(realmId, userId);
+      // A registration's ceremony (#655) names no account yet: nothing to exclude.
+      const existing = userId === undefined ? [] : await passkeysOf(realmId, userId);
       // One user handle per account: an authenticator that already holds a
       // passkey of the account replaces it rather than adding a second.
       const handle =
         existing
           .map(({ data }) => (data.success ? data.data.user_handle : undefined))
           .find((stored) => stored !== undefined) ?? generateWebAuthnUserHandle();
-      const name = displayName(identifier, 'Account');
+      // An account with no address is named by its handle, which tells two
+      // such accounts on one authenticator apart.
+      const name =
+        identifier === undefined
+          ? accountNameOf(handle)
+          : displayName(identifier, accountNameOf(handle));
       const started = await provider.startRegistration({
         transactionId: transactionOf(realmId, key),
         purpose: 'sign-in',
@@ -343,7 +368,7 @@ export function createServerPasskeys(
       return { kind: 'verified', registration: JSON.stringify(enrolment) };
     },
 
-    async bind({ realmId, userId, registration }): Promise<PasskeyBinding> {
+    async bind({ realmId, userId, registration, replacing }): Promise<PasskeyBinding> {
       const held = heldRegistrationSchema.safeParse(parseJson(registration));
       if (!held.success) throw new Error('a held passkey registration that is not well formed');
       const user = await fastify.repositories.users.findById(realmId, userId);
@@ -357,7 +382,7 @@ export function createServerPasskeys(
             realms: fastify.repositories.realms,
             userCredentials: credentials,
           },
-          { realmId, userId, enrolment: held.data }
+          { realmId, userId, enrolment: held.data, ...(replacing === true ? { replacing } : {}) }
         );
       } catch (error) {
         // The realm already holds the credential id, for this account or
@@ -383,4 +408,54 @@ export function createServerPasskeys(
     },
   };
   return Object.freeze(ceremonies);
+}
+
+/** What {@link createServerPasskeyAccounts} records with a new account. */
+export interface ServerPasskeyAccountOptions {
+  /** Record the account's `user.registered` event, in the transaction that creates it. */
+  readonly registered: (
+    input: { readonly realmId: string; readonly clientId: string; readonly userId: string },
+    tx: EnrolmentTransaction
+  ) => Promise<void>;
+}
+
+/**
+ * The registration's passkey write (#655; ADR-017 Decision 8, question 30):
+ * an account whose primary identity is a passkey, from a registration
+ * {@link createServerPasskeys}' `verifyRegistration` verified with no
+ * account named. One transaction writes the `users` row, the realm's RP ID
+ * lock and the `webauthn` credential, and the `user.registered` event; no
+ * email attribute and no password. A credential id the realm holds by then,
+ * or an RP ID that changed under the ceremony, writes nothing and answers
+ * `conflict`.
+ */
+export function createServerPasskeyAccounts(
+  fastify: FastifyInstance,
+  options: ServerPasskeyAccountOptions
+): NonNullable<AccountRegistrations['createWithPasskey']> {
+  return async ({ realmId, clientId, registration }): Promise<AccountRegistration> => {
+    const held = heldRegistrationSchema.safeParse(parseJson(registration));
+    if (!held.success) throw new Error('a held passkey registration that is not well formed');
+    try {
+      const userId = await storePasskeyAccount(
+        {
+          db: fastify.db,
+          realms: fastify.repositories.realms,
+          users: fastify.repositories.users,
+          userCredentials: fastify.repositories.userCredentials,
+        },
+        {
+          realmId,
+          enrolment: held.data,
+          recorded: (tx, created) => options.registered({ realmId, clientId, userId: created }, tx),
+        }
+      );
+      return { kind: 'created', userId };
+    } catch (error) {
+      if (error instanceof UniqueConstraintError || error instanceof BadRequestError) {
+        return { kind: 'conflict' };
+      }
+      throw error;
+    }
+  };
 }

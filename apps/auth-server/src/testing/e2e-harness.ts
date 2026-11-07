@@ -408,11 +408,6 @@ export interface BootAuthServerOptions {
    */
   readonly authMethodPlugins?: AppOptions['authMethodPlugins'];
   /**
-   * Turn the passkey sign-in steps on (#651) while `WEBAUTHN_ENABLED` is
-   * refused at boot. The app refuses it outside NODE_ENV=test.
-   */
-  readonly passkeySignIn?: boolean;
-  /**
    * The MFA policy the sign-in engines read (#653) while none is stored. The
    * app refuses it outside NODE_ENV=test.
    */
@@ -640,7 +635,6 @@ export async function bootAuthServer(
     ...(options.authMethodPlugins === undefined
       ? {}
       : { authMethodPlugins: options.authMethodPlugins }),
-    ...(options.passkeySignIn === undefined ? {} : { passkeySignIn: options.passkeySignIn }),
     ...(options.mfaPolicy === undefined ? {} : { mfaPolicy: options.mfaPolicy }),
   });
   const { routes } = options;

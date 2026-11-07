@@ -29,7 +29,10 @@ import { requestRealm } from '../../helpers/request-realm';
  * - `GET /ui/passkey-enrolment/<interaction id>`: "add a passkey", while the
  *   `webauthn_create` step is the current step, after a sign-in, for the
  *   browser whose flow cookie binds the interaction and never from another
- *   site: its options carry the account's name.
+ *   site: its options carry the account's name. The same page creates an
+ *   account by passkey alone at a registration, with a link to the address
+ *   step, and adds the new passkey a recovery code binds in place of a lost
+ *   one (#655).
  *
  * Each runs the browser's ceremony and posts the result to the Interaction
  * API's answer endpoint (`/interaction/v1-rc.0/<id>/answer`), which checks
@@ -40,6 +43,7 @@ import { requestRealm } from '../../helpers/request-realm';
 
 const WEBAUTHN_GET_STEP = stepUrn('webauthn_get');
 const WEBAUTHN_CREATE_STEP = stepUrn('webauthn_create');
+const IDENTIFIER_STEP = stepUrn('identifier');
 
 /** The request options a page passes to the browser, as the step grammar keeps them. */
 const requestOptionsSchema = z.looseObject({ challenge: z.string(), rpId: z.string() });
@@ -150,7 +154,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'The "add a passkey" page (#651): runs the browser\'s registration ceremony for the interaction\'s `webauthn_create` step, offered after a sign-in, and posts the result to the answer endpoint, or declines the offer. Needs the flow cookie; refused from another site. `Cache-Control: no-store`.',
+          'The "add a passkey" page (#651): runs the browser\'s registration ceremony for the interaction\'s `webauthn_create` step, offered after a sign-in, and posts the result to the answer endpoint, or declines the offer. At a registration it creates the account by passkey alone, with a link to the address step; after a recovery code it adds the new passkey in place of a lost one (#655). Needs the flow cookie; refused from another site. `Cache-Control: no-store`.',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [403, 410],
@@ -178,6 +182,11 @@ export default async function (fastify: FastifyInstance) {
         if (!step.success || !account.success) {
           throw new Error('the webauthn_create step holds no creation options');
         }
+        // A registration by passkey offers the address beside it; a passkey
+        // that cannot be declined and has none is the one a recovery code
+        // binds in place of a lost one (#655).
+        const registering = view.step.alternatives.includes(IDENTIFIER_STEP);
+        const purpose = registering ? 'register' : step.data.optional ? 'enrol' : 'rebind';
         return sendPage(
           reply,
           passkeyEnrolmentPage({
@@ -185,6 +194,8 @@ export default async function (fastify: FastifyInstance) {
             scriptNonce: reply.cspNonce.script,
             refused: view.step.error === 'invalid_credentials',
             optional: step.data.optional,
+            purpose,
+            ...(registering ? { otherWay: urls.ceremony } : {}),
             options: {
               ...step.data.options,
               user: account.data.user,

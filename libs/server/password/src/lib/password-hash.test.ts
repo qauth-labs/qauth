@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  ARGON2ID_DIGEST_PREFIX,
+  argon2idDigest,
   createPasswordHasher,
   DEFAULT_PASSWORD_CONFIG,
   type PasswordHasher,
@@ -129,5 +131,36 @@ describe('DEFAULT_PASSWORD_CONFIG', () => {
     expect(DEFAULT_PASSWORD_CONFIG.memoryCost).toBeGreaterThan(0);
     expect(DEFAULT_PASSWORD_CONFIG.timeCost).toBeGreaterThan(0);
     expect(DEFAULT_PASSWORD_CONFIG.parallelism).toBeGreaterThan(0);
+  });
+});
+
+describe('argon2idDigest (#655)', () => {
+  const salt = new Uint8Array(16).fill(7);
+
+  it('is the same for the same secret and salt, and differs for another of either', async () => {
+    const first = await argon2idDigest('k7qd2mvwx4rap6tn', salt);
+    expect(first).toMatch(/^argon2id\$m=19456,t=2,p=1\$[A-Za-z0-9_-]{43}$/);
+    expect(first.startsWith(ARGON2ID_DIGEST_PREFIX)).toBe(true);
+    await expect(argon2idDigest('k7qd2mvwx4rap6tn', salt)).resolves.toBe(first);
+    await expect(argon2idDigest('k7qd2mvwx4rap6tm', salt)).resolves.not.toBe(first);
+    await expect(argon2idDigest('k7qd2mvwx4rap6tn', new Uint8Array(16).fill(8))).resolves.not.toBe(
+      first
+    );
+    expect(first).not.toContain('k7qd2mvwx4rap6tn');
+  });
+
+  it('is the Argon2id (version 0x13) digest of its parameters: the stored format', async () => {
+    // Computed apart from @node-rs/argon2, with OpenSSL's Argon2id through
+    // node:crypto (`argon2Sync('argon2id', { message, nonce: 16 bytes of 7,
+    // parallelism: 1, tagLength: 32, memory: 19456, passes: 2 })`). Stored
+    // lookup digests depend on it: a library or parameter change that moves
+    // it strands every stored set.
+    await expect(argon2idDigest('k7qd2mvwx4rap6tn', salt)).resolves.toBe(
+      `${ARGON2ID_DIGEST_PREFIX}uR0GrevStYlobNu70tsxESbZyLQYgjV13A-0CQ0ijiA`
+    );
+  });
+
+  it('refuses a short salt', async () => {
+    await expect(argon2idDigest('secret', new Uint8Array(8))).rejects.toThrow(RangeError);
   });
 });

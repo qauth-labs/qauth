@@ -37,7 +37,7 @@ import type { InteractionDecision } from './interaction';
 import { InvalidAnswerError } from './interaction-errors';
 import { InteractionExpiredError } from './interaction-expired';
 import { EVENT_CLIENT_ID_MAX_LENGTH } from './interaction-record';
-import { createServerPasskeys } from './passkey-sign-in';
+import { createServerPasskeyAccounts, createServerPasskeys } from './passkey-sign-in';
 import { createServerEmailCodeDigest, createServerLadderParts } from './password-attempts';
 import { resetAllowed, resetNotBefore } from './password-reset';
 import { createServerRecoveryCodes } from './recovery-codes';
@@ -269,7 +269,37 @@ export function createInteractionEngines(
       hash: (password) => fastify.passwordHasher.hashPassword(password),
     }
   );
-  const registrations: AccountRegistrations =
+  /**
+   * Record a new account's `user.registered` event: it commits with the
+   * account (ADR-019 Decision 8).
+   */
+  const recordRegistered = async (
+    {
+      realmId,
+      clientId,
+      userId,
+    }: { readonly realmId: string; readonly clientId: string; readonly userId: string },
+    tx: EventTransaction,
+    method: 'password' | 'passkey'
+  ): Promise<void> => {
+    const request = roundRequests.getStore();
+    if (request === undefined) {
+      throw new Error('an account registered outside the request that asked for it');
+    }
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:user.registered:v1-rc.0',
+      { method },
+      {
+        tx,
+        realmId,
+        userId,
+        clientId: clientId.length <= EVENT_CLIENT_ID_MAX_LENGTH ? clientId : null,
+        actor: 'user',
+      }
+    );
+  };
+  const passwordRegistrations: AccountRegistrations =
     createRepositoryAccountRegistrations<EventTransaction>(
       {
         users: fastify.repositories.users,
@@ -297,25 +327,7 @@ export function createInteractionEngines(
         },
         hash: (password) => fastify.passwordHasher.hashPassword(password),
         isUniqueViolation: (error) => error instanceof UniqueConstraintError,
-        registered: async ({ realmId, clientId, userId }, tx) => {
-          const request = roundRequests.getStore();
-          if (request === undefined) {
-            throw new Error('an account registered outside the request that asked for it');
-          }
-          // The account's event commits with the account (ADR-019 Decision 8).
-          await emitUserEvent(
-            request,
-            'urn:qauth:event:user.registered:v1-rc.0',
-            { method: 'password' },
-            {
-              tx,
-              realmId,
-              userId,
-              clientId: clientId.length <= EVENT_CLIENT_ID_MAX_LENGTH ? clientId : null,
-              actor: 'user',
-            }
-          );
-        },
+        registered: (input, tx) => recordRegistered(input, tx, 'password'),
       }
     );
   const resets: AccountResets = createRepositoryAccountResets<EventTransaction>(
@@ -391,11 +403,22 @@ export function createInteractionEngines(
     }
   );
   // Passkeys (#651): offered only while passkey sign-in is on
-  // (`WEBAUTHN_ENABLED`, refused at boot until #655). Off, an account that
-  // holds a passkey still owes it after its password (the downgrade rule):
-  // only a recovery code stands in for it, and without one the round ends.
+  // (`WEBAUTHN_ENABLED`). Off, an account that holds a passkey still owes it
+  // after its password (the downgrade rule): only a recovery code stands in
+  // for it, and without one the round ends.
   const passkeys =
     fastify.passkeySignIn === true ? createServerPasskeys(fastify, { mailer }) : undefined;
+  // A registration by passkey alone, with no address (#655), while passkeys
+  // are on: the same gate and challenge as a password registration.
+  const registrations: AccountRegistrations =
+    passkeys === undefined
+      ? passwordRegistrations
+      : Object.freeze({
+          ...passwordRegistrations,
+          createWithPasskey: createServerPasskeyAccounts(fastify, {
+            registered: (input, tx) => recordRegistered(input, tx, 'passkey'),
+          }),
+        });
   // The authenticator app (#653): asked after the first factor of an account
   // that holds one, set up when the MFA policy needs a second factor the
   // account lacks. Its hard action is armed only while the hosted pages,

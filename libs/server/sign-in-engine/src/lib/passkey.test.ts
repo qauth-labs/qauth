@@ -205,7 +205,7 @@ function withoutChallenges(result: RoundResult): unknown {
 }
 
 describe('passkey-first', () => {
-  it('asks for a discoverable passkey first, preferred, with the password and the identifier', async () => {
+  it('asks for a discoverable passkey first, preferred, with the password, the identifier and a recovery code', async () => {
     const built = build();
     const result = await built.engine.advance(null, null, context(built));
     expect(result).toMatchObject({
@@ -215,7 +215,8 @@ describe('passkey-first', () => {
           step: 'webauthn_get',
           params: { rpId: 'auth.example.com', userVerification: 'required' },
         },
-        alternatives: [{ step: 'password' }, { step: 'identifier' }],
+        // The hosted pages offer a recovery code to every account (#655).
+        alternatives: [{ step: 'password' }, { step: 'identifier' }, { step: 'recovery_code' }],
         required: false,
       },
       personal: {},

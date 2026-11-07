@@ -212,15 +212,17 @@ export interface SignedIn {
 /**
  * A completed registration (#640; ADR-017 Decisions 8 and 10): the account
  * was created after its mailbox was proved and its password passed the
- * policy. No authenticator was presented, so it carries no `amr` and no
- * `auth_time`, and the transport starts no session that could satisfy
- * `max_age` or `prompt=login`.
+ * policy, or, for an account whose primary identity is a passkey (#655),
+ * after its registration ceremony and the confirmation of its recovery
+ * codes. No sign-in completed, so it carries no `amr` and no `auth_time`,
+ * and the transport starts no session that could satisfy `max_age` or
+ * `prompt=login`.
  */
 export interface Registered {
   /** The new account's user id. */
   readonly subject: string;
-  /** The address it was registered with, normalised. */
-  readonly identifier: string;
+  /** The address it was registered with, normalised; none for a passkey-only account (#655). */
+  readonly identifier?: string;
   readonly registered: true;
   readonly recovered?: undefined;
   readonly amr?: undefined;

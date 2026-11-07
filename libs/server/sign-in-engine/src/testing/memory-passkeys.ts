@@ -19,6 +19,9 @@ import type {
 /** The RP ID every ceremony runs under. */
 export const MEMORY_PASSKEY_RP_ID = 'auth.example.com';
 
+/** The name the memory gives an account with no address (#655). */
+export const MEMORY_PASSKEY_ACCOUNT_NAME = 'account-memory';
+
 /** One passkey the memory holds. */
 export interface MemoryPasskey {
   readonly id: string;
@@ -172,8 +175,17 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
     async startRegistration({ key, userId, identifier }): Promise<PasskeyRegistrationStart> {
       calls.push('startRegistration');
       const started = challenge();
-      ceremonies.set(key, { kind: 'registration', challenge: started, userId });
-      const excluded = [...passkeys.values()].filter((passkey) => passkey.userId === userId);
+      ceremonies.set(key, {
+        kind: 'registration',
+        challenge: started,
+        ...(userId === undefined ? {} : { userId }),
+      });
+      // A registration's ceremony (#655) names no account, and excludes nothing.
+      const excluded =
+        userId === undefined
+          ? []
+          : [...passkeys.values()].filter((passkey) => passkey.userId === userId);
+      const name = identifier ?? MEMORY_PASSKEY_ACCOUNT_NAME;
       return {
         options: {
           challenge: started,
@@ -188,7 +200,7 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
           attestation: 'none',
         },
         personal: {
-          user: { id: 'dXNlci1oYW5kbGU', name: identifier, displayName: identifier },
+          user: { id: 'dXNlci1oYW5kbGU', name, displayName: name },
           excludeCredentials: excluded.map((passkey) => ({ type: 'public-key', id: passkey.id })),
         },
       };
@@ -208,13 +220,18 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
       }
       return { kind: 'verified', registration: JSON.stringify({ id: answer.id, userId }) };
     },
-    async bind({ realmId, userId, registration }): Promise<PasskeyBinding> {
-      calls.push('bind');
+    async bind({ realmId, userId, registration, replacing }): Promise<PasskeyBinding> {
+      calls.push(replacing === true ? 'bind replacing' : 'bind');
       if (memory.bindRefusal !== undefined) return { kind: 'refused', reason: memory.bindRefusal };
       const held = JSON.parse(registration) as { id: string; userId: string };
       if (held.userId !== userId) return { kind: 'refused', reason: 'subject_mismatch' };
       if (passkeys.has(held.id)) return { kind: 'refused', reason: 'credential_exists' };
       const passkey: MemoryPasskey = { id: held.id, userId, disabled: false };
+      if (replacing === true) {
+        for (const other of passkeys.values()) {
+          if (other.userId === userId) other.disabled = true;
+        }
+      }
       passkeys.set(held.id, passkey);
       notices.push({ realmId, userId });
       memory.onBind?.(passkey);

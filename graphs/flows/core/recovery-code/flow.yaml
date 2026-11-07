@@ -46,8 +46,8 @@ scope:
       its 5 free failures), the identifier, the first factor, and the account read again"
     - "the factor's own steps (a passkey from #651, TOTP from #653): their offer, their answer and their ladders. A
       recovery code is offered beside them, never in their place"
-    - 'a recovery code before any first factor, for the passkey of a passkey-only account (#655): no such account
-      exists before #655 adds passkey registration'
+    - 'a recovery code before any first factor, for the passkey of a passkey-only account, found by its lookup
+      digest: drawn by flows/core/passkey-sign-up (#655), which then runs this flow from reservingAttempt'
     - 'what follows the factors at rule 8, drawn by flows/core/account-verification and flows/core/sign-in: the
       inline verification of an address and the forced password update'
     - 'the step of a password reset that asks for any other authenticator the account holds (flows/core/password-reset,

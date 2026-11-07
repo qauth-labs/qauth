@@ -52,27 +52,109 @@ export async function storePasskeyEnrolment(
     readonly realmId: string;
     readonly userId: string;
     readonly enrolment: WebAuthnEnrolment;
+    /**
+     * The rebind after a lost passkey (#655): after step 3, every other
+     * enabled passkey of the account in the realm is disabled, in the same
+     * transaction, so the lost one signs in no more.
+     */
+    readonly replacing?: boolean;
   }
 ): Promise<UserCredential> {
-  type Transaction = Parameters<
-    Parameters<PasskeyEnrolmentDependencies['db']['transaction']>[0]
-  >[0];
-  return deps.db.transaction(async (tx: Transaction) => {
-    const lock = await deps.realms.lockRpIdForEnrolment(tx, input.realmId);
-    if (lock.rpId !== input.enrolment.rpId) {
-      throw new BadRequestError(
-        "Passkey was created under another RP ID than the realm's; start the enrolment again"
+  return deps.db.transaction(async (tx: EnrolmentTransaction) => {
+    const created = await writePasskey(deps, tx, input);
+    if (input.replacing === true) {
+      const passkeys = await deps.userCredentials.findAllByUserIdAndType(
+        input.userId,
+        WEBAUTHN_PROVIDER_TYPE,
+        tx
       );
+      const at = Date.now();
+      for (const other of passkeys) {
+        if (
+          other.realmId !== input.realmId ||
+          other.externalSub === created.externalSub ||
+          (other.disabledAt !== null && other.disabledAt !== undefined)
+        ) {
+          continue;
+        }
+        await deps.userCredentials.setDisabledAt(
+          input.realmId,
+          WEBAUTHN_PROVIDER_TYPE,
+          other.externalSub,
+          at,
+          tx
+        );
+      }
     }
-    return deps.userCredentials.create(
-      {
-        userId: input.userId,
-        realmId: input.realmId,
-        providerType: WEBAUTHN_PROVIDER_TYPE,
-        externalSub: input.enrolment.externalSub,
-        credentialData: { ...input.enrolment.credentialData },
-      },
-      tx
+    return created;
+  });
+}
+
+/** The database transaction an enrolment writes in. */
+export type EnrolmentTransaction = Parameters<
+  Parameters<PasskeyEnrolmentDependencies['db']['transaction']>[0]
+>[0];
+
+/** Steps 1 to 3 of {@link storePasskeyEnrolment}, in the caller's transaction. */
+async function writePasskey(
+  deps: PasskeyEnrolmentDependencies,
+  tx: EnrolmentTransaction,
+  input: {
+    readonly realmId: string;
+    readonly userId: string;
+    readonly enrolment: WebAuthnEnrolment;
+  }
+): Promise<UserCredential> {
+  const lock = await deps.realms.lockRpIdForEnrolment(tx, input.realmId);
+  if (lock.rpId !== input.enrolment.rpId) {
+    throw new BadRequestError(
+      "Passkey was created under another RP ID than the realm's; start the enrolment again"
     );
+  }
+  return deps.userCredentials.create(
+    {
+      userId: input.userId,
+      realmId: input.realmId,
+      providerType: WEBAUTHN_PROVIDER_TYPE,
+      externalSub: input.enrolment.externalSub,
+      credentialData: { ...input.enrolment.credentialData },
+    },
+    tx
+  );
+}
+
+/**
+ * Create an account whose primary identity is a passkey, with no address
+ * (#655; ADR-017 Decision 8, question 30), from a verified registration: in
+ * one transaction, the `users` row, the passkey as {@link storePasskeyEnrolment}
+ * stores one (the realm's RP ID locked and checked, the `webauthn`
+ * credential), and the caller's `recorded` write (the account's
+ * `user.registered` event), so a refusal or a failure rolls back the user
+ * with it. No email attribute and no password credential are written.
+ *
+ * @returns the new account's user id
+ * @throws BadRequestError when the passkey was created under another RP ID
+ * than the realm's
+ * @throws UniqueConstraintError when the realm already has the credential id
+ */
+export async function storePasskeyAccount(
+  deps: PasskeyEnrolmentDependencies & {
+    readonly users: Pick<FastifyInstance['repositories']['users'], 'create'>;
+  },
+  input: {
+    readonly realmId: string;
+    readonly enrolment: WebAuthnEnrolment;
+    readonly recorded: (tx: EnrolmentTransaction, userId: string) => Promise<void>;
+  }
+): Promise<string> {
+  return deps.db.transaction(async (tx: EnrolmentTransaction) => {
+    const user = await deps.users.create({ realmId: input.realmId }, tx);
+    await writePasskey(deps, tx, {
+      realmId: input.realmId,
+      userId: user.id,
+      enrolment: input.enrolment,
+    });
+    await input.recorded(tx, user.id);
+    return user.id;
   });
 }

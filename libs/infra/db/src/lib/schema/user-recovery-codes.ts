@@ -35,6 +35,15 @@ export const userRecoveryCodes = pgTable(
     userId: uuid('user_id').notNull(),
     /** The code's salted hash from the password hasher: never the code. */
     codeHash: text('code_hash').notNull(),
+    /**
+     * The code's lookup digest (#655): a slow hash (Argon2id) of the code
+     * under a salt of the realm, the same for the same code, which finds the
+     * account by the code alone. Only the sets of an account whose primary identity is a passkey,
+     * with no address, carry it: such an account has nothing else to name it
+     * by when its passkey is lost. `NULL` for every other set, whose codes are
+     * checked only after a first factor named the account. Never the code.
+     */
+    lookupDigest: text('lookup_digest'),
     /** When the set was issued, in epoch ms on the auth server's clock. */
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
     /** When the code was used, in epoch ms; `NULL` while it is unused. */
@@ -57,7 +66,15 @@ export const userRecoveryCodes = pgTable(
     index('idx_user_recovery_codes_user_realm').on(t.userId, t.realmId),
     // Serves the realm foreign key's cascade.
     index('idx_user_recovery_codes_realm_id').on(t.realmId),
+    // Serves the lookup of an unused code by its digest (#655).
+    index('idx_user_recovery_codes_lookup')
+      .on(t.realmId, t.lookupDigest)
+      .where(sql`${t.lookupDigest} IS NOT NULL AND ${t.usedAt} IS NULL`),
     check('user_recovery_codes_code_hash_not_empty', sql`length(${t.codeHash}) > 0`),
+    check(
+      'user_recovery_codes_lookup_digest_not_empty',
+      sql`${t.lookupDigest} IS NULL OR length(${t.lookupDigest}) > 0`
+    ),
     check('user_recovery_codes_created_at_positive', sql`${t.createdAt} > 0`),
     // Not ordered against `created_at`: two servers' clocks may disagree.
     check('user_recovery_codes_used_at_positive', sql`${t.usedAt} IS NULL OR ${t.usedAt} > 0`),

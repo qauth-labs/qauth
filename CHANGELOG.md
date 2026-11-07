@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Sign-up with a passkey alone, and `WEBAUTHN_ENABLED` switched on**
+  ([#655], ADR-017 Decision 8 and phase F2b, ADR-018 §3;
+  `graphs/flows/core/passkey-sign-up`). `WEBAUTHN_ENABLED=true` now boots:
+  the environment schema no longer refuses it, and it turns on passkey
+  sign-in, the offer to add a passkey after a password sign-in, and a new
+  registration path. Where the realm and the client allow sign-up, the hosted
+  pages offer a passkey first at registration, with the email address beside
+  it: the ceremony (user verification required, no account named, the
+  passkey named `account-` and the start of its user handle) creates a
+  `users` row and a `webauthn` credential with no email attribute and no
+  password, in one transaction with `user.registered` (method `passkey`).
+  The account counts as verified by the ceremony; the registration carries
+  no `amr` or `auth_time`. A recovery set is shown at once, and no code is
+  issued until the person confirms the codes are saved. No mail is ever sent
+  to such an account: its notices are its security log. It has no password
+  reset; on the hosted pages a recovery code is offered beside the first
+  sign-in step, for every account alike, and finds an account whose
+  credentials are all passkeys by the code alone, through a per-realm
+  Argon2id lookup digest of each code of its set (new column
+  `user_recovery_codes.lookup_digest`, migration 0066). The code then binds
+  a new passkey within 5 minutes in place of the lost one (the account's
+  other passkeys are disabled in the same write), which the next round signs
+  in with; a code alone never signs in. A registration by passkey counts against the realm's
+  registration cap, and each answer is a credential round on the sign-in
+  limiters.
 - **TOTP as a second factor, with its own failure ladder** ([#653], ADR-017
   Decisions 7 and 8, ADR-020 §3; `graphs/flows/core/totp`). The sign-in
   engine gains the `totp` step (answered with `otp`) after the first factor of
@@ -63,8 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one. The FiPA mapper answers `redirect_to_web` for a client that did not
   list `webauthn_get`. Two pages in the current `/ui` style run the
   ceremonies: `GET /ui/passkey/{id}` and `GET /ui/passkey-enrolment/{id}`.
-  Passkey sign-in stays off while `WEBAUTHN_ENABLED=true` is refused at boot
-  (#655 lifts the refusal).
+  Passkey sign-in is on while `WEBAUTHN_ENABLED` is (#655).
 - **`amr` and `auth_time` on the tokens of browser sign-ins** ([#662],
   ADR-017 Decision 10 as amended 2026-11-06, ADR-020 §3; RFC 9068 §2.2.1,
   RFC 8176). A browser session now stores the methods its sign-in proved
@@ -3298,6 +3322,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#649]: https://github.com/qauth-labs/qauth/issues/649
 [#651]: https://github.com/qauth-labs/qauth/issues/651
 [#653]: https://github.com/qauth-labs/qauth/issues/653
+[#655]: https://github.com/qauth-labs/qauth/issues/655
 [#662]: https://github.com/qauth-labs/qauth/issues/662
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675

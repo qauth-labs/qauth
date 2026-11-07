@@ -3,6 +3,7 @@ import {
   createRecoveryCodeService,
   type RecoveryCodeAccount,
   type RecoveryCodeHasher,
+  type RecoveryCodeLookup,
   type RecoveryCodes,
   type RecoveryCodeSet,
   type RecoveryCodeStore,
@@ -48,11 +49,18 @@ export interface RecoveryCodeRepositories<Tx> {
         readonly realmId: string;
         readonly userId: string;
         readonly codeHashes: readonly string[];
+        readonly lookupDigests?: readonly string[];
         readonly createdAt: number;
         readonly keepConfirmed?: boolean;
       },
       tx?: Tx
     ): Promise<string | null>;
+    /** The account of an unused code by its lookup digest (#655). */
+    findByLookupDigest(
+      realmId: string,
+      digest: string,
+      tx?: Tx
+    ): Promise<{ readonly userId: string } | null>;
     markUsed(
       input: {
         readonly realmId: string;
@@ -112,6 +120,12 @@ export interface RepositoryRecoveryCodesOptions<Tx> extends RecoveryCodeNotices<
   readonly hasher: RecoveryCodeHasher;
   /** The clock a code is taken and a set issued by. The system's by default. */
   readonly clock?: Clock;
+  /**
+   * What finds an account with no address by a code alone (#655): its sets
+   * carry each code's lookup digest, and the engine's `findAccount` reads
+   * it. Absent: no code is found before a first factor.
+   */
+  readonly lookup?: RecoveryCodeLookup;
 }
 
 /** The engine's port, and the regeneration the account API calls. */
@@ -156,8 +170,16 @@ export function createRepositoryRecoveryCodes<Tx>(
     },
     confirm: ({ realmId, userId, setId, at }) =>
       codes.confirmSet({ realmId, userId, setId, confirmedAt: at }),
-    replace: ({ realmId, userId, hashes, at, keepConfirmed }) =>
-      codes.replaceSet({ realmId, userId, codeHashes: hashes, createdAt: at, keepConfirmed }),
+    replace: ({ realmId, userId, hashes, lookupDigests, at, keepConfirmed }) =>
+      codes.replaceSet({
+        realmId,
+        userId,
+        codeHashes: hashes,
+        ...(lookupDigests === undefined ? {} : { lookupDigests }),
+        createdAt: at,
+        keepConfirmed,
+      }),
+    findByLookupDigest: ({ realmId, digest }) => codes.findByLookupDigest(realmId, digest),
     async take({ realmId, userId, id, at, clientId }) {
       const use = await transaction(async (tx) => {
         if (!(await codes.markUsed({ realmId, userId, id, usedAt: at }, tx))) return undefined;
@@ -175,9 +197,11 @@ export function createRepositoryRecoveryCodes<Tx>(
     store,
     hasher: options.hasher,
     ...(options.clock === undefined ? {} : { clock: options.clock }),
+    ...(options.lookup === undefined ? {} : { lookup: options.lookup }),
   });
 
   return Object.freeze({
+    ...(service.findAccount === undefined ? {} : { findAccount: service.findAccount }),
     status: service.status,
     issue: service.issue,
     redeem: service.redeem,

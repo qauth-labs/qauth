@@ -36,6 +36,7 @@ const CSRF = 'csrf-value-of-the-step-view';
 const WEBAUTHN_GET = stepUrn('webauthn_get');
 const WEBAUTHN_CREATE = stepUrn('webauthn_create');
 const PASSWORD = stepUrn('password');
+const IDENTIFIER = stepUrn('identifier');
 const REQUEST_OPTIONS = {
   challenge: 'c'.repeat(43),
   rpId: 'auth.example.com',
@@ -248,6 +249,62 @@ describe('the passkey pages (#651)', () => {
 
       expect(response.statusCode).toBe(303);
       expect(response.headers.location).toBe(buildRealmUrl(REALM, `/ui/interaction/${ID}`));
+    });
+
+    it('creates an account by passkey at a registration, with the address beside it (#655)', async () => {
+      const user = { id: 'aGFuZGxl', name: 'account-aGFuZGxl', displayName: 'account-aGFuZGxl' };
+      vi.mocked(readInteractionPersonalData).mockResolvedValue({
+        step: WEBAUTHN_CREATE,
+        data: { user, excludeCredentials: [] },
+      } as never);
+      vi.mocked(readInteractionStep).mockResolvedValue(
+        viewOf({
+          name: WEBAUTHN_CREATE,
+          params: { ...CREATION_PARAMS, optional: false },
+          alternatives: [IDENTIFIER],
+        })
+      );
+
+      const response = await get();
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain('Create your account with a passkey');
+      expect(response.body).toContain('Use an email address instead');
+      expect(response.body).toContain(`href="${buildRealmUrl(REALM, `/ui/interaction/${ID}`)}"`);
+      expect(response.body).not.toContain('Not now');
+      expect(optionsOf(response.body)).toEqual({
+        ...CREATION_PARAMS.options,
+        user,
+        excludeCredentials: [],
+      });
+    });
+
+    it('says a refused registration by passkey could not be created (#655)', async () => {
+      vi.mocked(readInteractionStep).mockResolvedValue(
+        viewOf({
+          name: WEBAUTHN_CREATE,
+          params: { ...CREATION_PARAMS, optional: false },
+          alternatives: [IDENTIFIER],
+          error: 'invalid_credentials',
+        })
+      );
+
+      const response = await get();
+
+      expect(response.body).toContain('The passkey could not be created.');
+    });
+
+    it('adds the new passkey a recovery code binds, with no way to decline (#655)', async () => {
+      vi.mocked(readInteractionStep).mockResolvedValue(
+        viewOf({ name: WEBAUTHN_CREATE, params: { ...CREATION_PARAMS, optional: false } })
+      );
+
+      const response = await get();
+
+      expect(response.body).toContain('Add a new passkey');
+      expect(response.body).toContain('Your recovery code worked.');
+      expect(response.body).not.toContain('Not now');
+      expect(response.body).not.toContain('Use an email address instead');
     });
 
     it('says a refused registration could not be added', async () => {

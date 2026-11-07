@@ -4,7 +4,8 @@ import { createHash, generateKeyPairSync, type KeyObject, randomBytes, sign } fr
  * A SOFTWARE PASSKEY FOR THE TESTS (#651): one ES256 credential (P-256,
  * COSE algorithm -7), held in memory, which answers a `webauthn_get`
  * ceremony as a browser posts it: `PublicKeyCredential.toJSON()` of an
- * assertion, as a JSON string. Its authenticator data names the RP ID's hash,
+ * assertion, as a JSON string; and, for a registration (#655), the
+ * `webauthn_create` ceremony, with a `none` attestation. Its authenticator data names the RP ID's hash,
  * the user-presence flag, the user-verification flag unless a test turns it
  * off, and a counter that grows with each assertion; its signature is the
  * DER-encoded ECDSA signature over the authenticator data and the hash of the
@@ -18,6 +19,12 @@ import { createHash, generateKeyPairSync, type KeyObject, randomBytes, sign } fr
 export interface SoftPasskeyRequest {
   readonly challenge: string;
   readonly rpId: string;
+}
+
+/** The creation options a `webauthn_create` step carries, as far as a registration reads them. */
+export interface SoftPasskeyCreation {
+  readonly challenge: string;
+  readonly rp: { readonly id: string };
 }
 
 /** What one assertion may change. */
@@ -37,6 +44,12 @@ export interface SoftPasskey {
   readonly credentialData: Record<string, unknown>;
   /** The browser's answer to `request`, as the page posts it in `webauthn_response`. */
   assert(request: SoftPasskeyRequest, options?: SoftAssertionOptions): string;
+  /**
+   * The browser's answer to a registration's `options` (#655), as the page
+   * posts it in `webauthn_response`: this credential, created for the RP ID
+   * the options name, with a `none` attestation and a sign counter of 0.
+   */
+  create(options: SoftPasskeyCreation, assertion?: SoftAssertionOptions): string;
 }
 
 const b64url = (bytes: Buffer): string => bytes.toString('base64url');
@@ -58,6 +71,20 @@ function coseKeyOf(publicKey: KeyObject): Buffer {
     y,
   ]);
 }
+
+/** A CBOR head (RFC 8949 §3) of major type `major` and argument `length`. */
+function cborHead(major: number, length: number): Buffer {
+  if (length < 24) return Buffer.from([(major << 5) | length]);
+  if (length < 256) return Buffer.from([(major << 5) | 24, length]);
+  const head = Buffer.alloc(3);
+  head[0] = (major << 5) | 25;
+  head.writeUInt16BE(length, 1);
+  return head;
+}
+
+const cborText = (text: string): Buffer =>
+  Buffer.concat([cborHead(3, Buffer.byteLength(text)), Buffer.from(text, 'utf8')]);
+const cborBytes = (bytes: Buffer): Buffer => Buffer.concat([cborHead(2, bytes.length), bytes]);
 
 /** A new software passkey for an account of the RP `rpId`. */
 export function softPasskey(rpId: string, userHandle = b64url(randomBytes(32))): SoftPasskey {
@@ -116,6 +143,55 @@ export function softPasskey(rpId: string, userHandle = b64url(randomBytes(32))):
           authenticatorData: b64url(authenticatorData),
           signature: b64url(signature),
           userHandle,
+        },
+        authenticatorAttachment: 'platform',
+        clientExtensionResults: {},
+      });
+    },
+    create(options, assertion = {}) {
+      const clientDataJSON = Buffer.from(
+        JSON.stringify({
+          type: 'webauthn.create',
+          challenge: options.challenge,
+          origin: assertion.origin ?? `https://${options.rp.id}`,
+          crossOrigin: false,
+        }),
+        'utf8'
+      );
+      // UP (0x01), UV (0x04) unless the test says otherwise, AT (0x40): the
+      // attested credential data follows (WebAuthn Level 3 §6.5.1).
+      const flags = 0x01 | 0x40 | (assertion.userVerified === false ? 0 : 0x04);
+      const rawId = Buffer.from(credentialId, 'base64url');
+      const idLength = Buffer.alloc(2);
+      idLength.writeUInt16BE(rawId.length);
+      const authenticatorData = Buffer.concat([
+        sha256(options.rp.id),
+        Buffer.from([flags]),
+        Buffer.alloc(4),
+        // The AAGUID of an authenticator that names no model.
+        Buffer.alloc(16),
+        idLength,
+        rawId,
+        coseKeyOf(publicKey),
+      ]);
+      // { "fmt": "none", "attStmt": {}, "authData": <bytes> } (§8.7).
+      const attestationObject = Buffer.concat([
+        Buffer.from([0xa3]),
+        cborText('fmt'),
+        cborText('none'),
+        cborText('attStmt'),
+        Buffer.from([0xa0]),
+        cborText('authData'),
+        cborBytes(authenticatorData),
+      ]);
+      return JSON.stringify({
+        id: credentialId,
+        rawId: credentialId,
+        type: 'public-key',
+        response: {
+          clientDataJSON: b64url(clientDataJSON),
+          attestationObject: b64url(attestationObject),
+          transports: ['internal'],
         },
         authenticatorAttachment: 'platform',
         clientExtensionResults: {},

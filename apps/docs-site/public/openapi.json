@@ -14961,7 +14961,7 @@
         "tags": [
           "UI"
         ],
-        "description": "The \"add a passkey\" page (#651): runs the browser's registration ceremony for the interaction's `webauthn_create` step, offered after a sign-in, and posts the result to the answer endpoint, or declines the offer. Needs the flow cookie; refused from another site. `Cache-Control: no-store`.",
+        "description": "The \"add a passkey\" page (#651): runs the browser's registration ceremony for the interaction's `webauthn_create` step, offered after a sign-in, and posts the result to the answer endpoint, or declines the offer. At a registration it creates the account by passkey alone, with a link to the address step; after a recovery code it adds the new passkey in place of a lost one (#655). Needs the flow cookie; refused from another site. `Cache-Control: no-store`.",
         "parameters": [
           {
             "schema": {
@@ -15111,7 +15111,7 @@
         "tags": [
           "UI"
         ],
-        "description": "The \"use a recovery code\" page (#649): the form of the interaction's `recovery_code` step, with the error of a refused code. `Cache-Control: no-store`.",
+        "description": "The \"use a recovery code\" page (#649): the form of the interaction's `recovery_code` step, current or offered beside another step (the sign-in's first offer, for the lost passkey of an account with no address, #655), with the error of a refused code. `Cache-Control: no-store`.",
         "parameters": [
           {
             "schema": {

@@ -132,7 +132,8 @@ export {
 } from './trust-registry';
 export {
   type AndroidAppFingerprints,
-  WEBAUTHN_ENABLED_REFUSAL,
+  type PasskeyPostureWarning,
+  passkeyPostureWarnings,
   type WebAuthnEnv,
   webauthnEnvSchema,
 } from './webauthn';

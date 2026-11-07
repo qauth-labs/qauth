@@ -430,18 +430,20 @@ describe('ID_JAG_JWKS_CACHE_TTL above its ceiling is refused at boot (#433)', ()
 });
 
 /**
- * WEBAUTHN_ENABLED (ADR-017 phase F2b, #467). Until the change that completes
- * F2b, the environment schema refuses the switch, so passkeys cannot be turned
- * on before their ceremonies and abuse controls exist. That change removes the
- * refusal and this block with it.
+ * WEBAUTHN_ENABLED (ADR-017 phase F2b, #467). #467 refused the switch until
+ * F2b was complete; #655, which completes it, lifts the refusal.
  */
-describe('WEBAUTHN_ENABLED is refused at boot until F2b is complete (#467)', () => {
-  it('WEBAUTHN_ENABLED=true fails the boot, naming the variable and the way out', async () => {
+describe('WEBAUTHN_ENABLED turns passkeys on (#467, #655)', () => {
+  it('WEBAUTHN_ENABLED=true boots with passkeys on, in production too', async () => {
     setEnv({ NODE_ENV: 'development', WEBAUTHN_ENABLED: 'true' });
+    expect((await import('./env')).env.WEBAUTHN_ENABLED).toBe(true);
 
-    const boot = import('./env');
-    await expect(boot).rejects.toThrow('WEBAUTHN_ENABLED=true is not available yet');
-    await expect(boot).rejects.toThrow('Unset WEBAUTHN_ENABLED or set it to false');
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: PROD_SECRET,
+      WEBAUTHN_ENABLED: 'true',
+    });
+    expect((await import('./env')).env.WEBAUTHN_ENABLED).toBe(true);
   });
 
   it('unset or false boots with passkeys off, in production too', async () => {

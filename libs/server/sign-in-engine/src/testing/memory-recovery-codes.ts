@@ -4,6 +4,7 @@ import type { RecoveryCodeAccount, RecoveryCodes, RecoveryCodeSet } from '../lib
 import {
   createRecoveryCodeService,
   type RecoveryCodeHasher,
+  type RecoveryCodeLookup,
   type RecoveryCodeStore,
 } from '../lib/recovery-codes';
 
@@ -20,6 +21,8 @@ export interface MemoryRecoveryCodeRow {
   readonly realmId: string;
   readonly userId: string;
   readonly hash: string;
+  /** The code's lookup digest (#655), for an account found by its code alone. */
+  readonly lookupDigest: string | null;
   readonly createdAt: number;
   usedAt: number | null;
   usedBy: string | null;
@@ -29,6 +32,10 @@ export interface MemoryRecoveryCodeRow {
 export interface MemoryRecoveryCodeStore extends RecoveryCodeStore {
   /** Every row, used or not, of every account. */
   readonly rows: MemoryRecoveryCodeRow[];
+  findByLookupDigest(input: {
+    readonly realmId: string;
+    readonly digest: string;
+  }): Promise<{ readonly userId: string } | null>;
 }
 
 /** A store in memory. `take` may be told to lose a race: another round took the code first. */
@@ -70,20 +77,30 @@ export function createMemoryRecoveryCodeStore(): MemoryRecoveryCodeStore & {
       realmId,
       userId,
       hashes,
+      lookupDigests,
       at,
       keepConfirmed,
-    }: RecoveryCodeAccount & { hashes: readonly string[]; at: number; keepConfirmed: boolean }) {
+    }: RecoveryCodeAccount & {
+      hashes: readonly string[];
+      lookupDigests?: readonly string[];
+      at: number;
+      keepConfirmed: boolean;
+    }) {
       const held = of({ realmId, userId });
       if (keepConfirmed && held.some((row) => row.confirmedAt !== null)) return null;
+      if (lookupDigests !== undefined && lookupDigests.length !== hashes.length) {
+        throw new Error('a lookup digest for each hash');
+      }
       for (const row of held) rows.splice(rows.indexOf(row), 1);
       const setId = `code-${next + 1}`;
-      for (const hash of hashes) {
+      for (const [index, hash] of hashes.entries()) {
         next += 1;
         rows.push({
           id: `code-${next}`,
           realmId,
           userId,
           hash,
+          lookupDigest: lookupDigests?.[index] ?? null,
           createdAt: at,
           usedAt: null,
           usedBy: null,
@@ -91,6 +108,17 @@ export function createMemoryRecoveryCodeStore(): MemoryRecoveryCodeStore & {
         });
       }
       return setId;
+    },
+    async findByLookupDigest({ realmId, digest }: { realmId: string; digest: string }) {
+      const owners = new Set(
+        rows
+          .filter(
+            (row) => row.realmId === realmId && row.usedAt === null && row.lookupDigest === digest
+          )
+          .map((row) => row.userId)
+      );
+      const [userId] = owners;
+      return owners.size === 1 && userId !== undefined ? { userId } : null;
     },
     async take({
       realmId,
@@ -153,14 +181,38 @@ export interface MemoryRecoveryCodes extends RecoveryCodes {
   readonly ceilingNotices: RecoveryCodeAccount[];
 }
 
+/** The lookup digest of the memory: a plain SHA-256 of the realm and the code, never for production. */
+export function memoryLookupDigest(realmId: string, code: string): string {
+  return createHash('sha256').update(`${realmId}\u0000${code}`).digest('hex');
+}
+
+/** Options of {@link createMemoryRecoveryCodes}. */
+export interface MemoryRecoveryCodeOptions {
+  /**
+   * Which accounts' sets carry lookup digests (#655): the accounts a code
+   * alone finds. None by default.
+   */
+  readonly findable?: (account: RecoveryCodeAccount) => boolean;
+  /** Build the port with no lookup at all, as before #655: no `findAccount`. */
+  readonly noLookup?: boolean;
+}
+
 /** The engine's recovery-code port in memory, with the service's rules. */
-export function createMemoryRecoveryCodes(now: () => number = Date.now): MemoryRecoveryCodes {
+export function createMemoryRecoveryCodes(
+  now: () => number = Date.now,
+  options: MemoryRecoveryCodeOptions = {}
+): MemoryRecoveryCodes {
   const store = createMemoryRecoveryCodeStore();
   const hasher = createCountingHasher();
+  const lookup: RecoveryCodeLookup = {
+    digest: async ({ realmId, code }) => memoryLookupDigest(realmId, code),
+    findable: async (account) => options.findable?.(account) ?? false,
+  };
   const service = createRecoveryCodeService({
     store,
     hasher,
     clock: { now, sleep: async () => undefined },
+    ...(options.noLookup === true ? {} : { lookup }),
   });
   const usedNotices: RecoveryCodeAccount[] = [];
   const ceilingNotices: RecoveryCodeAccount[] = [];
@@ -169,6 +221,7 @@ export function createMemoryRecoveryCodes(now: () => number = Date.now): MemoryR
     hasher,
     usedNotices,
     ceilingNotices,
+    ...(service.findAccount === undefined ? {} : { findAccount: service.findAccount }),
     status: service.status,
     issue: service.issue,
     replace: service.replace,

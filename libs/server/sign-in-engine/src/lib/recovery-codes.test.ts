@@ -227,3 +227,67 @@ describe('redeeming a recovery code', () => {
     });
   });
 });
+
+describe('a code found by itself (#655)', () => {
+  /** A service whose lookup finds `findable`'s sets, counting its digests. */
+  function lookupService(findable: ReadonlySet<string>) {
+    const store = createMemoryRecoveryCodeStore();
+    const hasher = createCountingHasher();
+    const digests: string[] = [];
+    const codes = createRecoveryCodeService({
+      store,
+      hasher,
+      clock: { now: () => 1_800_000_000_000, sleep: async () => undefined },
+      lookup: {
+        digest: async ({ realmId, code }) => {
+          digests.push(code);
+          return `${realmId}:${code}`;
+        },
+        findable: async ({ userId }) => findable.has(userId),
+      },
+    });
+    return { store, codes, digests };
+  }
+
+  it('carries a lookup digest of each code only in the sets of a findable account', async () => {
+    const { store, codes } = lookupService(new Set([ACCOUNT.userId]));
+    const found = await issue(codes, ACCOUNT);
+    await issue(codes, OTHER);
+    const of = (userId: string) => store.rows.filter((row) => row.userId === userId);
+    expect(of(ACCOUNT.userId).map((row) => row.lookupDigest)).toEqual(
+      found.codes.map((code) => `${ACCOUNT.realmId}:${code.replaceAll('-', '')}`)
+    );
+    expect(of(OTHER.userId).every((row) => row.lookupDigest === null)).toBe(true);
+  });
+
+  it("names the code's account, typed in any case or spacing, and takes nothing", async () => {
+    const { store, codes } = lookupService(new Set([ACCOUNT.userId]));
+    const set = await issue(codes, ACCOUNT);
+    const typed = ` ${(set.codes[3] ?? '').toUpperCase().replaceAll('-', ' ')} `;
+    expect(await codes.findAccount?.({ realmId: ACCOUNT.realmId, code: typed })).toEqual({
+      userId: ACCOUNT.userId,
+    });
+    expect(store.rows.every((row) => row.usedAt === null)).toBe(true);
+    // Another realm's lookup finds nothing.
+    expect(await codes.findAccount?.({ realmId: 'realm-2', code: typed })).toBeNull();
+  });
+
+  it('finds nothing for a used code, a wrong one or a code of an account that is not findable', async () => {
+    const { codes, digests } = lookupService(new Set([ACCOUNT.userId]));
+    const set = await issue(codes, ACCOUNT);
+    const other = await issue(codes, OTHER);
+    const [first] = set.codes;
+    await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code: first ?? '' });
+    for (const code of [first, 'aaaa-bbbb-cccc-dddd', other.codes[0]]) {
+      expect(await codes.findAccount?.({ realmId: ACCOUNT.realmId, code: code ?? '' })).toBeNull();
+    }
+    // An answer that cannot be a code costs one digest too.
+    const before = digests.length;
+    expect(await codes.findAccount?.({ realmId: ACCOUNT.realmId, code: 'not a code' })).toBeNull();
+    expect(digests.length).toBe(before + 1);
+  });
+
+  it('offers no lookup without one', () => {
+    expect(service().codes.findAccount).toBeUndefined();
+  });
+});

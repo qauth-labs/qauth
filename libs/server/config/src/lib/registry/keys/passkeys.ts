@@ -4,8 +4,8 @@ import { defineKeys } from '../types';
  * Passkeys (ADR-017 Decision 14, ADR-019 Decision 2, issue #467): the keys of
  * `webauthnEnvSchema`.
  *
- * All `advanced` while phase F2b is incomplete: the switch is refused, and the
- * names may still change before passkeys ship.
+ * All `advanced`: passkeys are off by default, and the RP ID and the
+ * association files are a deployment's deliberate choice.
  */
 export const PASSKEY_KEYS = defineKeys([
   {
@@ -15,7 +15,7 @@ export const PASSKEY_KEYS = defineKeys([
     owner: 'passkeys',
     default: 'false',
     since: '0.2.0',
-    docs: 'Turn passkeys on; refused at boot until passkey sign-in (ADR-017 phase F2b) is complete.',
+    docs: 'Turn passkeys on: passkey sign-in, the offer to add one after a password sign-in, and sign-up with a passkey alone (no email address) where the realm allows sign-up; only the hosted pages (`INTERACTION_UI_ENABLED`) offer a passkey, and while they are off the server warns at every boot.',
   },
   {
     name: 'WEBAUTHN_RP_ID',

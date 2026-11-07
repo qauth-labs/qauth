@@ -1,0 +1,527 @@
+# The registration of an account whose primary identity is a passkey, with no address (#655; ADR-017 Decision 8,
+# Phasing F2b, question 30; ADR-018 §3), and its recovery with a recovery code when the passkey is lost. Written before
+# the code (status: proposed), as ADR-021 Decision 4 asks of a new core flow.
+#
+# - Like the sign-in engine (flows/core/sign-in), this flow has no screen and no HTTP route of its own: a transport
+#   calls the engine once a round, and every round runs the sign-in's rules up to rule 5 first (the transaction, the
+#   MFA policy, the limiters, the transport's request checks, the registration's gate, the bot challenge). So an exit
+#   here is the engine's answer, as data, named in camelCase.
+# - A registration interaction (prompt=create) on a transport that serves webauthn_create and recovery_codes (the
+#   Interaction API, behind the hosted pages) is offered a passkey first, preferred, with the address step of
+#   flows/core/sign-up beside it. The realm's and the client's sign-up rules (PRO-16) are the password registration's,
+#   on every round.
+# - The registration ceremony proves the account (ADR-017 Decision 5): a discoverable passkey, created with user
+#   verification and attestation none. Once the port verified it, one database transaction writes the users row, the
+#   webauthn credential and the user.registered event; no email attribute, no password. The account is verified from
+#   its first moment, and REQUIRE_VERIFIED_ACCOUNT treats it so.
+# - Recovery codes are mandatory for it (question 30): a set is issued in the same round and shown once, and the
+#   registration completes only once the person confirms they saved it. It completes as every registration does, with
+#   no amr and no auth_time (ADR-017 Decision 10).
+# - It has no address, so nothing is mailed for it, ever: a notice it is owed (a recovery code used, the codes failed
+#   100 times) is its security-log event alone (ADR-020 §3, ACC-09). It has no password, so no reset is offered.
+# - Lost passkey: on the hosted pages the first offer of a sign-in carries a recovery code for every account (ADR-017
+#   Decision 4, "Try another way"). A code typed there, before any first factor, finds its account by a lookup digest
+#   that only the sets of passkey-only accounts carry; the account's recovery-code ladder and the salted hashes then
+#   take it as after a first factor (flows/core/recovery-code). It stands in for the lost passkey alone: a new passkey
+#   is bound at once, within 5 minutes of the code, and the sign-in completes only with an assertion of a passkey, so
+#   its amr is a passkey's.
+schema: delurio-graph/0
+kind: flow
+id: core.passkey-sign-up
+status: proposed
+domain: qauth
+title: Register an account with a passkey alone, and recover it with a recovery code
+summary: >-
+  A registration interaction on the hosted pages offers a passkey first. The registration ceremony proves the account:
+  once the port verified it, the account is created with its passkey and no address, and a set of recovery codes is
+  shown once. The registration completes, with no amr, only once the person confirms they saved the codes. When the
+  passkey is lost, a recovery code typed in the sign-in's first offer finds the account, is taken once, and a new
+  passkey is bound before the person signs in with it.
+
+scope:
+  shows: >-
+    a registration by passkey from its first offer to the confirmed codes, and the recovery of a passkey-only account
+    from a recovery code typed before any first factor to the new passkey and the sign-in with it
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "what every round runs before rule 6, drawn by flows/core/sign-in and flows/core/sign-up: the transaction's
+      checks, the MFA policy, the limiters, the transport's request checks, the registration's gate (the realm's
+      accounts.allowSignUp and the client's hosted_flows naming register, refused with registration_not_allowed) and
+      the bot challenge a registration may require"
+    - 'the address step beside the passkey, and everything after it: the password registration of flows/core/sign-up'
+    - "the ceremony's own checks in the port (flows/core/passkey): the challenge taken once, the RP ID and the origins,
+      user verification, a credential the realm holds already"
+    - 'the recovery-code rounds after the account is found: the ladder, the decoy-padded check and the take of
+      flows/core/recovery-code'
+    - 'a FiPA client: it never serves webauthn_create, recovery_codes or recovery_code here, so its registration asks
+      for the address alone, and its sign-in offers no recovery code'
+    - 'the sign-in with the passkey later, passkey-first: flows/core/passkey'
+    - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
+      round of its own'
+
+context:
+  # Where the transaction started: a registration interaction, or a sign-in whose person lost the passkey.
+  entry:
+    values: [register, recover]
+    initial: any
+    say:
+      register: 'a registration interaction (prompt=create)'
+      recover: 'a sign-in, on the hosted pages, whose person types a recovery code in the first offer'
+  # Whether the transport serves the steps this flow needs and the engine holds its ports.
+  hostedPages:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the transport cannot serve webauthn_create and recovery_codes, or the engine has no passkeys'
+      'true': 'the Interaction API, which serves webauthn_create, recovery_codes and recovery_code'
+  # What the port found of a registration response.
+  ceremony:
+    values: [verified, refused]
+    initial: any
+    say:
+      verified: 'a new discoverable passkey, created with user verification under the realm RP ID'
+      refused: 'anything else: a spent challenge, another origin, no user verification, a malformed response'
+  # Whether the realm holds the new credential id already when the account is written.
+  credential:
+    values: [new, held]
+    initial: any
+    say:
+      new: 'no account of the realm holds the credential id'
+      held: 'the realm holds the credential id: another registration or binding wrote it first'
+  # What a recovery code typed before any first factor finds.
+  lookup:
+    values: [found, nothing]
+    initial: any
+    say:
+      found: "an unused code of a passkey-only account's set: an enabled account with no address and only passkeys"
+      nothing: 'no such code: a wrong one, a used one, or a code of an account that holds an address or a password'
+  # The found account's recovery-code ladder and the take of the code.
+  redemption:
+    values: [taken, refused]
+    initial: any
+    say:
+      taken: "the account is outside its ladder's wait, and the code is taken once"
+      refused: "inside the ladder's wait, or another round took the code first"
+  # Whether 5 minutes have passed since the code was taken, when the new passkey is bound.
+  fresh:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'more than 5 minutes since the code was taken'
+      'true': 'at most 5 minutes since the code was taken'
+  # Whether the confirmation names the set this transaction showed.
+  confirmation:
+    values: [current, replaced]
+    initial: any
+    say:
+      current: 'the set shown is still the account’s'
+      replaced: 'another sign-in replaced the set shown meanwhile'
+  # this round reserved a credential round on the limiters before a credential was checked
+  attemptReserved: { values: [false, true], initial: false }
+  # a registration response was verified by the port
+  ceremonyVerified: { values: [false, true], initial: false }
+  # the account exists: the users row, the webauthn credential and the user.registered event
+  accountCreated: { values: [false, true], initial: false }
+  # an email attribute or a password credential was written: never
+  addressWritten: { values: [false, true], initial: false }
+  # a mail was asked for, for the account: never
+  mailAttempted: { values: [false, true], initial: false }
+  # a new set of recovery codes was issued and shown
+  setIssued: { values: [false, true], initial: false }
+  # the person confirmed they saved the set this transaction showed
+  setConfirmed: { values: [false, true], initial: false }
+  # a recovery code was taken for the account
+  codeTaken: { values: [false, true], initial: false }
+  # a new passkey was bound to the recovered account
+  passkeyBound: { values: [false, true], initial: false }
+  # a passkey assertion proved the account
+  factorProved: { values: [false, true], initial: false }
+  # this round wrote an audit record
+  audited: { values: [false, true], initial: false }
+
+guards:
+  registering: "entry == 'register'"
+  notHosted: 'not hostedPages'
+  ceremonyRefused: "ceremony == 'refused'"
+  credentialHeld: "credential == 'held'"
+  nothingFound: "lookup == 'nothing'"
+  redemptionRefused: "redemption == 'refused'"
+  stale: 'not fresh'
+  replaced: "confirmation == 'replaced'"
+
+effects:
+  # each round starts with nothing done
+  newRound:
+    set:
+      attemptReserved: false
+      audited: false
+  reserveAttempt: { set: { attemptReserved: true } }
+  verifyCeremony: { set: { ceremonyVerified: true } }
+  createAccount: { set: { accountCreated: true } }
+  issueSet: { set: { setIssued: true } }
+  confirmSet: { set: { setConfirmed: true } }
+  takeCode: { set: { codeTaken: true } }
+  bindPasskey: { set: { passkeyBound: true } }
+  proveFactor: { set: { factorProved: true } }
+  audit: { set: { audited: true } }
+  # what another transaction or the clock may have changed by the next answer
+  moveOn: { havoc: [ceremony, credential, redemption, fresh, confirmation] }
+
+failures:
+  verifyingRegistration: { from: passkeys, store: [unavailable] }
+  creatingAccount: { from: registrations, store: [unavailable] }
+  issuingSet: { from: recoveryCodes, store: [unavailable] }
+  findingAccount: { from: recoveryCodes, store: [unavailable] }
+  bindingPasskey: { from: passkeys, store: [unavailable] }
+
+# The main story: a person registers with the passkey on their phone and saves the codes.
+main:
+  given:
+    entry: register
+    hostedPages: true
+    ceremony: verified
+    credential: new
+    lookup: found
+    redemption: taken
+    fresh: true
+    confirmation: current
+  events: [PASSKEY, DONE, DONE, DONE, CONFIRM]
+
+initial: firstOffer
+states:
+  firstOffer:
+    title: Ask where the transaction starts
+    description: >-
+      A registration with no identifier yet, or a sign-in with nobody named yet, past every rule before rule 6.
+    always:
+      - guard: notHosted
+        target: addressOnly
+        say: 'a transport that cannot serve this flow: the address step alone, or the sign-in offer without a code'
+      - guard: registering
+        target: offeringPasskey
+        say: 'a registration on the hosted pages'
+      - target: offeringRecoveryCode
+        say: 'a sign-in on the hosted pages'
+
+  offeringPasskey:
+    title: Offer a passkey first, the address beside it
+    description: >-
+      webauthn_create with optional false, preferred (required false), and the identifier step as its alternative. A
+      new registration ceremony under a new key: a new user handle, an account name made from it, nothing excluded.
+      The personal data is the user entity alone; no address.
+    response:
+      kind: step
+      body:
+        current:
+          { step: webauthn_create, params: { optional: false, options: 'the creation options' } }
+        alternatives: [identifier]
+        required: false
+        personal:
+          { user: 'a new user handle, and the account name made from it', excludeCredentials: [] }
+    on:
+      ROUND:
+        target: offeringPasskey
+        effect: [newRound]
+        say: 'the next round carries no answer: the same offer, the same ceremony while it is young'
+      PASSKEY:
+        target: verifyingRegistration
+        effect: [newRound, reserveAttempt, moveOn]
+        say: 'the browser created a passkey: a credential round on the limiters, then the port'
+      ADDRESS:
+        target: addressOnly
+        effect: [newRound]
+        say: 'the person gives an address instead: the password registration'
+
+  verifyingRegistration:
+    title: Verify the registration response
+    description: >-
+      The port takes the ceremony first, whatever it finds, and verifies the response with user verification; no
+      account is named yet.
+    invoke: { external: passkeys }
+    on:
+      DONE:
+        - guard: ceremonyRefused
+          target: passkeyRefused
+          effect: [audit]
+          say: 'refused: the step is offered again with a new ceremony, audited as invalid_credentials'
+        - target: creatingAccount
+          effect: [verifyCeremony]
+          say: 'a passkey created with user verification'
+      FAIL.store:
+        target: unavailable
+        say: 'the challenge store or the database fails; nothing is written'
+
+  creatingAccount:
+    title: Create the account with its passkey
+    description: >-
+      One database transaction: the users row, the realm's RP ID locked and checked, the webauthn credential whose
+      external_sub is the credential id, and the user.registered event with the method passkey. No email attribute and
+      no password credential: the account has no address.
+    invoke: { external: registrations }
+    on:
+      DONE:
+        - guard: credentialHeld
+          target: ended
+          effect: [audit]
+          say: 'the realm holds the credential id: nothing is written, and the transaction ends (registration_conflict)'
+        - target: issuingSet
+          effect: [createAccount, audit]
+          say: 'the account exists, verified: webauthn_create joins the verified steps with no amr'
+      FAIL.store:
+        target: unavailable
+        say: 'the database fails: nothing is written'
+
+  issuingSet:
+    title: Issue the account's recovery codes
+    description: >-
+      Mandatory for an account with no address (question 30): 10 codes of 80 bits, stored as salted hashes, each with
+      the lookup digest that finds the account by the code alone. Only this round's answer shows them.
+    invoke: { external: recoveryCodes }
+    on:
+      DONE:
+        target: offeringSet
+        effect: [issueSet]
+        say: 'the set is written; its codes are shown'
+      FAIL.store:
+        target: unavailable
+        say: 'the database fails: no set is written, and the next round owes one'
+
+  offeringSet:
+    title: Show the codes once, and wait for the confirmation
+    description: >-
+      The recovery_codes step, with the codes as its personal data. Nothing keeps them: a round that brings no
+      confirmation gets a new set. The registration's authorization code waits for the confirmation.
+    response:
+      kind: step
+      body:
+        current: { step: recovery_codes, params: { count: 10 } }
+        alternatives: []
+        personal: { codes: 'the 10 codes' }
+    on:
+      CONFIRM:
+        - guard: replaced
+          target: issuingSet
+          effect: [newRound]
+          say: 'another sign-in replaced the set shown: a new set in its place'
+        - target: registered
+          effect: [newRound, confirmSet, audit]
+          say: 'the person saved the codes: recovery_codes joins the verified steps with no amr'
+      ROUND:
+        target: issuingSet
+        effect: [newRound]
+        say: 'no confirmation: the codes shown are gone, so a new set replaces them'
+
+  offeringRecoveryCode:
+    title: Offer a recovery code in the first offer
+    description: >-
+      The sign-in's first offer, the same for every account (ADR-017 Decision 4): a passkey, the password and the
+      identifier step, and recovery_code last on the hosted pages.
+    response:
+      kind: step
+      body:
+        current: { step: webauthn_get }
+        alternatives: [password, identifier, recovery_code]
+        required: false
+    on:
+      CODE:
+        target: findingAccount
+        effect: [newRound, reserveAttempt, moveOn]
+        say: 'the person lost the passkey and types a code: a credential round on the limiters, keyed on the IP'
+      OTHER:
+        target: signInElsewhere
+        effect: [newRound]
+        say: 'any other answer: the sign-in of flows/core/sign-in'
+
+  findingAccount:
+    title: Find the account the code is for, and take the code
+    description: >-
+      The code's lookup digest, a slow hash under the realm's salt, finds an unused code of a passkey-only account's
+      set; then the account is read (enabled, no address, passkeys alone), its recovery-code ladder reserved, and the
+      code checked against the set's salted hashes and taken once, with its security-log event and no mail.
+    invoke: { external: recoveryCodes }
+    on:
+      DONE:
+        - guard: nothingFound
+          target: codeRefused
+          effect: [audit]
+          say: 'nothing found: refused as invalid_credentials, the same answer as a wrong code anywhere'
+        - guard: redemptionRefused
+          target: codeRefused
+          effect: [audit]
+          say: "inside the account's ladder wait, or taken by another round first: refused"
+        - target: offeringNewPasskey
+          effect: [takeCode, audit]
+          say: >-
+            the code is taken: the account is the subject, recovery_code joins the verified steps with no amr, and
+            auth_time holds the redemption's time, which bounds the new passkey's binding
+      FAIL.store:
+        target: unavailable
+        say: 'the database fails: nothing is taken'
+
+  offeringNewPasskey:
+    title: Bind a new passkey in place of the lost one
+    description: >-
+      webauthn_create with optional false, for the account's user handle: a recovery code stands in for the lost
+      passkey only to bind a new one (ADR-017 Decision 8). No mailbox proof: the account has no address.
+    response:
+      kind: step
+      body:
+        current:
+          { step: webauthn_create, params: { optional: false, options: 'the creation options' } }
+        alternatives: []
+        personal:
+          { user: "the account's user handle", excludeCredentials: "the account's passkeys" }
+    on:
+      PASSKEY:
+        target: bindingPasskey
+        effect: [newRound, reserveAttempt, moveOn]
+        say: 'the browser created a passkey'
+      ROUND:
+        target: offeringNewPasskey
+        effect: [newRound]
+        say: 'the next round carries no answer: the same offer'
+
+  bindingPasskey:
+    title: Verify the new passkey and bind it
+    description: >-
+      The port verifies the response for the account's user handle, then binds it while at most 5 minutes have passed
+      since the code was taken, in place of the lost one: the same write disables the account's other passkeys, which
+      still count as bound. No notice is mailed: the account has no address.
+    invoke: { external: passkeys }
+    on:
+      DONE:
+        - guard: ceremonyRefused
+          target: newPasskeyRefused
+          effect: [audit]
+          say: 'refused: the step is offered again with a new ceremony'
+        - guard: stale
+          target: ended
+          effect: [audit]
+          say: 'more than 5 minutes since the code: nothing is bound, and the transaction ends (authentication_stale)'
+        - target: offeringAssertion
+          effect: [verifyCeremony, bindPasskey, audit]
+          say: 'the passkey is bound: webauthn_create joins the verified steps with no amr'
+      FAIL.store:
+        target: unavailable
+        say: 'the database fails: nothing is bound'
+
+  offeringAssertion:
+    title: Sign in with the new passkey
+    description: >-
+      The downgrade rule asks for the strongest bound factor: webauthn_get. A registration response proves no
+      possession (attestation none), so the sign-in completes only with an assertion, by the account's own passkey.
+    response:
+      kind: step
+      body:
+        current: { step: webauthn_get }
+        alternatives: []
+    on:
+      ASSERTION:
+        target: signedIn
+        effect: [newRound, proveFactor, audit]
+        say: 'an assertion of the account: webauthn_get joins the verified steps, and auth_time moves'
+
+  # Exits
+
+  registered:
+    type: final
+    title: Complete the registration
+    description: >-
+      Rule 9 for a registration: the account and nothing more. No amr and no auth_time (ADR-017 Decision 10); the
+      Interaction API mints the authorization code with no session.
+    response:
+      kind: complete
+      body: { subject: 'the new account', registered: true }
+
+  signedIn:
+    type: final
+    title: Complete the sign-in with the new passkey
+    description: The account's passkey proved it after the code; the set keeps its other codes.
+    response:
+      kind: complete
+      body: { amr: '["pop","mfa"]', authTime: "the assertion's" }
+
+  addressOnly:
+    type: final
+    title: Go on without this flow
+    description: >-
+      The address step of flows/core/sign-up for a registration, or the sign-in of flows/core/sign-in, without a
+      passkey registration or a code before the first factor.
+    response:
+      kind: step
+      body: { current: identifier }
+
+  signInElsewhere:
+    type: final
+    title: Go on with the sign-in
+    description: 'A passkey, a password or an identifier: flows/core/sign-in and flows/core/passkey.'
+    response:
+      kind: continue
+      body: {}
+
+  passkeyRefused:
+    type: final
+    title: Offer the passkey again
+    description: The same offer with invalid_credentials on webauthn_create, under a new ceremony.
+    response:
+      kind: step
+      body:
+        {
+          current: { step: webauthn_create, error: invalid_credentials },
+          alternatives: [identifier],
+        }
+
+  newPasskeyRefused:
+    type: final
+    title: Offer the new passkey again
+    description: The same step with invalid_credentials, under a new ceremony.
+    response:
+      kind: step
+      body: { current: { step: webauthn_create, error: invalid_credentials } }
+
+  codeRefused:
+    type: final
+    title: Refuse the code
+    description: The first offer again, recovery_code current with invalid_credentials; nothing names an account.
+    response:
+      kind: step
+      body: { current: { step: recovery_code, error: invalid_credentials } }
+
+  ended:
+    type: final
+    title: End the transaction
+    description: A credential another account holds, or a binding past its 5 minutes.
+    response:
+      kind: refused
+      body: { reason: transaction_ended, transaction: null }
+
+  unavailable:
+    type: final
+    title: Refuse the round while a store is down
+    description: Fail closed; the transaction stays as far as the round took it.
+    response:
+      kind: refused
+      body: { reason: unavailable }
+
+assertions:
+  - id: no-account-before-the-ceremony
+    never: 'accountCreated and not ceremonyVerified'
+    say: 'No account exists before the port verified its registration ceremony'
+  - id: no-address-is-written
+    never: 'addressWritten'
+    say: 'A passkey-only account holds no email attribute and no password'
+  - id: no-mail-is-attempted
+    never: 'mailAttempted'
+    say: 'Nothing is mailed for an account with no address: its notices are its security-log events'
+  - id: the-code-waits-for-the-codes
+    never: "state == 'registered' and not setConfirmed"
+    say: 'The registration completes, and its authorization code is minted, only once the codes are confirmed'
+  - id: a-credential-is-reserved-first
+    never: "state in ['verifyingRegistration', 'findingAccount', 'bindingPasskey'] and not attemptReserved"
+    say: 'Every registration response and every recovery code is a credential round on the limiters first'
+  - id: a-code-alone-never-signs-in
+    never: "state == 'signedIn' and not (factorProved and passkeyBound)"
+    say: 'A recovery code before any first factor binds a new passkey, and only its assertion completes the sign-in'
+  - id: every-refusal-is-audited
+    never: "state in ['passkeyRefused', 'newPasskeyRefused', 'codeRefused', 'ended'] and not audited"
+    say: 'Every refused or ended answer writes an audit record'

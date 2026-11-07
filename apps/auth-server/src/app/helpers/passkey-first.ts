@@ -39,11 +39,16 @@ export type PasskeyFirstStarter = (
  * the identifier and the realm's upstream providers beside it. Like every
  * round it waits the engine's timing floor.
  *
+ * A registration (`prompt=create`, #655) with no `login_hint` starts at the
+ * same first round, as a registration's: it offers a passkey to create the
+ * account with, preferred, and the address step beside it.
+ *
  * With a `login_hint`, or with passkey sign-in off, the answer is `null`: the
  * identifier step, the hint as its prefill, from which the engine asks for
- * the password and offers the passkey beside it, the same for every account.
- * So is a first round that could not offer a step (a store it needs failed):
- * the sign-in still starts, without the passkey first.
+ * the password and offers the passkey beside it, the same for every account
+ * (a registration goes on with the address). So is a first round that could
+ * not offer a step (a store it needs failed): the interaction still starts,
+ * without the passkey first.
  *
  * The engines are built on the first such request; `tasks` must have been
  * created while the route registered (their mail registers a hook).
@@ -55,7 +60,6 @@ export function passkeyFirstStarter(
   let engines: InteractionEngines | undefined;
   return async (request, reply, realm, query) => {
     if (fastify.passkeySignIn !== true || query.login_hint !== undefined) return null;
-    if (query.prompt === 'create') return null;
     engines ??= createInteractionEngines(fastify, { tasks });
     const built = engines;
     const clientId = query.client_id;
@@ -65,6 +69,8 @@ export function passkeyFirstStarter(
       built.of(accountPoliciesOf(fastify, realm).requireVerifiedAccount).advance(null, null, {
         realm: { id: realm.id },
         client: { id: clientId },
+        // `prompt=create` (#640): the rounds are a registration's, from this one.
+        ...(query.prompt === 'create' ? { flow: 'register' as const } : {}),
         ...(query.prompt === 'login' || query.max_age !== undefined ? { freshSignIn: true } : {}),
         receivedAt: Date.now(),
         ...ladderEndUserIp(request),
@@ -90,7 +96,7 @@ export function passkeyFirstStarter(
     if (result.kind !== 'step') {
       fastify.log.warn(
         { realmId: realm.id, result: result.kind },
-        'the first sign-in round offered no step: the sign-in starts at the identifier'
+        'the first sign-in round offered no step: the interaction starts at the identifier'
       );
       return null;
     }

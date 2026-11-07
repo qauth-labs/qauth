@@ -36,8 +36,7 @@ import { defaultRealmPlugin, type DefaultRealmPluginOptions } from './plugins/de
  *   the lock refuses to start, saying why;
  * - the association files are served only while the RP ID is the realm host.
  *
- * `WEBAUTHN_ENABLED` stays off throughout: it is refused at boot until F2b is
- * complete, and none of the three depends on it.
+ * `WEBAUTHN_ENABLED` stays off throughout: none of the three depends on it.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).

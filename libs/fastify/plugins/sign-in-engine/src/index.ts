@@ -75,6 +75,7 @@ export {
   RECOVERY_CODE_LADDER_POLICY,
   RECOVERY_CODE_PATTERN,
   type RecoveryCodeAccount,
+  type RecoveryCodeLookup,
   type RecoveryCodes,
   REGISTRATION_NOT_ALLOWED,
   type RegistrationMail,

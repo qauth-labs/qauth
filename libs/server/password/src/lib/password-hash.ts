@@ -1,4 +1,4 @@
-import { hash, verify } from '@node-rs/argon2';
+import { hash, hashRaw, verify } from '@node-rs/argon2';
 import { z } from 'zod';
 
 /**
@@ -238,4 +238,39 @@ export function createPasswordHasher(config?: Partial<PasswordHashConfig>): Pass
       }
     },
   };
+}
+
+/**
+ * The fixed parameters of {@link argon2idDigest} (#655): OWASP's minimum for
+ * Argon2id (19 MiB, 2 passes, 1 lane) and a 32-byte output. They are part of
+ * every digest's value, which must stay the same for the same secret: never
+ * the deployment's `PASSWORD_*` costs, which an operator may change.
+ */
+export const ARGON2ID_DIGEST_PARAMS = Object.freeze({
+  memoryCost: 19456,
+  timeCost: 2,
+  parallelism: 1,
+  outputLen: 32,
+});
+
+/** The prefix of every {@link argon2idDigest}: the algorithm and its parameters, PHC-style. */
+export const ARGON2ID_DIGEST_PREFIX = `argon2id$m=${ARGON2ID_DIGEST_PARAMS.memoryCost},t=${ARGON2ID_DIGEST_PARAMS.timeCost},p=${ARGON2ID_DIGEST_PARAMS.parallelism}$`;
+
+/**
+ * A deterministic Argon2id digest of `secret` under `salt` (#655): the same
+ * value for the same secret and salt, so it can be looked up, and as slow to
+ * guess as a password hash. For a secret with entropy of its own that must
+ * be found by itself, such as a recovery code of an account with no other
+ * identifier; never for a password, which needs a salt of its own
+ * ({@link createPasswordHasher}). It runs in the same Argon2 slots as every
+ * password hash, so a burst of them waits its turn.
+ *
+ * @param secret - The secret, in the form it is compared in.
+ * @param salt - At least 16 bytes, the same for every secret one lookup may find.
+ * @returns `argon2id$m=19456,t=2,p=1$` and the digest, base64url.
+ */
+export async function argon2idDigest(secret: string, salt: Uint8Array): Promise<string> {
+  if (salt.length < 16) throw new RangeError('an Argon2id digest needs a salt of 16 bytes or more');
+  const raw = await withArgon2Slot(() => hashRaw(secret, { ...ARGON2ID_DIGEST_PARAMS, salt }));
+  return `${ARGON2ID_DIGEST_PREFIX}${Buffer.from(raw).toString('base64url')}`;
 }

@@ -11,18 +11,6 @@ import { z } from 'zod';
  * checks them at boot, with the RP ID rules of `@qauth-labs/server-federation`.
  */
 
-/**
- * The boot error for `WEBAUTHN_ENABLED=true` while phase F2b is incomplete.
- *
- * ADR-017's phasing: until the change that completes F2b (the ceremony steps,
- * the hosted enrolment page and their end-to-end suite), the environment
- * schema refuses the switch with a clear error, so passkeys can never be
- * switched on before their abuse controls exist. That change removes the
- * refusal.
- */
-export const WEBAUTHN_ENABLED_REFUSAL =
-  'WEBAUTHN_ENABLED=true is not available yet. Passkey sign-in (ADR-017 phase F2b) is still being built, and this switch is refused until the change that completes it. Unset WEBAUTHN_ENABLED or set it to false.';
-
 /** Same parsing as `REQUIRE_VERIFIED_ACCOUNT`: `'true'` / `'false'`, blank is unset. */
 function strictBoolean(defaultValue: boolean) {
   return z
@@ -173,14 +161,15 @@ function parseAndroidApps(raw: string, ctx: z.RefinementCtx): AndroidAppFingerpr
  */
 export const webauthnEnvSchema = z.object({
   /**
-   * Turn passkeys on (ADR-017 F2b). Default off. REFUSED when `true` until F2b
-   * is complete (see {@link WEBAUTHN_ENABLED_REFUSAL}). The RP ID settings and
-   * the association files below do not depend on it: they are checked, and
-   * the files served, either way.
+   * Turn passkeys on (ADR-017 phase F2b, complete with #655): passkey sign-in,
+   * the enrolment offer after a password sign-in, and the registration of an
+   * account by passkey alone. Default off. Until the FiPA endpoint ships
+   * (#646), only the hosted pages (`INTERACTION_UI_ENABLED`) offer a passkey:
+   * on without them, the boot warns ({@link passkeyPostureWarnings}). The RP
+   * ID settings and the association files below do not depend on it: they
+   * are checked, and the files served, either way.
    */
-  WEBAUTHN_ENABLED: strictBoolean(false).refine((enabled) => !enabled, {
-    message: WEBAUTHN_ENABLED_REFUSAL,
-  }),
+  WEBAUTHN_ENABLED: strictBoolean(false),
 
   /**
    * The default realm's passkey RP ID (ADR-019 Decision 2). Unset: the realm's
@@ -214,3 +203,32 @@ export const webauthnEnvSchema = z.object({
 });
 
 export type WebAuthnEnv = z.infer<typeof webauthnEnvSchema>;
+
+/** A warning the boot logs about the passkey settings, naming its variable. */
+export interface PasskeyPostureWarning {
+  readonly variable: string;
+  readonly message: string;
+}
+
+/**
+ * What the boot warns about in the passkey settings (#655): `WEBAUTHN_ENABLED`
+ * on while `INTERACTION_UI_ENABLED` is off. Only the hosted pages offer a
+ * passkey until the FiPA endpoint ships (#646); the server-rendered pages ask
+ * for a password and refuse a right one of an account that holds a passkey.
+ * So nothing offers a passkey, and an account whose only credential is a
+ * passkey, registered while the hosted pages were on, cannot sign in. Not a
+ * refusal: the switch gates the FiPA endpoint's passkeys too (ADR-017
+ * Phasing), which need no hosted page.
+ */
+export function passkeyPostureWarnings(
+  env: Pick<WebAuthnEnv, 'WEBAUTHN_ENABLED'> & { readonly INTERACTION_UI_ENABLED: boolean }
+): PasskeyPostureWarning[] {
+  if (!env.WEBAUTHN_ENABLED || env.INTERACTION_UI_ENABLED) return [];
+  return [
+    {
+      variable: 'WEBAUTHN_ENABLED',
+      message:
+        'WEBAUTHN_ENABLED is on while INTERACTION_UI_ENABLED is off: only the hosted pages offer a passkey, so no page asks for one, and an account whose only credential is a passkey cannot sign in',
+    },
+  ];
+}

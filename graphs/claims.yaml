@@ -20,10 +20,10 @@ operations:
   GET /ui/upstream/{type}/start: { flow: [upstream-sign-in] }
   GET /ui/consent: { flow: [consent-page] }
   POST /ui/consent: { flow: [consent-page] }
-  GET /ui/recovery-code/{interactionId}: { flow: [recovery-code] }
+  GET /ui/recovery-code/{interactionId}: { flow: [recovery-code, passkey-sign-up] }
   GET /ui/recovery-codes/{interactionId}: { flow: [recovery-code] }
   GET /ui/passkey/{interactionId}: { flow: [passkey] }
-  GET /ui/passkey-enrolment/{interactionId}: { flow: [passkey] }
+  GET /ui/passkey-enrolment/{interactionId}: { flow: [passkey, passkey-sign-up] }
   GET /ui/totp/{interactionId}: { flow: [totp] }
   GET /ui/totp-setup/{interactionId}: { flow: [totp] }
   GET /interaction/v1-rc.0/{interactionId}: { flow: [consent, logout] }

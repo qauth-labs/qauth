@@ -294,7 +294,9 @@ export default async function (fastify: FastifyInstance) {
    * (`createPromptRefusal`); each refusal is recorded as
    * `authorization.failed`. Otherwise an interaction starts at the identifier
    * step, the request held without its routing parameter: an upstream
-   * provider never registers here.
+   * provider never registers here. While passkey sign-in is on, one with no
+   * `login_hint` starts at the engine's first round instead (#655): a passkey
+   * to create the account with, preferred, the address step beside it.
    */
   const startRegistration = async (
     request: FastifyRequest,
@@ -323,9 +325,12 @@ export default async function (fastify: FastifyInstance) {
     }
     const browserSession = await resolveBrowserSession(fastify, request, reply);
     const held = withoutUpstreamRoute(query);
+    const first =
+      passkeyFirst !== undefined ? await passkeyFirst(request, reply, target.realm, held) : null;
     const started = await startInteraction(request, reply, {
       request: held,
       ...registrationInteractionStart(held, browserSession),
+      ...(first ?? {}),
     });
     return reply.redirect(ceremonyPagePath(started.id), 302);
   };
