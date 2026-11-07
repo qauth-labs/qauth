@@ -43,6 +43,10 @@ import { ERROR_CLASSES } from '../api-conventions/error-classes';
 import { OAUTH_ERROR_CODES, oauthErrorResponses } from '../api-conventions/oauth-error';
 import { pageQuerySchema, pageSchema } from '../api-conventions/paging';
 import { PROBLEM_CODES, PROBLEM_TYPE_BASE, problemResponses } from '../api-conventions/problem';
+import {
+  DelegatedTokenRefusedError,
+  InsufficientUserAuthenticationError,
+} from '../helpers/account-operation-errors';
 import { SandboxCeilingError } from '../helpers/api-request-errors';
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import errorHandler from './error-handler';
@@ -1066,6 +1070,150 @@ describe('error-handler plugin (#513)', { timeout: 30_000 }, () => {
         headers: { authorization: 'DPoP some.token.value' },
       });
       expect(response.headers['www-authenticate']).toMatch(/^Bearer realm="OAuth"/);
+      await app.close();
+    });
+  });
+
+  /**
+   * The account API guard's refusals (#663): the step-up challenge of RFC 9470
+   * §3, and the refusal of an act-chain token (ADR-019 Decision 7). Their
+   * documents carry no prose, as the account contract's problem document
+   * allows none.
+   */
+  describe('the account API guard’s refusals (RFC 9470 §3, #663)', () => {
+    async function buildGuardApp(dpop: 'on' | 'off' | 'only'): Promise<FastifyInstance> {
+      const app = Fastify({ logger: false, requestIdHeader: 'x-request-id' });
+      app.decorate('dpop', dpop === 'off' ? null : ({ algorithms: ['ES256', 'EdDSA'] } as never));
+      await app.register(errorHandler, dpop === 'only' ? { dpopOnly: true } : {});
+      app.post('/account/v1-rc.0/password/change', async (request) => {
+        const maxAge = Number((request.query as { max_age?: string }).max_age ?? '300');
+        throw new InsufficientUserAuthenticationError(maxAge);
+      });
+      app.post('/account/v1-rc.0/deletion', async () => {
+        throw new DelegatedTokenRefusedError();
+      });
+      return app;
+    }
+
+    it.each([
+      [300, 'a sign-in too old'],
+      [0, 'a recent sign-in without the strongest factor'],
+    ])(
+      'challenges with insufficient_user_authentication and max_age="%i" for %s',
+      async (maxAge) => {
+        const app = await buildGuardApp('off');
+
+        const response = await app.inject({
+          method: 'POST',
+          url: `/account/v1-rc.0/password/change?max_age=${maxAge}`,
+          headers: { authorization: 'Bearer a.b.c', 'x-request-id': 'trace-1' },
+        });
+
+        // RFC 9470 §3: a 401 whose Bearer challenge names the error and the
+        // `max_age` the next sign-in must meet, as a quoted string of seconds.
+        expect(response.statusCode).toBe(401);
+        expect(response.headers['www-authenticate']).toBe(
+          `Bearer error="insufficient_user_authentication", max_age="${maxAge}"`
+        );
+        expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
+        expect(response.json()).toEqual({
+          type: `${PROBLEM_TYPE_BASE}insufficient-user-authentication`,
+          title: PROBLEM_CODES.insufficient_user_authentication.title,
+          status: 401,
+          code: 'insufficient_user_authentication',
+          trace_id: 'trace-1',
+          max_age: maxAge,
+        });
+
+        await app.close();
+      }
+    );
+
+    it('parses as one challenge with exactly the two parameters of RFC 9470 §3', async () => {
+      const app = await buildGuardApp('off');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/account/v1-rc.0/password/change?max_age=300',
+        headers: { authorization: 'Bearer a.b.c' },
+      });
+      const challenge = String(response.headers['www-authenticate']);
+      // RFC 9110 §11.6.1: `auth-scheme 1*SP auth-param *( OWS "," OWS auth-param )`,
+      // each a token and a quoted string.
+      const match = /^(\S+) (.*)$/.exec(challenge);
+      const parameters = Object.fromEntries(
+        [...(match?.[2] ?? '').matchAll(/([a-z_]+)="([^"\\]*)"(?:, |$)/g)].map(
+          ([, name, value]) => [name, value]
+        )
+      );
+
+      expect(match?.[1]).toBe('Bearer');
+      expect(parameters).toEqual({ error: 'insufficient_user_authentication', max_age: '300' });
+      // A `max_age` that is no whole number of seconds never reaches the header.
+      expect(new InsufficientUserAuthenticationError(Number.NaN).maxAge).toBe(0);
+      expect(new InsufficientUserAuthenticationError(-1).maxAge).toBe(0);
+      expect(new InsufficientUserAuthenticationError(1.5).maxAge).toBe(0);
+
+      await app.close();
+    });
+
+    it('challenges in the DPoP scheme, with the proof algorithms, for a DPoP-bound token', async () => {
+      const app = await buildGuardApp('on');
+
+      const dpop = await app.inject({
+        method: 'POST',
+        url: '/account/v1-rc.0/password/change?max_age=300',
+        headers: { authorization: 'DPoP a.b.c' },
+      });
+      expect(dpop.headers['www-authenticate']).toBe(
+        'DPoP error="insufficient_user_authentication", max_age="300", algs="ES256 EdDSA"'
+      );
+      expect(dpop.json()).toMatchObject({ max_age: 300 });
+
+      // A Bearer token keeps the Bearer scheme while DPoP is on.
+      const bearer = await app.inject({
+        method: 'POST',
+        url: '/account/v1-rc.0/password/change?max_age=0',
+        headers: { authorization: 'Bearer a.b.c' },
+      });
+      expect(bearer.headers['www-authenticate']).toBe(
+        'Bearer error="insufficient_user_authentication", max_age="0"'
+      );
+
+      await app.close();
+
+      const only = await buildGuardApp('only');
+      const anyScheme = await only.inject({
+        method: 'POST',
+        url: '/account/v1-rc.0/password/change?max_age=0',
+        headers: { authorization: 'Bearer a.b.c' },
+      });
+      expect(anyScheme.headers['www-authenticate']).toBe(
+        'DPoP error="insufficient_user_authentication", max_age="0", algs="ES256 EdDSA"'
+      );
+      await only.close();
+    });
+
+    it('refuses an act-chain token with delegated_token_refused, a 403 no step-up lifts', async () => {
+      const app = await buildGuardApp('off');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/account/v1-rc.0/deletion',
+        headers: { authorization: 'Bearer a.b.c', 'x-request-id': 'trace-2' },
+      });
+
+      expect(response.statusCode).toBe(403);
+      // No insufficient_scope and no step-up: neither can lift the refusal.
+      expect(response.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
+      expect(response.json()).toEqual({
+        type: `${PROBLEM_TYPE_BASE}delegated-token-refused`,
+        title: PROBLEM_CODES.delegated_token_refused.title,
+        status: 403,
+        code: 'delegated_token_refused',
+        trace_id: 'trace-2',
+      });
+
       await app.close();
     });
   });

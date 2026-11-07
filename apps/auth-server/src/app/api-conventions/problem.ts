@@ -44,6 +44,13 @@ function decodedPath(path: string): string {
   }
 }
 
+/** The codes whose document is bare wherever it is sent; see {@link isBareProblem}. */
+const BARE_CODES: ReadonlySet<string> = new Set([
+  'interaction_expired',
+  'insufficient_user_authentication',
+  'delegated_token_refused',
+]);
+
 /**
  * Whether a problem document says nothing about the request beyond its code:
  * no `instance`, no `detail` and no `errors`.
@@ -55,12 +62,16 @@ function decodedPath(path: string): string {
  *   percent-decoded, as the router reads it (`/%69nteraction/v1-rc%2E0/…`).
  * - `interaction_expired` wherever it is sent: an unknown, expired or finished
  *   interaction and a flow cookie that does not bind it get the same bytes.
+ * - The account API guard's two refusals wherever they are sent (#663):
+ *   `insufficient_user_authentication`, whose document carries `max_age`
+ *   beside its code, and `delegated_token_refused`. The account contract's
+ *   problem document allows no prose (`libs/shared/account-contract`).
  *
  * @param urls - the raw request-target and, for a routed request, the route's
  *   own path; a query is ignored
  */
 export function isBareProblem(code: string, ...urls: readonly (string | undefined)[]): boolean {
-  if (code === 'interaction_expired') return true;
+  if (BARE_CODES.has(code)) return true;
   return urls.some((url) => {
     if (url === undefined) return false;
     const queryAt = url.indexOf('?');
@@ -548,11 +559,15 @@ export const problemSchema = z
         description:
           'For `weak_password`: why the new password was refused, in the order checked. A later release may add reasons.',
       }),
+    max_age: z.int().min(0).optional().meta({
+      description:
+        'For `insufficient_user_authentication`: the `max_age` of the challenge (RFC 9470 §3), in seconds. Send the person to the authorization endpoint with it, then repeat the call.',
+    }),
   })
   .meta({
     id: PROBLEM_SCHEMA_ID,
     description:
-      'RFC 9457 problem details. Branch on `code`, never on `title` or `detail`. `trace_id` is the id the server logged the request under. `errors` lists each field the request got wrong. `reasons` lists why a new password was refused (`weak_password`).',
+      'RFC 9457 problem details. Branch on `code`, never on `title` or `detail`. `trace_id` is the id the server logged the request under. `errors` lists each field the request got wrong. `reasons` lists why a new password was refused (`weak_password`). `max_age` says how fresh the next sign-in must be (`insufficient_user_authentication`).',
   });
 
 export type ProblemDocument = z.infer<typeof problemSchema>;

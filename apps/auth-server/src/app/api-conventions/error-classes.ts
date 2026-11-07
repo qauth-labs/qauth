@@ -42,6 +42,10 @@ import {
   UnprocessableContentError,
   UnsupportedMediaTypeError,
 } from '../helpers/api-request-errors';
+import {
+  DelegatedTokenRefusedError,
+  InsufficientUserAuthenticationError,
+} from '../helpers/account-operation-errors';
 import { ApprovalRequiredError, ApprovalStateError } from '../helpers/approval-required';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
@@ -222,7 +226,8 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
  * Framework transmitter's refusals (SSF 1.0 §8.1 defines no error body, so its
  * routes answer problem documents), the admin pipeline's refusal of a
  * security operation that carries no approval, an approval's refused move,
- * and a refused realm policy update, a sandbox realm's ceiling among them. Each code is one the problem types page
+ * a refused realm policy update, a sandbox realm's ceiling among them, and the
+ * account API's step-up challenge and act-chain refusal. Each code is one the problem types page
  * publishes, for the status the class carries.
  *
  * A test fails when an error class of the app that declares a `statusCode` has
@@ -272,6 +277,19 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // A realm policy update that would give a sandbox realm the `development`
   // ceiling (#554).
   { errorClass: SandboxCeilingError, code: 'sandbox_ceiling', oauthError: 'invalid_request' },
+  // The account API's operation guard (#663, ADR-017 Decision 8): the RFC
+  // 9470 step-up challenge, and the refusal of an act-chain token on an
+  // operation that takes none (ADR-019 Decision 7).
+  {
+    errorClass: InsufficientUserAuthenticationError,
+    code: 'insufficient_user_authentication',
+    oauthError: 'invalid_token',
+  },
+  {
+    errorClass: DelegatedTokenRefusedError,
+    code: 'delegated_token_refused',
+    oauthError: 'access_denied',
+  },
   // `@qauth-labs/server-ssf`, through the SSF plugin: a stream request the
   // protocol refuses. Its message, which echoes no value, is the `detail`.
   { errorClass: SsfRequestError, code: 'bad_request', oauthError: 'invalid_request' },
