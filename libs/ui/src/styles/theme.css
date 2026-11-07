@@ -27,7 +27,7 @@
   --success: oklch(0.52 0.17 149.214);
   --border: oklch(0.923 0.003 48.717);
   --input: oklch(0.62 0.003 48.717);
-  --ring: oklch(0.6 0.01 56.259);
+  --ring: oklch(0.5 0.1324 194.77);
 }
 
 :root {
@@ -88,7 +88,7 @@
     --success: oklch(0.648 0.223 149.214);
     --border: oklch(1 0 0 / 0.08);
     --input: oklch(0.5 0.008 90);
-    --ring: oklch(0.553 0.013 58.071);
+    --ring: oklch(0.75 0.15 195);
   }
 }
 
@@ -118,7 +118,7 @@
   --success: oklch(0.648 0.223 149.214);
   --border: oklch(1 0 0 / 0.08);
   --input: oklch(0.5 0.008 90);
-  --ring: oklch(0.553 0.013 58.071);
+  --ring: oklch(0.75 0.15 195);
 }
 
 @media (prefers-reduced-motion: reduce) {
