@@ -1046,7 +1046,8 @@ the account API. The shapes below stay as they are until the path is removed.
 The same consent management, **Bearer-authed** — the credential the developer
 portal and any other API client actually holds. Same auth model as
 [`/api/clients/`](#client-management-apiclients): `Authorization: Bearer
-<access_token>`, scoped strictly to the token subject.
+<access_token>`, scoped strictly to the token subject, with `qauth:developer:read`
+to list and `qauth:developer:write` to revoke (#933).
 
 **No CSRF token.** A Bearer token is not ambient authority a cross-site page can
 make the browser attach, so there is nothing for one to add. The cookie-authed
@@ -1097,7 +1098,9 @@ Deprecated since #524, with the same `Deprecation` header: use the
 [Developer API](#developer-api-developer-family-v1-rc0), which serves the same clients and API keys
 in the API conventions' representation. These routes accept only the developer portal's token, whose
 audience is `urn:qauth:aud:developer:v1-rc.0` since #524. The shapes below stay as they are until
-the paths are removed.
+the paths are removed. Each route needs the developer scope of the operation it aliases (#933):
+`qauth:developer:read` for a `GET`, `qauth:developer:write` for any other method, or `403`
+`forbidden` with the `insufficient_scope` challenge. The portal's token carries both.
 :::
 
 Developer-portal API for managing a developer's own OAuth clients. **JSON**,
@@ -1125,7 +1128,9 @@ curl -s -X POST https://auth.example.com/oauth/register \
 
 The client is then owned by that token's subject and behaves like any client
 created through `POST /api/clients/`, including the per-developer limit on the
-number of clients (`MAX_CLIENTS_PER_DEVELOPER`, `403` once reached). A token
+number of clients (`MAX_CLIENTS_PER_DEVELOPER`, `403` once reached). The token
+needs `qauth:developer:write`, as `POST /api/clients/` does (#933), or the
+registration answers `403` `access_denied`. A token
 that does not verify is rejected
 rather than silently ignored — otherwise you would get an unowned client while
 believing you owned it, which is the failure this note exists to prevent.

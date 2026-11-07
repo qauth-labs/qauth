@@ -620,8 +620,16 @@ the account API (`/account/v1-rc.0`) needs, beside the family's audience, the
 family's scope of its class: `qauth:developer:read` or `qauth:developer:write`,
 `qauth:account:read` or `qauth:account:write`
 ([#933](https://github.com/qauth-labs/qauth/issues/933)). A token without it is
-refused with 403 `forbidden`. The developer portal's token carries both
-developer scopes, so the portal needs nothing. A client you gave a family
+refused with 403 `forbidden`. The deprecated `/api/clients` and `/api/consents`
+routes need the same scopes as the operations they alias, and attributing a
+dynamic registration to a developer (`POST /oauth/register` with the
+developer's token) needs `qauth:developer:write`. The developer portal's token
+carries both developer scopes, so the portal needs nothing. For this release
+only, a portal token that names no scope, which a node of the previous release
+mints, counts as carrying both, so a developer whose portal session began
+before the upgrade, or on a node not yet upgraded, keeps working during and
+after the rolling upgrade. The next release refuses such a token; by then
+every one has expired. A client you gave a family
 audience in its `audience` (the seed manifest's `clients[].audience`) also
 needs the scopes it will use in its `scopes`, and asks for them in `scope`; the
 token endpoint issues them only to a client that lists the family's audience,

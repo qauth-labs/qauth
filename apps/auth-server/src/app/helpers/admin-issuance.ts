@@ -16,10 +16,11 @@
  *   subject. It needs no DPoP proof.
  * - Any other scope of the reserved `qauth:` namespace is never issued.
  *
- *   A scope that fails is WITHHELD: the token is issued without it, and the response's
- *   `scope` says so (RFC 6749 §3.3). When nothing else is left to issue, the
- *   token route refuses the request, `invalid_scope`, rather than answer with
- *   no `scope`, which would read as the scope asked for.
+ * A scope that fails is WITHHELD: the token is issued without it, and the
+ * response's `scope` says so (RFC 6749 §3.3). When nothing else is left to
+ * issue, the token route refuses the request, `invalid_scope`, rather than
+ * answer with no `scope`, which would read as the scope asked for.
+ *
  * - The admin audience is issued only to an account whose live admin grants
  *   give a permission. Otherwise the request is refused, `invalid_target`
  *   (RFC 8707 §2), as for an audience the client does not list.

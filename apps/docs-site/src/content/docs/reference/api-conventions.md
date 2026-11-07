@@ -409,13 +409,26 @@ of `approvals.approve`.
   a `cimd_clients` entry, the one place it would be stored. The rule is `isReservedAudience` in
   `@qauth-labs/shared-validation`.
 - The developer portal's token, which `/auth/login` mints for the system client, carries the
-  developer audience since #524, and both developer scopes since #933. Its refresh token carries no
-  scope, as the system client's row lists none: a token refreshed from it reaches no developer
-  operation, and the portal, which never refreshes, signs its developer in again. The system client lists it from its creation, and one created
-  before is given it the next time a node boots or reads it. The deprecated `/api/clients` and
-  `/api/consents`, and `/auth/logout` (`assertManagementToken`), accept a system-client token with
-  exactly that audience, and no longer one whose audience is the system client's id. Expand, then
-  contract (ADR-018 §5): #509 made every node accept the audience before #524 minted it.
+  developer audience since #524, and both developer scopes since #933. The system client lists the
+  audience from its creation, and one created before is given it the next time a node boots or
+  reads it. The deprecated `/api/clients` and `/api/consents`, and `/auth/logout`
+  (`assertManagementToken`), accept a system-client token with exactly that audience, and no longer
+  one whose audience is the system client's id. Expand, then contract (ADR-018 §5): #509 made every
+  node accept the audience before #524 minted it.
+- Each deprecated `/api/clients` and `/api/consents` route needs the developer scope of the
+  operation it aliases, as that operation does (#933): `qauth:developer:read` to list or read,
+  `qauth:developer:write` to create, change, delete, regenerate a secret, mint or revoke an API key,
+  or revoke a consent. So does `POST /oauth/register` to attribute the client it registers to the
+  developer whose token it carries: `qauth:developer:write`, or 403 `access_denied`. `/auth/logout`,
+  which only ends access, needs none.
+- For the release of #933 only, the developer API, those routes and that attribution take a
+  system-client token that names no scope at all, the portal token a node of the previous release
+  mints, as carrying both developer scopes (`isPortalTokenBeforeScopes`). A developer whose portal
+  session began before the upgrade, or on a node the rolling upgrade has not reached, keeps working.
+  The next release removes it: expand, then contract (ADR-018 §5). The portal's refresh token
+  carries no scope, as the system client's row lists none; once that grace is gone a token
+  refreshed from it reaches no developer operation, and the portal, which never refreshes, signs
+  its developer in again.
 
 ### Served routes
 
@@ -617,8 +630,8 @@ protocol endpoint.
 | `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                                                                                                                                              |
 | `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                                                                                                                                               |
 
-On the developer and account APIs a permission is a read or a write permission, and the operation
-needs its family's scope of that class (#933): `clients.read`, `clients.apiKeys.read` and
+On the developer and account APIs the scope an operation needs is its family's scope of its
+`x-qauth-class`, `read` or `write` (#933): `clients.read`, `clients.apiKeys.read` and
 `consents.read` need `qauth:developer:read`; `clients.write`, `clients.apiKeys.write` and
 `consents.write` need `qauth:developer:write`; the account API's `profile.read` needs
 `qauth:account:read` and its `password.write` `qauth:account:write`. A token without the scope gets

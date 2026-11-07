@@ -26,8 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grant; a delegated token of token exchange keeps one its subject token
   carried), with no admin grant and no DPoP proof; a refresh carries them
   forward. The developer portal's token from `POST /auth/login` carries both
-  developer scopes. The account API contract states the rule and publishes
-  `ACCOUNT_API_SCOPES`.
+  developer scopes. The deprecated `/api/clients` and `/api/consents` routes
+  need the scope of the operation each aliases, and `POST /oauth/register`
+  attributes a client to a developer only with `qauth:developer:write`. For
+  this release only, a portal token that names no scope, minted by a node of
+  the previous release, counts as carrying both developer scopes, so portal
+  sessions survive the rolling upgrade. The account API contract states the
+  rule and publishes `ACCOUNT_API_SCOPES`.
 - **Fresh authentication with the strongest factor for account changes**
   ([#663], ADR-017 Decision 8, ADR-019 Decision 7, ADR-020 §3). One guard
   stands in front of every account API operation (`/account/v1-rc.0`) and
