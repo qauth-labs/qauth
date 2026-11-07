@@ -51,12 +51,12 @@ function LoginPage() {
   const isSubmitting = formState.stage === 'submitting';
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-md space-y-6 rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
-        <h1 className="text-xl font-semibold">Log in to your account</h1>
+    <main className="bg-background flex min-h-screen items-center justify-center px-4">
+      <div className="rounded-surface border-border bg-card w-full max-w-md space-y-6 border p-8">
+        <h1 className="text-foreground text-3xl leading-tight">Log in to your account</h1>
 
         {errorMessage ? (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-destructive text-sm">
             {errorMessage}
           </p>
         ) : null}
@@ -76,16 +76,16 @@ function LoginPage() {
             />
           </FormField>
 
-          <p className="text-sm text-gray-400">Forgot password? Coming soon.</p>
+          <p className="text-muted-foreground text-sm">Forgot password? Coming soon.</p>
 
           <Button type="submit" disabled={isSubmitting} className="w-full">
             {isSubmitting ? 'Logging in...' : 'Log in'}
           </Button>
         </form>
 
-        <p className="text-center text-sm text-gray-500">
+        <p className="text-muted-foreground text-center text-sm">
           Don&apos;t have an account?{' '}
-          <Link to="/register" className="text-blue-600 hover:underline">
+          <Link to="/register" className="text-primary-text underline-offset-4 hover:underline">
             Register
           </Link>
         </p>

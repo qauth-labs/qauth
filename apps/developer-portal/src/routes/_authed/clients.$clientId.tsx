@@ -28,8 +28,8 @@ type LoadState =
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="py-2">
-      <dt className="text-xs font-medium tracking-wide text-gray-500 uppercase">{label}</dt>
-      <dd className="mt-0.5 text-sm text-gray-800">{children}</dd>
+      <dt className="text-muted-foreground text-xs font-medium tracking-wide uppercase">{label}</dt>
+      <dd className="text-foreground mt-0.5 text-sm">{children}</dd>
     </div>
   );
 }
@@ -148,15 +148,21 @@ function ClientDetailsPage() {
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
       <div className="mb-6">
-        <Link to="/clients" className="text-sm text-blue-600 hover:underline">
+        <Link
+          to="/clients"
+          className="text-primary-text text-sm underline-offset-4 hover:underline"
+        >
           ← Back to clients
         </Link>
       </div>
 
-      {load.status === 'loading' ? <p className="text-sm text-gray-500">Loading…</p> : null}
+      {load.status === 'loading' ? <p className="text-muted-foreground text-sm">Loading…</p> : null}
 
       {load.status === 'error' ? (
-        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p
+          role="alert"
+          className="rounded-control bg-destructive-surface text-destructive px-3 py-2 text-sm"
+        >
           {load.message}
         </p>
       ) : null}
@@ -172,7 +178,7 @@ function ClientDetailsPage() {
                 </Button>
                 <Button
                   type="button"
-                  className="bg-red-600 hover:bg-red-700"
+                  variant="destructive"
                   onClick={() => {
                     setActionError(undefined);
                     setConfirmDelete(true);
@@ -183,7 +189,7 @@ function ClientDetailsPage() {
               </div>
             </CardHeader>
             <CardContent>
-              <dl className="divide-y divide-gray-100">
+              <dl className="divide-border divide-y">
                 <Field label="Client ID">
                   <CopyField label="Client ID" value={load.client.clientId} />
                 </Field>
@@ -217,7 +223,7 @@ function ClientDetailsPage() {
                 </Field>
                 <Field label="Client secret">
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-sm text-gray-500">
+                    <span className="text-muted-foreground text-sm">
                       {load.client.tokenEndpointAuthMethod === 'none'
                         ? 'Public client — no secret.'
                         : 'Hidden. Secrets are shown only once, at creation or regeneration.'}
@@ -287,7 +293,7 @@ function ClientDetailsPage() {
               </Button>
               <Button
                 type="button"
-                className="bg-red-600 hover:bg-red-700"
+                variant="destructive"
                 disabled={busy}
                 onClick={() => void handleDelete()}
               >
@@ -301,7 +307,7 @@ function ClientDetailsPage() {
             authorization flows, and any dependent data is removed. This cannot be undone.
           </p>
           {actionError ? (
-            <p role="alert" className="text-sm text-red-700">
+            <p role="alert" className="text-destructive text-sm">
               {actionError}
             </p>
           ) : null}
@@ -334,7 +340,7 @@ function ClientDetailsPage() {
             secret will stop working until you update them with the new one.
           </p>
           {actionError ? (
-            <p role="alert" className="text-sm text-red-700">
+            <p role="alert" className="text-destructive text-sm">
               {actionError}
             </p>
           ) : null}

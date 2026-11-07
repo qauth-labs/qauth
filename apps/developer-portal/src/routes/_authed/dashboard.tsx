@@ -12,7 +12,7 @@ function DashboardPage() {
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
-      <h1 className="mb-8 text-2xl font-semibold text-gray-900">
+      <h1 className="text-foreground mb-8 text-3xl leading-tight">
         Welcome, {user.email ?? user.sub}
       </h1>
 
@@ -39,7 +39,7 @@ function DashboardPage() {
             <CardDescription>Generate and revoke keys for direct API access.</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-gray-400">Coming soon in Phase 2.3.</p>
+            <p className="text-muted-foreground text-sm">Coming soon in Phase 2.3.</p>
           </CardContent>
         </Card>
       </div>

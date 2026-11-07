@@ -59,7 +59,10 @@ function NewClientPage() {
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
       <div className="mb-6">
-        <Link to="/clients" className="text-sm text-blue-600 hover:underline">
+        <Link
+          to="/clients"
+          className="text-primary-text text-sm underline-offset-4 hover:underline"
+        >
           ← Back to clients
         </Link>
       </div>
