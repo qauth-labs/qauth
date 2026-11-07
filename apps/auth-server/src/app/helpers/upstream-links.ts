@@ -37,7 +37,8 @@ import { emitUserEvent } from './user-events';
  * - **The last way in.** An unlink that would leave the account with no
  *   credential to sign in with (a password, a passkey, an upstream identity,
  *   a wallet) is refused with `last_credential`. An authenticator app is a
- *   second factor, never a way in on its own.
+ *   second factor, never a way in on its own; a marked credential, or the
+ *   identity of a provider switched off, signs in with none (#844).
  *
  * Each change locks the user's row, so a link, an unlink and its
  * last-credential check of one account never interleave, and its event
@@ -204,6 +205,40 @@ function signsIn(credential: { readonly providerType: string }): boolean {
   return credential.providerType !== 'totp';
 }
 
+/** A credential, as far as {@link signsInNow} reads it. */
+export interface WayInCandidate {
+  readonly providerType: string;
+  readonly credentialData?: unknown;
+  /** The failure ladder's mark, or a rebind's (#655). */
+  readonly disabledAt?: number | null;
+}
+
+/**
+ * Whether one of `credentials` still signs the account in on its own: an
+ * unmarked credential that is no authenticator app and, for an upstream
+ * identity, one whose provider the realm has on. A credential the failure
+ * ladder or a rebind marked signs in with nothing until a reset or a new
+ * set-up, nor does the identity of a provider switched off (#844), so
+ * neither is a way in a removal may leave the account with. A provider is
+ * read only when nothing else signs in.
+ */
+export async function signsInNow(
+  fastify: UpstreamLinkServer,
+  realmId: string,
+  credentials: readonly WayInCandidate[]
+): Promise<boolean> {
+  const live = credentials.filter(
+    (credential) =>
+      signsIn(credential) && (credential.disabledAt === null || credential.disabledAt === undefined)
+  );
+  if (live.some((credential) => !isUpstreamCredentialData(credential.credentialData))) return true;
+  const catalog = upstreamProviderCatalog(fastify);
+  for (const credential of live) {
+    if ((await catalog.find(realmId, credential.providerType)) !== undefined) return true;
+  }
+  return false;
+}
+
 /**
  * Remove the upstream identity `credentialId` from the account `userId`
  * (#670). Its caller, the account API, has checked a fresh sign-in and
@@ -233,9 +268,10 @@ export async function unlinkUpstreamIdentity(
           isUpstreamCredentialData(credential.credentialData)
       );
       if (target === undefined) return { kind: 'not_found' };
-      if (!credentials.some((credential) => credential.id !== target.id && signsIn(credential))) {
-        return { kind: 'last_credential' };
-      }
+      const others = credentials.filter(
+        (credential) => credential.id !== target.id && credential.realmId === realm.id
+      );
+      if (!(await signsInNow(fastify, realm.id, others))) return { kind: 'last_credential' };
       const deleted = await repositories.userCredentials.deleteById(realm.id, target.id, tx);
       if (deleted === undefined || deleted.userId !== userId) {
         throw new Error('a locked credential could not be deleted');

@@ -16,6 +16,14 @@ const { emitUserEvent, sideRecord, writeSessionSideRecord } = vi.hoisted(() => {
 // The helpers' modules read the environment at import; these rules read none of it.
 vi.mock('../../config/env', () => ({ env: { NODE_ENV: 'test' } }));
 vi.mock('./user-events', () => ({ emitUserEvent }));
+// The realm's providers: `oidc_on` is on; every other is off or unknown.
+vi.mock('./upstream-providers', () => ({
+  upstreamProviderCatalog: () => ({
+    offered: async () => [],
+    find: async (_realmId: string, type: string) =>
+      type === 'oidc_on' ? { entry: { provider: type, name: 'On' } } : undefined,
+  }),
+}));
 vi.mock('./session-side-record', () => ({
   readSessionSideRecord: vi.fn(async () => ({ ...sideRecord })),
   writeSessionSideRecord,
@@ -368,6 +376,36 @@ describe('removeCredential (#844)', () => {
         MAILER
       )
     ).toEqual({ kind: 'second_factor_required' });
+  });
+
+  it('counts no identity of a provider switched off as a way in (#844)', async () => {
+    const upstream = (type: string) => ({
+      ...credential(type),
+      credentialData: { kind: 'upstream', iss: 'https://idp.example', verified: true },
+    });
+    const passkey = credential('webauthn');
+    const off = server([passkey, upstream('oidc_off')]);
+    expect(
+      await removeCredential(
+        off.fastify,
+        REQUEST,
+        session(['pop']),
+        { type: 'passkey', id: passkey.id },
+        MAILER
+      )
+    ).toEqual({ kind: 'last_credential' });
+    expect(off.deleteById).not.toHaveBeenCalled();
+    // The identity of a provider that is on is one.
+    const on = server([passkey, upstream('oidc_on')]);
+    expect(
+      await removeCredential(
+        on.fastify,
+        REQUEST,
+        session(['pop']),
+        { type: 'passkey', id: passkey.id },
+        MAILER
+      )
+    ).toEqual({ kind: 'removed' });
   });
 
   it('counts the ways in of the session’s realm only', async () => {

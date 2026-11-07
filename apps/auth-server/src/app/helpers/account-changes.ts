@@ -32,7 +32,7 @@ import { recordPasswordChange } from './password-reset';
 import { requestRealm } from './request-realm';
 import { csrfTokensEqual, generateCsrfToken } from './session-cookie';
 import { readSessionSideRecord, writeSessionSideRecord } from './session-side-record';
-import { type LinkedAccount, pageLinkedAccounts } from './upstream-links';
+import { type LinkedAccount, pageLinkedAccounts, signsInNow } from './upstream-links';
 import { upstreamProviderCatalog } from './upstream-providers';
 import { emitUserEvent } from './user-events';
 
@@ -58,7 +58,9 @@ import { emitUserEvent } from './user-events';
  *   user's row (`lockUser`), so a removal and its last-credential check never
  *   interleave with another change, and its event commits with it.
  * - **The last way in.** A removal that would leave no credential to sign in
- *   with is refused with `last_credential`; one that would leave no second
+ *   with (a marked credential, or the identity of a provider switched off,
+ *   signs in with none: `signsInNow`) is refused with `last_credential`; one
+ *   that would leave no second
  *   factor where the realm's policy requires one, with
  *   `second_factor_required`. An authenticator app is a second factor, never
  *   a way in on its own.
@@ -206,11 +208,6 @@ interface CredentialRow {
  */
 function isLive(credential: CredentialRow): boolean {
   return credential.disabledAt === null || credential.disabledAt === undefined;
-}
-
-/** Whether a credential lets the account sign in on its own: anything but an authenticator app. */
-function signsIn(credential: CredentialRow): boolean {
-  return credential.providerType !== TOTP_PROVIDER_TYPE;
 }
 
 /** Whether a credential is a second factor: a passkey or an authenticator app. */
@@ -551,9 +548,10 @@ export async function removeCredential(
         : candidate.providerType === TOTP_PROVIDER_TYPE
     );
     if (row === undefined) return { kind: 'not_found' };
-    // What the account keeps that still signs in: a marked credential is none.
+    // What the account keeps that still signs in: a marked credential is
+    // none, nor the identity of a provider switched off.
     const others = held.filter((candidate) => candidate.id !== row.id && isLive(candidate));
-    if (!others.some(signsIn)) return { kind: 'last_credential' };
+    if (!(await signsInNow(fastify, realmId, others))) return { kind: 'last_credential' };
     if (mfaRequired && !others.some(isSecondFactor)) return { kind: 'second_factor_required' };
     const deleted = await fastify.repositories.userCredentials.deleteById(realmId, row.id, tx);
     if (deleted === undefined || deleted.userId !== userId) {
