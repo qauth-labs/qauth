@@ -2662,6 +2662,12 @@ async function mintIdJagForExchange(args: {
  *  - GATE 3 — the assertion's `client_id` claim MUST equal the AUTHENTICATED
  *    client (draft §4.4.1). This is what stops a valid assertion intended for
  *    client A being redeemed by client B.
+ *  - GATE 3a — an assertion bound to a DPoP key (`cnf.jkt`, draft §9.8.1.2) is
+ *    redeemed only with the request's DPoP proof under exactly that key, and
+ *    the access token is bound to it. Like GATE 3, enforced inside GATE 2
+ *    before the `jti` is burned, and re-asserted here. For a client that
+ *    authenticates with no secret this is the one proof that the caller holds
+ *    the key the IdP saw.
  *  - GATE 4 — the assertion's `resource` MUST be inside the operator's
  *    per-client ID-JAG target list (`id_jag_targets`). A trusted IdP is trusted
  *    to say WHICH USER authorized WHICH CLIENT; it is not thereby trusted to
@@ -2709,6 +2715,8 @@ async function handleJwtBearer(
     assertion = await validateIdJagAssertion(fastify, requestRealm(request), {
       assertion: body.assertion,
       expectedClientId: client.clientId,
+      // The key of the proof verified at dispatch, or none (RFC 9449 §5).
+      ...(ctx.dpopThumbprint === undefined ? {} : { dpopThumbprint: ctx.dpopThumbprint }),
       realm: requestRealm(request).name,
     });
   } catch (err) {
@@ -2724,7 +2732,17 @@ async function handleJwtBearer(
       'token endpoint: identity assertion refused'
     );
     await emitRequestFailed(ctx, 'invalid_grant', reason);
-    throw new InvalidGrantError('the presented assertion is not acceptable');
+    // One refusal says why, as draft §9.8.1.2.2 shows it: a bound assertion
+    // presented without a DPoP proof. It tells no one anything they do not
+    // hold: the check runs only once the client authenticated and every
+    // other check of the assertion, the `client_id` binding among them,
+    // passed, and the binding is in the assertion's own payload. The
+    // assertion is still unspent, so the client can send it again with one.
+    throw new InvalidGrantError(
+      reason === 'dpop_missing_proof'
+        ? 'proof of possession is required for this assertion: send a DPoP proof'
+        : 'the presented assertion is not acceptable'
+    );
   }
 
   // GATE 3 — belt-and-braces re-assertion of the `client_id` binding GATE 2
@@ -2734,6 +2752,14 @@ async function handleJwtBearer(
   // future refactor of the helper must not be able to drop it silently.
   if (assertion.clientId !== client.clientId) {
     await emitRequestFailed(ctx, 'invalid_grant', 'client_mismatch');
+    throw new InvalidGrantError('the presented assertion is not acceptable');
+  }
+
+  // GATE 3a — the same belt-and-braces for the `cnf.jkt` binding GATE 2
+  // already enforced (draft §9.8.1.2). With it, the access token below is
+  // bound to the proof's key, which is the assertion's (`dpopConfirmation`).
+  if (assertion.cnfJkt !== undefined && assertion.cnfJkt !== ctx.dpopThumbprint) {
+    await emitRequestFailed(ctx, 'invalid_grant', 'dpop_key_mismatch');
     throw new InvalidGrantError('the presented assertion is not acceptable');
   }
 

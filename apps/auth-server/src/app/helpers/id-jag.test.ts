@@ -821,6 +821,153 @@ describe('validateIdJagAssertion — replay protection', () => {
   });
 });
 
+describe('validateIdJagAssertion — the cnf binding (draft §9.8.1.2, ADR-011 gate 16, #927)', () => {
+  /** The thumbprint of the key the assertion is bound to, and of another key. */
+  const BOUND_JKT = 'b'.repeat(43);
+  const OTHER_JKT = 'o'.repeat(43);
+
+  /** {@link fastifyStub} with DPoP on, as `fastify.dpop` is while `DPOP_ENABLED` is. */
+  function dpopOnStub() {
+    const stub = fastifyStub();
+    stub.fastify.dpop = { verifyRequest: vi.fn() };
+    return stub;
+  }
+
+  it('accepts a bound assertion with a proof under its key, and returns the key', async () => {
+    const { fastify, store } = dpopOnStub();
+    const assertion = await makeAssertion({ extraClaims: { cnf: { jkt: BOUND_JKT } } });
+
+    const validated = await validateIdJagAssertion(fastify, REALM, {
+      assertion,
+      expectedClientId: CLIENT_ID,
+      dpopThumbprint: BOUND_JKT,
+      realm: 'master',
+      resolver: trustedResolver(),
+    });
+
+    expect(validated.cnfJkt).toBe(BOUND_JKT);
+    expect(store.size).toBe(1);
+  });
+
+  it('accepts an unbound assertion with or without a proof, and names no key', async () => {
+    for (const dpopThumbprint of [undefined, OTHER_JKT]) {
+      const { fastify } = dpopOnStub();
+      const validated = await validateIdJagAssertion(fastify, REALM, {
+        assertion: await makeAssertion(),
+        expectedClientId: CLIENT_ID,
+        ...(dpopThumbprint === undefined ? {} : { dpopThumbprint }),
+        realm: 'master',
+        resolver: trustedResolver(),
+      });
+      expect(validated).not.toHaveProperty('cnfJkt');
+    }
+  });
+
+  it.each([
+    ['no proof, DPoP on', true, undefined, 'dpop_missing_proof'],
+    ['no proof, DPoP off', false, undefined, 'dpop_disabled'],
+    ['a proof under another key', true, OTHER_JKT, 'dpop_key_mismatch'],
+  ] as const)(
+    'refuses a bound assertion with %s, and leaves its jti unspent',
+    async (_case, dpopOn, dpopThumbprint, reason) => {
+      const { fastify, store } = dpopOn ? dpopOnStub() : fastifyStub();
+      const assertion = await makeAssertion({ extraClaims: { cnf: { jkt: BOUND_JKT } } });
+      const resolver = trustedResolver();
+
+      await expectRejection(
+        validateIdJagAssertion(fastify, REALM, {
+          assertion,
+          expectedClientId: CLIENT_ID,
+          ...(dpopThumbprint === undefined ? {} : { dpopThumbprint }),
+          realm: 'master',
+          resolver,
+        }),
+        reason
+      );
+      // Checked before the burn: a request without the key cannot destroy the
+      // assertion, and the client can send it again with its proof.
+      expect(store.size).toBe(0);
+      fastify.dpop = { verifyRequest: vi.fn() };
+      await expect(
+        validateIdJagAssertion(fastify, REALM, {
+          assertion,
+          expectedClientId: CLIENT_ID,
+          dpopThumbprint: BOUND_JKT,
+          realm: 'master',
+          resolver,
+        })
+      ).resolves.toMatchObject({ cnfJkt: BOUND_JKT });
+    }
+  );
+
+  it('compares the thumbprint exactly: no case folding', async () => {
+    const { fastify } = dpopOnStub();
+    const jkt = `${'a'.repeat(42)}B`;
+    const assertion = await makeAssertion({ extraClaims: { cnf: { jkt } } });
+
+    await expectRejection(
+      validateIdJagAssertion(fastify, REALM, {
+        assertion,
+        expectedClientId: CLIENT_ID,
+        dpopThumbprint: jkt.toLowerCase(),
+        realm: 'master',
+        resolver: trustedResolver(),
+      }),
+      'dpop_key_mismatch'
+    );
+  });
+
+  // `-05` says it outright: a confirmation method the server does not
+  // support is a refusal. Read as unbound, the assertion would be redeemed
+  // without the proof of possession its issuer required.
+  it.each([
+    ['an mTLS certificate binding', { 'x5t#S256': 'c'.repeat(43) }],
+    ['jkt beside another method', { jkt: BOUND_JKT, 'x5t#S256': 'c'.repeat(43) }],
+    ['a bare jwk', { jwk: { kty: 'OKP', crv: 'Ed25519', x: 'x'.repeat(43) } }],
+    ['an empty object', {}],
+    ['null', null],
+    ['an array', [{ jkt: BOUND_JKT }]],
+    ['a string', BOUND_JKT],
+  ])('refuses a cnf that is %s, whatever the proof', async (_case, cnf) => {
+    const { fastify, store } = dpopOnStub();
+    const assertion = await makeAssertion({ extraClaims: { cnf } });
+
+    await expectRejection(
+      validateIdJagAssertion(fastify, REALM, {
+        assertion,
+        expectedClientId: CLIENT_ID,
+        dpopThumbprint: BOUND_JKT,
+        realm: 'master',
+        resolver: trustedResolver(),
+      }),
+      'unsupported_confirmation'
+    );
+    expect(store.size).toBe(0);
+  });
+
+  it.each([
+    ['too short', 'b'.repeat(42)],
+    ['too long', 'b'.repeat(44)],
+    ['not base64url', `${'b'.repeat(42)}=`],
+    ['not a string', 43],
+  ])('refuses a cnf.jkt that is %s as a malformed claim', async (_case, jkt) => {
+    const { fastify, store } = dpopOnStub();
+    const assertion = await makeAssertion({ extraClaims: { cnf: { jkt } } });
+
+    await expectRejection(
+      validateIdJagAssertion(fastify, REALM, {
+        assertion,
+        expectedClientId: CLIENT_ID,
+        dpopThumbprint: typeof jkt === 'string' ? jkt : BOUND_JKT,
+        realm: 'master',
+        resolver: trustedResolver(),
+      }),
+      'claims_invalid'
+    );
+    expect(store.size).toBe(0);
+  });
+});
+
 describe('mintIdJag', () => {
   it('mints an assertion with exactly the ID-JAG claim set', async () => {
     const { fastify } = fastifyStub();

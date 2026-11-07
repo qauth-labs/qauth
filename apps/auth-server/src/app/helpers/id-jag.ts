@@ -112,6 +112,10 @@ export type IdJagRejectionReason =
   | 'audience_invalid'
   | 'lifetime_invalid'
   | 'client_mismatch'
+  | 'unsupported_confirmation'
+  | 'dpop_disabled'
+  | 'dpop_missing_proof'
+  | 'dpop_key_mismatch'
   | 'replayed'
   | 'replay_store_unavailable';
 
@@ -157,7 +161,16 @@ export interface ValidatedIdJag {
   readonly expiresAt: number;
   /** `iat`, epoch seconds. */
   readonly issuedAt: number;
+  /**
+   * `cnf.jkt` — the RFC 7638 SHA-256 thumbprint of the DPoP key the assertion
+   * is bound to (draft §9.8.1, RFC 9449 §6.1). When present, the request's
+   * DPoP proof was under exactly this key. Absent for an unbound assertion.
+   */
+  readonly cnfJkt?: string;
 }
+
+/** The form of a `cnf.jkt`: a base64url RFC 7638 SHA-256 JWK thumbprint (RFC 9449 §6.1). */
+const CNF_JKT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 /**
  * Claim-shape validation for a SIGNATURE-VERIFIED assertion.
@@ -188,7 +201,24 @@ const idJagClaimsSchema = z.object({
   exp: z.number().int(),
   iat: z.number().int(),
   scope: z.string().max(2048).optional(),
+  // draft §9.8.1: the DPoP key the assertion is bound to. `jkt` is the only
+  // confirmation method this server can prove, and `validateIdJagAssertion`
+  // has refused any other member before this parse; strict all the same, so
+  // the parse cannot strip one.
+  cnf: z.strictObject({ jkt: z.string().regex(CNF_JKT_PATTERN) }).optional(),
 });
+
+/**
+ * Whether an assertion's `cnf` claim is one this server can honour: an object
+ * whose only member is `jkt` (draft §9.8.1, RFC 9449 §6.1). Any other
+ * confirmation method (`x5t#S256`, `jwk`, `kid`, ...) binds the assertion to a
+ * key this server has no way to see proven, so it is never ignored.
+ */
+function isDpopConfirmation(cnf: unknown): boolean {
+  if (typeof cnf !== 'object' || cnf === null || Array.isArray(cnf)) return false;
+  const members = Object.keys(cnf);
+  return members.length === 1 && members[0] === 'jkt';
+}
 
 /** Split a space-delimited scope string, dropping empties and duplicates. */
 function splitScope(scope: string | undefined): string[] {
@@ -282,6 +312,14 @@ export interface ValidateIdJagOptions {
    */
   readonly expectedClientId: string;
   /**
+   * The RFC 7638 thumbprint of the key of the request's VERIFIED DPoP proof
+   * (RFC 9449 §4.3), or `undefined` when the request carried none. An
+   * assertion bound with `cnf.jkt` is accepted only when this equals it
+   * (draft §9.8.1.2). Leaving it out is fail-closed: a bound assertion is then
+   * refused, never redeemed without proof of possession.
+   */
+  readonly dpopThumbprint?: string;
+  /**
    * The name of the realm the assertion is presented to. The issuer's
    * discovery fetch is an operator-set destination of this realm, so the
    * deployment allowlist entries that name it apply (ADR-019 Decision 8).
@@ -313,8 +351,9 @@ export interface ValidateIdJagOptions {
  *  5. signature + `iss` + `aud` + `exp`/`nbf` (bounded skew) via the crypto
  *     abstraction, with the algorithm pinned to the ONE the header declared;
  *  6. `typ` asserted on the AUTHENTICATED header;
- *  7. claim shape, single-valued `aud`, a bounded `exp - iat`, and the
- *     `client_id` binding to the caller;
+ *  7. claim shape (no `authorization_details`, no `cnf` but `jkt`),
+ *     single-valued `aud`, a bounded `exp - iat`, the `client_id` binding to
+ *     the caller, and the `cnf.jkt` binding to the request's DPoP proof key;
  *  8. `jti` burned — the only side effect, and only after everything above.
  *
  * Step 7 includes the `client_id` binding DELIBERATELY, rather than leaving it
@@ -322,7 +361,10 @@ export interface ValidateIdJagOptions {
  * any client that got hold of another client's assertion destroy it — present
  * it, pass every cryptographic check, burn the single-use marker, and only THEN
  * be refused. Checking the binding before the burn means an assertion can only
- * ever be consumed by the client it names.
+ * ever be consumed by the client it names. The `cnf.jkt` binding is checked
+ * before the burn for the same reason: an assertion bound to a key is consumed
+ * only by a request that proves that key, and a request that forgot its proof
+ * leaves the assertion unspent, so the client can present it again with one.
  *
  * @throws IdJagValidationError for every refusal, carrying an audit reason. The
  *   caller maps them all to one uniform OAuth error.
@@ -477,6 +519,25 @@ export async function validateIdJagAssertion(
     );
   }
 
+  // ADR-011 gate 16, draft §9.8.1 — a `cnf` claim binds the assertion to a key, and proof of
+  // possession of it "MUST be demonstrated when using the ID-JAG". This server
+  // proves a DPoP key (`jkt`) and nothing else, so a `cnf` naming any other
+  // confirmation method, or `jkt` beside another member, is refused rather
+  // than read as unbound: ignoring a key binding is the same downgrade as
+  // ignoring `authorization_details` (`-05` says so outright). Checked on the
+  // verified claims, as above, before the schema sees them.
+  if (
+    typeof verified.claims === 'object' &&
+    verified.claims !== null &&
+    'cnf' in verified.claims &&
+    !isDpopConfirmation(verified.claims.cnf)
+  ) {
+    throw new IdJagValidationError(
+      'unsupported_confirmation',
+      'assertion cnf names a confirmation method other than jkt (RFC 9449)'
+    );
+  }
+
   const parsed = idJagClaimsSchema.safeParse(verified.claims);
   if (!parsed.success) {
     throw new IdJagValidationError('claims_invalid', 'assertion is missing required claims');
@@ -530,6 +591,29 @@ export async function validateIdJagAssertion(
     );
   }
 
+  // ADR-011 gate 16, draft §9.8.1.2: an assertion bound to a DPoP key is redeemed only with a
+  // proof under that key. No proof is a refusal (§9.8.1.2.2), and so is a
+  // server with DPoP off, which cannot verify one; a proof under another key
+  // fails the exact thumbprint comparison (§9.8.1.2.1). The proof itself was
+  // verified (RFC 9449 §4.3) before this runs. Checked BEFORE the burn — see
+  // this function's TSDoc.
+  if (claims.cnf !== undefined) {
+    if (options.dpopThumbprint === undefined) {
+      throw new IdJagValidationError(
+        fastify.dpop ? 'dpop_missing_proof' : 'dpop_disabled',
+        fastify.dpop
+          ? 'assertion is bound to a DPoP key and the request carries no DPoP proof'
+          : 'assertion is bound to a DPoP key and DPoP is off on this server'
+      );
+    }
+    if (options.dpopThumbprint !== claims.cnf.jkt) {
+      throw new IdJagValidationError(
+        'dpop_key_mismatch',
+        'the DPoP proof is not under the key the assertion is bound to'
+      );
+    }
+  }
+
   // LAST, and only now: burn the jti. Everything above is side-effect free, so
   // an unverifiable assertion costs no store write.
   await consumeIdJagJti(fastify, resolved.identifier, claims.jti);
@@ -544,6 +628,7 @@ export async function validateIdJagAssertion(
     jti: claims.jti,
     expiresAt: claims.exp,
     issuedAt: claims.iat,
+    ...(claims.cnf === undefined ? {} : { cnfJkt: claims.cnf.jkt }),
   };
 }
 
