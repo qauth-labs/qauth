@@ -313,6 +313,39 @@ describe('ResourceGuard.authenticate (introspection mode)', () => {
   });
 });
 
+describe('ResourceGuard.authenticate — the DPoP scheme is not accepted', () => {
+  function guard(requiredScopes: string[] = []) {
+    return new ResourceGuard({
+      resource: RESOURCE,
+      authorizationServer: ISSUER,
+      requiredScopes,
+      fetch: jwksFetch({ keys: [publicJwk] }),
+    });
+  }
+
+  // RFC 6750 §3.1: a request that "attempted using an unsupported
+  // authentication method" gets the credential-absent answer, with no error
+  // code. The message names the scheme so a host's logs show why.
+  it.each(['DPoP', 'dpop', 'DPOP'])(
+    'answers the %s scheme as a missing bearer, naming the scheme',
+    async (scheme) => {
+      const token = await signToken({ sub: 'u', client_id: 'c', scope: 'mcp:read' }, RESOURCE);
+      const rejection = guard(['mcp:read']).authenticate(`${scheme} ${token}`);
+      await expect(rejection).rejects.toBeInstanceOf(MissingTokenError);
+      await expect(rejection).rejects.toMatchObject({
+        message:
+          'The DPoP authorization scheme is not supported; this resource accepts unbound Bearer tokens only',
+        requiredScopes: ['mcp:read'],
+      });
+    }
+  );
+
+  it('keeps the generic message for other schemes', async () => {
+    await expect(guard().authenticate('Basic abc')).rejects.toThrow('No bearer token presented');
+    await expect(guard().authenticate('DPoPabc')).rejects.toThrow('No bearer token presented');
+  });
+});
+
 describe('ResourceGuard — requireAccessTokenTyp reaches the validator (#283)', () => {
   // Exercised through `ResourceGuardConfig`, NOT by constructing `JwtValidator`
   // directly as the validator's own suite does. The flag is inert unless the
