@@ -51,11 +51,13 @@ import { requestRealm } from './request-realm';
  * the experiment.
  *
  * The generic upstream OIDC client (`@qauth-labs/server-upstream-oidc`,
- * #601) cannot go on this list as it is built: it is a factory that builds
- * one method per configured provider, every one with the id `oidc`, where a
- * plugin package exports one `authMethod`; and its client secret sits inside
- * the `clientAuthentication` union, a mark the secret-member reader refuses.
- * Provider administration (#714) registers it instead.
+ * #601) is no plugin: it is a factory that builds one method per provider a
+ * realm configures, every one with the id `oidc`, which the loader reserves,
+ * where a plugin package exports one `authMethod`. The realm's provider rows
+ * run it (#639, #714). A preset plugin built on it
+ * (`createUpstreamOidcPresetMethod`, #951) is a plugin like any other, with
+ * its own id, type and config, so it can be listed here, as the presets of
+ * #671 are meant to be.
  */
 export const FIRST_PARTY_AUTH_METHOD_PLUGINS: readonly string[] = Object.freeze([]);
 

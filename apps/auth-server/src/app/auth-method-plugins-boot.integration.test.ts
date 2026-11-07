@@ -1,3 +1,8 @@
+import {
+  EXAMPLE_PRESET_PACKAGE,
+  EXAMPLE_PRESET_TYPE,
+  examplePresetPackage,
+} from '@qauth-labs/fastify-plugin-federation/src/testing/upstream-oidc-fixtures';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -108,7 +113,7 @@ describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => 
       const app = booted.app;
       const methods = app.providerRegistry.authMethods().map((method) => method.type);
       const statuses = new Map<string, number>();
-      for (const type of ['corp_sso', 'fixture_sso', INSTALLED_PLUGIN_TYPE]) {
+      for (const type of ['corp_sso', 'fixture_sso', INSTALLED_PLUGIN_TYPE, EXAMPLE_PRESET_TYPE]) {
         const response = await app.inject({ method: 'GET', url: `/upstream/${type}/callback` });
         statuses.set(type, response.statusCode);
       }
@@ -189,6 +194,25 @@ describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => 
       pluginLines(booted.log).map((line) => [line['authMethodPlugin'], line['reason']])
     ).toEqual([[THIRD_PARTY, 'plugin-api-off']]);
     expect(experimentalLines(booted.log)).toEqual([]);
+  });
+
+  // Acceptance criterion (#951): a preset plugin built on the generic OpenID
+  // Connect client loads from the first-party list with the switch off.
+  it('loads a preset plugin on the generic OpenID Connect client from the first-party list with the switch off', async () => {
+    const booted = await boot(
+      { AUTH_METHOD_PLUGINS: EXAMPLE_PRESET_PACKAGE },
+      {
+        importPackage: fixturePluginImporter({ [EXAMPLE_PRESET_PACKAGE]: examplePresetPackage() }),
+        firstParty: [EXAMPLE_PRESET_PACKAGE],
+      }
+    );
+
+    expect(booted.methods).toEqual([EXAMPLE_PRESET_TYPE]);
+    // No warn line about the plugin, and no experimental warning: it is first-party.
+    expect(pluginLines(booted.log)).toEqual([]);
+    expect(experimentalLines(booted.log)).toEqual([]);
+    // Mounted under its own type, and off in the realm until an admin enables it: 404.
+    expect(await booted.callbackStatus(EXAMPLE_PRESET_TYPE)).toBe(404);
   });
 
   // Acceptance criterion (#1009): a plugin installed as a package, not a
