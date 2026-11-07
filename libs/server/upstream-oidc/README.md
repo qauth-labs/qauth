@@ -109,7 +109,7 @@ export const authMethod = createUpstreamOidcPresetMethod({
   client secret is not the value of such a member is refused, since the runtime would store it in
   the clear.
 - `origins` binds the secret to its provider. The runtime seals a plugin's secret under the
-  plugin's own context (`auth-method-plugin:<id>:<path>`), not under the issuer and token endpoint
+  plugin's own context (`auth-method-plugin:<id>:<package>:<type>:<path>`), not under the issuer and token endpoint
   as the stored config above does, so a preset names the `https` origins its provider answers on,
   every host its endpoints are on included. A config whose issuer or any endpoint set by hand is on
   none of them is refused where the host parses it, at the admin API's configure and at every use,

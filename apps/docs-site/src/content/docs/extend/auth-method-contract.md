@@ -173,8 +173,8 @@ The plugin runtime builds the context for the request's realm
 secret members decrypted back into place, the method's `type` as the signer's provider, and the
 request's logger with the plugin's name. The context signs and decrypts as `api`: its grant holds
 `signClientAssertion`, and among the stored secrets it may decrypt are a plugin secret's
-`auth-method-plugin:<plugin>:<path>` contexts, beside a realm's mail secrets and an upstream
-OpenID Connect client's secret. `web`, which serves a plugin's routes, may neither decrypt nor sign
+`auth-method-plugin:<plugin>:<package>:<type>:<path>` contexts, beside a realm's mail secrets and
+an upstream OpenID Connect client's secret. `web`, which serves a plugin's routes, may neither decrypt nor sign
 a client assertion, and `local` would open every stored secret. The admin API seals a plugin
 secret as `local`, as the realm secret store does, and opens a stored or sealed one as `api`. In a
 single deployment every role shares the signer's process. A deployment that runs the signer apart
@@ -252,7 +252,10 @@ export const authMethod: AuthMethod<CorpSsoConfig, CorpSsoTransaction> = {
 
 One package holds one method. Its `id` is the name the admin API gives the plugin, and stays the
 same across versions of the package; its `type` is the segment of its routes,
-`/upstream/<type>/…`, and the value written to `user_credentials.provider_type`.
+`/upstream/<type>/…`, and the value written to `user_credentials.provider_type`. A realm's state
+of the plugin belongs to the package and the type that wrote it: keep both across versions, or
+every realm has to configure the plugin again
+([The plugin that wrote the state](#the-plugin-that-wrote-the-state)).
 
 **Taken names.** A plugin's `type` may not be a type QAuth writes itself
 (`RESERVED_AUTH_METHOD_TYPES`), which the registry and the kit refuse. Nor may it start with
@@ -360,6 +363,36 @@ QAuth-Approval: {approvalId}
 serves, before the request's body is read and without the rate limit's headers; disabling keeps
 the config. They are checked after the rate limit, so a flood past it answers 429 where an unknown
 path answers 404: that tells a plugin of that type is installed, never which realms have it on.
+
+### The plugin that wrote the state
+
+A realm's state of a plugin is keyed by the plugin's `id`, and it records the npm package and the
+`type` of the plugin that wrote it. A secret is sealed under a context that names both
+(`auth-method-plugin:<id>:<package>:<type>:<path>`). So when the deployment puts another package
+behind the same `id`, or a version of the package changes its `type`, the new plugin inherits
+nothing from the realm: neither the switch, the config nor the secrets. Until the realm configures
+it again:
+
+- its routes answer `404`, as for a disabled plugin, and the sign-in page offers no button for it;
+- its stored secrets do not open, and count as unset;
+- `plugins.get` and `plugins.list` show it as off, with `configuredBy`, the package and type that
+  wrote the state, and `mismatch`, why the state is not this plugin's: `package_changed`,
+  `type_changed`, or `package_unrecorded` for a state written before QAuth recorded the package;
+- `plugins.enable` is refused with `400`.
+
+A configure (`plugins.update`) under the installed plugin writes the state again for it, off, with
+each secret sealed again for it: a secret it does not send again is not kept. An approved enable
+then turns it on. `plugins.disable` turns the stored switch off and keeps the rest, so the state
+stays off if the other package comes back.
+
+A new version of the same package, with the same `id` and `type`, keeps the realm's state as it is:
+it stays on, and its secrets open.
+
+A realm state written by QAuth 0.2, which recorded no package, reads as `package_unrecorded` after
+the upgrade: configure and enable each plugin again in each realm that used it. During a rolling
+upgrade, such a plugin stays on at the nodes of 0.2 and is off at the new ones; configure no plugin
+until every node runs the new release, since a node of 0.2 neither records the package nor seals
+under the new context, and opens no secret the new nodes sealed.
 
 ## The generic OpenID Connect client
 
