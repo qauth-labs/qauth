@@ -380,7 +380,7 @@ export const signInMethodsSchema = object(
       {
         count: count(
           100,
-          'How many upstream accounts and wallets are linked. Their lists are the Upstream login and Federation areas’.'
+          'How many upstream accounts and wallets are linked. The upstream accounts are listed under Linked accounts.'
         ),
       },
       ['count']
@@ -429,6 +429,27 @@ export const passkeySchema = object(
   },
   ['id', 'nickname', 'backedUp', 'createdAt', 'lastUsedAt'],
   'A bound passkey.'
+);
+
+export const linkedAccountSchema = object(
+  {
+    id: uuid('The linked account’s id: QAuth’s own, never the identity’s subject at the provider.'),
+    provider: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 63,
+      pattern: '^[a-z][a-z0-9_]{0,62}$',
+      description: 'The upstream identity provider, by its type, such as `oidc_corp`.',
+    },
+    providerName: displayText(
+      'realm',
+      64,
+      'The provider’s name as the operator set it. Absent when the provider is no longer configured.'
+    ),
+    createdAt: dateTime('When it was linked.'),
+  },
+  ['id', 'provider', 'createdAt'],
+  'An upstream account linked to the account (#670): the person can sign in through its provider.'
 );
 
 export const passkeyPatchSchema = closedObject(
@@ -775,6 +796,10 @@ export const notificationPreferencesSchema = object(
 
 export const PAGES = {
   PasskeyPage: page('Passkey', 'A page of the account’s passkeys, newest first.'),
+  LinkedAccountPage: page(
+    'LinkedAccount',
+    'A page of the account’s linked upstream accounts, newest first.'
+  ),
   SessionPage: page('Session', 'A page of the account’s sessions, most recently used first.'),
   SecurityLogPage: page('SecurityLogEntry', 'A page of the security log, newest first.'),
   ConsentPage: page(

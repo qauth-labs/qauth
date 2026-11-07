@@ -159,7 +159,7 @@ export interface SignInMethods {
     remaining: number;
   };
   linkedAccounts: {
-    /** How many upstream accounts and wallets are linked. Their lists are the Upstream login and Federation areas’. */
+    /** How many upstream accounts and wallets are linked. The upstream accounts are listed under Linked accounts. */
     count: number;
   };
   /** Whether the account has a contact address. Without one, security notices go only to the security log. */
@@ -253,6 +253,26 @@ export interface RecoveryCodeStatus {
   remaining: number;
   /** When the current set was issued; `null` without one. */
   issuedAt: string | null;
+}
+
+/** An upstream account linked to the account (#670): the person can sign in through its provider. */
+export interface LinkedAccount {
+  /** The linked account’s id: QAuth’s own, never the identity’s subject at the provider. */
+  id: string;
+  /** The upstream identity provider, by its type, such as `oidc_corp`. */
+  provider: string;
+  /** The provider’s name as the operator set it. Absent when the provider is no longer configured. */
+  providerName?: string;
+  /** When it was linked. */
+  createdAt: string;
+}
+
+/** A page of the account’s linked upstream accounts, newest first. */
+export interface LinkedAccountPage {
+  /** This page’s items, at most `limit`. */
+  items: LinkedAccount[];
+  /** The cursor of the next page; `null` on the last page. */
+  nextCursor: string | null;
 }
 
 /** A browser session of the account. `location` is absent when unknown. */
@@ -454,6 +474,8 @@ export interface NoticePreference {
     | 'send_ceiling_reached'
     | 'second_factor_failed'
     | 'identifier_changed'
+    | 'account_linked'
+    | 'account_unlinked'
     | 'account_deleted'
     | (string & {});
   /** Whether it always goes out: no setting switches it off. */
@@ -677,6 +699,38 @@ export interface Operations {
       400: Problem;
       401: Problem;
       403: Problem;
+      409: Problem;
+      421: Problem;
+      429: Problem;
+      500: Problem;
+      503: Problem;
+    };
+  };
+  'account.linkedAccounts.list': {
+    method: 'GET';
+    path: '/account/v1-rc.0/linked-accounts';
+    request: { query?: { limit?: number; cursor?: string } };
+    responses: {
+      200: LinkedAccountPage;
+      400: Problem;
+      401: Problem;
+      403: Problem;
+      421: Problem;
+      429: Problem;
+      500: Problem;
+      503: Problem;
+    };
+  };
+  'account.linkedAccounts.delete': {
+    method: 'DELETE';
+    path: '/account/v1-rc.0/linked-accounts/{linkedAccountId}';
+    request: { path: { linkedAccountId: string } };
+    responses: {
+      204: undefined;
+      400: Problem;
+      401: Problem;
+      403: Problem;
+      404: Problem;
       409: Problem;
       421: Problem;
       429: Problem;
@@ -1052,6 +1106,32 @@ export const OPERATIONS = {
     statuses: [200, 400, 401, 403, 409, 421, 429, 500, 503],
     emptyStatuses: [],
   },
+  'account.linkedAccounts.list': {
+    method: 'GET',
+    path: '/account/v1-rc.0/linked-accounts',
+    pathPatterns: {},
+    query: ['limit', 'cursor'],
+    headers: [],
+    bodyMediaType: undefined,
+    freshAuthentication: 'none',
+    actChain: 'accepted',
+    statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
+  },
+  'account.linkedAccounts.delete': {
+    method: 'DELETE',
+    path: '/account/v1-rc.0/linked-accounts/{linkedAccountId}',
+    pathPatterns: {
+      linkedAccountId: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    },
+    query: [],
+    headers: [],
+    bodyMediaType: undefined,
+    freshAuthentication: 'strongest-factor',
+    actChain: 'refused',
+    statuses: [204, 400, 401, 403, 404, 409, 421, 429, 500, 503],
+    emptyStatuses: [204],
+  },
   'account.sessions.list': {
     method: 'GET',
     path: '/account/v1-rc.0/sessions',
@@ -1336,6 +1416,28 @@ export function createAccountClient(options: AccountClientOptions) {
       callOperation<Operations['account.recoveryCodes.regenerate']>(
         options,
         OPERATIONS['account.recoveryCodes.regenerate'],
+        request,
+        init
+      ),
+    /** List the linked upstream accounts: `account.linkedAccounts.list`. */
+    linkedAccountsList: (
+      request: Operations['account.linkedAccounts.list']['request'] = {},
+      init?: CallInit
+    ) =>
+      callOperation<Operations['account.linkedAccounts.list']>(
+        options,
+        OPERATIONS['account.linkedAccounts.list'],
+        request,
+        init
+      ),
+    /** Unlink an upstream account: `account.linkedAccounts.delete`. */
+    linkedAccountsDelete: (
+      request: Operations['account.linkedAccounts.delete']['request'],
+      init?: CallInit
+    ) =>
+      callOperation<Operations['account.linkedAccounts.delete']>(
+        options,
+        OPERATIONS['account.linkedAccounts.delete'],
         request,
         init
       ),

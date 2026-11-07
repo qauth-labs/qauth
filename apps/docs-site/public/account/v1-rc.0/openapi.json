@@ -37,6 +37,10 @@
       "description": "The address the account signs in with, and its contact address."
     },
     {
+      "name": "Linked accounts",
+      "description": "The upstream accounts the person can sign in through, and their removal."
+    },
+    {
       "name": "Connected apps",
       "description": "The apps the person consented to, and their revocation."
     },
@@ -3958,6 +3962,567 @@
         }
       }
     },
+    "/account/v1-rc.0/linked-accounts": {
+      "get": {
+        "operationId": "account.linkedAccounts.list",
+        "summary": "List the linked upstream accounts",
+        "description": "The upstream accounts linked to the account, newest first: the provider and when it was linked, never the identity’s subject at the provider. Linking one is not an account API operation: it runs on the realm host, as an authorization request with `qauth_link` that signs the person in to the account again in the same interaction (ADR-020 §1 and §3).\n\nToken: audience `urn:qauth:aud:account:v1-rc.0`; no fresh authentication; an act-chain token is accepted.",
+        "tags": [
+          "Linked accounts"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "read",
+        "x-qauth-permission": "linkedAccounts.read",
+        "x-qauth-audience": "urn:qauth:aud:account:v1-rc.0",
+        "x-qauth-fresh-authentication": "none",
+        "x-qauth-act-chain": "accepted",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How many items a page holds at most.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "example": 20
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Where the page starts: the previous page’s `nextCursor`. Absent for the first page.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "The `nextCursor` of the previous page. Opaque: a client never builds or changes one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of linked accounts.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkedAccountPage"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "019a4c2d-3e4f-7a5b-8c6d-7e8f9a0b1c2d",
+                      "provider": "oidc_corp",
+                      "providerName": "Example Corp",
+                      "createdAt": "2026-10-12T14:03:27Z"
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request: `bad_request` or `validation_error` or `invalid_cursor`.",
+            "x-qauth-problem-codes": [
+              "bad_request",
+              "validation_error",
+              "invalid_cursor"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "bad_request": {
+                    "$ref": "#/components/examples/bad_request"
+                  },
+                  "validation_error": {
+                    "$ref": "#/components/examples/validation_error"
+                  },
+                  "invalid_cursor": {
+                    "$ref": "#/components/examples/invalid_cursor"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
+            "x-qauth-problem-codes": [
+              "unauthorized",
+              "access_token_expired",
+              "invalid_access_token",
+              "invalid_dpop_proof"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              },
+              "WWW-Authenticate": {
+                "$ref": "#/components/headers/Challenge"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "$ref": "#/components/examples/unauthorized"
+                  },
+                  "access_token_expired": {
+                    "$ref": "#/components/examples/access_token_expired"
+                  },
+                  "invalid_access_token": {
+                    "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden: `forbidden`.",
+            "x-qauth-problem-codes": [
+              "forbidden"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              },
+              "WWW-Authenticate": {
+                "$ref": "#/components/headers/ScopeChallenge"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "forbidden": {
+                    "$ref": "#/components/examples/forbidden"
+                  }
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request: `misdirected_request`.",
+            "x-qauth-problem-codes": [
+              "misdirected_request"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "misdirected_request": {
+                    "$ref": "#/components/examples/misdirected_request"
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests: `too_many_requests`.",
+            "x-qauth-problem-codes": [
+              "too_many_requests"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "too_many_requests": {
+                    "$ref": "#/components/examples/too_many_requests"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error: `internal_error`.",
+            "x-qauth-problem-codes": [
+              "internal_error"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "internal_error": {
+                    "$ref": "#/components/examples/internal_error"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable: `service_unavailable`.",
+            "x-qauth-problem-codes": [
+              "service_unavailable"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "service_unavailable": {
+                    "$ref": "#/components/examples/service_unavailable"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/v1-rc.0/linked-accounts/{linkedAccountId}": {
+      "delete": {
+        "operationId": "account.linkedAccounts.delete",
+        "summary": "Unlink an upstream account",
+        "description": "Remove a linked upstream account: the account no longer signs in through its provider, and the attributes the provider gave stay. The last way the account can sign in is refused with `last_credential`. Needs a fresh sign-in with the strongest factor the account holds, or any fresh sign-in for an account that holds no password, passkey or authenticator app; an act-chain token is refused (ADR-019 Decision 7). The \"account unlinked\" notice goes out, and the security log records it.\n\nToken: audience `urn:qauth:aud:account:v1-rc.0`; fresh authentication with the account’s strongest factor (at most 300 seconds old); an act-chain token is refused.",
+        "tags": [
+          "Linked accounts"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "write",
+        "x-qauth-permission": "linkedAccounts.write",
+        "x-qauth-audience": "urn:qauth:aud:account:v1-rc.0",
+        "x-qauth-fresh-authentication": "strongest-factor",
+        "x-qauth-act-chain": "refused",
+        "parameters": [
+          {
+            "name": "linkedAccountId",
+            "in": "path",
+            "required": true,
+            "description": "The linked account’s id.",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "description": "The linked account’s id."
+            },
+            "example": "019a4c2d-3e4f-7a5b-8c6d-7e8f9a0b1c2d"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The upstream account was unlinked.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request: `bad_request` or `validation_error`.",
+            "x-qauth-problem-codes": [
+              "bad_request",
+              "validation_error"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "bad_request": {
+                    "$ref": "#/components/examples/bad_request"
+                  },
+                  "validation_error": {
+                    "$ref": "#/components/examples/validation_error"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof` or `insufficient_user_authentication`.",
+            "x-qauth-problem-codes": [
+              "unauthorized",
+              "access_token_expired",
+              "invalid_access_token",
+              "invalid_dpop_proof",
+              "insufficient_user_authentication"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              },
+              "WWW-Authenticate": {
+                "$ref": "#/components/headers/Challenge"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "$ref": "#/components/examples/unauthorized"
+                  },
+                  "access_token_expired": {
+                    "$ref": "#/components/examples/access_token_expired"
+                  },
+                  "invalid_access_token": {
+                    "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
+                  },
+                  "insufficient_user_authentication": {
+                    "$ref": "#/components/examples/insufficient_user_authentication"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden: `forbidden` or `delegated_token_refused`.",
+            "x-qauth-problem-codes": [
+              "forbidden",
+              "delegated_token_refused"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              },
+              "WWW-Authenticate": {
+                "$ref": "#/components/headers/ScopeChallenge"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "forbidden": {
+                    "$ref": "#/components/examples/forbidden"
+                  },
+                  "delegated_token_refused": {
+                    "$ref": "#/components/examples/delegated_token_refused"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found: `not_found`.",
+            "x-qauth-problem-codes": [
+              "not_found"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "not_found": {
+                    "$ref": "#/components/examples/not_found"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: `last_credential`.",
+            "x-qauth-problem-codes": [
+              "last_credential"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "last_credential": {
+                    "$ref": "#/components/examples/last_credential"
+                  }
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request: `misdirected_request`.",
+            "x-qauth-problem-codes": [
+              "misdirected_request"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "misdirected_request": {
+                    "$ref": "#/components/examples/misdirected_request"
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests: `too_many_requests`.",
+            "x-qauth-problem-codes": [
+              "too_many_requests"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              },
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "too_many_requests": {
+                    "$ref": "#/components/examples/too_many_requests"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error: `internal_error`.",
+            "x-qauth-problem-codes": [
+              "internal_error"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "internal_error": {
+                    "$ref": "#/components/examples/internal_error"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable: `service_unavailable`.",
+            "x-qauth-problem-codes": [
+              "service_unavailable"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "service_unavailable": {
+                    "$ref": "#/components/examples/service_unavailable"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/account/v1-rc.0/sessions": {
       "get": {
         "operationId": "account.sessions.list",
@@ -7380,6 +7945,16 @@
                       "enabled": true
                     },
                     {
+                      "notice": "account_linked",
+                      "mandatory": true,
+                      "enabled": true
+                    },
+                    {
+                      "notice": "account_unlinked",
+                      "mandatory": true,
+                      "enabled": true
+                    },
+                    {
                       "notice": "account_deleted",
                       "mandatory": true,
                       "enabled": true
@@ -8134,7 +8709,7 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 100,
-                "description": "How many upstream accounts and wallets are linked. Their lists are the Upstream login and Federation areas’."
+                "description": "How many upstream accounts and wallets are linked. The upstream accounts are listed under Linked accounts."
               }
             },
             "required": [
@@ -8457,6 +9032,78 @@
         "required": [
           "remaining",
           "issuedAt"
+        ],
+        "additionalProperties": false
+      },
+      "LinkedAccount": {
+        "type": "object",
+        "description": "An upstream account linked to the account (#670): the person can sign in through its provider.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "minLength": 36,
+            "maxLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "description": "The linked account’s id: QAuth’s own, never the identity’s subject at the provider."
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^[a-z][a-z0-9_]{0,62}$",
+            "description": "The upstream identity provider, by its type, such as `oidc_corp`."
+          },
+          "providerName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+            "x-qauth-display": "realm",
+            "description": "The provider’s name as the operator set it. Absent when the provider is no longer configured."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 30,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$",
+            "description": "When it was linked."
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "LinkedAccountPage": {
+        "type": "object",
+        "description": "A page of the account’s linked upstream accounts, newest first.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "This page’s items, at most `limit`.",
+            "items": {
+              "$ref": "#/components/schemas/LinkedAccount"
+            },
+            "minItems": 0,
+            "maxItems": 200
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "description": "The cursor of the next page; `null` on the last page."
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
         ],
         "additionalProperties": false
       },
@@ -9082,6 +9729,8 @@
               "send_ceiling_reached",
               "second_factor_failed",
               "identifier_changed",
+              "account_linked",
+              "account_unlinked",
               "account_deleted"
             ],
             "description": "The notice. A minor release may add notices, such as the new-agent-grant notice of ADR-020 §3; a console shows one it does not know by its `mandatory` and `enabled` alone."

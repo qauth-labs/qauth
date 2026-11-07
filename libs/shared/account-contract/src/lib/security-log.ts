@@ -140,12 +140,12 @@ export const SECURITY_LOG_KINDS = {
   },
   account_linked: {
     description: 'A wallet or an upstream account was linked to the account.',
-    sources: [registered('wallet.linked'), planned('user.upstream_linked', 670)],
+    sources: [registered('wallet.linked'), registered('user.upstream_linked')],
     reportable: false,
   },
   account_unlinked: {
     description: 'A wallet or an upstream account was unlinked from the account.',
-    sources: [planned('user.upstream_unlinked', 670)],
+    sources: [registered('user.upstream_unlinked')],
     reportable: false,
   },
   consent_granted: {

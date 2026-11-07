@@ -73,6 +73,9 @@ const EXPECTED: Record<string, readonly [string, string]> = {
   'account.totp.delete': ['strongest-factor-or-recovery-code', 'refused'],
   'account.recoveryCodes.get': ['none', 'accepted'],
   'account.recoveryCodes.regenerate': ['strongest-factor', 'refused'],
+  'account.linkedAccounts.list': ['none', 'accepted'],
+  // ADR-019 Decision 7: a linked account is a way into the account.
+  'account.linkedAccounts.delete': ['strongest-factor', 'refused'],
   'account.sessions.list': ['none', 'accepted'],
   'account.sessions.delete': ['none', 'accepted'],
   'account.sessions.endAll': ['none', 'accepted'],
@@ -99,6 +102,7 @@ describe('the operations', () => {
         'Account',
         'Addresses',
         'Connected apps',
+        'Linked accounts',
         'Notifications',
         'Profile',
         'Security log',
