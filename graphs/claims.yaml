@@ -28,6 +28,21 @@ operations:
   GET /ui/passkey-enrolment/{interactionId}: { flow: [passkey, passkey-sign-up] }
   GET /ui/totp/{interactionId}: { flow: [totp] }
   GET /ui/totp-setup/{interactionId}: { flow: [totp] }
+  GET /ui/account: { flow: [account-page] }
+  GET /ui/account/password: { flow: [account-page] }
+  POST /ui/account/password: { flow: [account-page-changes] }
+  POST /ui/account/reauthenticate: { flow: [account-page] }
+  POST /ui/account/passkeys/add: { flow: [account-page] }
+  POST /ui/account/passkeys/{passkeyId}/rename: { flow: [account-page-changes] }
+  POST /ui/account/passkeys/{passkeyId}/remove: { flow: [account-page-changes] }
+  POST /ui/account/totp/setup: { flow: [account-page] }
+  POST /ui/account/totp/remove: { flow: [account-page-changes] }
+  POST /ui/account/recovery-codes/regenerate: { flow: [account-page-changes] }
+  POST /ui/account/recovery-codes/confirm: { flow: [account-page-changes] }
+  POST /ui/account/sessions/{sessionId}/end: { flow: [account-page-changes] }
+  POST /ui/account/sessions/end-all: { flow: [account-page-changes] }
+  POST /ui/account/linked-accounts/link: { flow: [account-page] }
+  POST /ui/account/linked-accounts/{linkedAccountId}/unlink: { flow: [account-page-changes] }
   GET /interaction/v1-rc.0/{interactionId}: { flow: [consent, logout, upstream-link] }
   GET /interaction/v1-rc.0/{interactionId}/personal: { flow: [consent, logout] }
   POST /interaction/v1-rc.0/{interactionId}/answer: { flow: [consent, logout, upstream-link] }
