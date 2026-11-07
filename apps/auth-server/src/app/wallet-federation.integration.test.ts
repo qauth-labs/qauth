@@ -768,21 +768,19 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
           const jar = await signInWithPassword(app, email, password);
 
           // (2) Link the wallet through the server-rendered linking screen —
-          // CROSS-device, the path that existed before #405: no device field,
-          // a QR, and completion by polling.
+          // on this device, the only way a link is made (ADR-013 as amended
+          // 2026-11-07): the wallet is handed a redirect_uri and brings the
+          // signed-in browser back, which completes the link.
           const link = await startWalletLink(app, jar);
           const walletResponse = await wallet.buildResponse(link.invocationUri);
           const posted = await postWalletResponse(app, walletResponse.formBody);
           expect(posted.statusCode).toBe(200);
-          expect(posted.body).toEqual({});
+          const { redirectUri } = parseOid4vpResponseAck(posted.body);
+          if (redirectUri === undefined) throw new Error('no redirect_uri for a link');
 
-          const linked = await app.inject({
-            method: 'GET',
-            url: `/ui/wallet-link/${link.handle}`,
-            headers: { cookie: jar.header() as string },
-          });
-          jar.absorb(linked.headers['set-cookie']);
+          const linked = await followRedirect(app, jar, redirectUri);
           expect(linked.statusCode).toBe(200);
+          expect(linked.body).toContain('Wallet credential linked');
 
           // (3) The account now holds two credentials under one users.id.
           const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
@@ -821,8 +819,8 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
           const userId = await registerPasswordAccount(app, email, password);
           const jar = await signInWithPassword(app, email, password);
 
-          // `device=this`: the pending page offers the deep link and no QR.
-          const link = await startWalletLink(app, jar, 'this');
+          // The pending page offers the deep link and no QR.
+          const link = await startWalletLink(app, jar);
           expect(link.page).toMatch(/href="openid4vp:/);
           expect(link.page).not.toContain('<svg');
 
@@ -862,8 +860,7 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
           });
           expect((await pollLink(app, jar, link.handle)).status).toBe('expired');
 
-          // The account holds two credentials under one users.id — exactly as
-          // the cross-device link leaves it.
+          // The account holds two credentials under one users.id.
           const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
             ids.realmId,
             email
@@ -878,6 +875,140 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         }
       );
     }, 180_000);
+
+    /**
+     * Linking is same-device only (ADR-013 as amended 2026-11-07). A link
+     * request answered by a wallet that is not on the signed-in browser's
+     * device — whoever holds it — must bind nothing to the account that asked,
+     * under `issuer-scoped-claim` too, where a linked row would carry that
+     * wallet's stable subject. Two ways in, each refused: the cross-device
+     * mode at both starts, and the same-device request answered from another
+     * device.
+     */
+    it.each<{ strategy: string; env: Record<string, string> }>([
+      { strategy: 'asserted-lookup', env: {} },
+      {
+        strategy: 'issuer-scoped-claim',
+        env: {
+          OID4VP_SUBJECT_RESOLUTION: 'issuer-scoped-claim',
+          OID4VP_SUBJECT_CLAIM: 'email',
+          OID4VP_SUBJECT_CLAIM_ISSUERS: TRUSTED_ISSUER,
+        },
+      },
+    ])(
+      '(ADR-013 as amended 2026-11-07) a link answered by a wallet on another device binds nothing ($strategy)',
+      async ({ env }) => {
+        const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+        // Someone else's wallet, holding their own valid credential.
+        const { wallet: otherWallet } = await walletHolding(issuer, {
+          claims: {
+            given_name: 'Victor',
+            family_name: 'Vale',
+            email: 'victor@example.com',
+            email_verified: true,
+          },
+        });
+
+        await withDeployment(
+          walletEnabledEnv({
+            OID4VP_ISSUER_JWKS: issuerJwksConfig([issuer]),
+            OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER] }),
+            ...env,
+          }),
+          async ({ app, ids }) => {
+            const email = 'starter@example.com';
+            const userId = await registerPasswordAccount(app, email);
+            const jar = await signInWithPassword(app, email);
+            const requestRows = async () =>
+              Number(
+                (
+                  await app.dbPool.query<{ count: string }>(
+                    'SELECT count(*) AS count FROM oid4vp_request_states'
+                  )
+                ).rows[0]?.count
+              );
+            const walletRows = async () =>
+              Number(
+                (
+                  await app.dbPool.query<{ count: string }>(
+                    "SELECT count(*) AS count FROM user_credentials WHERE provider_type = 'wallet'"
+                  )
+                ).rows[0]?.count
+              );
+            const before = await requestRows();
+
+            // (1) The cross-device mode is refused at both starts, with the
+            // 400 validation_error problem, before anything is written.
+            const api = await app.inject({
+              method: 'POST',
+              url: '/auth/link/wallet',
+              headers: { 'content-type': 'application/json', cookie: jar.header() as string },
+              payload: { device: 'other' },
+            });
+            expect(api.statusCode).toBe(400);
+            expect(api.headers['content-type']).toMatch(/^application\/problem\+json/);
+            expect(api.json()).toMatchObject({
+              code: 'validation_error',
+              errors: [{ pointer: '/device' }],
+            });
+
+            const confirm = await app.inject({
+              method: 'GET',
+              url: '/ui/wallet-link',
+              headers: { cookie: jar.header() as string },
+            });
+            expect(confirm.body).not.toContain('value="other"');
+            jar.absorb(confirm.headers['set-cookie']);
+            const form = await app.inject({
+              method: 'POST',
+              url: '/ui/wallet-link',
+              headers: {
+                'content-type': 'application/x-www-form-urlencoded',
+                cookie: jar.header() as string,
+              },
+              payload: new URLSearchParams({
+                csrf_token: extractCsrfToken(confirm.body),
+                device: 'other',
+              }).toString(),
+            });
+            expect(form.statusCode).toBe(400);
+            expect(form.json()).toMatchObject({ code: 'validation_error' });
+            expect(await requestRows()).toBe(before);
+
+            // (2) The only link there is, answered by a wallet on another
+            // device: it follows the redirect in ITS OWN browser, which holds
+            // neither the flow nor the session. Refused there, and the
+            // starter's tab is told.
+            const relayed = await startWalletLink(app, jar);
+            const answered = await postWalletResponse(
+              app,
+              (await otherWallet.buildResponse(relayed.invocationUri)).formBody
+            );
+            expect(answered.statusCode).toBe(200);
+            const { redirectUri } = parseOid4vpResponseAck(answered.body);
+            if (redirectUri === undefined) throw new Error('no redirect_uri for a link');
+            const elsewhere = await followRedirect(app, new CookieJar(), redirectUri);
+            expect(elsewhere.statusCode).toBe(200);
+            expect(elsewhere.body).toContain(RETURN_REFUSAL_TITLE);
+            expect((await pollLink(app, jar, relayed.handle)).status).toBe('rejected');
+            // The code is spent: the starter cannot redeem it either.
+            const late = await followRedirect(app, jar, redirectUri);
+            expect(late.body).toContain(RETURN_REFUSAL_TITLE);
+
+            // Nothing was bound: the account holds its password and nothing
+            // else, and no wallet row exists anywhere.
+            expect(await providerTypesOn(app, ids.realmId, email)).toEqual(['password']);
+            expect(await walletRows()).toBe(0);
+            const owned = await app.dbPool.query<{ provider_type: string }>(
+              'SELECT provider_type FROM user_credentials WHERE user_id = $1',
+              [userId]
+            );
+            expect(owned.rows.map((row) => row.provider_type)).toEqual(['password']);
+          }
+        );
+      },
+      240_000
+    );
   });
 
   describe('acr on the wallet path, and never on the password path (#237)', () => {

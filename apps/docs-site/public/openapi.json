@@ -1622,7 +1622,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Start linking a wallet credential to the signed-in account. Requires a valid session cookie and an `X-CSRF-Token` header matching the per-session token returned by `GET /consents`. Issues an OID4VP 1.0 presentation request in LINKING mode: the validated response is bound to the caller's authenticated users.id and is never used to resolve or create an account (ADR-009 §5). The optional `device` field (`this` | `other`, default `other`) says where the wallet is: a same-device link completes on the browser's return leg at `GET /ui/wallet-login/return` and polls as `pending` until then (OID4VP 1.0 §14.2, HAIP 1.0 §5.1); a cross-device link completes by polling. Issues #238, #405.",
+        "description": "Start linking a wallet credential to the signed-in account. Requires a valid session cookie and an `X-CSRF-Token` header matching the per-session token returned by `GET /consents`. Issues an OID4VP 1.0 presentation request in LINKING mode: the validated response is bound to the caller's authenticated users.id and is never used to resolve or create an account (ADR-009 §5). Linking is same-device only (ADR-013, amended 2026-11-07): the wallet must be on the device the browser runs on, the link completes on the browser's return leg at `GET /ui/wallet-login/return`, and the poll answers `pending` until then (OID4VP 1.0 §14.2, HAIP 1.0 §5.1). The optional `device` field accepts only `this`, which is also what an absent field or body means; `other` (cross-device) is refused with `400` `validation_error`. Issues #238, #405.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1633,11 +1633,9 @@
                     "type": "object",
                     "properties": {
                       "device": {
-                        "default": "other",
                         "type": "string",
                         "enum": [
-                          "this",
-                          "other"
+                          "this"
                         ]
                       }
                     }
@@ -1747,7 +1745,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Poll a wallet-linking flow. Reports whether the direct_post presentation response has arrived, and COMPLETES the link when it has — writing a second user_credentials row (provider_type=wallet) under the same users.id. A link started with `device=this` completes on the return leg instead and polls as `pending` until then, then `linked` once (#405). Issue #238.",
+        "description": "Poll a wallet-linking flow. A link is same-device only (ADR-013, amended 2026-11-07): it completes on the return leg, writing a second user_credentials row (provider_type=wallet) under the same users.id, and this poll answers `pending` until then, then `linked` once (#405). Issue #238.",
         "parameters": [
           {
             "schema": {
@@ -16307,7 +16305,7 @@
         "tags": [
           "UI"
         ],
-        "description": "Starts a wallet-linking flow for the signed-in user and issues an OID4VP presentation request. Issue #238.",
+        "description": "Starts a wallet-linking flow for the signed-in user and issues an OID4VP presentation request for a wallet on this device. Linking is same-device only (ADR-013, amended 2026-11-07): the form field `device` accepts only `this`, which is also what an absent field means, and `other` (cross-device) is refused with `400` `validation_error`. Issues #238, #405.",
         "requestBody": {
           "required": true,
           "content": {
@@ -16320,11 +16318,9 @@
                     "minLength": 1
                   },
                   "device": {
-                    "default": "other",
                     "type": "string",
                     "enum": [
-                      "this",
-                      "other"
+                      "this"
                     ]
                   }
                 },
@@ -16339,6 +16335,16 @@
         "responses": {
           "200": {
             "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "421": {
             "description": "Misdirected Request",
