@@ -154,12 +154,12 @@ states:
         target: checkingOrigin
         effect: [askTotp]
         say: 'POST /ui/account/totp/setup'
-        source: apps/auth-server/src/app/routes/ui/account.ts:482
+        source: apps/auth-server/src/app/routes/ui/account.ts:485
       LINK:
         target: checkingOrigin
         effect: [askLink]
         say: 'POST /ui/account/linked-accounts/link, with the provider'
-        source: apps/auth-server/src/app/routes/ui/account.ts:684
+        source: apps/auth-server/src/app/routes/ui/account.ts:693
 
   # The page loads
 
@@ -208,7 +208,7 @@ states:
       The credentials of the session's realm, the recovery code set's state, the linked upstream accounts, the
       providers it may link and up to 50 live sessions; then the session's account CSRF value, minted once and kept in
       its side record.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:274
+    source: apps/auth-server/src/app/helpers/account-changes.ts:285
     invoke: { external: accountStore }
     on:
       DONE:
@@ -318,7 +318,7 @@ states:
 
   readingTotp:
     title: Read whether the account holds an authenticator app
-    source: apps/auth-server/src/app/routes/ui/account.ts:498
+    source: apps/auth-server/src/app/routes/ui/account.ts:501
     invoke: { action: UserCredential.findAllByUserId }
     on:
       DONE:
@@ -330,7 +330,7 @@ states:
 
   checkingTotp:
     title: Set up one authenticator app at a time
-    source: apps/auth-server/src/app/routes/ui/account.ts:499
+    source: apps/auth-server/src/app/routes/ui/account.ts:502
     always:
       - guard: totpHeld
         target: conflict.totp_held
@@ -340,7 +340,7 @@ states:
 
   readingProviders:
     title: Read the providers the account may link
-    source: apps/auth-server/src/app/routes/ui/account.ts:700
+    source: apps/auth-server/src/app/routes/ui/account.ts:709
     invoke: { external: upstreamProviderCatalog }
     on:
       DONE:
@@ -352,7 +352,7 @@ states:
 
   checkingProvider:
     title: Link only a provider the account may link
-    source: apps/auth-server/src/app/routes/ui/account.ts:701
+    source: apps/auth-server/src/app/routes/ui/account.ts:710
     always:
       - guard: otherProvider
         target: not_found.provider
@@ -472,7 +472,7 @@ states:
   conflict.totp_held:
     type: final
     title: Refuse a second authenticator app
-    source: apps/auth-server/src/app/routes/ui/account.ts:500
+    source: apps/auth-server/src/app/routes/ui/account.ts:503
     response:
       status: 409
       headers:
@@ -482,7 +482,7 @@ states:
   not_found.provider:
     type: final
     title: Refuse a provider the account may not link
-    source: apps/auth-server/src/app/routes/ui/account.ts:702
+    source: apps/auth-server/src/app/routes/ui/account.ts:711
     response:
       status: 404
       headers:
@@ -536,8 +536,8 @@ assertions:
   - id: one-authenticator-app
     never: 'ceremonyStarted and settingUpTotp and totpHeld'
     say: 'No set-up starts for an account that holds an authenticator app'
-    source: apps/auth-server/src/app/routes/ui/account.ts:499
+    source: apps/auth-server/src/app/routes/ui/account.ts:502
   - id: no-link-to-another-provider
     never: "ceremonyStarted and request == 'link' and otherProvider"
     say: 'A link starts only for a provider the realm offers and the account holds no identity of'
-    source: apps/auth-server/src/app/routes/ui/account.ts:701
+    source: apps/auth-server/src/app/routes/ui/account.ts:710

@@ -403,7 +403,8 @@ the account the same interaction signed in to; nothing is matched by an email
 address.
 
 The pages keep an account usable. A removal that would leave no way to sign
-in (an authenticator app is a second factor, never a way in on its own) is
+in (an authenticator app is a second factor, never a way in on its own, and a
+credential the failure ladder or a passkey rebind turned off counts as none) is
 refused with `409`, and so is one that would leave no second factor where the
 realm's MFA policy requires one. A new password ends the account's other
 sessions and revokes every refresh token; this browser stays signed in. Ending a
@@ -412,8 +413,8 @@ back-channel logout URI. Each change is recorded as a user event:
 `user.password_changed`, `user.credential_added`, `user.credential_removed`,
 `user.passkey_renamed`, `user.recovery_codes_regenerated`,
 `user.upstream_linked`, `user.upstream_unlinked` and `user.signed_out`. A
-changed password, a new recovery code set and a linked or unlinked account
-mail the owner. No page puts a secret or a code in a URL, and every page is
+changed password, a removed passkey or authenticator app, a new recovery code
+set and a linked or unlinked account mail the owner. No page puts a secret or a code in a URL, and every page is
 sent with `Cache-Control: no-store`.
 
 ## Pending authorization: why the login bounce carries a handle, not a URL

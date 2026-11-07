@@ -689,6 +689,20 @@ describe('the hosted account pages (#844, real containers)', () => {
       { type: 'passkey', credentialId: passkeyId },
     ]);
     expect(await eventsOf('user.recovery_codes_regenerated', who.userId)).toEqual([{}]);
+    // Every change is told to the owner (ADR-020 §3 "Emails").
+    await vi.waitFor(
+      () =>
+        expect((mails.get(who.email) ?? []).map((mail) => mail.template)).toEqual(
+          expect.arrayContaining([
+            'password_changed',
+            'recovery_codes_regenerated',
+            'upstream_unlinked',
+            'totp_removed',
+            'passkey_removed',
+          ])
+        ),
+      { timeout: 5_000, interval: 20 }
+    );
   });
 
   it('takes a recovery code in place of the lost factor for a removal, never for a password change', async () => {

@@ -469,10 +469,13 @@ export default async function (fastify: FastifyInstance) {
         ACCOUNT_PAGE_CHANGES.passkeyRemove
       );
       if (session === null) return reply;
-      const result = await removeCredential(fastify, request, session, {
-        type: 'passkey',
-        id: request.params.passkeyId,
-      });
+      const result = await removeCredential(
+        fastify,
+        request,
+        session,
+        { type: 'passkey', id: request.params.passkeyId },
+        ceremonies.engines().mailer
+      );
       if (result.kind === 'not_found') return notFound(reply);
       if (result.kind !== 'removed') return refusedRemoval(reply, result.kind);
       return reply.redirect(overviewUrl(request, 'passkey_removed'), 303);
@@ -533,7 +536,13 @@ export default async function (fastify: FastifyInstance) {
         ACCOUNT_PAGE_CHANGES.totpRemove
       );
       if (session === null) return reply;
-      const result = await removeCredential(fastify, request, session, { type: 'totp' });
+      const result = await removeCredential(
+        fastify,
+        request,
+        session,
+        { type: 'totp' },
+        ceremonies.engines().mailer
+      );
       if (result.kind === 'not_found') return notFound(reply);
       if (result.kind !== 'removed') return refusedRemoval(reply, result.kind);
       return reply.redirect(overviewUrl(request, 'totp_removed'), 303);

@@ -23,7 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operation (#663), and a refused one offers "Confirm it's you". Adding a
   passkey or an authenticator app runs the sign-in engine's own enrolment
   step after that fresh sign-in. A removal never leaves the account without
-  a way to sign in, nor without a second factor the realm requires. Ending a
+  a way to sign in, nor without a second factor the realm requires, and a
+  removed passkey or authenticator app mails the owner (`passkey_removed`,
+  `totp_removed`, which no realm can switch off). Ending a
   session tells every relying party with a back-channel logout URI. The
   changes are recorded as the new user events `user.password_changed`,
   `user.credential_added`, `user.credential_removed`,

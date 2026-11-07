@@ -194,6 +194,17 @@ interface CredentialRow {
   readonly id: string;
   readonly providerType: string;
   readonly realmId: string;
+  /** The failure ladder's mark, or a rebind's (#655). */
+  readonly disabledAt?: number | null;
+}
+
+/**
+ * Whether a credential still signs in: one the failure ladder or a rebind
+ * marked does not, until a reset or a new set-up, so it is no way in that a
+ * removal may leave the account with.
+ */
+function isLive(credential: CredentialRow): boolean {
+  return credential.disabledAt === null || credential.disabledAt === undefined;
 }
 
 /** Whether a credential lets the account sign in on its own: anything but an authenticator app. */
@@ -492,17 +503,21 @@ export type CredentialRemovalResult =
  * Remove one of the account's passkeys (`account.passkeys.delete`) or its
  * authenticator app (`account.totp.delete`), under the user's row lock. The
  * caller has checked a fresh sign-in and the CSRF token. The delete and its
- * `user.credential_removed` event commit together.
+ * `user.credential_removed` event commit together; then the owner is told at
+ * the address of the account's password (ADR-020 §3 "Emails": a notice no
+ * realm switches off). An account with no password has no address to tell.
  */
 export async function removeCredential(
   fastify: FastifyInstance,
   request: FastifyRequest,
   session: BrowserSession,
-  target: { readonly type: 'passkey'; readonly id: string } | { readonly type: 'totp' }
+  target: { readonly type: 'passkey'; readonly id: string } | { readonly type: 'totp' },
+  mailer: EngineMailer
 ): Promise<CredentialRemovalResult> {
   const { realmId, userId } = session;
   const mfaRequired = await secondFactorRequired(fastify, realmId, userId);
-  return fastify.db.transaction(async (tx): Promise<CredentialRemovalResult> => {
+  let address: string | undefined;
+  const result = await fastify.db.transaction(async (tx): Promise<CredentialRemovalResult> => {
     if (!(await fastify.repositories.userCredentials.lockUser(realmId, userId, tx))) {
       return { kind: 'not_found' };
     }
@@ -515,7 +530,8 @@ export async function removeCredential(
         : candidate.providerType === TOTP_PROVIDER_TYPE
     );
     if (row === undefined) return { kind: 'not_found' };
-    const others = held.filter((candidate) => candidate.id !== row.id);
+    // What the account keeps that still signs in: a marked credential is none.
+    const others = held.filter((candidate) => candidate.id !== row.id && isLive(candidate));
     if (!others.some(signsIn)) return { kind: 'last_credential' };
     if (mfaRequired && !others.some(isSecondFactor)) return { kind: 'second_factor_required' };
     const deleted = await fastify.repositories.userCredentials.deleteById(realmId, row.id, tx);
@@ -528,8 +544,18 @@ export async function removeCredential(
       { type: target.type, credentialId: row.id },
       { tx, realmId, userId, clientId: null, actor: 'user' }
     );
+    address = held.find(
+      (candidate) => candidate.providerType === PASSWORD_PROVIDER_TYPE
+    )?.externalSub;
     return { kind: 'removed' };
   });
+  if (result.kind === 'removed' && address !== undefined) {
+    // Queued, never awaited: a notice that cannot go out is logged by the mailer.
+    mailer.sendUncounted(requestRealm(request), address, {
+      template: target.type === 'passkey' ? 'passkey_removed' : 'totp_removed',
+    });
+  }
+  return result;
 }
 
 /**

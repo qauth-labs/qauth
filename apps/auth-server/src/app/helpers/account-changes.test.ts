@@ -30,6 +30,7 @@ import {
   removeCredential,
 } from './account-changes';
 import { FRESH_AUTHENTICATION_MAX_AGE_SECONDS } from './account-operation-guard';
+import type { EngineMailer } from './engine-mail';
 import type { InteractionEngines } from './interaction-engines';
 
 const REALM_ID = '00000000-0000-4000-8000-0000000000aa';
@@ -38,7 +39,11 @@ const USER_ID = '00000000-0000-4000-8000-000000000001';
 const SID = '00000000-0000-4000-8000-0000000000c1';
 const NOW = Date.UTC(2026, 10, 7, 12);
 const REFUSED = 'urn:qauth:event:request.account_operation_refused:v1-rc.0';
-const REQUEST = { id: 'request-1' } as unknown as FastifyRequest;
+const REALM = { id: REALM_ID, issuer: 'https://auth.example.com' };
+const REQUEST = { id: 'request-1', realm: REALM } as unknown as FastifyRequest;
+const ADDRESS = 'ada@example.com';
+const sendUncounted = vi.fn();
+const MAILER = { sendUncounted } as unknown as EngineMailer;
 
 /** A browser session of the account, signed in `ageMs` ago with `amr`. */
 function session(amr: readonly string[], ageMs = 60_000): BrowserSession {
@@ -65,7 +70,8 @@ function credential(providerType: string, realmId = REALM_ID) {
     providerType,
     realmId,
     userId: USER_ID,
-    disabledAt: null,
+    externalSub: providerType === 'password' ? ADDRESS : `${providerType}-${nextId}`,
+    disabledAt: null as number | null,
   };
 }
 
@@ -107,6 +113,7 @@ function server(
 
 beforeEach(() => {
   emitUserEvent.mockClear();
+  sendUncounted.mockClear();
   writeSessionSideRecord.mockClear();
   delete sideRecord.accountCsrfToken;
 });
@@ -293,12 +300,20 @@ describe('removeCredential (#844)', () => {
     const passkey = credential('webauthn');
     const { fastify, deleteById } = server([credential('password'), passkey]);
     expect(
-      await removeCredential(fastify, REQUEST, session(['pop']), {
-        type: 'passkey',
-        id: passkey.id,
-      })
+      await removeCredential(
+        fastify,
+        REQUEST,
+        session(['pop']),
+        {
+          type: 'passkey',
+          id: passkey.id,
+        },
+        MAILER
+      )
     ).toEqual({ kind: 'removed' });
     expect(deleteById).toHaveBeenCalledWith(REALM_ID, passkey.id, 'tx');
+    // The owner is told at the password's address, after the commit (ADR-020 §3).
+    expect(sendUncounted).toHaveBeenCalledWith(REALM, ADDRESS, { template: 'passkey_removed' });
     expect(emitUserEvent).toHaveBeenCalledWith(
       REQUEST,
       'urn:qauth:event:user.credential_removed:v1-rc.0',
@@ -311,24 +326,70 @@ describe('removeCredential (#844)', () => {
     const only = credential('webauthn');
     const { fastify, deleteById } = server([only, credential('totp')]);
     expect(
-      await removeCredential(fastify, REQUEST, session(['pop']), { type: 'passkey', id: only.id })
+      await removeCredential(
+        fastify,
+        REQUEST,
+        session(['pop']),
+        { type: 'passkey', id: only.id },
+        MAILER
+      )
     ).toEqual({ kind: 'last_credential' });
     expect(deleteById).not.toHaveBeenCalled();
     expect(emitUserEvent).not.toHaveBeenCalled();
+    expect(sendUncounted).not.toHaveBeenCalled();
+  });
+
+  it('counts no marked credential as a way in, nor as the second factor kept (#655)', async () => {
+    // A rebind marked the lost passkey: it signs in no more.
+    const lost = { ...credential('webauthn'), disabledAt: NOW - 60_000 };
+    const live = credential('webauthn');
+    const { fastify, deleteById } = server([lost, live]);
+    expect(
+      await removeCredential(
+        fastify,
+        REQUEST,
+        session(['pop']),
+        { type: 'passkey', id: live.id },
+        MAILER
+      )
+    ).toEqual({ kind: 'last_credential' });
+    expect(deleteById).not.toHaveBeenCalled();
+    // An app turned off after 100 wrong codes is no second factor either.
+    const marked = server(
+      [credential('password'), { ...credential('totp'), disabledAt: NOW - 60_000 }, live],
+      { mfa: 'required' }
+    );
+    expect(
+      await removeCredential(
+        marked.fastify,
+        REQUEST,
+        session(['pop']),
+        { type: 'passkey', id: live.id },
+        MAILER
+      )
+    ).toEqual({ kind: 'second_factor_required' });
   });
 
   it('counts the ways in of the session’s realm only', async () => {
     const only = credential('webauthn');
     const { fastify } = server([only, credential('password', OTHER_REALM_ID)]);
     expect(
-      await removeCredential(fastify, REQUEST, session(['pop']), { type: 'passkey', id: only.id })
+      await removeCredential(
+        fastify,
+        REQUEST,
+        session(['pop']),
+        { type: 'passkey', id: only.id },
+        MAILER
+      )
     ).toEqual({ kind: 'last_credential' });
   });
 
   it('keeps the last second factor the realm requires', async () => {
     const totp = credential('totp');
     const { fastify } = server([credential('password'), totp], { mfa: 'required' });
-    expect(await removeCredential(fastify, REQUEST, session(['otp']), { type: 'totp' })).toEqual({
+    expect(
+      await removeCredential(fastify, REQUEST, session(['otp']), { type: 'totp' }, MAILER)
+    ).toEqual({
       kind: 'second_factor_required',
     });
     const forAdmins = server([credential('password'), credential('totp')], {
@@ -336,25 +397,35 @@ describe('removeCredential (#844)', () => {
       admin: true,
     });
     expect(
-      await removeCredential(forAdmins.fastify, REQUEST, session(['otp']), { type: 'totp' })
+      await removeCredential(forAdmins.fastify, REQUEST, session(['otp']), { type: 'totp' }, MAILER)
     ).toEqual({ kind: 'second_factor_required' });
     const notAdmin = server([credential('password'), credential('totp')], {
       mfa: 'required_for_admins',
     });
     expect(
-      await removeCredential(notAdmin.fastify, REQUEST, session(['otp']), { type: 'totp' })
+      await removeCredential(notAdmin.fastify, REQUEST, session(['otp']), { type: 'totp' }, MAILER)
     ).toEqual({ kind: 'removed' });
+    expect(sendUncounted).toHaveBeenCalledOnce();
+    expect(sendUncounted).toHaveBeenCalledWith(REALM, ADDRESS, { template: 'totp_removed' });
   });
 
   it('answers not_found for a passkey the account does not hold', async () => {
     const { fastify } = server([credential('password'), credential('webauthn')]);
     expect(
-      await removeCredential(fastify, REQUEST, session(['pop']), {
-        type: 'passkey',
-        id: '00000000-0000-4000-8000-0000000000ff',
-      })
+      await removeCredential(
+        fastify,
+        REQUEST,
+        session(['pop']),
+        {
+          type: 'passkey',
+          id: '00000000-0000-4000-8000-0000000000ff',
+        },
+        MAILER
+      )
     ).toEqual({ kind: 'not_found' });
-    expect(await removeCredential(fastify, REQUEST, session(['pop']), { type: 'totp' })).toEqual({
+    expect(
+      await removeCredential(fastify, REQUEST, session(['pop']), { type: 'totp' }, MAILER)
+    ).toEqual({
       kind: 'not_found',
     });
   });
