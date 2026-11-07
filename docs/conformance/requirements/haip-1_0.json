@@ -7,7 +7,7 @@
       "section": "5.1",
       "level": "MUST",
       "quote": "Verifiers and Wallets MUST support the \"same-device\" flow.",
-      "applies": "apps/auth-server — the wallet sign-in and account-link forms carry a `device` choice (`this` | `other`, absent ⇒ `other`); a `this` flow is recorded on the request-state row and the flow record at creation, renders the deep link, is answered with a `redirect_uri` by POST /oid4vp/response, and completes only on GET /ui/wallet-login/return. Cross-device (QR) is kept alongside — see haip-5_1-same-device-only.",
+      "applies": "apps/auth-server — the wallet sign-in form carries a `device` choice (`this` | `other`, absent ⇒ `other`); account linking is same-device only (ADR-013 as amended 2026-11-07), so the link form and POST /auth/link/wallet accept only `this` (absent ⇒ `this`) and refuse `other` with 400 `validation_error`. A same-device flow is recorded on the request-state row and the flow record at creation, renders the deep link, is answered with a `redirect_uri` by POST /oid4vp/response, and completes only on GET /ui/wallet-login/return. Cross-device (QR) is kept alongside for sign-in only — see haip-5_1-same-device-only.",
       "status": "covered",
       "evidenceMatch": "records the same-device choice|returns redirect_uri carrying a fresh Response Code for a same-device request"
     },
@@ -16,9 +16,9 @@
       "section": "5.1",
       "level": "RECOMMENDED",
       "quote": "Verifiers are RECOMMENDED to use only the \"same-device\" flow unless the Verifier does not rely on session binding for phishing resistance, e.g. in a proximity scenario.",
-      "applies": "Both verifier profiles (`oid4vp-1.0-base` and `haip-1.0`): the cross-device QR flow, completed by polling with no Response Code, stays available under both.",
+      "applies": "Both verifier profiles (`oid4vp-1.0-base` and `haip-1.0`): the cross-device QR sign-in flow, completed by polling with no Response Code, stays available under both. Account linking takes the recommendation: it is same-device only since the 2026-11-07 amendment of ADR-013, so the waiver covers sign-in alone.",
       "status": "waived",
-      "reason": "QAuth keeps the cross-device (QR) flow on both profiles: a desktop browser signing in with a phone wallet is the primary journey the product ships, and it has no same-device equivalent. The cross-device flow does not have Response-Code session binding — OID4VP 1.0 §14.2 says the technique is not applicable there — and QAuth relies on the `__Host-qauth_wallet_flow` browser binder, the asserted identifier (ADR-009 §1) and the six-minute flow lifetime instead. A per-profile `crossDevice` posture that would let a deployment turn the QR path off is recorded as a follow-up, not built.",
+      "reason": "QAuth keeps the cross-device (QR) sign-in flow on both profiles: a desktop browser signing in with a phone wallet is the primary journey the product ships, and it has no same-device equivalent. The cross-device flow does not have Response-Code session binding — OID4VP 1.0 §14.2 says the technique is not applicable there — and QAuth relies on the `__Host-qauth_wallet_flow` browser binder, the asserted identifier (ADR-009 §1) and the six-minute flow lifetime instead. A link asserts no identifier, so linking is same-device only (ADR-013 as amended 2026-11-07). A per-profile `crossDevice` posture that would let a deployment turn the QR sign-in path off is recorded as a follow-up, not built.",
       "decision": "docs/adr/013-same-device-return-leg.md",
       "revisit": "2027-03-31"
     },

@@ -360,20 +360,23 @@ only when `WALLET_FEDERATION_ENABLED` is on; otherwise the path does not exist
 Requires a valid `__Host-qauth_session` cookie **and** an `X-CSRF-Token` header
 matching the per-session token returned by `GET /consents/`.
 
-**Request** (`application/json`, optional): `{ "device": "this" | "other" }` —
-where the wallet is (#405). `this` starts a **same-device** link: render
-`invocation_uri` as a deep link, and the link completes on the browser's
-return leg at `GET /ui/wallet-login/return` rather than by polling. `other`,
-an empty body, or no body at all is **cross-device**: render a QR code and poll.
-Any other value is a `400` validation error. The generated OpenAPI document
-marks this request body as required — the generator's default for any declared
-body schema — but a `POST` with no body at all is accepted and means
-`device: "other"`.
+**Request** (`application/json`, optional): `{ "device": "this" }`. Linking is
+**same-device only** ([ADR-013](/reference/records/adr/013-same-device-return-leg/),
+amended 2026-11-07): the wallet must be on the device the browser runs on.
+Render `invocation_uri` as a deep link; the link completes on the browser's
+return leg at `GET /ui/wallet-login/return`, never by polling. `this`, an empty
+body, or no body at all are the same request. `"device": "other"`, the
+cross-device mode this endpoint accepted before, is refused with `400`
+`validation_error`, whose `errors` entry points at the `device` member, as is
+any other value. The
+generated OpenAPI document marks this request body as required — the
+generator's default for any declared body schema — but a `POST` with no body at
+all is accepted.
 
 **`200 OK`**: `{ "handle": "...", "invocation_uri": "openid4vp://...", "expires_at": 1730000000000 }`
-— render `invocation_uri` as a QR code or deep link; it is opaque.
-Errors: `401` (no session), `400` (`invalid_csrf_token`, or an invalid
-`device`), `404` (no usable `VerifierProfile`), `500`.
+— render `invocation_uri` as a deep link ("Open my wallet"); it is opaque.
+Errors: `401` (no session), `400` (`invalid_csrf_token`, or a `device` other
+than `this`: `validation_error`), `404` (no usable `VerifierProfile`), `500`.
 
 ### `GET /auth/link/wallet/{handle}`
 
@@ -385,11 +388,12 @@ session must be the **same user** that started the flow.
 
 On `linked`, a second `user_credentials` row (`provider_type='wallet'`) now
 exists under the same `users.id`, keyed on the identifier the account already
-owned — so a later wallet sign-in returns tokens with the identical `sub`. A
-link started with `device: "this"` is never completed by this poll: it answers
-`pending` after the wallet has responded, `linked` **once** after the return
-leg has completed it in the same browser, and `rejected` if the redirect has
-not landed within 180 s or landed in a different browser (#405).
+owned — so a later wallet sign-in returns tokens with the identical `sub`. This
+poll never completes a link: it answers `pending` after the wallet has
+responded, `linked` **once** after the return leg has completed it in the same
+browser, and `rejected` if the redirect has not landed within 180 s or landed
+in a different browser (#405). A cross-device link flow started before the
+2026-11-07 change is answered `rejected`, and nothing is linked.
 `conflict` is the one specific outcome (the credential belongs to another
 account) and is only reachable under the `issuer-scoped-claim` strategy; every
 other failure renders one uniform refusal. See
@@ -791,7 +795,7 @@ The wallet-login screens below are registered **only** when
 | `/ui/wallet-login/{handle}`        | GET       | The waiting screen for a pending presentation.                                                                                                                                                                                                      |
 | `/ui/wallet-login/{handle}/status` | GET       | Poll the presentation's outcome. Completes a cross-device sign-in once the presentation lands; a same-device one only once its return leg has, and rejects it if the redirect never arrives.                                                        |
 | `/ui/wallet-login/return`          | GET       | The same-device return leg: `?response_code=` carries the single-use Response Code the wallet received from `POST /oid4vp/response`. Spent first, then bound to the browser that started the flow; every refusal renders one identical page (#405). |
-| `/ui/wallet-link`                  | GET, POST | GET renders the confirmation screen; POST starts the link (issue #238) with the same `device` form field and the same one-affordance page as the sign-in.                                                                                           |
+| `/ui/wallet-link`                  | GET, POST | GET renders the confirmation screen; POST starts the link (issue #238) for a wallet on this device. Linking is same-device only: the form field `device` accepts only `this` (absent means the same), `other` answers `400` `validation_error`.     |
 | `/ui/wallet-link/{handle}`         | GET       | The waiting/outcome screen for a pending link.                                                                                                                                                                                                      |
 
 ---
@@ -1387,7 +1391,8 @@ credential, or issuer validation, and authenticates no user.**
 **`200 OK`** — a transport-level acknowledgement: a JSON object, sent
 `Cache-Control: no-store` (OID4VP 1.0 §8.2). For a **cross-device** request
 the object is empty, `{}`, and the wallet is not required to do anything
-further. For a request the user started as **same-device** it is
+further. For a request the user started as **same-device**, and for every account-link
+request (linking is same-device only), it is
 `{ "redirect_uri": "https://<issuer>/ui/wallet-login/return?response_code=<43 base64url chars>" }`
 — an absolute URI under the issuer carrying a fresh, single-use Response Code,
 which the wallet MUST redirect the user agent to (HAIP 1.0 §5.1); it is returned

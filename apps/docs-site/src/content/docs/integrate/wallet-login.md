@@ -57,6 +57,13 @@ step, and what is deliberately not built yet. Implements
 > that started the flow can spend it; a sign-in started with **Scan with a
 > wallet on another device** completes by polling exactly as before. See
 > [The flow](#the-flow) and [ADR-013](/reference/records/adr/013-same-device-return-leg/).
+>
+> **Behaviour change (2026-11-07): linking is same-device only.** A wallet is
+> linked to an account only from a browser on the same device as the wallet.
+> The linking page has no QR code, and a request for the cross-device mode
+> (`device=other`) is refused with `400` `validation_error`. A link flow
+> started cross-device before the upgrade is refused when it is polled. Wallet
+> sign-in keeps both modes. See [Account linking](#account-linking-238).
 
 ## Where it lives
 
@@ -72,10 +79,10 @@ password login they extend:
 | `GET /ui/wallet-login/:handle/status` | Polled by the page; completes a cross-device sign-in when the wallet has responded, and a same-device one once its return leg has  |
 | `GET /ui/wallet-login/return`         | The same-device **return leg** — the `redirect_uri` the wallet brings the browser back to, carrying the Response Code (#405)       |
 | `GET /ui/wallet-link`                 | **Signed-in only.** Confirmation screen for linking a wallet credential (#238)                                                     |
-| `POST /ui/wallet-link`                | Starts a linking flow; the same `device` choice, the same one-affordance page                                                      |
+| `POST /ui/wallet-link`                | Starts a linking flow for a wallet on this device; renders the deep link, never a QR code; refuses `device=other`                  |
 | `GET /ui/wallet-link/:handle`         | Re-renders a linking flow; the no-JavaScript refresh path                                                                          |
-| `POST /auth/link/wallet`              | JSON API: starts a linking flow (session cookie + `X-CSRF-Token`; optional `{ "device" }`)                                         |
-| `GET /auth/link/wallet/:handle`       | JSON API: polls, and completes the link when the wallet has responded (or returned)                                                |
+| `POST /auth/link/wallet`              | JSON API: starts a linking flow (session cookie + `X-CSRF-Token`; optional `{ "device": "this" }`, `other` refused)                |
+| `GET /auth/link/wallet/:handle`       | JSON API: polls; reports the outcome once the return leg has completed the link                                                    |
 | `POST /oid4vp/response`               | The `response_uri` the **wallet** posts to (issue #233) — not a browser surface; answers `{ redirect_uri }` for a same-device flow |
 | `GET /oid4vp/request/:handle`         | The `request_uri` a **wallet** fetches a signed request object from (#377)                                                         |
 
@@ -430,9 +437,10 @@ never registered and no wallet login exists to produce a level.
   working; in return every response of the route is `Cache-Control: no-store`
   and `Referrer-Policy: no-referrer`, both terminal pages scrub it from the
   address bar with a nonced `history.replaceState`, and the request log
-  redacts `response_code`. The cross-device flow has no equivalent — §14.2
-  says the technique is not applicable there — and leans on the browser
-  binder and the asserted identifier instead; see
+  redacts `response_code`. The cross-device sign-in flow has no equivalent —
+  §14.2 says the technique is not applicable there — and leans on the browser
+  binder and the asserted identifier instead; a link, which asserts no
+  identifier, is therefore same-device only. See
   [ADR-013](/reference/records/adr/013-same-device-return-leg/).
 - **One refusal.** Expired request, wallet-reported error, unvalidatable
   presentation, untrusted issuer, unknown account and disabled account all render
@@ -527,10 +535,41 @@ wallet first creates an account, signs in, and links the wallet here. Wallet-fir
 sign-up arrives with the hosted sign-up pages (ADR-017).
 
 Two entry points, both requiring a session: the server-rendered screens at
-`/ui/wallet-link` (confirmation → QR → outcome, the same chrome as the sign-in
-screens) and the JSON API at `POST /auth/link/wallet` for a first-party settings
-UI. QAuth ships no account-management page today, so `/ui/wallet-link` is the
-affordance a deployment links to from its own account screen.
+`/ui/wallet-link` (confirmation → open the wallet → outcome, the same chrome as
+the sign-in screens) and the JSON API at `POST /auth/link/wallet` for a
+first-party settings UI. QAuth ships no account-management page today, so
+`/ui/wallet-link` is the affordance a deployment links to from its own account
+screen.
+
+### Same device only
+
+A wallet is linked only from a browser on the **same device** as the wallet
+([ADR-013](/reference/records/adr/013-same-device-return-leg/), amended
+2026-11-07). Wallet sign-in still offers both devices; linking does not.
+
+- The confirmation form has one button, **Use a wallet on this device**
+  (`device=this`). The pending page renders the **Open my wallet** deep link
+  and no QR code.
+- The wallet answers `POST /oid4vp/response` and is handed a `redirect_uri`
+  carrying a single-use Response Code. The link completes when the wallet
+  brings the **same browser**, signed in as the same account, back to
+  `GET /ui/wallet-login/return`. The poll never completes a link: it answers
+  `pending`, then the outcome once.
+- A request for the cross-device mode is refused. `POST /auth/link/wallet`
+  with `{ "device": "other" }`, or the form posting `device=other`, answers
+  `400` `validation_error` with `errors` naming `/device`. An absent `device`
+  means same-device.
+- A link flow started cross-device before the upgrade is answered `rejected`
+  when it is polled, and nothing is linked.
+
+The reason is the Response Code. A cross-device link completed by polling, and
+nothing on that path tied the wallet that answered to the browser that asked:
+the request names only the verifier, and a link asserts no identifier, so the
+credential presented said nothing about the account it would join. The return
+leg binds the presentation to the browser that requested it (OID4VP 1.0 §14.2).
+
+A person whose wallet is on their phone signs in on the phone and links it
+there. After that, wallet sign-in works from any device, the QR included.
 
 ### What gets written
 
@@ -588,6 +627,10 @@ collision, not wallet duplicate detection.
 - **Modes do not cross.** A flow is `login` or `link`, and each completion path
   refuses the other's handle. Completing a link flow on the login path would sign
   a browser in as the linking user with no credential of that account checked.
+- **Same device only.** A link completes only on the return leg, with the
+  Response Code the wallet brought back to the signed-in browser. A link flow
+  not recorded as same-device is refused by the state machine and again by the
+  writer, before the presentation is read (see [Same device only](#same-device-only)).
 - **CSRF.** The JSON `POST` takes the per-session `X-CSRF-Token` header (the same
   token `GET /consents` returns); the UI form takes the signed double-submit
   login-CSRF cookie.
@@ -779,8 +822,13 @@ refused; a landing from a fresh cookie jar refused, with the initiating poll
 answering `rejected` and no session minted; a redirect never followed, with the
 poll pending until the deadline and rejected after it; a cross-device sign-in
 (`device` omitted) acknowledged with `{}` and completed by polling exactly as
-before; and the same-device link flow. The mock wallet's acknowledgement parser
-is I/O-free and imports nothing from the verifier.
+before; and the link flow, which is same-device only. The base suite also
+shows that a link answered by a wallet on another device binds nothing, under
+`asserted-lookup` and `issuer-scoped-claim`: `device=other` refused at both
+starts, the redirect landing in that wallet's own browser refused, and a
+cross-device link flow left from before the upgrade refused on its poll. The
+mock wallet's acknowledgement parser is I/O-free and imports nothing from the
+verifier.
 
 Interoperability with a REAL wallet is unverified, and which wallets implement
 HAIP 1.0 is an open research question. The procedure for a manual pass — and the

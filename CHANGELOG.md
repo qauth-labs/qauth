@@ -2256,6 +2256,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Linking a wallet to an account is same-device only** (ADR-013, amended
+  2026-11-07). A wallet credential is linked only from a browser on the same
+  device as the wallet: the link completes on the same-device return leg,
+  whose single-use Response Code binds the wallet that answers to the
+  signed-in browser that asked. `/ui/wallet-link` shows one button, **Use a
+  wallet on this device**, and the "Open my wallet" link; it no longer shows a
+  QR code. `POST /ui/wallet-link` and `POST /auth/link/wallet` accept `device`
+  `this` or no `device` at all, and refuse `device=other` with `400`
+  `validation_error`, whose `errors` names `/device`. A link flow started
+  cross-device before the upgrade is answered `rejected` when it is polled,
+  and nothing is linked. Wallet sign-in is unchanged and still offers both
+  devices. **Action:** a client that started links with no `device` and
+  rendered the invocation URI as a QR code must render it as a link that opens
+  a wallet on the same device; a person whose wallet is on their phone signs
+  in on the phone to link it.
 - **docs.qauth.dev and the developer portal use the design system** ([#472]).
   The portal's pages name the tokens of `libs/ui` instead of Tailwind's
   palette. The docs site maps Starlight's theme onto the same tokens and
