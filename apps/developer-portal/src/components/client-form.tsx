@@ -147,7 +147,7 @@ export function ClientForm({
           rows={3}
           disabled={busy}
           defaultValue={(initial?.redirectUris ?? []).join('\n')}
-          className="rounded-control border-input bg-card focus-visible:border-ring focus-visible:ring-ring flex w-full border px-3 py-2 text-sm outline-none focus-visible:ring-1 disabled:opacity-50"
+          className="rounded-control border-input bg-card focus-visible:border-ring flex w-full border px-3 py-2 text-sm disabled:opacity-50"
         />
       </FormField>
 
@@ -181,7 +181,7 @@ export function ClientForm({
           value={authMethod}
           disabled={busy}
           onChange={(e) => setAuthMethod(e.target.value as TokenEndpointAuthMethod)}
-          className="rounded-control border-input bg-card focus-visible:border-ring focus-visible:ring-ring flex h-9 w-full border px-3 text-sm outline-none focus-visible:ring-1 disabled:opacity-50"
+          className="rounded-control border-input bg-card focus-visible:border-ring flex h-9 w-full border px-3 text-sm disabled:opacity-50"
         >
           {AUTH_METHODS.map((m) => (
             <option key={m.value} value={m.value}>
