@@ -3518,9 +3518,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       /**
        * The account's first factor beyond its password: its mailbox is proved
        * before the binding (ADR-017 Decision 8). The optional offer is only
-       * ever made to such an account.
+       * ever made to such an account. An account with no factor of its own
+       * (one an upstream provider signs in, #844) has no password either.
        */
-      const passwordOnly = current.factors.every((factor) => factor.type === 'password');
+      const passwordOnly =
+        current.factors.length > 0 && current.factors.every((factor) => factor.type === 'password');
       const fresh = (): boolean => {
         const { authTime } = state.transaction;
         return authTime !== undefined && clock.now() - authTime <= PASSKEY_BINDING_MAX_AUTH_AGE_MS;
