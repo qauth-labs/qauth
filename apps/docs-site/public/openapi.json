@@ -1195,6 +1195,16 @@
               }
             }
           },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "421": {
             "description": "Misdirected Request",
             "content": {
@@ -1273,6 +1283,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4522,6 +4542,16 @@
               }
             }
           },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "421": {
             "description": "Misdirected Request",
             "content": {
@@ -5003,6 +5033,16 @@
               }
             }
           },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -5346,6 +5386,16 @@
               }
             }
           },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -5470,6 +5520,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5691,6 +5751,16 @@
               }
             }
           },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -5885,6 +5955,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6260,6 +6340,16 @@
               }
             }
           },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -6423,6 +6513,16 @@
               }
             }
           },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "421": {
             "description": "Misdirected Request",
             "content": {
@@ -6499,6 +6599,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -16108,11 +16218,11 @@
   "tags": [
     {
       "name": "Developer API",
-      "description": "The developer API, `/developer/v1-rc.0`. A token whose only audience is `urn:qauth:aud:developer:v1-rc.0` reaches every operation here for its subject, reads and writes alike: the family checks the audience and the subject, and no scope. Only an operator can give a client that audience. An operation's `x-qauth-permission` (`clients.read`, `clients.write`, ...) names the permission it will need and is not enforced yet."
+      "description": "The developer API, `/developer/v1-rc.0`. A token reaches an operation here for its subject when its only audience is `urn:qauth:aud:developer:v1-rc.0` and it carries the developer scope of the operation's `x-qauth-class`: `qauth:developer:read` for a `read` operation, `qauth:developer:write` for a `write` one. The two are independent. A token without the scope gets 403 `forbidden` with an `insufficient_scope` challenge naming it. The operation's `x-qauth-permission` (`clients.read`, `clients.write`, ...) is a permission of that class. Only an operator can give a client the audience, and the scopes are issued only to such a client; the developer portal's token carries both."
     },
     {
       "name": "Account API",
-      "description": "The account API, `/account/v1-rc.0`. A token whose only audience is `urn:qauth:aud:account:v1-rc.0` reaches every operation here for its subject: the family checks the audience and the subject, and no scope. An operation's `x-qauth-permission` (`consents.read`, `consents.write`) names the permission it will need and is not enforced yet."
+      "description": "The account API, `/account/v1-rc.0`. A token reaches an operation here for its subject when its only audience is `urn:qauth:aud:account:v1-rc.0` and it carries the account scope of the operation's `x-qauth-class`: `qauth:account:read` for a `read` operation, `qauth:account:write` for a `write` one. The two are independent. A token without the scope gets 403 `forbidden` with an `insufficient_scope` challenge naming it. The operation's `x-qauth-permission` (`consents.read`, `consents.write`) is a permission of that class. Only an operator can give a client the audience, and the scopes are issued only to such a client."
     }
   ]
 }

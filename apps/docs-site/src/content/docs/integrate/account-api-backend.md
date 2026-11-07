@@ -19,12 +19,20 @@ account API as the RFC 8707 resource:
 ```http
 GET /oauth/authorize?response_type=code&client_id=account-console
     &redirect_uri=https%3A%2F%2Faccount.example.com%2Fcallback
-    &scope=openid&resource=urn%3Aqauth%3Aaud%3Aaccount%3Av1-rc.0
+    &scope=openid%20qauth%3Aaccount%3Aread%20qauth%3Aaccount%3Awrite
+    &resource=urn%3Aqauth%3Aaud%3Aaccount%3Av1-rc.0
     &code_challenge=…&code_challenge_method=S256&state=…
 ```
 
 - The client must list `urn:qauth:aud:account:v1-rc.0` in its `audience`. A client that does not
   gets `invalid_target`; an operator provisions the console's client with it.
+- The token needs the account scope of each operation's `x-qauth-class`: `qauth:account:read` to
+  read, `qauth:account:write` to change anything. Ask for both when the BFF does both; the write
+  scope does not reach a read. The client must hold them in its `scopes`, which only an operator
+  writes, and the token endpoint issues them only to a client that lists the account audience. A
+  call without the scope it needs gets 403 `forbidden` with
+  `WWW-Authenticate: Bearer realm="OAuth", error="insufficient_scope", scope="qauth:account:write"`,
+  before any rule below: a new sign-in does not help, a token with the scope does.
 - The token's only audience is the account API. Keep it on the server side, as every BFF keeps its
   tokens; no cookie authenticates a call.
 - It carries how the person signed in: `auth_time` (when) and `amr` (with what: `pwd`, `pop` for a

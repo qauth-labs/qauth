@@ -5,8 +5,8 @@ import { DELETION_CONFIRMATION } from './schemas';
 
 /**
  * Every operation of the account API v1 contract (#588), with what ADR-019
- * Decision 7 and ADR-017 Decision 8 say about each: the permission it will
- * need, whether it needs fresh authentication, whether it refuses an
+ * Decision 7 and ADR-017 Decision 8 say about each: the permission it
+ * needs, whether it needs fresh authentication, whether it refuses an
  * act-chain token, and one example request and response. `openapi.ts` turns
  * the table into the document; the tests read it to check the examples and the
  * rules.
@@ -64,8 +64,9 @@ export interface AccountOperation {
   readonly tag: AccountTag;
   readonly summary: string;
   readonly description: string;
+  /** Its class: the token needs the account scope of this class (`ACCOUNT_API_SCOPES`, #933). */
   readonly class: 'read' | 'write';
-  /** The permission the operation will need (#933); not enforced yet. */
+  /** The permission the operation needs, a permission of its class. */
   readonly permission: string;
   readonly freshAuthentication: FreshAuthenticationRule;
   readonly actChain: ActChainRule;
@@ -804,7 +805,7 @@ export function operationNamed(id: string): AccountOperation {
  *
  * - every operation: `bad_request`, the token guard's 401s (`invalid_dpop_proof`
  *   for a DPoP-bound token's proof) and `forbidden`
- *   (a scope, #933), `misdirected_request`, `too_many_requests`,
+ *   (the scope of its class, #933), `misdirected_request`, `too_many_requests`,
  *   `internal_error` and `service_unavailable`;
  * - with parameters or a body: `validation_error`; a list: `invalid_cursor`;
  * - with a body: `content_too_large` and `unsupported_media_type`;

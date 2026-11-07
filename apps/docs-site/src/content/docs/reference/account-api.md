@@ -22,7 +22,7 @@ The contract is one OpenAPI 3.1 document, [openapi.json](/account/v1-rc.0/openap
 
 - The callers are backends, such as the account console’s, that hold a person’s access token whose only audience is `urn:qauth:aud:account:v1-rc.0`, sent as a Bearer token or, while the server’s DPoP support is on, a DPoP-bound one. No cookie authenticates a call, and the server sends no CORS headers. Each operation names the audience in `x-qauth-audience`.
 - The token’s subject is an enabled user of the request’s realm, and every operation acts on that user’s own account only. A resource of another account answers `not_found`, as one that does not exist.
-- Each operation names the permission it will need in `x-qauth-permission` and its class in `x-qauth-class`. No scope grants them yet: until the account family defines its scopes, the audience alone admits a token, and a token that lacks a scope an operation requires will get 403 `forbidden`.
+- Each operation names the permission it needs in `x-qauth-permission` and its class in `x-qauth-class`. The token needs the account scope of that class: `qauth:account:read` for a `read` operation, `qauth:account:write` for a `write` one. The two are independent, so a caller that reads and writes asks for both. A token without it gets 403 `forbidden` with `WWW-Authenticate: Bearer realm="OAuth", error="insufficient_scope", scope="<the scope>"`, before any other rule of the operation. QAuth issues these scopes only to a client whose audience an operator set to `urn:qauth:aud:account:v1-rc.0`.
 
 ## Fresh authentication
 

@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scopes for the account and developer APIs** ([#933], ADR-019 Decision 7).
+  Each family has a read and a write scope in QAuth's reserved `qauth:`
+  namespace: `qauth:developer:read` and `qauth:developer:write`,
+  `qauth:account:read` and `qauth:account:write`. An operation needs its
+  family's scope of its `x-qauth-class`, which is the class of its
+  `x-qauth-permission`; the two scopes are independent. A token without it is
+  refused with 403 `forbidden` and an `insufficient_scope` challenge naming
+  the scope, so a developer token with only the read scope lists and reads
+  clients, API keys and consents, and cannot create, update, delete or
+  regenerate a client's secret, mint or revoke an API key, or revoke a
+  consent. Every operation of both families now lists 403 in its OpenAPI
+  responses. The token endpoint issues a family's scopes only to a client
+  whose `audience` an operator set to that family's audience, for a token
+  that names a user (never `client_credentials`, an ID-JAG or the jwt-bearer
+  grant; a delegated token of token exchange keeps one its subject token
+  carried), with no admin grant and no DPoP proof; a refresh carries them
+  forward. The developer portal's token from `POST /auth/login` carries both
+  developer scopes. The account API contract states the rule and publishes
+  `ACCOUNT_API_SCOPES`.
 - **Fresh authentication with the strongest factor for account changes**
   ([#663], ADR-017 Decision 8, ADR-019 Decision 7, ADR-020 §3). One guard
   stands in front of every account API operation (`/account/v1-rc.0`) and
@@ -3367,6 +3386,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#901]: https://github.com/qauth-labs/qauth/issues/901
 [#908]: https://github.com/qauth-labs/qauth/issues/908
 [#914]: https://github.com/qauth-labs/qauth/issues/914
+[#933]: https://github.com/qauth-labs/qauth/issues/933
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
 [#964]: https://github.com/qauth-labs/qauth/issues/964
