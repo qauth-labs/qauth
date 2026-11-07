@@ -36,6 +36,15 @@ build output — re-run that export and commit the result to pick up the
 change. CI's stable-surface job runs the export and fails when the committed
 file differs from its output (see `stable-surface/README.md`).
 
+## Look
+
+The site uses QAuth's design system (`libs/ui`), as the developer portal and the qauth.dev website do:
+
+- `astro.config.mjs` loads `@qauth-labs/ui/fonts.css` (DM Sans, Instrument Serif, JetBrains Mono, self-hosted) and `@qauth-labs/ui/theme.css` (the token variables) through Starlight's `customCss`.
+- `src/styles/qauth.css` maps Starlight's theme variables onto those tokens, puts headings in the display serif, squares the corners and draws the teal focus outline.
+
+Starlight sets `data-theme` on `<html>` for light and dark, and `theme.css` switches the tokens on it, so one mapping covers both modes. Change a colour in `libs/ui/src/tokens/tokens.json`, never here.
+
 ## What actually feeds the build
 
 Beyond this directory, the build also reads, **in place**, two directories
