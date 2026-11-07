@@ -781,6 +781,53 @@ describe('linking an upstream account to an existing one (#670, real containers)
     });
   });
 
+  describe('from the account page (#844)', () => {
+    it('offers the existing account only: a sign-in of the account page never creates one', async () => {
+      await registerPasswordAccount(app(), EMAIL);
+      const jar = new CookieJar();
+      await signIn(jar);
+      const usersBefore = await users();
+
+      // "Confirm it's you" on the account page: an account interaction.
+      const overview = await get(jar, '/ui/account');
+      expect(overview.statusCode, withServerLog(overview.body)).toBe(200);
+      const csrf = /name="csrf" value="([^"]+)"/.exec(overview.body)?.[1] ?? '';
+      const confirm = await app().inject({
+        method: 'POST',
+        url: '/ui/account/reauthenticate',
+        headers: { ...FORM, ...SAME_ORIGIN, cookie: jar.header() ?? '' },
+        payload: new URLSearchParams({ csrf }).toString(),
+      });
+      jar.absorb(confirm.headers['set-cookie']);
+      expect(confirm.statusCode, withServerLog(confirm.body)).toBe(303);
+      const id = ceremonyIdOf(confirm.headers['location']);
+
+      // The provider beside the first step proves an identity no account holds.
+      const waiting = await get(jar, `/ui/upstream/${TYPE}/start?interaction=${id}`);
+      expect(waiting.statusCode, withServerLog(waiting.body)).toBe(200);
+      const link = /<a class="alt-action" href="([^"]+)"/.exec(waiting.body)?.[1];
+      if (link === undefined) throw new Error('no provider link on the waiting page');
+      const answered = provider.authorize(new URL(decodeHtmlEntities(link)), PERSON);
+      expect(answered['error']).toBeUndefined();
+      const callback = await callbackAt(jar, answered);
+      expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
+      expect(ceremonyIdOf(callback.headers['location'])).toBe(id);
+
+      // The choice offers no new account, and an answer that asks for one is refused.
+      const choice = await read(id);
+      expect(choice.step).toBe(UPSTREAM_LINK);
+      expect(choice.params?.[UPSTREAM_LINK]).toEqual({
+        provider: { provider: TYPE, name: PROVIDER_NAME },
+        create: false,
+      });
+      const created = await answer(jar, id, UPSTREAM_LINK, { decision: 'create' });
+      expect(created.statusCode, withServerLog(created.body)).toBe(400);
+      expect(await users()).toBe(usersBefore);
+      expect(await upstreamCredentials()).toBe(0);
+      expect((await read(id)).step).toBe(UPSTREAM_LINK);
+    });
+  });
+
   describe('another browser or another interaction', () => {
     it("refuses the provider's answer in another browser, and the answers of the link's sign-in there, linking nothing", async () => {
       const ownerId = await registerPasswordAccount(app(), EMAIL);

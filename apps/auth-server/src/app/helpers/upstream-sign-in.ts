@@ -747,7 +747,9 @@ export async function decideUpstreamLinkChoice(
         linked
       );
     }
-    if (!link.create) throw new InvalidAnswerError('the step offered no new account');
+    if (!link.create || state.purpose !== 'authorization') {
+      throw new InvalidAnswerError('the step offered no new account');
+    }
     const realm = requestRealm(request);
     const provider = await input.catalog.find(realm.id, link.provider);
     if (provider?.method.type !== link.provider) {
@@ -961,7 +963,10 @@ export function upstreamRouteHost(
             // An identity no account holds (#670; ADR-020 §3): the person
             // chooses between a new account and the existing one they sign
             // in to next. Nothing is matched, by an email or anything else.
+            // An account page's sign-in (#844) never registers: it offers the
+            // existing account only.
             const create =
+              state.purpose === 'authorization' &&
               newAccountRefusal(fastify, realm, provider, attributes, 'interaction') === null &&
               keepsUpstreamAttributes(attributes);
             return {
