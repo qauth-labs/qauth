@@ -3497,6 +3497,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An ID-JAG bound to a DPoP key needs a proof under that key** ([#927],
+  ADR-011 gate 16; only with `ID_JAG_ENABLED`, which is off by default). An
+  identity provider may bind the ID-JAG it mints to the client's DPoP key with
+  `cnf.jkt`, and `draft-ietf-oauth-identity-assertion-authz-grant-04`
+  §9.8.1.2 then requires a DPoP proof under that key at the token endpoint.
+  The `jwt-bearer` grant never read `cnf`, so a bound assertion was redeemed
+  without one. It is now refused with `invalid_grant` without a proof (the
+  description says a proof is required, and the assertion is not spent), with a
+  proof under another key, or while `DPOP_ENABLED` is off; a `cnf` naming any
+  confirmation method but `jkt` is refused too. With the matching proof the
+  access token is bound to that key (`cnf.jkt`, `token_type: DPoP`). An
+  assertion without `cnf` is handled as before. The grant type stays
+  `jwt-bearer`; `-06`'s `jwt-dpop` waits for the EMA extension to name a later
+  revision.
+
 - **No CORS at the authorization endpoint** ([#930]). `@fastify/cors` answered
   for every route, so with `CORS_ORIGIN` set, or in any environment but
   production, `/oauth/authorize` answered CORS preflights and sent
@@ -3695,6 +3710,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#644]: https://github.com/qauth-labs/qauth/issues/644
 [#748]: https://github.com/qauth-labs/qauth/issues/748
 [#912]: https://github.com/qauth-labs/qauth/issues/912
+[#927]: https://github.com/qauth-labs/qauth/issues/927
 [#930]: https://github.com/qauth-labs/qauth/issues/930
 [#935]: https://github.com/qauth-labs/qauth/issues/935
 

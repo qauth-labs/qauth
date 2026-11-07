@@ -7392,6 +7392,180 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     );
     expect(emittedData(TOKEN_ISSUED)).toEqual([]);
   });
+
+  // draft -04 §9.8.1.2 (#927): an assertion bound to a DPoP key with `cnf.jkt`
+  // is redeemed only with a proof under that key (ADR-011 gate 16).
+  describe('an assertion bound to a DPoP key (cnf.jkt, draft -04 §9.8.1.2, #927)', () => {
+    /** The thumbprint the stub DPoP verifier gives every proof. */
+    const PROOF_KEY = 'p'.repeat(43);
+    /** Another key's thumbprint. */
+    const OTHER_KEY = 'q'.repeat(43);
+
+    /** Turn DPoP on in the stub, with a verifier that accepts every proof under {@link PROOF_KEY}. */
+    function withDpopOn(fastify: FastifyInstance) {
+      const verifyRequest = vi.fn(async () => ({ thumbprint: PROOF_KEY }));
+      Object.assign(fastify, { dpop: { algorithms: ['ES256'], verifyRequest } });
+      return verifyRequest;
+    }
+
+    /** {@link bearerRequest} with a `DPoP` header. */
+    function withProof(request: ReturnType<typeof bearerRequest>) {
+      return { ...request, headers: { ...request.headers, dpop: 'proof.header.signature' } };
+    }
+
+    async function refusalOf(promise: Promise<unknown>): Promise<unknown> {
+      return promise.then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+    }
+
+    it('issues a DPoP-bound access token for a proof under the bound key', async () => {
+      enableIdJag();
+      const idpKey = await wireTrustedIdp();
+      const { fastify, ctx } = setupConsumeStub();
+      withDpopOn(fastify);
+
+      const result = (await invoke(
+        fastify,
+        ctx,
+        withProof(bearerRequest(await signIdJag(idpKey, { cnf: { jkt: PROOF_KEY } })))
+      )) as Record<string, unknown>;
+
+      expect(result).toMatchObject({ access_token: 'ema.access.jwt', token_type: 'DPoP' });
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
+        expect.objectContaining({ aud: MCP_SERVER, cnf: { jkt: PROOF_KEY } })
+      );
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([]);
+    });
+
+    it('refuses it without a DPoP proof with invalid_grant, saying a proof is required, and leaves it unspent', async () => {
+      enableIdJag();
+      const idpKey = await wireTrustedIdp();
+      const { fastify, ctx } = setupConsumeStub();
+      withDpopOn(fastify);
+      const assertion = await signIdJag(idpKey, { cnf: { jkt: PROOF_KEY } });
+
+      const refused = await refusalOf(invoke(fastify, ctx, bearerRequest(assertion)));
+
+      expect(refused).toBeInstanceOf(InvalidGrantError);
+      expect(wireAnswer(refused)).toMatchObject({
+        statusCode: 400,
+        message: 'invalid_grant',
+        errorDescription: 'proof of possession is required for this assertion: send a DPoP proof',
+      });
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        { grantType: JWT_BEARER_GRANT, error: 'invalid_grant', reason: 'dpop_missing_proof' },
+      ]);
+
+      // The `jti` was not burned: the same assertion, now with its proof, is redeemed.
+      await expect(
+        invoke(fastify, ctx, withProof(bearerRequest(assertion)))
+      ).resolves.toMatchObject({ token_type: 'DPoP' });
+    });
+
+    it('refuses it with a proof under another key with the bare invalid_grant', async () => {
+      enableIdJag();
+      const idpKey = await wireTrustedIdp();
+      const { fastify, ctx } = setupConsumeStub();
+      withDpopOn(fastify);
+
+      const refused = await refusalOf(
+        invoke(
+          fastify,
+          ctx,
+          withProof(bearerRequest(await signIdJag(idpKey, { cnf: { jkt: OTHER_KEY } })))
+        )
+      );
+
+      expect(refused).toBeInstanceOf(InvalidGrantError);
+      expect(wireAnswer(refused)).toMatchObject({
+        statusCode: 400,
+        message: 'invalid_grant',
+        errorDescription: 'the presented assertion is not acceptable',
+      });
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        { grantType: JWT_BEARER_GRANT, error: 'invalid_grant', reason: 'dpop_key_mismatch' },
+      ]);
+    });
+
+    it('refuses it while DPoP is off, whatever the request sends: no proof can be checked', async () => {
+      enableIdJag();
+      const idpKey = await wireTrustedIdp();
+      const { fastify, ctx } = setupConsumeStub();
+
+      const refused = await refusalOf(
+        invoke(
+          fastify,
+          ctx,
+          withProof(bearerRequest(await signIdJag(idpKey, { cnf: { jkt: PROOF_KEY } })))
+        )
+      );
+
+      expect(refused).toBeInstanceOf(InvalidGrantError);
+      expect(wireAnswer(refused)).toMatchObject({
+        errorDescription: 'the presented assertion is not acceptable',
+      });
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        { grantType: JWT_BEARER_GRANT, error: 'invalid_grant', reason: 'dpop_disabled' },
+      ]);
+    });
+
+    it('refuses a cnf of a confirmation method other than jkt, even with a proof', async () => {
+      enableIdJag();
+      const idpKey = await wireTrustedIdp();
+      const { fastify, ctx } = setupConsumeStub();
+      withDpopOn(fastify);
+
+      await expect(
+        invoke(
+          fastify,
+          ctx,
+          withProof(
+            bearerRequest(
+              await signIdJag(idpKey, { cnf: { jkt: PROOF_KEY, 'x5t#S256': 'c'.repeat(43) } })
+            )
+          )
+        )
+      ).rejects.toBeInstanceOf(InvalidGrantError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        {
+          grantType: JWT_BEARER_GRANT,
+          error: 'invalid_grant',
+          reason: 'unsupported_confirmation',
+        },
+      ]);
+    });
+
+    it('leaves an unbound assertion as it was: Bearer without a proof, bound to the proof key with one', async () => {
+      enableIdJag();
+      const idpKey = await wireTrustedIdp();
+
+      const bare = setupConsumeStub();
+      withDpopOn(bare.fastify);
+      await expect(
+        invoke(bare.fastify, bare.ctx, bearerRequest(await signIdJag(idpKey)))
+      ).resolves.toMatchObject({ token_type: 'Bearer' });
+      expect(bare.fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
+        expect.not.objectContaining({ cnf: expect.anything() })
+      );
+
+      const proved = setupConsumeStub();
+      withDpopOn(proved.fastify);
+      await expect(
+        invoke(proved.fastify, proved.ctx, withProof(bearerRequest(await signIdJag(idpKey))))
+      ).resolves.toMatchObject({ token_type: 'DPoP' });
+      expect(proved.fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
+        expect.objectContaining({ cnf: { jkt: PROOF_KEY } })
+      );
+    });
+  });
 });
 
 describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
