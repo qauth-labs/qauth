@@ -6,13 +6,13 @@ import { Button } from './button';
 describe('Button', () => {
   it('renders default variant classes', () => {
     const html = renderToString(<Button>click</Button>);
-    expect(html).toContain('rounded-md');
-    expect(html).toContain('bg-blue-500');
+    expect(html).toContain('rounded-control');
+    expect(html).toContain('bg-primary');
   });
 
   it('applies outline variant', () => {
     const html = renderToString(<Button variant="outline">click</Button>);
-    expect(html).toContain('border-gray-300');
+    expect(html).toContain('border-input');
   });
 
   it('merges custom className with variant classes', () => {

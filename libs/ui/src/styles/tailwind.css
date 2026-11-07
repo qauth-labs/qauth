@@ -1,0 +1,27 @@
+/*
+ * The Tailwind side of the design system: the theme that maps utilities onto the token variables,
+ * the `dark:` variant, and an @source for the library's components. It sets no variable values:
+ * theme.css, or a realm's brand stylesheet in its place, does.
+ */
+@import './tailwind-theme.css';
+
+/* Tailwind scans the library's components, so an app needs no @source line for them. */
+@source '../';
+
+/*
+ * `dark:` fires when the system prefers dark, unless the root says data-theme="light", and under
+ * data-theme="dark" on the root or an ancestor. It is decided from the root down: inside a
+ * data-theme="light" subtree of a dark page it still fires, where the token utilities (bg-card,
+ * text-foreground) follow the subtree. Prefer the token utilities; use `dark:` only for what no
+ * token covers. A realm with dark mode off puts data-theme="light" on <html>, so both stay light.
+ */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme='light']), :root:not([data-theme='light']) *) {
+      @slot;
+    }
+  }
+  &:where([data-theme='dark'], [data-theme='dark'] *) {
+    @slot;
+  }
+}

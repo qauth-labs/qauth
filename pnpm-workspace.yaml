@@ -642,6 +642,16 @@ catalog:
   tailwind-merge: '^3.7.0'
   clsx: '^2.1.1'
   class-variance-authority: '^0.7.1'
+  # The design system's fonts (libs/ui/src/styles/fonts.css, #472), self-hosted:
+  # the woff2 files ship with each app, never from a font CDN. Same versions as
+  # the qauth.dev website, which uses the same design system.
+  '@fontsource-variable/dm-sans': '^5.2.8'
+  '@fontsource-variable/jetbrains-mono': '^5.2.8'
+  '@fontsource/instrument-serif': '^5.2.8'
+  # Test only (libs/ui): proves the token file reads as Terrazzo's DTCG input,
+  # modes included, so a Terrazzo build (delurio's kit, #561) can compile the
+  # same file. libs/ui generates its own CSS; Terrazzo is not in any build.
+  '@terrazzo/parser': '^2.10.0'
   # docs.qauth.dev (Astro + Starlight, #347). Pinned exact — this pairing is
   # deliberate (Starlight 0.42 requires Astro ^7.2.10), so a routine catalog
   # bump must move both together, not drift independently. Astro 7.4's own
