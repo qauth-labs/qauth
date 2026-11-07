@@ -1,7 +1,11 @@
 import type { ValidatedCredential } from '../oid4vp/validated-credential';
 import { ValidatedIssuer } from '../trust/issuer-identity';
 import { createAssertedLookupStrategy } from './asserted-lookup.strategy';
-import { deriveIssuerScopedSubject } from './subject-binding';
+import {
+  constantTimeEquals,
+  deriveIssuerScopedSubject,
+  normalizeAssertedIdentifier,
+} from './subject-binding';
 import {
   AMBIGUOUS,
   matched,
@@ -11,6 +15,7 @@ import {
   selectSoleAccount,
 } from './subject-candidates';
 import type {
+  SubjectAccountCandidate,
   SubjectResolutionContext,
   SubjectResolutionOutcome,
   SubjectResolutionStrategy,
@@ -49,6 +54,25 @@ import {
  * possession of the key is the proof. Adding a second check over the same
  * material would be ceremony, and ceremony that looks like a security control is
  * worse than none.
+ *
+ * ## The asserted identifier still names the account
+ *
+ * Wallet sign-in has no usernameless form (ADR-009 §1): the user says which
+ * account they are signing in to, and the presentation proves entitlement to
+ * it. The credential decides who the holder is; the asserted identifier
+ * decides which account the browser asked for. So a subject match is accepted
+ * only when the asserted identifier, normalized exactly as `asserted-lookup`
+ * normalizes it (`normalizeAssertedIdentifier`) and looked up through the same
+ * port (`byAssertedIdentifier`), names the SAME account. An identifier that
+ * names another account, or none, is a refusal (`rejected`, as
+ * `asserted-lookup` answers an account the presentation is not entitled to),
+ * and so is a presentation with no usable identifier at all. Nothing here
+ * reads a credential claim to find an account: the comparison is between the
+ * account the user named and the account the credential resolved to.
+ *
+ * Both lookups run on every presentation that takes this path, whatever the
+ * first one found, so "subject found, identifier differs" costs the same work
+ * as "no such subject" and answers the same refusal on the wire.
  *
  * ## The fallback is mandatory, not a convenience
  *
@@ -129,10 +153,21 @@ export function createIssuerScopedClaimStrategy(
       const subject = issuerScopedSubject(credential);
       if (subject === undefined) return fallback.resolve(credential, context);
 
+      // The account the user said they are signing in to (ADR-009 §1). No
+      // usable identifier: a refusal before any lookup, as `asserted-lookup`
+      // refuses one, so the subject alone never names an account.
+      const identifier = normalizeAssertedIdentifier(context?.assertedIdentifier);
+      if (identifier === undefined) return REJECTED;
+
+      // BOTH lookups, always, before either result is looked at: see the
+      // module JSDoc for why the work must not depend on what the first found.
       const candidates = await runAccountLookup(context, () =>
         context.lookup.byWalletSubject(context.realmId, subject)
       );
-      if (candidates === undefined) return REJECTED;
+      const named = await runAccountLookup(context, () =>
+        context.lookup.byAssertedIdentifier(context.realmId, identifier)
+      );
+      if (candidates === undefined || named === undefined) return REJECTED;
 
       const selection = selectSoleAccount(candidates);
       if (selection.kind === 'invalid') return REJECTED;
@@ -142,7 +177,37 @@ export function createIssuerScopedClaimStrategy(
       // unlike `asserted-lookup` there is no second bootstrap case here.
       if (selection.kind === 'none') return NO_MATCH;
 
-      return matched(selection.userId);
+      // The credential resolved to an account; the asserted identifier must
+      // name that same account, or the presentation is refused like any other
+      // the holder is not entitled to here.
+      return identifierNamesAccount(named, selection.userId) ? matched(selection.userId) : REJECTED;
     },
   });
+}
+
+/**
+ * Whether the accounts an asserted identifier resolved to include `userId`.
+ *
+ * Membership, not "the sole account": the identifier must name the account the
+ * credential resolved to, and another account that also holds a credential on
+ * the same identifier does not make that untrue. Nothing is picked — `userId`
+ * was already the sole account of the subject lookup. A structurally unusable
+ * candidate is a refusal, as `selectSoleAccount` treats one. Every candidate
+ * is compared, with no short-circuit, so the count of comparisons does not
+ * depend on which candidate matched.
+ *
+ * @param named - what `byAssertedIdentifier` returned.
+ * @param userId - the account the issuer-scoped subject resolved to.
+ */
+function identifierNamesAccount(
+  named: readonly SubjectAccountCandidate[],
+  userId: string
+): boolean {
+  let found = false;
+  for (const candidate of named) {
+    if (candidate === null || typeof candidate !== 'object') return false;
+    if (typeof candidate.userId !== 'string' || candidate.userId.length === 0) return false;
+    found = constantTimeEquals(candidate.userId, userId) || found;
+  }
+  return found;
 }

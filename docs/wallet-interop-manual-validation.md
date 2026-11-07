@@ -107,8 +107,9 @@ Wallet sign-in never creates an account (ADR-009 §1, amended 2026-10-19). A
 presentation on an identifier with no account is refused, so every sign-in
 below needs an account the wallet was linked to first:
 
-- [ ] Register a password account, sign in with it, open `/ui/wallet-link` and
-      complete a link with the wallet (see [Account linking](#account-linking)).
+- [ ] Register a password account, sign in with it **on the device the wallet
+      is on**, open `/ui/wallet-link` and complete a link with the wallet (see
+      [Account linking](#account-linking)).
       Use that account's email as the asserted identifier in every sign-in
       below.
 
@@ -267,11 +268,16 @@ against issuers who publish none has bought nothing.
 - [ ] Sign in with a password, visit `/ui/wallet-link`, and complete a link with
       the wallet. A second `user_credentials` row appears under the same
       `users.id`.
-- [ ] The confirmation screen offers the same two device buttons as the sign-in
-      (#405). A link started with **Use a wallet on this device** completes on
-      the wallet's return into the same browser ("Wallet credential linked"),
-      and the original tab reports `linked` once; one started with **Scan with
-      a wallet on another device** completes by polling.
+- [ ] The confirmation screen offers one button, **Use a wallet on this
+      device**, and no QR code: linking is same-device only (ADR-013, amended
+      2026-11-07). The link completes on the wallet's return into the same
+      browser ("Wallet credential linked"), and the original tab reports
+      `linked` once.
+- [ ] Posting the form with `device=other` (by hand, for example with `curl`)
+      answers `400` with a `validation_error` problem naming `/device`.
+- [ ] A link answered by a wallet on another device does not complete: the
+      wallet's browser lands on the refusal page, the original tab reports
+      `rejected`, and no `user_credentials` row is written.
 - [ ] A later wallet sign-in resolves to that same account, and its ID token's
       `sub` equals the password session's.
 

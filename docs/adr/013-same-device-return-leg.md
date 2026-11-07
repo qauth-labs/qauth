@@ -1,8 +1,23 @@
 # ADR-013: Same-Device Return Leg — the OID4VP Response Code on Both Verifier Profiles
 
 **Status:** Accepted
-**Date:** 2026-09-11
+**Date:** 2026-09-11 (amended 2026-11-07)
 **Authors:** QAuth Team
+
+> **Amended 2026-11-07:** linking a wallet to an account is same-device only;
+> cross-device linking is refused (the maintainer's decision of 2026-11-07).
+> The link form (`POST /ui/wallet-link`) and the JSON API
+> (`POST /auth/link/wallet`) accept `device=this` or no `device` at all, and
+> refuse `device=other` with `400` `validation_error`. The linking page renders
+> the "Open my wallet" link and no QR code. A link completes only on the
+> return leg, with the Response Code. A cross-device link flow still pending from
+> before the upgrade is refused when it is polled, and the writer
+> (`linkWalletPresentation`) refuses any flow not recorded as same-device.
+> Wallet sign-in keeps both modes as decided below, and on the same day
+> `issuer-scoped-claim` sign-in began to honour the asserted identifier the
+> residual-risk section relies on (ADR-009 §2, amended 2026-11-07). Decision 1
+> and the sections on residual risk and consequences are read with this
+> amendment.
 
 ## Context
 
@@ -48,6 +63,11 @@ QR code for `other`. Both carry a "Start again" link to a fresh, unmarked flow.
 
 There is no server-side "bounce" that marks a flow same-device on a click. See
 [Alternatives](#alternatives-considered) for why that shape cannot work.
+
+_Amended 2026-11-07: the choice above is the sign-in form's. The link form has
+one button, `device=this`; the link form and API refuse `device=other`, and
+an absent field there means same-device. Every link flow is written
+same-device in both places._
 
 ### 2. One shape on both profiles
 
@@ -259,31 +279,43 @@ nothing.
 
 ## Residual cross-device risk
 
-The QR flow keeps completing by polling on both profiles, and OID4VP §14.2 is
-explicit that the Response Code "is not applicable to cross-device scenarios
-because the browser used by the Wallet will not have the original session".
-That flow therefore relies on the mitigations §14.2 RECOMMENDS a Verifier add
-when running `direct_post` without a redirect:
+_Amended 2026-11-07: this section now covers wallet sign-in only. Linking is
+same-device only (see the amendment at the top), so a link always completes
+on the return leg, with the Response Code, and has no cross-device residual
+risk._
+
+The QR sign-in flow keeps completing by polling on both profiles, and OID4VP
+§14.2 is explicit that the Response Code "is not applicable to cross-device
+scenarios because the browser used by the Wallet will not have the original
+session". That flow therefore relies on the mitigations §14.2 RECOMMENDS a
+Verifier add when running `direct_post` without a redirect:
 
 - the signed `__Host-qauth_wallet_flow` binder cookie required on every poll —
   only the browser that started the flow can fetch its outcome
   (`routes/ui/wallet-login.test.ts`, "CSRF and the browser binder");
-- the asserted identifier the presentation must match ([ADR-009](./009-wallet-account-resolution.md)
-  §1) — a request relayed to a victim whose credential carries a different
-  identifier is refused ("the asserted identifier");
+- the asserted identifier ([ADR-009](./009-wallet-account-resolution.md) §1):
+  the presentation must be entitled to the account the browser named, under
+  either strategy. Under `asserted-lookup` the identifier finds the account
+  and the presentation's binding must match it; under `issuer-scoped-claim`
+  the credential's subject finds the account and the identifier must name
+  that same account (ADR-009 §2, amended 2026-11-07). A presentation for
+  another account is refused like one for an identifier with no account
+  ("the asserted identifier");
 - the six-minute flow lifetime and one uniform refusal.
 
 They narrow the attack; they do not close it the way the Response Code does.
-HAIP 1.0 §5.1's "Verifiers are RECOMMENDED to use only the same-device flow" is
-therefore a **waived** row in the conformance matrix, not n/a — it applied and
-QAuth chose the QR flow anyway, because a desktop browser signing in with a
-phone wallet is the primary journey the product ships. Revisit **2027-03-31**
+
+HAIP 1.0 §5.1's "Verifiers are RECOMMENDED to use only the same-device flow"
+is therefore a **waived** row in the conformance matrix for sign-in, not n/a —
+it applied and QAuth chose the QR flow anyway, because a desktop browser
+signing in with a phone wallet is the primary journey the product ships.
+Linking follows the recommendation. Revisit **2027-03-31**
 (`docs/conformance/requirements/haip-1_0.json`). The follow-up that would let a
-deployment take the recommendation is a per-profile `crossDevice` posture on
-`VerifierProfile` — `permitted` today, `forbidden` for a deployment that relies
-on session binding for phishing resistance — which would remove the
-`device=other` affordance rather than touch the Response Code. It is noted, not
-built.
+deployment take the recommendation for sign-in too is a per-profile
+`crossDevice` posture on `VerifierProfile` — `permitted` today, `forbidden` for
+a deployment that relies on session binding for phishing resistance — which
+would remove the `device=other` affordance rather than touch the Response
+Code. It is noted, not built.
 
 ## In-app browsers and a different browser on the same device
 
@@ -340,8 +372,10 @@ Only the third is this record's subject.
 - The tab that started a same-device flow and the tab the wallet opened end on
   the same word, completed or refused; the one sub-second edge on which they
   can differ is recorded under decision 7.
-- The cross-device journey is byte-for-byte what it was: `device` absent, QR
-  only, `200 {}`, completion by polling, status JSON unchanged.
+- The cross-device sign-in journey is byte-for-byte what it was: `device`
+  absent, QR only, `200 {}`, completion by polling, status JSON unchanged.
+  Since the 2026-11-07 amendment a link has no cross-device journey: an
+  absent `device` on the link form or API means same-device.
 - The new surfaces to keep uniform are the return route's one refusal page and
   the two terminal pages; the invariants in the route's JSDoc (burn before bind,
   nothing audited on refusal, no request text echoed) are pinned by
@@ -353,7 +387,7 @@ Only the third is this record's subject.
 
 - Issue #405 — the request this record settles; epic #231
 - [ADR-004](./004-wallet-agnostic-federation.md) — OID4VP federation; the request-side `redirect_uri` rules
-- [ADR-009](./009-wallet-account-resolution.md) — the asserted identifier the cross-device flow relies on
+- [ADR-009](./009-wallet-account-resolution.md) — the asserted identifier the cross-device sign-in flow relies on, under both strategies
 - [OpenID for Verifiable Presentations 1.0](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html) §8.2, §13.3, §14.2, §14.3
 - [OpenID4VC High Assurance Interoperability Profile 1.0](https://openid.net/specs/openid4vc-high-assurance-interoperability-profile-1_0.html) §5.1
 - `docs/conformance/requirements/oid4vp-1_0.json`, `docs/conformance/requirements/haip-1_0.json` — the rows and their evidence
