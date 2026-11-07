@@ -122,7 +122,7 @@ export function ApiKeysSection({ client, onUnauthenticated }: ApiKeysSectionProp
         <CardTitle>API keys</CardTitle>
       </CardHeader>
       <CardContent>
-        <p className="mb-4 text-sm text-gray-600">
+        <p className="text-body mb-4 text-sm">
           Static API keys are a development convenience for authenticating this client without the
           full OAuth flow. They are environment-gated: available only for development clients.
         </p>
@@ -130,7 +130,10 @@ export function ApiKeysSection({ client, onUnauthenticated }: ApiKeysSectionProp
         {client.staticApiKeysAllowed ? (
           <form onSubmit={(e) => void handleCreate(e)} noValidate className="mb-6 space-y-3">
             {createError ? (
-              <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+              <p
+                role="alert"
+                className="rounded-control bg-destructive-surface text-destructive px-3 py-2 text-sm"
+              >
                 {createError}
               </p>
             ) : null}
@@ -158,7 +161,7 @@ export function ApiKeysSection({ client, onUnauthenticated }: ApiKeysSectionProp
         ) : (
           <div
             role="note"
-            className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+            className="rounded-control border-warning/40 bg-warning-surface text-warning mb-6 border px-3 py-2 text-sm"
           >
             <p>
               Static API keys are disabled for <strong>{client.environment}</strong> clients. For
@@ -168,37 +171,42 @@ export function ApiKeysSection({ client, onUnauthenticated }: ApiKeysSectionProp
           </div>
         )}
 
-        {load.status === 'loading' ? <p className="text-sm text-gray-500">Loading keys…</p> : null}
+        {load.status === 'loading' ? (
+          <p className="text-muted-foreground text-sm">Loading keys…</p>
+        ) : null}
 
         {load.status === 'error' ? (
-          <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p
+            role="alert"
+            className="rounded-control bg-destructive-surface text-destructive px-3 py-2 text-sm"
+          >
             {load.message}
           </p>
         ) : null}
 
         {load.status === 'ready' && load.keys.length === 0 ? (
-          <p className="text-sm text-gray-500">No API keys yet.</p>
+          <p className="text-muted-foreground text-sm">No API keys yet.</p>
         ) : null}
 
         {load.status === 'ready' && load.keys.length > 0 ? (
-          <ul className="divide-y divide-gray-100">
+          <ul className="divide-border divide-y">
             {load.keys.map((key) => {
               const revoked = key.revokedAt !== null;
               return (
                 <li key={key.id} className="flex items-start justify-between gap-4 py-3">
                   <div className="min-w-0">
-                    <p className="flex items-center gap-2 text-sm font-medium text-gray-800">
+                    <p className="text-foreground flex items-center gap-2 text-sm font-medium">
                       <span className="truncate">{key.name}</span>
                       {revoked ? (
-                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-medium text-gray-500">
+                        <span className="rounded-control bg-muted text-muted-foreground px-1.5 py-0.5 text-xs font-medium">
                           Revoked
                         </span>
                       ) : null}
                     </p>
-                    <p className="font-mono text-xs break-all text-gray-500">
+                    <p className="text-muted-foreground font-mono text-xs break-all">
                       {key.prefix}…{key.last4}
                     </p>
-                    <p className="mt-0.5 text-xs text-gray-500">
+                    <p className="text-muted-foreground mt-0.5 text-xs">
                       Created {formatTimestamp(key.createdAt)} · Last used{' '}
                       {formatTimestamp(key.lastUsedAt)}
                     </p>
@@ -239,7 +247,7 @@ export function ApiKeysSection({ client, onUnauthenticated }: ApiKeysSectionProp
               </Button>
               <Button
                 type="button"
-                className="bg-red-600 hover:bg-red-700"
+                variant="destructive"
                 disabled={revoking}
                 onClick={() => void handleRevoke()}
               >
@@ -253,7 +261,7 @@ export function ApiKeysSection({ client, onUnauthenticated }: ApiKeysSectionProp
             integration using it will stop working. This cannot be undone.
           </p>
           {revokeError ? (
-            <p role="alert" className="text-sm text-red-700">
+            <p role="alert" className="text-destructive text-sm">
               {revokeError}
             </p>
           ) : null}
@@ -282,7 +290,7 @@ export function ApiKeysSection({ client, onUnauthenticated }: ApiKeysSectionProp
         >
           <div
             role="alert"
-            className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+            className="rounded-control border-warning/40 bg-warning-surface text-warning border px-3 py-2 text-sm"
           >
             Copy this key now. For your security, it will <strong>not</strong> be shown again. If
             you lose it you will have to create a new one.

@@ -9,6 +9,8 @@
   --color-accent: var(--accent);
   --color-destructive-surface: var(--destructive-surface);
   --color-success-surface: var(--success-surface);
+  --color-warning-surface: var(--warning-surface);
+  --color-scrim: var(--scrim);
   --color-foreground: var(--foreground);
   --color-card-foreground: var(--card-foreground);
   --color-popover-foreground: var(--popover-foreground);
@@ -23,6 +25,7 @@
   --color-highlight: var(--highlight);
   --color-destructive: var(--destructive);
   --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

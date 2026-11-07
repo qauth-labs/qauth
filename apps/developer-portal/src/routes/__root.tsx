@@ -15,7 +15,7 @@ export const Route = createRootRoute({
         content: 'width=device-width, initial-scale=1',
       },
       {
-        title: 'TanStack Start Starter',
+        title: 'QAuth Developer Portal',
       },
     ],
     links: [{ rel: 'stylesheet', href: appCss }],
@@ -34,7 +34,7 @@ function RootComponent() {
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html>
+    <html lang="en">
       <head>
         <HeadContent />
       </head>

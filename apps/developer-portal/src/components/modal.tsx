@@ -90,7 +90,7 @@ export function Modal({ title, children, footer, onClose, dismissible = true }: 
       onClick={() => {
         if (dismissible) onClose();
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      className="bg-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
     >
       <div
         ref={dialogRef}
@@ -99,10 +99,10 @@ export function Modal({ title, children, footer, onClose, dismissible = true }: 
         aria-label={title}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg space-y-4 rounded-lg border border-gray-200 bg-white p-6 shadow-lg outline-none"
+        className="rounded-surface border-border bg-card max-h-full w-full max-w-lg space-y-4 overflow-y-auto border p-6 outline-none"
       >
-        <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
-        <div className="space-y-3 text-sm text-gray-700">{children}</div>
+        <h2 className="text-foreground text-2xl leading-tight">{title}</h2>
+        <div className="text-body space-y-3 text-sm">{children}</div>
         {footer ? <div className="flex justify-end gap-3 pt-2">{footer}</div> : null}
       </div>
     </div>

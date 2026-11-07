@@ -77,10 +77,10 @@ function RegisterPage() {
 
   if (formState.stage === 'success') {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-        <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
-          <h1 className="text-xl font-semibold">Check your inbox</h1>
-          <p className="text-sm text-gray-600">
+      <main className="bg-background flex min-h-screen items-center justify-center px-4">
+        <div className="rounded-surface border-border bg-card w-full max-w-md space-y-4 border p-8">
+          <h1 className="text-foreground text-3xl leading-tight">Check your inbox</h1>
+          <p className="text-body text-sm">
             We sent an email to <span className="font-medium">{formState.email}</span> with the next
             step. If it holds a verification link, open it and confirm with your password to
             activate your account. If you already had an account with this address, the email says
@@ -88,9 +88,9 @@ function RegisterPage() {
           </p>
 
           {resendState === 'sent' ? (
-            <p className="text-sm text-green-700">Verification email resent.</p>
+            <p className="text-success text-sm">Verification email resent.</p>
           ) : typeof resendState === 'object' ? (
-            <p className="text-sm text-red-600">{resendState.error}</p>
+            <p className="text-destructive text-sm">{resendState.error}</p>
           ) : (
             <Button
               variant="outline"
@@ -111,12 +111,12 @@ function RegisterPage() {
   const isSubmitting = formState.stage === 'submitting';
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-md space-y-6 rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
-        <h1 className="text-xl font-semibold">Create your account</h1>
+    <main className="bg-background flex min-h-screen items-center justify-center px-4">
+      <div className="rounded-surface border-border bg-card w-full max-w-md space-y-6 border p-8">
+        <h1 className="text-foreground text-3xl leading-tight">Create your account</h1>
 
         {formError ? (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-destructive text-sm">
             {formError}
           </p>
         ) : null}
@@ -152,9 +152,9 @@ function RegisterPage() {
           </Button>
         </form>
 
-        <p className="text-center text-sm text-gray-500">
+        <p className="text-muted-foreground text-center text-sm">
           Already have an account?{' '}
-          <Link to="/login" className="text-blue-600 hover:underline">
+          <Link to="/login" className="text-primary-text underline-offset-4 hover:underline">
             Log in
           </Link>
         </p>

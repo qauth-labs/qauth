@@ -32,11 +32,11 @@ export function CopyField({ value, label, mono = true }: CopyFieldProps) {
 
   return (
     <div className="space-y-1.5">
-      <span className="text-sm font-medium text-gray-700">{label}</span>
+      <span className="text-body text-sm font-medium">{label}</span>
       <div className="flex items-stretch gap-2">
         <code
           data-testid="copy-field-value"
-          className={`flex-1 overflow-x-auto rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-800 ${
+          className={`rounded-control border-input bg-muted text-foreground flex min-h-9 min-w-0 flex-1 items-center overflow-x-auto border px-3 py-1.5 text-sm whitespace-nowrap ${
             mono ? 'font-mono' : ''
           }`}
         >

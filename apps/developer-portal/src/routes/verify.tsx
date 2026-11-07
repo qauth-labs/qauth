@@ -81,14 +81,14 @@ function VerifyPage() {
 
   if (state.stage === 'confirm') {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-        <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
-          <h1 className="text-xl font-semibold">Confirm your email address</h1>
-          <p className="text-sm text-gray-600">
+      <main className="bg-background flex min-h-screen items-center justify-center px-4">
+        <div className="rounded-surface border-border bg-card w-full max-w-md space-y-4 border p-8">
+          <h1 className="text-foreground text-3xl leading-tight">Confirm your email address</h1>
+          <p className="text-body text-sm">
             Someone used this email address to create a QAuth developer account. If that was you,
             enter the password you chose for it.
           </p>
-          <p className="text-sm text-gray-600">
+          <p className="text-body text-sm">
             If it wasn&apos;t you, close this page. Without that account&apos;s password this
             address cannot be verified.
           </p>
@@ -105,7 +105,7 @@ function VerifyPage() {
               />
             </FormField>
             {state.error ? (
-              <p role="alert" className="text-sm text-red-600">
+              <p role="alert" className="text-destructive text-sm">
                 {state.error}
               </p>
             ) : null}
@@ -118,24 +118,24 @@ function VerifyPage() {
 
   if (state.stage === 'pending') {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-        <p className="text-sm text-gray-500">Verifying your email...</p>
+      <main className="bg-background flex min-h-screen items-center justify-center px-4">
+        <p className="text-muted-foreground text-sm">Verifying your email...</p>
       </main>
     );
   }
 
   if (state.stage === 'success' || state.stage === 'already-verified') {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-        <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
-          <h1 className="text-xl font-semibold">Email verified</h1>
+      <main className="bg-background flex min-h-screen items-center justify-center px-4">
+        <div className="rounded-surface border-border bg-card w-full max-w-md space-y-4 border p-8">
+          <h1 className="text-foreground text-3xl leading-tight">Email verified</h1>
           {state.stage === 'success' ? (
-            <p className="text-sm text-gray-600">
+            <p className="text-body text-sm">
               <span className="font-medium">{state.email}</span> has been verified. You can now log
               in.
             </p>
           ) : (
-            <p className="text-sm text-gray-600">This email is already verified.</p>
+            <p className="text-body text-sm">This email is already verified.</p>
           )}
           <Link to="/login">
             <Button type="button">Continue to login</Button>
@@ -147,19 +147,19 @@ function VerifyPage() {
 
   // Error state.
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
-        <h1 className="text-xl font-semibold">Verification failed</h1>
-        <p role="alert" className="text-sm text-red-600">
+    <main className="bg-background flex min-h-screen items-center justify-center px-4">
+      <div className="rounded-surface border-border bg-card w-full max-w-md space-y-4 border p-8">
+        <h1 className="text-foreground text-3xl leading-tight">Verification failed</h1>
+        <p role="alert" className="text-destructive text-sm">
           {state.message}
         </p>
 
-        <p className="text-sm text-gray-600">
+        <p className="text-body text-sm">
           Enter your email below to request a new verification link.
         </p>
 
         {resendState === 'sent' ? (
-          <p className="text-sm text-green-700">Verification email sent. Check your inbox.</p>
+          <p className="text-success text-sm">Verification email sent. Check your inbox.</p>
         ) : (
           <form onSubmit={(e) => void handleResend(e)} className="space-y-3">
             <FormField label="Email" htmlFor="resend-email">
@@ -175,7 +175,7 @@ function VerifyPage() {
             </FormField>
 
             {typeof resendState === 'object' ? (
-              <p className="text-sm text-red-600">{resendState.error}</p>
+              <p className="text-destructive text-sm">{resendState.error}</p>
             ) : null}
 
             <Button type="submit" disabled={resendState === 'sending'}>
