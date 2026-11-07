@@ -930,6 +930,11 @@ export function upstreamRouteHost(
           if (state.purpose !== 'authorization' && state.purpose !== 'account') {
             throw new UpstreamSignInRefusal('transaction_mismatch');
           }
+          // An account page's sign-in (#844) runs as an interaction only: the
+          // pages' way registers an identity no account holds.
+          if (state.purpose === 'account' && pending.mode !== 'interaction') {
+            throw new UpstreamSignInRefusal('transaction_mismatch');
+          }
           const environment = await roundEnvironment(fastify, realm, engineClientIdOf(state));
           const link = state.upstreamLink;
           if (link !== undefined) {

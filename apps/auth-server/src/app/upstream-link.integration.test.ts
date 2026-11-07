@@ -826,6 +826,37 @@ describe('linking an upstream account to an existing one (#670, real containers)
       expect(await upstreamCredentials()).toBe(0);
       expect((await read(id)).step).toBe(UPSTREAM_LINK);
     });
+
+    it('starts none of its sign-ins on a node with the interaction UI off, which would register', async () => {
+      await registerPasswordAccount(app(), EMAIL);
+      const jar = new CookieJar();
+      await signIn(jar);
+      const overview = await get(jar, '/ui/account');
+      expect(overview.statusCode, withServerLog(overview.body)).toBe(200);
+      const csrf = /name="csrf" value="([^"]+)"/.exec(overview.body)?.[1] ?? '';
+      const confirm = await app().inject({
+        method: 'POST',
+        url: '/ui/account/reauthenticate',
+        headers: { ...FORM, ...SAME_ORIGIN, cookie: jar.header() ?? '' },
+        payload: new URLSearchParams({ csrf }).toString(),
+      });
+      jar.absorb(confirm.headers['set-cookie']);
+      expect(confirm.statusCode, withServerLog(confirm.body)).toBe(303);
+      const id = ceremonyIdOf(confirm.headers['location']);
+
+      // A node a rolling restart that turns the interaction UI on has not
+      // reached yet: imported after the boot, it is the app's own setting.
+      const { env } = await import('../config/env');
+      env.INTERACTION_UI_ENABLED = false;
+      let refused: LightMyRequestResponse;
+      try {
+        refused = await get(jar, `/ui/upstream/${TYPE}/start?interaction=${id}`);
+      } finally {
+        env.INTERACTION_UI_ENABLED = true;
+      }
+      expect(refused.statusCode, withServerLog(refused.body)).toBe(400);
+      expect(refused.body).not.toContain('class="alt-action"');
+    });
   });
 
   describe('another browser or another interaction', () => {

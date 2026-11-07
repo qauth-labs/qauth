@@ -177,6 +177,13 @@ export default async function (fastify: FastifyInstance) {
             if (state.purpose !== 'authorization' && state.purpose !== 'account') {
               throw new UpstreamSignInRefusal('transaction_mismatch');
             }
+            // An account page's sign-in (#844) starts as an interaction only:
+            // a node with the interaction UI off (one a rolling restart that
+            // turns it on has not reached) would send it the pages' way,
+            // which registers an identity no account holds.
+            if (state.purpose === 'account' && mode !== 'interaction') {
+              throw new UpstreamSignInRefusal('transaction_mismatch');
+            }
             // A link the request asked for (#670) starts only the provider it
             // named, before the provider proved anyone, in an interaction.
             const link = state.upstreamLink;
@@ -189,12 +196,9 @@ export default async function (fastify: FastifyInstance) {
               throw new UpstreamSignInRefusal('transaction_mismatch');
             }
             const back =
-              mode === 'interaction'
+              mode === 'interaction' || state.purpose === 'account'
                 ? ceremonyPageUrlOf(realm, interactionId)
-                : state.purpose === 'account'
-                  ? // The account page runs only with the interaction UI on (#844).
-                    ceremonyPageUrlOf(realm, interactionId)
-                  : authorizeUrlOf(state.request);
+                : authorizeUrlOf(state.request);
             wayBack = back;
             const round = await engine.advance(
               state.signInTransaction,
