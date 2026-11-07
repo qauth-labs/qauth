@@ -242,7 +242,8 @@ function noticeKey(input: NoticeMark): string {
   if (
     input.kind !== 'send_ceiling' &&
     input.kind !== 'password_disabled' &&
-    input.kind !== 'recovery_codes_failed'
+    input.kind !== 'recovery_codes_failed' &&
+    input.kind !== 'second_factor_failed'
   ) {
     throw new Error('send caps: not a once-a-day notice');
   }

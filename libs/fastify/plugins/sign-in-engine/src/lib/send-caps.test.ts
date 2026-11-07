@@ -245,6 +245,22 @@ describe('createRedisSendCaps (#637)', () => {
     ).rejects.toThrow('not a once-a-day notice');
   });
 
+  it('claims the wrong-second-factor notice on a key of its own (#653)', async () => {
+    const redis = fakeRedis(1);
+    const store = createRedisSendCaps(redis, { now: () => NOW });
+
+    expect(
+      await store.claimNotice({
+        realmId: REALM,
+        addressHmac: 'account-hmac',
+        kind: 'second_factor_failed',
+      })
+    ).toBe(true);
+    expect(redis.calls[0]?.keys).toEqual([
+      sendCapKey(REALM, 'notice', 'second_factor_failed', 'account-hmac'),
+    ]);
+  });
+
   it('releases a notice through its own script, on the claim’s key', async () => {
     const redis = fakeRedis(1);
     const store = createRedisSendCaps(redis, { now: () => NOW });

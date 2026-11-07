@@ -24,6 +24,14 @@ import {
   RecoveryCodeUsedEmail,
 } from '../templates/engine/recovery-codes';
 import {
+  SECOND_FACTOR_DISABLED_SUBJECT,
+  SECOND_FACTOR_FAILED_SUBJECT,
+  SecondFactorDisabledEmail,
+  SecondFactorFailedEmail,
+  TOTP_ADDED_SUBJECT,
+  TotpAddedEmail,
+} from '../templates/engine/second-factor';
+import {
   type MailPassFlow,
   SEND_CEILING_SUBJECT,
   SendCeilingEmail,
@@ -50,7 +58,10 @@ import { isMailBaseUrl, isMailPass, mailPassUrl } from './links';
  * - whether a realm may switch it off. None of these may be: the code and
  *   "account exists" mails are steps of a flow, "password changed" and the
  *   recovery codes' notices (#649: a code used, a set replaced, 100 wrong
- *   codes in a row) are notices about a credential, and the send-ceiling and
+ *   codes in a row) and the TOTP's (#653: one added, one turned off after 100
+ *   wrong codes) are notices about a credential, the notice of a wrong
+ *   second factor after a correct password always goes out (ADR-017
+ *   Decision 7), and the send-ceiling and
  *   password-disabled notices carry the pass that keeps the owner's reset
  *   open (ADR-020 §3 "Emails": they "always go out").
  */
@@ -96,7 +107,10 @@ export type EngineMail =
     }
   | { readonly template: 'recovery_codes_regenerated' }
   | { readonly template: 'recovery_codes_failed' }
-  | { readonly template: 'passkey_added' };
+  | { readonly template: 'passkey_added' }
+  | { readonly template: 'totp_added' }
+  | { readonly template: 'second_factor_disabled' }
+  | { readonly template: 'second_factor_failed' };
 
 /** The name of an engine mail template. */
 export type EngineMailName = EngineMail['template'];
@@ -272,6 +286,30 @@ export const ENGINE_MAIL_TEMPLATES: {
     subject: () => PASSKEY_ADDED_SUBJECT,
     element: (_mail: MailOf<'passkey_added'>, { baseUrl, brand }: EngineMailContext) =>
       createElement(PasskeyAddedEmail, { brand, baseUrl }),
+  }),
+  totp_added: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => TOTP_ADDED_SUBJECT,
+    element: (_mail: MailOf<'totp_added'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(TotpAddedEmail, { brand, baseUrl }),
+  }),
+  second_factor_disabled: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => SECOND_FACTOR_DISABLED_SUBJECT,
+    element: (_mail: MailOf<'second_factor_disabled'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(SecondFactorDisabledEmail, { brand, baseUrl }),
+  }),
+  second_factor_failed: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => SECOND_FACTOR_FAILED_SUBJECT,
+    element: (_mail: MailOf<'second_factor_failed'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(SecondFactorFailedEmail, { brand, baseUrl }),
   }),
   send_ceiling: Object.freeze({
     realmMaySwitchOff: false,

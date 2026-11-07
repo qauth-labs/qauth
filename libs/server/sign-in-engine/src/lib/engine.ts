@@ -72,6 +72,7 @@ import {
   type Clock,
   type EmailCodeDigest,
   type IdentifierDigest,
+  type LadderCounter,
   MFA_MODES,
   type MfaPolicy,
   type MfaPolicyReader,
@@ -90,6 +91,10 @@ import {
   type SignInAuditRecord,
   type SignInCandidate,
   SYSTEM_CLOCK,
+  TOTP_SEALED_MAX_LENGTH,
+  type TotpCredentials,
+  type TotpDisplay,
+  type TotpEnrolmentStart,
   type UpstreamProviderDirectory,
   type UpstreamProviderEntry,
 } from './ports';
@@ -113,6 +118,7 @@ import type {
 import { createIdentifierStep } from './steps/identifier';
 import { createPasskeyStep } from './steps/passkey';
 import { checkBreachList, createPasswordStep } from './steps/password';
+import { createTotpStep, holdsTotp, holdsUsableTotp } from './steps/totp';
 import { fromStore, SignInStoreUnavailableError } from './store';
 import {
   type CeremonyStep,
@@ -318,6 +324,22 @@ export interface SignInEngineDependencies {
    * redirect.
    */
   readonly passkeys?: PasskeyCeremonies;
+  /**
+   * The accounts' TOTPs (#653; ADR-017 Decisions 4, 7 and 8, ADR-020 §3).
+   * With them the engine serves `totp`, a second factor: after the first
+   * factor, an account that holds a TOTP (a disabled one counting as bound)
+   * owes a code, unless the transaction proved mfa another way or took a
+   * recovery code in its place; the wrong codes are counted on the ladder's
+   * `totp` counter, keyed on the account. And where the MFA policy needs a
+   * second factor the account lacks, `totp_setup` binds a new secret, on a
+   * transport that serves it and the recovery codes it owes: after a first
+   * valid code, within {@link TOTP_BINDING_MAX_AUTH_AGE_MS} of the factor
+   * the transaction proved, and, for the first second factor of a
+   * password-only account, after a code mailed to its address. Without them
+   * neither step is offered, and an account that holds a TOTP is answered
+   * with a redirect after its first factor.
+   */
+  readonly totp?: TotpCredentials;
   readonly hooks?: SignInHooks;
   /**
    * The password ladder's hard action (#615): called when a failure counts at
@@ -392,9 +414,10 @@ export interface SignInEngine {
 const STEPS_WITH_LOGIN_HINT: ReadonlySet<StepName> = new Set<StepName>(['identifier', 'password']);
 
 /**
- * The ladder counters whose soft threshold asks for a bot challenge (#643;
- * ADR-017 Decision 7, "bot challenge from F1b"): the password's and the email
- * codes'. A second factor's counter joins with its step (#653).
+ * The identifier's ladder counters whose soft threshold asks for a bot
+ * challenge (#643; ADR-017 Decision 7, "bot challenge from F1b"): the
+ * password's and the email codes'. A second factor's counter is the
+ * account's ({@link accountLadderCounters}).
  */
 const CHALLENGE_LADDER_COUNTERS = Object.freeze(['password', 'email_code'] as const);
 
@@ -411,13 +434,15 @@ const TRANSACTION_ENDED: RoundResult = Object.freeze({
  * The steps no role may take: an email code is never an authenticator
  * (ADR-017 Decision 5), a new password proves nothing, and a recovery code
  * stands in for a factor without being one (ADR-017 Decision 8); all are the
- * engine's own, as is showing a new set of recovery codes.
+ * engine's own, as are showing a new set of recovery codes and the
+ * enrolments of a passkey (#651) and of a TOTP (#653).
  */
 const NEVER_A_FACTOR: readonly StepName[] = Object.freeze([
   'email_code',
   'new_password',
   'recovery_code',
   'recovery_codes',
+  'totp_setup',
   'webauthn_create',
 ]);
 
@@ -435,13 +460,29 @@ const CEREMONY_REUSE_MS = 4 * 60 * 1000;
  */
 export const PASSKEY_BINDING_MAX_AUTH_AGE_MS = 5 * 60 * 1000;
 
+/** Binding a TOTP needs a factor proved at most this long ago (#653; ADR-017 Decision 8): as a passkey's. */
+export const TOTP_BINDING_MAX_AUTH_AGE_MS = PASSKEY_BINDING_MAX_AUTH_AGE_MS;
+
 /** A new ceremony key: 32 bytes from a CSPRNG, base64url. */
 function newCeremonyKey(): string {
   return randomBytes(32).toString('base64url');
 }
 
-/** The ladder counters of an account rather than an identifier: the recovery codes' (#649). */
-const ACCOUNT_LADDER_COUNTERS = Object.freeze(['recovery_code'] as const);
+/**
+ * The ladder counters of an account rather than an identifier, of the ports
+ * an engine was built with: the recovery codes' (#649) and the TOTP's (#653).
+ * Past its free failures, either asks for a bot challenge (ADR-017
+ * Decision 7, the second-factor row).
+ */
+function accountLadderCounters(deps: SignInEngineDependencies): readonly LadderCounter[] {
+  return Object.freeze([
+    ...(deps.recoveryCodes === undefined ? [] : (['recovery_code'] as const)),
+    ...(deps.totp === undefined ? [] : (['totp'] as const)),
+  ]);
+}
+
+/** The `totp_setup` step's params: ADR-020 §3's fixed parameters. */
+const TOTP_SETUP_PARAMS = Object.freeze({ algorithm: 'SHA1', digits: 6, period: 30 } as const);
 
 /** The `recovery_code` step (#649): it has no params. */
 const RECOVERY_CODE_STEP: Offerable = Object.freeze({
@@ -522,6 +563,17 @@ function buildHandlers(deps: SignInEngineDependencies) {
       ? undefined
       : createPasskeyStep({ passkeys: deps.passkeys, accounts: deps.accounts });
   if (passkey !== undefined) byStep.set('webauthn_get', passkey);
+  // The TOTP step is the engine's own once it has the TOTPs (#653).
+  const totp =
+    deps.totp === undefined
+      ? undefined
+      : createTotpStep({
+          totp: deps.totp,
+          accounts: deps.accounts,
+          ladder: deps.hooks?.ladder ?? NO_LADDER,
+          ...(deps.onUnavailable === undefined ? {} : { onReportFailure: deps.onUnavailable }),
+        });
+  if (totp !== undefined) byStep.set('totp', totp);
   for (const handler of extra) {
     if (!isStepName(handler.step)) throw new Error(`sign-in engine: unknown step ${handler.step}`);
     if (byStep.has(handler.step)) {
@@ -581,7 +633,10 @@ function buildHandlers(deps: SignInEngineDependencies) {
       ...firstFactors.filter((handler) => handler.discoverable === true),
     ]),
     discoverable: Object.freeze(firstFactors.filter((handler) => handler.discoverable === true)),
-    secondFactors: Object.freeze(ofRole('second_factor')),
+    secondFactors: Object.freeze([
+      ...ofRole('second_factor'),
+      ...(totp === undefined ? [] : [totp]),
+    ]),
   });
 }
 
@@ -673,7 +728,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   const ladder = deps.hooks?.ladder ?? NO_LADDER;
   /**
    * Whether the engine answers `step` itself: a handler's, the email code of
-   * the inline verification, or the new password of the forced update.
+   * the inline verification, the new password of the forced update, or a
+   * set-up the engine runs (a passkey's, a TOTP's).
    */
   const knows = (step: StepName) =>
     handlers.byStep.has(step) ||
@@ -682,7 +738,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     (step === 'upstream' && deps.upstream !== undefined) ||
     (step === 'password_reset' && deps.resets !== undefined) ||
     ((step === 'recovery_code' || step === 'recovery_codes') && recoveryCodes !== undefined) ||
-    (step === 'webauthn_create' && deps.passkeys !== undefined);
+    (step === 'webauthn_create' && deps.passkeys !== undefined) ||
+    (step === 'totp_setup' && deps.totp !== undefined);
   /** Report a failure that changes no answer: a reporter that throws changes nothing either. */
   const report = (port: string, error: unknown) => {
     try {
@@ -1486,6 +1543,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      */
     const tookRecoveryCode = (): boolean =>
       state.transaction.verified.some((step) => step.step === 'recovery_code');
+    /**
+     * Whether this transaction proved a password: the one first factor that
+     * makes `mfa` with a TOTP (an upstream sign-in adds no `amr` value).
+     */
+    const provedPassword = (): boolean =>
+      state.transaction.verified.some((step) => factorOf(step.step) === 'password');
     /**
      * Whether this transaction bound a passkey (#651): to an account whose
      * only factor was the password it proved, so the downgrade rule asks no
@@ -2606,22 +2669,19 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     };
     /**
      * Whether the account the transaction proved is past its recovery codes'
-     * free failures (#649; ADR-017 Decision 7: the second-factor row's
-     * "bot challenge from F1b"). Read only once a factor fixed the subject,
-     * and only by an engine that offers recovery codes.
+     * (#649) or its TOTP's (#653) free failures (ADR-017 Decision 7: the
+     * second-factor row's "bot challenge from F1b"). Read only once a factor
+     * fixed the subject, and only by an engine that offers either.
      */
     const accountLadderSoft = async (): Promise<boolean> => {
       const peek = hooks.ladder;
       const userId = state.transaction.subject;
-      if (
-        peek?.softThreshold === undefined ||
-        userId === undefined ||
-        recoveryCodes === undefined
-      ) {
+      const counters = accountLadderCounters(deps);
+      if (peek?.softThreshold === undefined || userId === undefined || counters.length === 0) {
         return false;
       }
       const soft: unknown = await fromStore('ladder', () =>
-        peek.softThreshold?.({ realmId, userId, counters: ACCOUNT_LADDER_COUNTERS })
+        peek.softThreshold?.({ realmId, userId, counters })
       );
       if (typeof soft !== 'boolean') {
         throw new SignInStoreUnavailableError('ladder', new Error('not a soft threshold'));
@@ -3218,6 +3278,185 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       throw new SignInStoreUnavailableError('passkeys', new Error('not a binding'));
     };
 
+    /** Whether this transaction bound a TOTP (#653): its set-up is never offered again. */
+    const enrolledTotp = (): boolean =>
+      state.transaction.verified.some((step) => step.step === 'totp_setup');
+    /**
+     * The TOTP set-up (#653; ADR-017 Decisions 4 and 8,
+     * `graphs/flows/core/totp/flow.yaml`): where the MFA policy needs a
+     * second factor the account lacks after a password (or the lost one a
+     * recovery code stood in for), and, whatever the policy, after a
+     * recovery code stood in for a TOTP the hard action disabled,
+     * `totp_setup` binds a new secret before the sign-in completes, never an
+     * emailed code in the factor's place. Only on a transport that serves the
+     * step and the recovery codes it owes (the hosted pages); any other gets
+     * a redirect.
+     *
+     * An unclaimed account never reaches the step: its address is verified
+     * inline first, which claims it, as the same person then proved the
+     * password and the mailbox (ADR-017 Decision 8). A binding needs a factor
+     * proved at most {@link TOTP_BINDING_MAX_AUTH_AGE_MS} ago, so the step is
+     * not shown past it, and a binding that finds the factor older ends the
+     * transaction (`authentication_stale`): a fresh sign-in starts again.
+     *
+     * The port draws the secret and seals it at once; the transaction keeps
+     * only the ciphertext, and every round that offers the step shows the
+     * same secret again. An answer to an offer this round did not make is
+     * ignored. A code is a credential round on the limiters, with no ladder
+     * counter: it guesses nothing of the account. A valid one holds the time
+     * step it matched; the first second factor of a password-only account
+     * then needs its mailbox, proved in this transaction (an emailed code
+     * with the purpose `recovery`, unless one was taken). The port binds the
+     * secret with that step as its last accepted one, replacing the TOTP the
+     * account holds, and queues the notice. The binding's first code counts
+     * as the bound TOTP's proof: `totp_setup` and `totp` join the verified
+     * steps, and `auth_time` moves (decision d-1107-01). Returns the round's
+     * result, or `null` once the secret is bound.
+     */
+    const enrolTotp = async (
+      totp: TotpCredentials,
+      current: SignInAccount,
+      subject: string
+    ): Promise<RoundResult | null> => {
+      const label =
+        state.transaction.identifier ?? current.identifier ?? state.transaction.upstream?.address;
+      if (
+        enrolledTotp() ||
+        label === undefined ||
+        recoveryCodes === undefined ||
+        !served.has('totp_setup') ||
+        !served.has('recovery_codes')
+      ) {
+        return redirect('step_not_available');
+      }
+      const fresh = (): boolean => {
+        const { authTime } = state.transaction;
+        return authTime !== undefined && clock.now() - authTime <= TOTP_BINDING_MAX_AUTH_AGE_MS;
+      };
+      const stale = async (): Promise<RoundResult> => {
+        state.transaction = { ...state.transaction, totpEnrolment: undefined };
+        return ended('totp_setup', 'authentication_stale');
+      };
+      if (!fresh()) return stale();
+      // An unclaimed account is claimed first: never a code in the factor's place.
+      if (addressPending(current)) {
+        if (emailCodes === undefined) return redirect('step_not_available');
+        const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);
+        if (result !== null) return result;
+        if (!fresh()) return stale();
+      }
+      const account = { realmId, userId: subject };
+      const offer: StepOffer = Object.freeze({
+        current: Object.freeze({ step: 'totp_setup', params: TOTP_SETUP_PARAMS }),
+        alternatives: Object.freeze([]),
+      }) as StepOffer;
+      const shown = (display: unknown): Readonly<Record<string, unknown>> => {
+        const { secret, otpauthUri } = (display ?? {}) as Partial<TotpDisplay>;
+        const personal = { identifier: label, secret, otpauth_uri: otpauthUri };
+        if (!grammarStep('totp_setup').personal.safeParse(personal).success) {
+          throw new SignInStoreUnavailableError('totp', new Error('not a TOTP display'));
+        }
+        return Object.freeze(personal);
+      };
+      const held = state.transaction.totpEnrolment;
+      let step = held?.step;
+      if (held === undefined) {
+        const started = await fromStore('totp', () =>
+          totp.start({ ...account, identifier: label })
+        );
+        const sealed = (started as Partial<TotpEnrolmentStart> | null)?.sealed;
+        if (
+          typeof sealed !== 'string' ||
+          sealed.length === 0 ||
+          sealed.length > TOTP_SEALED_MAX_LENGTH
+        ) {
+          throw new SignInStoreUnavailableError('totp', new Error('not a sealed secret'));
+        }
+        const personal = shown(started?.display);
+        state.transaction = { ...state.transaction, totpEnrolment: { sealed } };
+        // An answer to an offer this round makes is ignored: nobody saw it.
+        if (turn.pending?.name === 'totp_setup') turn.pending = null;
+        return offerStep(offer, undefined, personal);
+      }
+      const showAgain = async (error?: StepErrorCode): Promise<RoundResult> =>
+        offerStep(
+          offer,
+          error,
+          shown(
+            await fromStore('totp', () =>
+              totp.display({ ...account, identifier: label, sealed: held.sealed })
+            )
+          )
+        );
+      if (step === undefined) {
+        if (turn.pending?.name !== 'totp_setup') return showAgain();
+        const read = readPending(offer);
+        if (read === null) return invalidAnswer('totp_setup');
+        turn.pending = null;
+        const { otp } = read.answer as StepAnswer<'totp_setup'>;
+        const limited = await reserveCredentialRound('totp_setup');
+        if ('refused' in limited) return limited.refused;
+        spendChallenge();
+        const checked: unknown = await fromStore('totp', () =>
+          totp.check({ ...account, sealed: held.sealed, code: otp })
+        );
+        const verdict = checked as Partial<{ kind: string; step: unknown }> | null;
+        if (verdict?.kind === 'refused') {
+          await settleRound(limited.reservation, 'failure');
+          await audit('refused', 'totp_setup', 'invalid_credentials');
+          return showAgain('invalid_credentials');
+        }
+        if (
+          verdict?.kind !== 'valid' ||
+          typeof verdict.step !== 'number' ||
+          !Number.isSafeInteger(verdict.step) ||
+          verdict.step < 0
+        ) {
+          throw new SignInStoreUnavailableError('totp', new Error('not a set-up check'));
+        }
+        await settleRound(limited.reservation, 'success', subject);
+        step = verdict.step;
+        state.transaction = { ...state.transaction, totpEnrolment: { sealed: held.sealed, step } };
+      }
+      // The first second factor of a password-only account: its mailbox,
+      // proved in this transaction (ADR-017 Decision 8). The code adds no amr.
+      if (!boundBeyondPassword(current) && !provedMailbox()) {
+        if (emailCodes === undefined) return redirect('step_not_available');
+        const result = await verifyAddress(emailCodes, subject, RECOVERY);
+        if (result !== null) return result;
+      }
+      if (!fresh()) return stale();
+      const at = step;
+      const bound: unknown = await fromStore('totp', () =>
+        totp.bind({ ...account, clientId, sealed: held.sealed, step: at })
+      );
+      const binding = bound as Partial<{ kind: string; reason: unknown }> | null;
+      if (binding?.kind === 'bound') {
+        state.transaction = {
+          ...state.transaction,
+          totpEnrolment: undefined,
+          verified: [
+            ...state.transaction.verified,
+            { step: 'totp_setup', params: TOTP_SETUP_PARAMS } as OfferedStep,
+            { step: 'totp', params: { digits: 6 } } as OfferedStep,
+          ],
+          authTime: clock.now(),
+        };
+        await audit('passed', 'totp_setup');
+        return null;
+      }
+      const reason = binding?.kind === 'refused' ? binding.reason : undefined;
+      if (
+        reason === 'account_disabled' ||
+        reason === 'subject_mismatch' ||
+        reason === 'account_unclaimed'
+      ) {
+        state.transaction = { ...state.transaction, totpEnrolment: undefined };
+        return ended('totp_setup', reason);
+      }
+      throw new SignInStoreUnavailableError('totp', new Error('not a binding'));
+    };
+
     for (;;) {
       const current: SignInAccount = account;
       const verifiedSteps = new Set(state.transaction.verified.map((step) => step.step));
@@ -3226,6 +3465,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         !verifiedSteps.has(handler.step) &&
         (handler.usableBy?.(current) ?? false);
       let needed: Offerable[] | null = null;
+      // The MFA policy's set-up step (#653), in place of an offer.
+      let setUp = false;
       const strongest = strongestBoundFactor(current);
       if (
         provenFactorStrength(state.transaction.verified, factorOf) < strongest &&
@@ -3241,24 +3482,68 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           ),
           ...(await recoveryAlternative(subject)),
         ];
-      } else if (secondFactorRequired(policy, current) && !provesMfa(state.transaction.verified)) {
-        // The MFA policy: the transaction's amr must carry mfa. A recovery
-        // code never makes it: it stands in for a lost second factor, and a
-        // new one is bound before the sign-in completes (ADR-017 Decision 8):
-        // the set-up step, which no transport serves until #651 and #653 add
-        // one, so after a code only a factor the account still holds is
-        // offered, and with none the round is a redirect.
+      } else if (
+        holdsTotp(current) &&
+        !verifiedSteps.has('totp') &&
+        !provesMfa(state.transaction.verified) &&
+        !tookRecoveryCode()
+      ) {
+        // The account's TOTP (#653; ADR-017 Decision 4, rule 8): a bound one
+        // is owed after the first factor, whatever the MFA policy says, a
+        // disabled one counting as bound, so disabling it never lowers what a
+        // sign-in must prove. A factor that made mfa already (a passkey) meets
+        // it; on the hosted pages a recovery code may stand in for it. An
+        // engine without TOTPs, or a transport that cannot serve the step,
+        // has nothing but the recovery code to offer, and with none the round
+        // is a redirect.
         needed = [
-          ...[...handlers.secondFactors, ...handlers.firstFactors].filter(candidate),
+          ...handlers.secondFactors.filter(
+            (handler) => handler.factor === 'totp' && candidate(handler)
+          ),
           ...(await recoveryAlternative(subject)),
         ];
-        // An account that lacks the factor gets the set-up step, below, never
-        // a code. One that has it verifies its address first: rule 8 asks for
-        // the verification before the second factor (ADR-017 Decision 4).
+        // Rule 8 asks for the verification of an address before the second
+        // factor (ADR-017 Decision 4).
         if (needed.length > 0 && emailCodes !== undefined && addressPending(current)) {
           const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);
           if (result !== null) return result;
         }
+      } else if (secondFactorRequired(policy, current) && !provesMfa(state.transaction.verified)) {
+        // The MFA policy: the transaction's amr must carry mfa. A recovery
+        // code never makes it: it stands in for a lost second factor, and a
+        // new one is bound before the sign-in completes (ADR-017 Decision 8).
+        const factors = [...handlers.secondFactors, ...handlers.firstFactors].filter(candidate);
+        if (!tookRecoveryCode() && factors.length > 0) {
+          needed = [...factors, ...(await recoveryAlternative(subject))];
+          // One that has a factor verifies its address first: rule 8 asks for
+          // the verification before the second factor (ADR-017 Decision 4).
+          if (emailCodes !== undefined && addressPending(current)) {
+            const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);
+            if (result !== null) return result;
+          }
+        } else {
+          // An account that lacks a second factor, or one whose lost factor a
+          // recovery code stood in for, gets the set-up step, never a code
+          // (#653). After a first factor that adds no amr (an upstream
+          // sign-in) a TOTP cannot make mfa: a redirect, before any secret is
+          // drawn or bound.
+          needed = [];
+          setUp = provedPassword() && (tookRecoveryCode() || !holdsTotp(current));
+        }
+      } else if (
+        tookRecoveryCode() &&
+        holdsTotp(current) &&
+        !holdsUsableTotp(current) &&
+        !enrolledTotp() &&
+        !provesMfa(state.transaction.verified)
+      ) {
+        // A recovery code stood in for a TOTP the hard action disabled (#653;
+        // ADR-017 Decisions 7 and 8): a new one is bound before the sign-in
+        // completes, whatever the MFA policy says. A disabled TOTP still
+        // counts as bound, so without the rebind every later sign-in would
+        // spend another code until none is left.
+        needed = [];
+        setUp = true;
       } else if (updateDue(current) && boundBeyondPassword(current) && !metBeyondPassword()) {
         // The forced update (#635): an account with a factor beyond its
         // password proves it first, so a person who knows only the password,
@@ -3280,12 +3565,18 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         }
       }
       if (needed === null) break;
-      // No step can meet the rule yet, or the transport cannot serve one.
-      if (needed.length === 0) return redirect('step_not_available');
-      const offer = await offerOf(needed);
-      if (!answers(offer)) return offerStep(offer);
-      const result = await verifyAfterFirstFactor(offer, subject);
-      if (result !== null) return result;
+      if (setUp) {
+        if (deps.totp === undefined) return redirect('step_not_available');
+        const result = await enrolTotp(deps.totp, current, subject);
+        if (result !== null) return result;
+      } else {
+        // No step can meet the rule yet, or the transport cannot serve one.
+        if (needed.length === 0) return redirect('step_not_available');
+        const offer = await offerOf(needed);
+        if (!answers(offer)) return offerStep(offer);
+        const result = await verifyAfterFirstFactor(offer, subject);
+        if (result !== null) return result;
+      }
       const reread = await readAccount();
       if (reread === null || reread.userId !== subject)
         return ended('identifier', 'subject_mismatch');

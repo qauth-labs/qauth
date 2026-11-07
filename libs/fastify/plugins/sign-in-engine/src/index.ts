@@ -16,6 +16,7 @@ export * from './lib/password-verifier';
 export * from './lib/recovery-codes';
 export * from './lib/round-limits';
 export * from './lib/send-caps';
+export * from './lib/totp';
 // What the auth server works with, from the engine library it may not import.
 export {
   type AccountRegistration,
@@ -25,6 +26,7 @@ export {
   type AccountResets,
   type AddressVerifier,
   type AuditSink,
+  base32Encode,
   type BotChallengeProvider,
   BREACH_CHECK_FAILURES,
   type BreachCheckFailure,
@@ -52,6 +54,7 @@ export {
   NO_BREACH_CHECK,
   NO_SECOND_FACTOR_POLICY,
   type OnceANoticeKind,
+  otpauthUri,
   PASSKEY_BINDING_MAX_AUTH_AGE_MS,
   type PasskeyAssertion,
   type PasskeyBinding,
@@ -106,6 +109,13 @@ export {
   SignInStoreUnavailableError,
   type SignInTransaction,
   signInTransactionSchema,
+  TOTP_BINDING_MAX_AUTH_AGE_MS,
+  TOTP_LADDER_POLICY,
+  TOTP_SECRET_BYTES,
+  type TotpAccount,
+  type TotpCipher,
+  type TotpCredentials,
+  type TotpDisplay,
   type UpstreamProof,
   type UpstreamProviderDirectory,
   type UpstreamProviderEntry,

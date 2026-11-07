@@ -502,6 +502,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     load: () => import('./routes/ui/resume'),
   },
   {
+    module: 'ui/totp',
+    prefix: '/ui',
+    roles: ['web'],
+    plugins: ['sessions'],
+    repositories: ['events', 'userCredentials', 'users'],
+    load: () => import('./routes/ui/totp'),
+  },
+  {
     module: 'ui/upstream',
     prefix: '/ui',
     roles: ['web'],

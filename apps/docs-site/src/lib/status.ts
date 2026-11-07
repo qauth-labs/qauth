@@ -196,6 +196,12 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     flag: { name: 'WEBAUTHN_ENABLED', default: 'off' },
   },
   {
+    feature: 'Authenticator app (TOTP) second factor',
+    state: 'partial',
+    summary:
+      'Built (#653): the sign-in engine\'s `totp` step after the first factor of an account that holds one (SHA-1, six digits, 30 seconds, one step of tolerance, a time step never accepted twice), `amr` `["pwd","otp","mfa"]` for a password then a code, and the `totp_setup` step that binds a new secret after a first valid code, a fresh factor and, for a password-only account, a mailed code, with a recovery set at the first binding. The secret is sealed under the realm\'s `data_at_rest` key. Wrong codes count per account on their own failure ladder, a password never clears them, and at 100 in a row the app is turned off only while the hosted pages are on and the account keeps another way in; three notices no realm can switch off. The two `/ui` pages serve the steps. `/auth/login` and `/ui/login` refuse a right password of an account that holds one. Open: the stored MFA policy that asks for the set-up (the admin console), the account API\'s own enrolment, the FiPA endpoint (#646) and the design-system screens (#654).',
+  },
+  {
     feature: 'API keys',
     state: 'shipped',
     summary:

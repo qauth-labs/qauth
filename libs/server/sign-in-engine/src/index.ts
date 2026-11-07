@@ -42,6 +42,7 @@ export {
   SIGN_IN_MIN_RESPONSE_TIME_MS,
   type SignInEngine,
   type SignInEngineDependencies,
+  TOTP_BINDING_MAX_AUTH_AGE_MS,
 } from './lib/engine';
 export {
   factorStrength,
@@ -79,6 +80,7 @@ export {
   ladderWaitMs,
   PASSWORD_LADDER_POLICY,
   RECOVERY_CODE_LADDER_POLICY,
+  TOTP_LADDER_POLICY,
 } from './lib/ladder';
 export {
   type AccountDirectory,
@@ -135,6 +137,14 @@ export {
   type SignInAuditRecord,
   type SignInCandidate,
   SYSTEM_CLOCK,
+  TOTP_SEALED_MAX_LENGTH,
+  type TotpAccount,
+  type TotpBinding,
+  type TotpCredentials,
+  type TotpDisplay,
+  type TotpEnrolmentStart,
+  type TotpSetupCheck,
+  type TotpVerification,
   type UpstreamProviderDirectory,
   type UpstreamProviderEntry,
 } from './lib/ports';
@@ -235,7 +245,27 @@ export {
   type VerdictAudit,
 } from './lib/steps/handler';
 export { createPasskeyStep, holdsUsablePasskey } from './lib/steps/passkey';
+export { createTotpStep, holdsTotp, holdsUsableTotp } from './lib/steps/totp';
 export { fromStore, SignInStoreUnavailableError } from './lib/store';
+export {
+  base32Encode,
+  createTotpService,
+  hotp,
+  matchTotpCode,
+  otpauthUri,
+  type StoredTotp,
+  TOTP_ALGORITHM,
+  TOTP_DIGITS,
+  TOTP_PERIOD_SECONDS,
+  TOTP_SECRET_BYTES,
+  TOTP_TOLERANCE_STEPS,
+  type TotpCipher,
+  totpCode,
+  type TotpNotices,
+  type TotpServiceDependencies,
+  totpStep,
+  type TotpStore,
+} from './lib/totp';
 export {
   CEREMONY_KEY_PATTERN,
   CEREMONY_STEPS,
@@ -250,4 +280,5 @@ export {
   type SignInTransaction,
   type SignInTransactionBinding,
   signInTransactionSchema,
+  type TotpEnrolment,
 } from './lib/transaction';

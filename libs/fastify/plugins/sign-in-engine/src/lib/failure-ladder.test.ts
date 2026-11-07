@@ -6,6 +6,7 @@ import {
   type LadderVerdict,
   PASSWORD_LADDER_POLICY,
   RECOVERY_CODE_LADDER_POLICY,
+  TOTP_LADDER_POLICY,
 } from '@qauth-labs/server-sign-in-engine';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -578,8 +579,8 @@ describe('the Redis failure ladder', () => {
   it('refuses a factor without a ladder and key parts out of shape', async () => {
     const { ladder } = setup();
     await expect(
-      ladder.reserve({ realmId: REALM, identifierHmac: IDENTIFIER_HMAC, factor: 'totp' })
-    ).rejects.toThrow(/no ladder for totp/);
+      ladder.reserve({ realmId: REALM, identifierHmac: IDENTIFIER_HMAC, factor: 'passkey' })
+    ).rejects.toThrow(/no ladder for passkey/);
     await expect(
       ladder.reserve({ realmId: REALM, identifierHmac: 'a}:b', factor: 'password' })
     ).rejects.toThrow(/out of shape/);
@@ -695,6 +696,54 @@ describe('the Redis failure ladder', () => {
     expect(redis.sets.get(KNOWN_IPS)?.size ?? 0).toBe(0);
     await (await reserved()).settle('success');
     expect(redis.sets.get(KNOWN_IPS)?.size).toBe(1);
+  });
+
+  it('keeps the wrong TOTP codes on a counter of the account by default, which a binding resets (#653)', async () => {
+    const clock = Date.UTC(2026, 10, 1);
+    const redis = new FakeRedis(() => clock);
+    const digest = vi.fn(async ({ identifier }: { realmId: string; identifier: string }) =>
+      hmacOf('ip', identifier)
+    );
+    const ladder = createRedisFailureLadder(redis, { ipDigest: digest, now: () => clock });
+    const USER = '0199fa20-0000-7000-8000-00000000bbbb';
+    expect(TOTP_LADDER_POLICY).toMatchObject({
+      freeFailures: 5,
+      hardCeiling: 100,
+      knownIpMs: 0,
+      onSuccess: 'clear',
+    });
+    const code = (endUserIp?: string) =>
+      ladder.reserve({
+        realmId: REALM,
+        userId: USER,
+        factor: 'totp',
+        ...(endUserIp === undefined ? {} : { endUserIp }),
+      });
+    const key = ladderAccountCounterKey(REALM, USER, 'totp');
+    expect(key).toBe(`sign-in-ladder:{${REALM}:user:${USER}}:totp`);
+    for (let i = 0; i < TOTP_LADDER_POLICY.freeFailures; i += 1) {
+      const verdict = await code(i % 2 === 0 ? IP : OTHER_IP);
+      if (verdict.kind !== 'reserved') throw new Error(`expected a reservation at ${i}`);
+      expect(await verdict.settle('failure')).toEqual({ ceilingReached: false });
+    }
+    // Every address waits: the counter knows no IP.
+    expect(await code(IP)).toEqual({ kind: 'wait', retryAfterSeconds: 1 });
+    expect(await code()).toEqual({ kind: 'wait', retryAfterSeconds: 1 });
+    expect(redis.hashes.get(key)?.get('n')).toBe(String(TOTP_LADDER_POLICY.freeFailures));
+    expect(digest).not.toHaveBeenCalled();
+    // A binding ends the run; the identifier's counters are the identifier's.
+    await expect(
+      ladder.reserve({ realmId: REALM, identifierHmac: IDENTIFIER_HMAC, factor: 'totp' })
+    ).rejects.toThrow(/the totp counter is the account's/);
+    await ladder.resetAccount({ realmId: REALM, userId: USER, factor: 'totp' });
+    expect(redis.hashes.has(key)).toBe(false);
+    expect(await code()).toMatchObject({ kind: 'reserved' });
+    await expect(
+      ladder.resetAccount({ realmId: REALM, userId: USER, factor: 'password' })
+    ).rejects.toThrow(/an identifier's/);
+    await expect(
+      ladder.resetAccount({ realmId: REALM, userId: 'a}:b', factor: 'totp' })
+    ).rejects.toThrow(/out of shape/);
   });
 
   it('resets a factor’s run for the owner’s reset', async () => {

@@ -223,6 +223,29 @@ export interface UserCredentialsRepository {
     tx?: DbClient
   ): Promise<UserCredential | undefined>;
   /**
+   * Take the TOTP time step `step` for the account (#653): `true` when this
+   * call moved the last accepted step of the account's enabled TOTP up to
+   * `step`; `false` when it was at `step` or later already, the TOTP is
+   * disabled, or the account holds none.
+   */
+  acceptTotpStep(realmId: string, userId: string, step: number, tx?: DbClient): Promise<boolean>;
+  /**
+   * Bind a TOTP to the account (#653), replacing the one it holds and
+   * clearing its disabled mark, in one statement.
+   *
+   * @returns the credential; `undefined` when the realm's `(totp, user id)`
+   *   row is another user's
+   */
+  upsertTotp(
+    input: {
+      readonly realmId: string;
+      readonly userId: string;
+      readonly credentialData: Readonly<Record<string, unknown>>;
+      readonly at: number;
+    },
+    tx?: DbClient
+  ): Promise<UserCredential | undefined>;
+  /**
    * Clear the disabled mark of the credential `(realm, provider type,
    * external_sub)` names (#615): a successful sign-in while the hard action
    * is unarmed, or the owner's reset (#642).

@@ -289,6 +289,49 @@ verify the user. An interaction at another step is sent to its ceremony page
 (`303`); one that ended gets a page saying so (`410`). Both are sent with
 `Cache-Control: no-store`.
 
+## The authenticator app's pages
+
+An authenticator app (TOTP: RFC 6238 with SHA-1, six digits and a 30-second
+step, one step of tolerance either way) is a second factor an account binds
+(#653; ADR-017 Decisions 7 and 8, ADR-020 §3). After the first factor, an
+account that holds one is asked for its code; under an MFA policy, an account
+with no second factor is asked to set one up before the sign-in completes,
+and is sent no code. Password then code gives `amr` `["pwd","otp","mfa"]`.
+Two server-rendered pages serve the steps for an interaction of the
+Interaction API, until the design-system screens of #654 replace them:
+
+- `GET /ui/totp/{interactionId}`: "Enter the code from your authenticator
+  app", for the `totp` step. After a refused answer it says "That code did not
+  work", the same for a wrong code, a used one and a late one. When the step
+  offers a recovery code in its place, "Use a recovery code instead" opens its
+  form.
+- `GET /ui/totp-setup/{interactionId}`: "Set up an authenticator app", for the
+  `totp_setup` step: the new secret as a QR code of its `otpauth://` URI and
+  as text, and the field for the first code. The secret is bound only once
+  that code is valid, and that code stands for the sign-in's `totp` step. The
+  secret is personal data, so the page is shown only to the browser whose
+  flow cookie binds the interaction, and never to a page another site opened
+  (`403`). The interaction record does not keep it: each read opens the
+  sign-in's sealed copy again. An account whose address is not proved cannot bind one, and the
+  first second factor of a password-only account also needs a code mailed to
+  its address, unless the sign-in proved the mailbox already. The first
+  binding issues a set of recovery codes.
+
+Both work without JavaScript and post to the Interaction API's answer endpoint
+with the step and its CSRF value. An interaction at another step is sent to
+its ceremony page (`303`); one that ended gets a page saying so (`410`). Both
+are sent with `Cache-Control: no-store`.
+
+Wrong codes count per account, across transactions, clients and IP
+addresses, and no successful password clears them: after the fifth in a row,
+each attempt waits longer (up to 15 minutes), and an attempt that comes early
+gets `429` without being checked. A wrong code after a right password mails
+the account a notice, at most once a day. At 100 in a row, and only while
+these pages are on and the account keeps an unused recovery code or another
+usable second factor, the authenticator app is turned off and the account is
+told. The next sign-in takes a recovery code in its place, then asks to set
+up the app again before it completes. No realm can switch these notices off.
+
 ## Pending authorization: why the login bounce carries a handle, not a URL
 
 Before qauth-labs/qauth#319, every surface that bounced an unauthenticated

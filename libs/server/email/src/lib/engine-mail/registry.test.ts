@@ -41,6 +41,9 @@ const EVERY_MAIL: readonly EngineMail[] = [
   { template: 'recovery_codes_regenerated' },
   { template: 'recovery_codes_failed' },
   { template: 'passkey_added' },
+  { template: 'totp_added' },
+  { template: 'second_factor_disabled' },
+  { template: 'second_factor_failed' },
 ];
 
 /** Every `href` and `src` of the HTML, and every URL the plain text spells out. */
@@ -173,6 +176,32 @@ describe('the engine mail registry (#637)', () => {
     expect(engineMailCarriesCode({ template: 'passkey_added' })).toBe(false);
     expect(isSwitchedOffByRealm('passkey_added', new Set(ENGINE_MAIL_NAMES))).toBe(false);
   });
+
+  it.each([
+    [
+      'totp_added',
+      'An authenticator app was added to your account',
+      'who can remove the authenticator app',
+    ],
+    [
+      'second_factor_disabled',
+      'Your authenticator app was turned off',
+      'the sign-in then asks you to set up',
+    ],
+    ['second_factor_failed', 'A wrong code was entered after your password', 'at most once a day'],
+  ] as const)(
+    'sends the TOTP notice %s, with no link and no switch (#653)',
+    async (template, subject, says) => {
+      const rendered = await renderEngineMail(
+        { template },
+        { baseUrl: BASE_URL, brand: DEFAULT_MAIL_BRAND }
+      );
+      expect(rendered.subject).toBe(subject);
+      expect(rendered.text.replace(/\s+/g, ' ')).toContain(says);
+      expect(engineMailCarriesCode({ template })).toBe(false);
+      expect(isSwitchedOffByRealm(template, new Set(ENGINE_MAIL_NAMES))).toBe(false);
+    }
+  );
 
   it.each([
     [9, '9 of your codes are left'],

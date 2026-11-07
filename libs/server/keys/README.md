@@ -411,13 +411,13 @@ What the signer guarantees:
   `SignerAccessDeniedError`. Every role may read public keys. A `signJws` grant names token types,
   so it names the key and the kind of token together.
 
-  | Role       | May call                                                                                                                                                                                                                                  |
-  | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `local`    | Everything. The caller inside the signer's own process, in a single deployment.                                                                                                                                                           |
-  | `web`      | `getCookieSecrets`, `signRequestObject`, `encrypt` of an `oid4vp-response-key:` context only. It signs no token and decrypts nothing.                                                                                                     |
-  | `api`      | `signJws` for `at+jwt`, `JWT` and `oauth-id-jag+jwt`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt` of a `realm_secrets:mail.`, `upstream-oidc:client-secret:`, `auth-method-plugin:` or `oid4vp-response-key:` context only. |
-  | `delivery` | `signJws` for `secevent+jwt` and `logout+jwt`, `signWebhook`, `decrypt` of a `delivery:` context only.                                                                                                                                    |
-  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                                                                                                                                                                   |
+  | Role       | May call                                                                                                                                                                                                                                                  |
+  | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `local`    | Everything. The caller inside the signer's own process, in a single deployment.                                                                                                                                                                           |
+  | `web`      | `getCookieSecrets`, `signRequestObject`, `encrypt` of an `oid4vp-response-key:` context only. It signs no token and decrypts nothing.                                                                                                                     |
+  | `api`      | `signJws` for `at+jwt`, `JWT` and `oauth-id-jag+jwt`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt` of a `realm_secrets:mail.`, `upstream-oidc:client-secret:`, `auth-method-plugin:`, `oid4vp-response-key:` or `totp-secret:` context only. |
+  | `delivery` | `signJws` for `secevent+jwt` and `logout+jwt`, `signWebhook`, `decrypt` of a `delivery:` context only.                                                                                                                                                    |
+  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                                                                                                                                                                                   |
 
   The public keys are `getVerificationKeys`, `getJwks` and `getUpstreamJwks`.
 
@@ -572,6 +572,7 @@ one of them. The contexts in use:
 | `upstream-oidc:client-secret:…` | An upstream provider's client secret.                                            | `api`    | `api`      |
 | `auth-method-plugin:…`          | An authentication-method plugin's secret.                                        | `api`    | `api`      |
 | `oid4vp-response-key:<kid>`     | An OID4VP request's ephemeral response-decryption key, until the wallet answers. | `web`    | `api`      |
+| `totp-secret:<realm>:<user>`    | An account's TOTP secret, which a code is checked against (#653).                | `api`    | `api`      |
 
 ## Testing
 

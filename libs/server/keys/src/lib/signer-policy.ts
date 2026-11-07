@@ -113,6 +113,17 @@ export const AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX = 'auth-method-plugin:';
  */
 export const OID4VP_RESPONSE_KEY_CONTEXT_PREFIX = 'oid4vp-response-key:';
 
+/**
+ * The `context` prefix of a TOTP secret (`totp-secret:<realm id>:<user id>`,
+ * #653): the shared secret of an account's authenticator app, sealed with the
+ * realm's `data_at_rest` key in `user_credentials` (ADR-017 Decision 8). It
+ * is reversible by design, as RFC 6238 needs it in clear to check a code.
+ * The sign-in engine seals a new one at its set-up and opens it for each
+ * code; it runs where the `api` role's mail sender does, so it calls as
+ * `api`, which may decrypt this prefix and no other role. The auth server
+ * builds its contexts from this constant (`totpSecretContext`).
+ */
+export const TOTP_SECRET_CONTEXT_PREFIX = 'totp-secret:';
 const NOTHING_ELSE = {
   signJws: [],
   signHybrid: false,
@@ -136,7 +147,7 @@ const NOTHING_ELSE = {
  * - `api` signs access tokens, ID tokens and ID-JAGs (`token_signing`, hybrid
  *   included), but no logout token, signs
  *   client assertions toward upstream providers (#547), and encrypts with the
- *   `data_at_rest` key. It decrypts only four kinds of stored secret: a
+ *   `data_at_rest` key. It decrypts only five kinds of stored secret: a
  *   realm's mail transport secret ({@link REALM_MAIL_SECRET_CONTEXT_PREFIX}),
  *   which its mail sender sends with (#529); an upstream provider's client
  *   secret ({@link UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX}), which the code
@@ -144,7 +155,9 @@ const NOTHING_ELSE = {
  *   secret member ({@link AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX}), which
  *   the plugin's context is built with (#600); and an OID4VP request state's
  *   ephemeral response key ({@link OID4VP_RESPONSE_KEY_CONTEXT_PREFIX}), which
- *   `/oid4vp/response` decrypts the wallet's response with (#546). Nothing
+ *   `/oid4vp/response` decrypts the wallet's response with (#546); and an
+ *   account's TOTP secret ({@link TOTP_SECRET_CONTEXT_PREFIX}), which the
+ *   sign-in engine checks a code with (#653). Nothing
  *   else of the role decrypts, and it signs no request object: the request is
  *   signed when the `web` role builds it. No granted prefix is the start of
  *   another role's, so no grant reaches another role's secrets.
@@ -195,6 +208,7 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
       UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
       AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
       OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
+      TOTP_SECRET_CONTEXT_PREFIX,
     ],
     ...PUBLIC_READS,
   },

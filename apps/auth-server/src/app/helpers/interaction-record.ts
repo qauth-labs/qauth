@@ -155,6 +155,28 @@ export type InteractionStep = z.infer<typeof interactionStepSchema>;
 /** The personal data of the current step: only the flow cookie's holder reads it. */
 export type InteractionPersonalData = z.infer<typeof stepDataSchema>;
 
+/** The TOTP set-up step (#653): its secret is shown, and never kept. */
+export const TOTP_SETUP_STEP = stepUrn('totp_setup');
+
+/** What a record never keeps of the set-up step's personal data: the secret and its URI. */
+const UNKEPT_TOTP_SETUP_DATA: ReadonlySet<string> = new Set(['secret', 'otpauth_uri']);
+
+/**
+ * What a record keeps of a step's personal data: all of it, but for the TOTP
+ * set-up's secret and its `otpauth://` URI (#653: the secret is never stored
+ * in clear). A read of the step's personal data builds them again from the
+ * ciphertext the sign-in transaction holds (`readInteractionPersonalData`).
+ */
+export function keptPersonalData(
+  step: Pick<InteractionStep, 'name'>,
+  personal: InteractionPersonalData
+): InteractionPersonalData {
+  if (step.name !== TOTP_SETUP_STEP) return personal;
+  return Object.fromEntries(
+    Object.entries(personal).filter(([key]) => !UNKEPT_TOTP_SETUP_DATA.has(key))
+  );
+}
+
 /**
  * The engine transaction: what has been proved in this interaction, and for
  * whom. One subject per transaction (ADR-017): once `userId` is set it never
@@ -390,10 +412,14 @@ export class InteractionRecordTooLargeError extends Error {
 /**
  * The record as stored, refused when its request is larger than
  * {@link INTERACTION_MAX_REQUEST_BYTES} or the whole is larger than
- * {@link INTERACTION_MAX_RECORD_BYTES}.
+ * {@link INTERACTION_MAX_RECORD_BYTES}. Its personal data is what
+ * {@link keptPersonalData} keeps: never a TOTP secret.
  */
 function serialize(record: InteractionRecord): string {
-  const parsed = interactionRecordSchema.parse(record);
+  const parsed = interactionRecordSchema.parse({
+    ...record,
+    personal: keptPersonalData(record.step, record.personal),
+  });
   if (Buffer.byteLength(JSON.stringify(parsed.request), 'utf8') > INTERACTION_MAX_REQUEST_BYTES) {
     throw new InteractionRequestTooLargeError();
   }

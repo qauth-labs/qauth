@@ -14,6 +14,7 @@ import {
   NOTHING_DUE,
   PASSWORD_LADDER_POLICY,
   RECOVERY_CODE_LADDER_POLICY,
+  TOTP_LADDER_POLICY,
 } from '@qauth-labs/server-sign-in-engine';
 
 /**
@@ -56,7 +57,12 @@ import {
  *   user rather than an identifier, so every identifier of the account,
  *   every transaction and every IP meet one counter. Its ladder knows no IP
  *   (`knownIpMs` 0), so its known-IP key is never written. A user part holds
- *   a `:`, which no HMAC does, so it never meets an identifier's key.
+ *   a `:`, which no HMAC does, so it never meets an identifier's key;
+ * - `sign-in-ladder:{<realm id>:user:<user id>}:totp`: the wrong TOTP codes
+ *   of an account (#653, ADR-017 Decision 7's second-factor row), keyed the
+ *   same way and with no known IP either. A binding ends its run
+ *   ({@link RedisFailureLadder.resetAccount}): the count was of the old
+ *   secret.
  *
  * The braces are a Redis Cluster hash tag: both keys of an account sit in one
  * slot, so one script may read the one and write the other.
@@ -108,6 +114,15 @@ export interface RedisFailureLadder extends LadderHook {
   reset(input: {
     readonly realmId: string;
     readonly identifierHmac: string;
+    readonly factor: LadderCounter;
+  }): Promise<void>;
+  /**
+   * End the run of a counter of the account (the recovery codes' or the
+   * TOTP's): a new TOTP's binding clears the old one's count (#653).
+   */
+  resetAccount(input: {
+    readonly realmId: string;
+    readonly userId: string;
     readonly factor: LadderCounter;
   }): Promise<void>;
 }
@@ -226,10 +241,14 @@ export function ladderAccountCounterKey(realmId: string, userId: string, factor:
 }
 
 /**
- * The counters keyed on the account rather than an identifier (#649): the
- * wrong recovery codes, shared by every identifier of the account.
+ * The counters keyed on the account rather than an identifier: the wrong
+ * recovery codes (#649) and TOTP codes (#653), shared by every identifier of
+ * the account.
  */
-const ACCOUNT_COUNTERS: ReadonlySet<LadderCounter> = new Set<LadderCounter>(['recovery_code']);
+const ACCOUNT_COUNTERS: ReadonlySet<LadderCounter> = new Set<LadderCounter>([
+  'recovery_code',
+  'totp',
+]);
 
 /** What a key part may hold: a realm id or an HMAC, so no caller can splice another key. */
 const KEY_PART = /^[A-Za-z0-9_-]{1,64}$/;
@@ -267,6 +286,7 @@ export function createRedisFailureLadder(
       password: PASSWORD_LADDER_POLICY,
       email_code: EMAIL_CODE_LADDER_POLICY,
       recovery_code: RECOVERY_CODE_LADDER_POLICY,
+      totp: TOTP_LADDER_POLICY,
     }),
   });
   for (const policy of Object.values(policies)) if (policy !== undefined) checkLadderPolicy(policy);
@@ -434,6 +454,10 @@ export function createRedisFailureLadder(
         timeoutMs,
         'reset'
       );
+    },
+    async resetAccount({ realmId, userId, factor }) {
+      const part = subjectPart(realmId, { userId }, factor);
+      await bounded(redis.del(ladderCounterKey(realmId, part, factor)), timeoutMs, 'reset');
     },
   };
   return Object.freeze(ladder);
