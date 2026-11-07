@@ -62,6 +62,9 @@ export const accessTokenClaimsSchema = z.looseObject({
   // no sign-in: an operation that asks for a fresh one reads both.
   auth_time: z.number().int().nonnegative().optional(),
   amr: z.array(z.string()).optional(),
+  // The browser session behind an account API token (#663). A malformed
+  // value is refused rather than read as no session.
+  sid: z.string().min(1).optional(),
   // Registered temporal/issuer claims.
   iat: z.number().optional(),
   exp: z.number().optional(),

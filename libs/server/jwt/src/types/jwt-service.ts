@@ -88,6 +88,20 @@ export interface SignAccessTokenPayload {
    * such as for a browser session created before the methods were stored.
    */
   amr?: readonly string[];
+  /**
+   * The browser session behind the token (ADR-019 Decision 3): the `sessions`
+   * row id its authorization code recorded, the value the ID token carries as
+   * `sid` (#549).
+   *
+   * Only the authorization code exchange passes it, and only on a token whose
+   * one audience is the account API (#663): the account API finds the session
+   * through it, since a recovery code that stood in for a lost factor adds no
+   * `amr` value, and it marks the caller's own session in its session list.
+   * Omitted (claim absent) on every other token, on a refreshed one (a
+   * refresh family records no session) and for a code no browser session
+   * backs. Never the Authority Tree's id, which is `tree_id` (ADR-014).
+   */
+  sid?: string;
 }
 
 /**

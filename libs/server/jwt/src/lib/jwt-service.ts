@@ -132,6 +132,11 @@ export function buildAccessTokenClaims(payload: SignAccessTokenPayload): {
   // server that asks for a fresh sign-in. The same values on every token of
   // one refresh family; absent when no sign-in backs the token.
   Object.assign(claims, authenticationClaims(payload));
+  // The browser session behind the token (#663): only the code exchange
+  // passes it, for the account API's token alone, as the ID token's `sid`.
+  if (typeof payload.sid === 'string' && payload.sid.length > 0) {
+    claims['sid'] = payload.sid;
+  }
 
   // `aud` claim: array → multi-audience, string → single, otherwise fall back
   // to the client_id (OAuth 2.1 RFC 8707 light-mode default).
@@ -473,5 +478,7 @@ export async function verifyAccessToken(
     // the unit `SignAccessTokenPayload.authTime` holds.
     ...(claims.auth_time === undefined ? {} : { authTime: claims.auth_time * 1000 }),
     ...(claims.amr === undefined ? {} : { amr: claims.amr }),
+    // The browser session behind an account API token (#663).
+    ...(claims.sid === undefined ? {} : { sid: claims.sid }),
   };
 }

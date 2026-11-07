@@ -164,6 +164,36 @@ describe('signAccessToken', () => {
     expect(decodeJwt(noMethods)['auth_time']).toBe(1_700_000_000);
     expect('amr' in decodeJwt(noMethods)).toBe(false);
   });
+
+  it('carries the browser session as sid when the caller passes one, and round-trips it (#663)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const sid = '0199f9a1-0000-7000-8000-0000000000ab';
+    const token = await signAccessToken(
+      { sub: 'user-account', clientId: 'account-console', authTime: 1_700_000_000_000, sid },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    expect(decodeJwt(token)['sid']).toBe(sid);
+    expect((await verifyAccessToken(token, publicKey)).sid).toBe(sid);
+  });
+
+  it.each([
+    ['no session id', {}],
+    ['an empty session id', { sid: '' }],
+  ])('omits sid for %s (#663)', async (_case, extra) => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const token = await signAccessToken(
+      { sub: 'user-plain', clientId: 'app-client', ...extra },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    expect(Object.hasOwn(decodeJwt(token), 'sid')).toBe(false);
+    expect(Object.hasOwn(await verifyAccessToken(token, publicKey), 'sid')).toBe(false);
+  });
 });
 
 describe('signIdToken', () => {
