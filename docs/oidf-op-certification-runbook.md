@@ -173,7 +173,7 @@ Confirm the returned `id_token` header decodes to `{"alg":"RS256","kid":"<the RS
 
 ## Step 4 — Register the conformance client
 
-Route `apps/auth-server/src/app/routes/oauth/register.ts`; body schema `apps/auth-server/src/app/schemas/oauth.ts:316-336`.
+Route `apps/auth-server/src/app/routes/oauth/register.ts`; body schema `apps/auth-server/src/app/schemas/oauth.ts:321-336`.
 
 **Facts that shape the client:**
 

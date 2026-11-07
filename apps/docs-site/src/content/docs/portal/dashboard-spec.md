@@ -418,7 +418,7 @@ is not. The developer-facing write paths do set it `true`
 `requirePkce: false`, as `getOrCreateSystemClient` wrote it until #631
 (`apps/auth-server/src/app/helpers/oauth-client.ts`), reached from first-party login
 (`apps/auth-server/src/app/routes/auth/login.ts:171`) and the authorize route
-(`apps/auth-server/src/app/routes/oauth/authorize.ts:347`). The column genuinely varies. The
+(`apps/auth-server/src/app/routes/oauth/authorize.ts:392`). The column genuinely varies. The
 conclusion is unchanged — it is unenforced either way — but the supporting claim has to be the one
 that is true.
 
@@ -795,7 +795,7 @@ public client identifiers and a coarse mode label, and nothing else
 (`libs/infra/db/src/lib/schema/audit.ts:44`, `:51`). The vector is **an open event namespace plus a
 millisecond timestamp.** Client-attributed rows already describe end-user authentication behaviour:
 `oauth.stepup.required` is written with `oauthClientId: client.id` at **six** sites — five in the
-authorize route (`apps/auth-server/src/app/routes/oauth/authorize.ts:309`,
+authorize route (`apps/auth-server/src/app/routes/oauth/authorize.ts:354`,
 `apps/auth-server/src/app/routes/oauth/authorize.ts:484`,
 `apps/auth-server/src/app/routes/oauth/authorize.ts:550`,
 `apps/auth-server/src/app/routes/oauth/authorize.ts:587`,
@@ -934,7 +934,7 @@ structural causes and their code anchors.
 1. **Rows whose `event` is not on the allowlist** — see
    [the classification table](#every-event-in-the-tree-classified). A policy choice.
 2. **Rows written before a client was resolved.** Many failure paths record `oauthClientId: null` —
-   for example `apps/auth-server/src/app/routes/oauth/authorize.ts:174` and
+   for example `apps/auth-server/src/app/routes/oauth/authorize.ts:189` and
    `apps/auth-server/src/app/routes/oauth/token.ts:195`. They have no client to be scoped to.
 3. **Rows belonging to a deleted client.** The FK is `set null` on delete
    (`libs/infra/db/src/lib/schema/audit.ts:30`), so deleting a client detaches its entire audit
