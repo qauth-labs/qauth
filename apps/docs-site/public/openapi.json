@@ -4234,6 +4234,11 @@
         ],
         "description": "List the active OAuth consents belonging to the authenticated user. Requires a developer Bearer access token. Drives the developer portal revocation screen (issue #366).",
         "deprecated": true,
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "x-qauth-stability": "stable",
         "responses": {
           "200": {
@@ -4358,6 +4363,11 @@
           }
         ],
         "deprecated": true,
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "x-qauth-stability": "stable",
         "responses": {
           "204": {

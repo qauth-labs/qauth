@@ -93,6 +93,8 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'stable',
         deprecated: true,
         'x-qauth-errors': [401, 403],
+        // A Bearer route: a 401 or 403 carries the RFC 6750 challenge (#933).
+        security: [{ bearerAuth: [] }],
         response: { 200: listResponseSchema },
       },
       config: { surface: 'api' },
@@ -121,6 +123,7 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'stable',
         deprecated: true,
         'x-qauth-errors': [400, 401, 403, 404],
+        security: [{ bearerAuth: [] }],
         params: z.object({ id: z.string().uuid() }),
         response: { 204: z.null() },
       },
