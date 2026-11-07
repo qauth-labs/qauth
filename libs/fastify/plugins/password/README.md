@@ -466,11 +466,13 @@ await fastify.register(passwordPlugin, {
 });
 
 // Since ADR-002 (#230) the `users` row holds no password hash — the secret
-// lives in `user_credentials.credential_data.password_hash` and is never
-// fetched here — so the user row is already safe to return. Kept as an
-// explicit seam in case you attach derived fields later.
-function sanitizeUser<T extends Record<string, unknown>>(user: T): T {
-  return user;
+// lives in `user_credentials.credential_data.password_hash`. `users.create`
+// returns the new account with its primary credential, whose
+// `credentialData` holds that hash, so the credential is dropped here; the
+// rest of the row is safe to return.
+function sanitizeUser<T extends Record<string, unknown>>(user: T): Omit<T, 'primaryCredential'> {
+  const { primaryCredential: _primaryCredential, ...account } = user;
+  return account;
 }
 
 // A decoy Argon2id hash of a random secret nobody holds, made by the
