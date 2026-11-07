@@ -39,8 +39,10 @@ function query(extra: Partial<AuthorizeQuery> = {}): AuthorizeQuery {
 /**
  * Passkey-first on the hosted pages (#651; ADR-017 Decision 4): a sign-in
  * with no `login_hint` starts at the engine's first round, which asks for a
- * discoverable passkey; one with a hint, a registration, or with passkey
- * sign-in off starts at the identifier step, as every sign-in did.
+ * discoverable passkey, and a registration with none at a registration's
+ * first round, which offers a passkey to create (#655); one with a hint, or
+ * with passkey sign-in off, starts at the identifier step, as every sign-in
+ * did.
  */
 describe('passkeyFirstStarter (#651)', () => {
   const advance = vi.fn();
@@ -79,9 +81,24 @@ describe('passkeyFirstStarter (#651)', () => {
       environment: 'production',
     });
     expect(context).not.toHaveProperty('freshSignIn');
+    expect(context).not.toHaveProperty('flow');
     // The transport can start a provider, so the round offers them.
     expect(typeof context.startUpstream).toBe('function');
     expect(roundEnvironment).toHaveBeenCalledWith(expect.anything(), REALM, 'client-1');
+  });
+
+  it('starts a registration with no hint at a registration’s first round (#655)', async () => {
+    const start = passkeyFirstStarter(fastify(true), tasks);
+
+    const first = await start(request, reply, REALM, query({ prompt: 'create' }));
+
+    expect(first).toEqual({ step: STEP, personal: {}, signInTransaction: TRANSACTION });
+    expect(advance).toHaveBeenCalledTimes(1);
+    const [transaction, answer, context] = advance.mock.calls[0];
+    expect(transaction).toBeNull();
+    expect(answer).toBeNull();
+    expect(context).toMatchObject({ realm: { id: REALM.id }, flow: 'register' });
+    expect(context).not.toHaveProperty('freshSignIn');
   });
 
   it('asks the round for a fresh sign-in under prompt=login or max_age', async () => {
@@ -105,8 +122,9 @@ describe('passkeyFirstStarter (#651)', () => {
 
   it.each([
     ['a login_hint', true, { login_hint: 'ada@example.com' }],
-    ['prompt=create', true, { prompt: 'create' }],
+    ['a login_hint at a registration', true, { prompt: 'create', login_hint: 'ada@example.com' }],
     ['passkey sign-in off', false, {}],
+    ['passkey sign-in off at a registration', false, { prompt: 'create' }],
   ] as const)('starts at the identifier step with %s, running no round', async (_, on, extra) => {
     const start = passkeyFirstStarter(fastify(on), tasks);
 

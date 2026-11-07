@@ -21,11 +21,14 @@ beforeEach(() => {
   emitUserEventMock.mockClear();
 });
 
-const { egressGet, startInteraction } = vi.hoisted(() => ({
+const { egressGet, startInteraction, passkeyStart } = vi.hoisted(() => ({
   egressGet: vi.fn(),
   // With INTERACTION_UI_ENABLED on, the interaction the endpoint starts
   // (#628); its record and flow cookie are `helpers/interaction.test.ts`'s.
   startInteraction: vi.fn(),
+  // The passkey-first start (#651, #655), while passkey sign-in is on; its
+  // round is `helpers/passkey-first.test.ts`'s.
+  passkeyStart: vi.fn(),
 }));
 
 vi.mock('../../../config/env', () => ({
@@ -60,6 +63,12 @@ vi.mock('../../helpers/interaction', async (importOriginal) => {
 // Mock only the network layer so CIMD resolution runs against a fixture doc.
 vi.mock('../../helpers/egress-get', () => ({ egressGet }));
 
+vi.mock('../../helpers/passkey-first', () => ({ passkeyFirstStarter: vi.fn(() => passkeyStart) }));
+vi.mock('../../helpers/background-tasks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/background-tasks')>();
+  return { ...actual, createBackgroundTasks: vi.fn(() => ({})) };
+});
+
 import { ceremonyPagePath, stepUrn } from '@qauth-labs/shared-interaction-contract';
 
 import { env } from '../../../config/env';
@@ -74,6 +83,7 @@ import authorizeRoute from './authorize';
 const INTERACTION_ID = 'i'.repeat(43);
 
 beforeEach(() => {
+  passkeyStart.mockReset();
   startInteraction.mockReset();
   startInteraction.mockImplementation(async () => ({
     id: INTERACTION_ID,
@@ -3364,9 +3374,14 @@ describe('GET /oauth/authorize — prompt=create (#640)', () => {
       readonly signUp?: boolean;
       readonly client?: Record<string, unknown>;
       readonly signedIn?: boolean;
+      /** Whether passkey sign-in is on (`WEBAUTHN_ENABLED`, #655). */
+      readonly passkeys?: boolean;
     } = {}
   ) {
     const { fastify, ctx, sessions } = makeFastify();
+    if (options.passkeys === true) {
+      (fastify as unknown as { passkeySignIn: boolean }).passkeySignIn = true;
+    }
     fastify.policyStore = testPolicyStore(
       {},
       { accounts: { allowSignUp: options.signUp ?? true } }
@@ -3439,6 +3454,46 @@ describe('GET /oauth/authorize — prompt=create (#640)', () => {
     expect(input.carriedSession).toBeUndefined();
     expect(fastify.repositories.realmUpstreamProviders.listByRealm).not.toHaveBeenCalled();
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('starts a registration at the engine’s first round while passkey sign-in is on (#655)', async () => {
+    const first = {
+      step: {
+        name: stepUrn('webauthn_create'),
+        params: {},
+        alternatives: [stepUrn('identifier')],
+      },
+      personal: {},
+      signInTransaction: { id: 'tx-655' },
+    };
+    passkeyStart.mockResolvedValueOnce(first);
+
+    const { state, fastify } = await create({ qauth_upstream: 'oidc_corp' }, { passkeys: true });
+
+    expect(state.redirected).toBe(ceremonyPagePath(INTERACTION_ID));
+    expect(passkeyStart).toHaveBeenCalledOnce();
+    const [, , realm, held] = passkeyStart.mock.calls[0] as unknown[];
+    expect(realm).toBe(REALM);
+    // The round sees the request the interaction holds: a registration's,
+    // without the routing parameter.
+    expect(held).toMatchObject({ prompt: 'create', client_id: BASE_QUERY.client_id });
+    expect(held).not.toHaveProperty('qauth_upstream');
+    const input = takeStartedInteraction();
+    expect(input.step).toEqual(first.step);
+    expect(input.personal).toEqual({});
+    expect(input.signInTransaction).toEqual(first.signInTransaction);
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('starts a registration at the identifier step when the first round offers none (#655)', async () => {
+    passkeyStart.mockResolvedValueOnce(null);
+
+    await create({ login_hint: 'new@example.com' }, { passkeys: true });
+
+    const input = takeStartedInteraction();
+    expect(input.step).toEqual({ name: stepUrn('identifier'), params: {}, alternatives: [] });
+    expect(input.personal).toEqual({ login_hint: 'new@example.com' });
+    expect(input.signInTransaction).toBeUndefined();
   });
 
   it('starts a registration for a signed-in browser too, carrying its session in and minting nothing', async () => {
