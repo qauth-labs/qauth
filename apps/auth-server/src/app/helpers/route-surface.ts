@@ -21,7 +21,8 @@
  *   carries one never reaches an endpoint host, since a `__Host-` cookie stays
  *   on the host that set it.
  * - `meta` — a document any caller may read about the realm or the server:
- *   discovery, JWKS, the passkey association files and the root greeting.
+ *   discovery, JWKS, the passkey association files, the root greeting, and
+ *   the stylesheet and fonts of the server-rendered pages (`/assets/ui/*`).
  *   Answers on the primary host and the endpoint hosts, like `api`.
  * - `none` — not routed by host. Answers on any host, with no realm resolved,
  *   and must carry no realm data. Only `/health` and `/ready` are `none`

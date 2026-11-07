@@ -598,18 +598,22 @@ describe('the reference proxy (#482)', () => {
       }
     );
 
-    // The names the auth server gives its own /ui pages' stylesheet and fonts
-    // (#472, apps/auth-server/src/app/helpers/ui-assets.ts): the same rule
-    // caches them, whichever upstream serves /ui/*.
+    // The stylesheet and fonts of the pages the auth server renders (#472,
+    // apps/auth-server/src/app/helpers/ui-assets.ts) are outside /ui/: they go
+    // to the auth server with every other path, and its Cache-Control passes
+    // through as it sent it (the stub's, here), never the /ui/* one.
     it.each([
-      '/ui/assets/qauth-1a2b3c4d.css',
-      '/ui/assets/dm-sans-latin-wght-normal-1a2b3c4d.woff2',
-    ])('lets a cache keep the auth server’s content-hashed %s', async (path) => {
-      if (!prerequisites) return;
+      '/assets/ui/qauth-1a2b3c4d.css',
+      '/assets/ui/dm-sans-latin-wght-normal-1a2b3c4d.woff2',
+    ])("sends the auth server's page asset %s to the auth server", async (path) => {
+      if (!prerequisites || stack === undefined) return;
       const response = await send(path);
 
-      expect(response.headers['x-stub-upstream']).toBe('ceremony-app');
-      expect(headerValues(response, 'cache-control')).toEqual([IMMUTABLE]);
+      expect(response.status).toBe(200);
+      expect(echoOf(response).upstream).toBe('auth-server');
+      expect(echoOf(response).url).toBe(path);
+      expect(headerValues(response, 'cache-control')).toEqual(['public, max-age=3600']);
+      expect(await logsOf(stack.containers.ceremonyApp)).not.toContain(response.marker);
     });
 
     it.each([

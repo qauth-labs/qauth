@@ -22,17 +22,33 @@ import { UI_PAGE_CSS } from './ui-page-css';
  * that is missing fails the boot, not a page. Each is served under a name that
  * carries the first 8 hex digits of its content's SHA-256, such as
  * `qauth-1a2b3c4d.css` or `dm-sans-latin-wght-normal-1a2b3c4d.woff2`, so a
- * name never changes meaning and `routes/ui/assets.ts` serves it with a year's
- * immutable cache. The names also match the rule the reference proxy caches
- * content-hashed files under `/ui/assets/` by (`deploy/reference/proxy`).
+ * name never changes meaning and `routes/assets/ui.ts` serves it with a year's
+ * immutable cache.
+ *
+ * The files are under `/assets/ui/`, outside `/ui/`: the pages that link them
+ * include some outside `/ui/` (`GET /auth/verify`, `GET /auth/pass`, the
+ * end-session pages, the authorization-error page), and ADR-019 Decision 5
+ * gives `/ui/*`, `/ui/assets/` with it, to the ceremony app. A reverse proxy
+ * that splits the two (`deploy/reference/proxy`) sends this path to the auth
+ * server with every other one, and passes its `Cache-Control` through.
  *
  * The `@font-face` rules are fontsource's own, with their `unicode-range` per
  * subset, so a browser fetches only the subsets a page's text needs. Only the
  * woff2 source of each is kept, renamed to its served file.
  */
 
-/** Where the files are served: `routes/ui/assets.ts` under the `/ui` prefix. */
-export const UI_ASSETS_PREFIX = '/ui/assets/';
+/** Where the files are served: `routes/assets/ui.ts` under the `/assets` prefix. */
+export const UI_ASSETS_PREFIX = '/assets/ui/';
+
+/**
+ * The shape of every served name, which the asset route checks a request
+ * against before it looks the name up: lower-case words and the content
+ * hash, then `.css` or `.woff2`. Bounded at {@link UI_ASSET_NAME_MAX_LENGTH}.
+ */
+export const UI_ASSET_NAME = /^[a-z0-9-]+\.(?:css|woff2)$/;
+
+/** The longest name the asset route accepts. */
+export const UI_ASSET_NAME_MAX_LENGTH = 96;
 
 /** One file of the set, as the asset route sends it. */
 export interface UiAsset {
@@ -105,6 +121,11 @@ function buildUiAssets(): { stylesheet: string; files: ReadonlyMap<string, UiAss
   ].join('\n');
   const stylesheet = `qauth-${contentHash(css)}.css`;
   files.set(stylesheet, { body: Buffer.from(css, 'utf8'), contentType: 'text/css; charset=utf-8' });
+  for (const name of files.keys()) {
+    if (!UI_ASSET_NAME.test(name) || name.length > UI_ASSET_NAME_MAX_LENGTH) {
+      throw new Error(`${name}: a /ui asset name the asset route would refuse`);
+    }
+  }
   return { stylesheet, files };
 }
 

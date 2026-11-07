@@ -15,7 +15,8 @@ import type { FastifyPluginAsync } from 'fastify';
  *   `GET /auth/verify` among them), `/consents` and wallet linking.
  * - `api` registers the routes a client or a server calls with its own
  *   credentials, and the documents about the realm: token, introspection,
- *   revocation, userinfo, registration, discovery, JWKS, the OID4VP endpoints
+ *   revocation, userinfo, registration, discovery, JWKS, the stylesheet and
+ *   fonts of the server-rendered pages (`/assets/ui/*`), the OID4VP endpoints
  *   a wallet calls, the account and developer APIs, the SSF transmitter and
  *   the legacy `/auth/*` routes (the `api` and `meta` surfaces).
  * - Every role registers `/health` and `/ready` (#500): each process answers
@@ -230,6 +231,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'users',
     ],
     load: () => import('./routes/account'),
+  },
+  {
+    module: 'assets/ui',
+    prefix: '/assets',
+    roles: ['api'],
+    plugins: [],
+    repositories: [],
+    load: () => import('./routes/assets/ui'),
   },
   {
     module: 'auth/link-wallet',
@@ -458,14 +467,6 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     plugins: ['jwt', 'ssf'],
     repositories: ['events', 'oauthClients', 'realms', 'ssfStreams'],
     load: () => import('./routes/ssf'),
-  },
-  {
-    module: 'ui/assets',
-    prefix: '/ui',
-    roles: ['web'],
-    plugins: [],
-    repositories: [],
-    load: () => import('./routes/ui/assets'),
   },
   {
     module: 'ui/consent',

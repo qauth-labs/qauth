@@ -2264,8 +2264,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The auth server's `/ui` pages use the design system** ([#472]). Sign-in,
   consent, the second-factor, passkey, recovery-code and wallet pages, e-mail
   verification and sign-out link one stylesheet: the tokens and fonts of
-  `libs/ui`, served by the auth server itself under `/ui/assets/` with
-  content-hashed names and a year's immutable cache. Square corners, flat
+  `libs/ui`, served by the auth server itself under `/assets/ui/` with
+  content-hashed names, a year's immutable cache and a rate-limit bucket of
+  their own. Square corners, flat
   cards, DM Sans and Instrument Serif, light and dark after the system's
   setting, and the teal focus outline on every control.
 - **A process whose only role is `delivery` skips the default realm's boot

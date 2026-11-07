@@ -4,7 +4,14 @@ import { join, relative } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { UI_ASSET_FILES, UI_STYLESHEET_URL, uiAsset, uiStylesheetLink } from './ui-assets';
+import {
+  UI_ASSET_FILES,
+  UI_ASSET_NAME,
+  UI_ASSET_NAME_MAX_LENGTH,
+  UI_STYLESHEET_URL,
+  uiAsset,
+  uiStylesheetLink,
+} from './ui-assets';
 import { UI_PAGE_CSS } from './ui-page-css';
 
 /**
@@ -31,7 +38,7 @@ describe('the /ui pages’ asset set (#472)', () => {
   it('names the stylesheet by its content and links it from every page’s head', () => {
     const [name] = UI_ASSET_FILES;
     expect(name).toMatch(/^qauth-[0-9a-f]{8}\.css$/);
-    expect(UI_STYLESHEET_URL).toBe(`/ui/assets/${name}`);
+    expect(UI_STYLESHEET_URL).toBe(`/assets/ui/${name}`);
     expect(name).toBe(`qauth-${hashOf(Buffer.from(stylesheet(), 'utf8'))}.css`);
     expect(uiAsset(name)?.contentType).toBe('text/css; charset=utf-8');
     expect(uiStylesheetLink().value).toBe(`<link rel="stylesheet" href="${UI_STYLESHEET_URL}" />`);
@@ -94,15 +101,18 @@ describe('the /ui pages’ asset set (#472)', () => {
     }
   );
 
-  it('names every file as the reference proxy caches content-hashed /ui assets', () => {
-    // Rule 6 of apps/docs-site/src/content/docs/operate/reverse-proxy.md, as
-    // deploy/reference/proxy/nginx.conf writes it; nginx's `\z` is `$` here,
-    // which without the `m` flag matches only at the end.
-    const cacheable =
-      /^\/ui\/assets\/(?:[A-Za-z0-9._-]+-)?[A-Za-z0-9_-]{8,}\.(?:js|mjs|css|woff2|woff|svg|png|jpg|jpeg|gif|webp|avif|ico)$/;
+  it('names every file in the shape the asset route accepts', () => {
     for (const name of UI_ASSET_FILES) {
-      expect(`/ui/assets/${name}`, name).toMatch(cacheable);
+      expect(name, name).toMatch(UI_ASSET_NAME);
+      expect(name.length, name).toBeLessThanOrEqual(UI_ASSET_NAME_MAX_LENGTH);
     }
+  });
+
+  it('serves them outside /ui/, which the ceremony app holds once a proxy splits the two', () => {
+    // ADR-019 Decision 5: `/ui/*`, `/ui/assets/` with it, goes to the ceremony
+    // app, and pages outside `/ui/` (GET /auth/verify) link these files too.
+    expect(UI_STYLESHEET_URL.startsWith('/assets/ui/')).toBe(true);
+    expect(UI_STYLESHEET_URL.startsWith('/ui/')).toBe(false);
   });
 });
 
