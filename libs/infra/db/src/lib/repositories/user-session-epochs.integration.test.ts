@@ -209,6 +209,32 @@ describe('session epochs and the password update (real Postgres, #642)', () => {
       expect(after?.disabledAt).toBe(SEEDED_AT);
     });
 
+    it('writes over the expected hash only, so a change checked before a reset writes nothing (#844)', async () => {
+      const { realmId, password } = await seedCredentials();
+
+      await expect(
+        credentials.updatePassword(
+          realmId,
+          password.id,
+          { password_hash: '$argon2id$stale', email_verified: true },
+          undefined,
+          { expectedPasswordHash: '$argon2id$replaced' }
+        )
+      ).resolves.toBeUndefined();
+      expect((await credentials.findById(realmId, password.id))?.credentialData).toMatchObject({
+        password_hash: '$argon2id$old',
+      });
+
+      const updated = await credentials.updatePassword(
+        realmId,
+        password.id,
+        { password_hash: '$argon2id$new', email_verified: true },
+        undefined,
+        { expectedPasswordHash: '$argon2id$old' }
+      );
+      expect(updated?.credentialData).toMatchObject({ password_hash: '$argon2id$new' });
+    });
+
     it("answers another realm's credential as none, and writes nothing", async () => {
       const { password } = await seedCredentials();
       const other = await seedUser('realm-password-other');
