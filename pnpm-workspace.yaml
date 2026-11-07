@@ -18,10 +18,11 @@ verifyDepsBeforeRun: warn
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
   # The owner's own package, provenance-signed (delurio-labs/delurio's release
-  # workflow at tag v0.5.2). It changes the generated page's diagram viewer only
-  # (opens fitted, pan and zoom; delurio-labs/delurio#14) and judges every graph
-  # as 0.5.1 did. Published 2026-11-03T10:45:21Z: remove after 2026-11-10T10:46Z.
-  - '@delurio/cli@0.5.2'
+  # workflow at tag v0.5.3). It changes only the flow.mmd its pages write: a `;`
+  # in a transition's label becomes a comma and "(never taken)" moves into the
+  # label, so Mermaid reads every diagram whole. It judges every graph as 0.5.2
+  # did. Published 2026-11-06T00:53:04Z: remove after 2026-11-13T00:54Z.
+  - '@delurio/cli@0.5.3'
   # The fix of aws/aws-sdk-js-v3#8393: @smithy/core 3.24.0–3.38.0 (all
   # deprecated) hand a custom logger sensitive values nested in lists and maps
   # unredacted. keys-aws-kms passes the KMS client no logger, so the tree was not
@@ -487,12 +488,13 @@ catalog:
   # accepts the exit names of graphs/README.md, snake_case or `<error>.<cause>`,
   # on final states only, and reads the `kind: domain` files of one directory as
   # one domain, so graphs/domain/*.yaml are checked too. 0.5.1 only made
-  # `explore` faster, and 0.5.2 only changes the diagram viewer of the pages it
-  # writes, both with the same findings, so no graph changes with them. It is
+  # `explore` faster, 0.5.2 only changes the diagram viewer of the pages it
+  # writes, and 0.5.3 only makes the flow.mmd of those pages read whole in
+  # Mermaid, all with the same findings, so no graph changes with them. It is
   # younger than minimumReleaseAge, so it is excluded above.
   # Provenance-signed; no advisory names it or its four dependencies (ajv 8.20.0,
   # ajv-formats 3.0.1, elkjs 0.12.0, yaml 2.9.1), all already in this tree.
-  '@delurio/cli': '0.5.2'
+  '@delurio/cli': '0.5.3'
   drizzle-kit: '^0.31.11'
   esbuild: '^0.28.2'
   # Runs only `@nx/dependency-checks` on package.json files now (the
