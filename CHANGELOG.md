@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-07
+
 ### Added
 
 - **The hosted account pages** ([#844], ADR-017 Decision 8, ADR-020 §3).
@@ -3813,6 +3815,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#638]) and the hosted account verification UI ([#644]) replace link
   verification.
 
+### Security
+
+- **Two security advisories are fixed in this release.** Every earlier
+  version is affected, from `v0.1.0` to `v0.2.0-rc.2`, and so is
+  `@qauth-labs/resource-guard` before `0.2.0`: upgrade to `v0.2.0`. What
+  each fix changes, and what an integration has to do about it, is under
+  **Changed** above.
+  - Medium: [GHSA-jw7g-6qgq-pw38](https://github.com/qauth-labs/qauth/security/advisories/GHSA-jw7g-6qgq-pw38) — `@qauth-labs/resource-guard` accepted a sender-constrained access token as a plain Bearer token
+  - Medium: [GHSA-85h3-2x3x-8gg3](https://github.com/qauth-labs/qauth/security/advisories/GHSA-85h3-2x3x-8gg3) — Wallet federation: a cross-device account link could bind a relayed credential to another account
+
 [#492]: https://github.com/qauth-labs/qauth/issues/492
 [#638]: https://github.com/qauth-labs/qauth/issues/638
 [#644]: https://github.com/qauth-labs/qauth/issues/644
@@ -4403,7 +4415,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/qauth-labs/qauth/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/qauth-labs/qauth/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/qauth-labs/qauth/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/qauth-labs/qauth/compare/v0.1.0...v0.1.1
