@@ -149,6 +149,17 @@ describe('argon2idDigest (#655)', () => {
     expect(first).not.toContain('k7qd2mvwx4rap6tn');
   });
 
+  it('is the Argon2id (version 0x13) digest of its parameters: the stored format', async () => {
+    // Computed apart from @node-rs/argon2, with OpenSSL's Argon2id through
+    // node:crypto (`argon2Sync('argon2id', { message, nonce: 16 bytes of 7,
+    // parallelism: 1, tagLength: 32, memory: 19456, passes: 2 })`). Stored
+    // lookup digests depend on it: a library or parameter change that moves
+    // it strands every stored set.
+    await expect(argon2idDigest('k7qd2mvwx4rap6tn', salt)).resolves.toBe(
+      `${ARGON2ID_DIGEST_PREFIX}uR0GrevStYlobNu70tsxESbZyLQYgjV13A-0CQ0ijiA`
+    );
+  });
+
   it('refuses a short salt', async () => {
     await expect(argon2idDigest('secret', new Uint8Array(8))).rejects.toThrow(RangeError);
   });
