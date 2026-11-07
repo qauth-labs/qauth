@@ -343,7 +343,13 @@ describe('POST /auth/login', () => {
         sub: user.id,
         clientId: 'system',
         aud: 'urn:qauth:aud:developer:v1-rc.0',
+        // Both developer API scopes, so the portal reads and writes (#933).
+        scope: 'qauth:developer:read qauth:developer:write',
       })
+    );
+    // The refresh token carries none: the system client's row lists none.
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: [] })
     );
 
     // RFC 6749 §5.1 — token response must not be cached
@@ -554,7 +560,7 @@ describe('POST /auth/login', () => {
     // canonical@example.com, credential external_sub says user@example.com,
     // and the verified attribute says attr@example.com. An access token
     // carries email only under the `email` scope, and this token is granted
-    // no scope, so none of them may appear.
+    // the developer API's scopes alone, so none of them may appear.
     (
       fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
     ).mockResolvedValue(
@@ -607,6 +613,7 @@ describe('POST /auth/login', () => {
         sub: 'user-1',
         clientId: 'system',
         aud: 'urn:qauth:aud:developer:v1-rc.0',
+        scope: 'qauth:developer:read qauth:developer:write',
         expiresInOverride: 900,
       }
     );

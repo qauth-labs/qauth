@@ -13,6 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { API_FAMILY_AUDIENCES } from '../../api-conventions/families';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { accountPoliciesOf } from '../../helpers/account-policies';
 import { withoutAdminAudience } from '../../helpers/admin-scopes';
@@ -22,7 +23,7 @@ import { resolveAudience } from '../../helpers/client-auth';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { issueAccessToken } from '../../helpers/hybrid-token';
-import { getOrCreateSystemClient } from '../../helpers/oauth-client';
+import { getOrCreateSystemClient, SYSTEM_CLIENT_SCOPES } from '../../helpers/oauth-client';
 import { ladderEndUserIp } from '../../helpers/password-attempts';
 import { tokenLifetimesOf } from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
@@ -254,15 +255,21 @@ export default async function (fastify: FastifyInstance) {
 
         // Generate access token (JWT) using JWT plugin. No `email` /
         // `email_verified`: an access token carries them only under the
-        // `email` scope, and this first-party token is granted no scope
+        // `email` scope, which this first-party token is never granted
         // (ANT-2026-2O0T72HY). Nothing that accepts it reads them; the
         // session below keeps the sign-in address for display.
+        // Never the admin API's audience: this sign-in checks no admin
+        // grant (#510), whatever the system client's row lists.
+        const aud = withoutAdminAudience(resolveAudience(systemClient), systemClient.clientId);
         const accessToken = await issueAccessToken(fastify, realm, {
           sub: user.id,
           clientId: systemClient.clientId,
-          // Never the admin API's audience: this sign-in checks no admin
-          // grant (#510), whatever the system client's row lists.
-          aud: withoutAdminAudience(resolveAudience(systemClient), systemClient.clientId),
+          aud,
+          // The developer API's two scopes (#933), so the portal reads and
+          // writes through it; only on a token for that API alone.
+          ...(aud === API_FAMILY_AUDIENCES.developer
+            ? { scope: SYSTEM_CLIENT_SCOPES.join(' ') }
+            : {}),
           // Signed with the lifetime `expires_in` names.
           expiresInOverride: accessTokenExpiresIn,
         });
@@ -298,6 +305,9 @@ export default async function (fastify: FastifyInstance) {
           authTime: null,
           amr: null,
           expiresAt: refreshExpiresAt,
+          // No scope, not even the developer API's (#933): the system client's
+          // row lists none, so a refresh could not carry them, and the portal
+          // never redeems this token (`SYSTEM_CLIENT_SCOPES`).
           scopes: [],
         });
 
