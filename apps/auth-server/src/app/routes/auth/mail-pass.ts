@@ -8,6 +8,7 @@ import { html, render } from '../../helpers/html';
 import { startMailedPassInteraction } from '../../helpers/interaction';
 import type { InteractionStep } from '../../helpers/interaction-record';
 import { requestRealm } from '../../helpers/request-realm';
+import { uiStylesheetLink } from '../../helpers/ui-assets';
 
 /**
  * The landing of a mailed pass link: `GET /auth/pass?pass=…` (#637, ADR-017
@@ -57,9 +58,10 @@ function sendInvalidPassPage(reply: FastifyReply): FastifyReply {
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
           <title>${title} — QAuth</title>
+          ${uiStylesheetLink()}
         </head>
         <body>
-          <main>
+          <main class="card">
             <h1>${title}</h1>
             <p>
               The link has expired, has already been used, or is incomplete. You can still reset

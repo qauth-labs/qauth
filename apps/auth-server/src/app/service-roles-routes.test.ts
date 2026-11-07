@@ -172,6 +172,8 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   'POST /ui/account/sessions/end-all',
   'POST /ui/account/linked-accounts/link',
   'POST /ui/account/linked-accounts/:linkedAccountId/unlink',
+  // The server-rendered pages' stylesheet and fonts (#472).
+  'GET /assets/ui/:file',
 ];
 
 /**

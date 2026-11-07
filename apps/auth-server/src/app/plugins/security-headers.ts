@@ -12,10 +12,13 @@ import { env } from '../../config/env';
  *
  * ## CSP design
  *
- * The server-rendered login/consent pages (issues #150, #112) ship inline
- * `<style>` blocks. Rather than weaken the policy with `'unsafe-inline'`,
- * `@fastify/helmet`'s `enableCSPNonces` generates a fresh per-request nonce
- * exposed on `reply.cspNonce.style`; the page renderers stamp it onto each
+ * The server-rendered pages (issues #150, #112) link one stylesheet, the
+ * design system's, and load its fonts, all same-origin files under
+ * `/assets/ui/` (#472) that `style-src 'self'` and `font-src 'self'` allow.
+ * A page that adds rules of its own ships an inline `<style>` block. Rather
+ * than weaken the policy with `'unsafe-inline'`, `@fastify/helmet`'s
+ * `enableCSPNonces` generates a fresh per-request nonce exposed on
+ * `reply.cspNonce.style`; the page renderers stamp it onto each
  * `<style nonce>` tag. `script-src` stays `'self'` plus its own per-request
  * nonce, so an injected `<script>` (reflected or stored XSS) is refused by the
  * browser: it cannot carry the nonce. Exactly one page emits a script — the

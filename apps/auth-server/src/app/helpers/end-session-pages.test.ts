@@ -3,6 +3,7 @@ import { stepUrn } from '@qauth-labs/shared-interaction-contract';
 import { describe, expect, it } from 'vitest';
 
 import { endSessionPage, formActionSourceOf } from './end-session-pages';
+import { UI_STYLESHEET_URL } from './ui-assets';
 
 /**
  * The pages of RP-initiated logout (#675): what they show, what they escape,
@@ -12,6 +13,11 @@ import { endSessionPage, formActionSourceOf } from './end-session-pages';
 
 const NONCE = 'n0nce';
 const LOGOUT_CONFIRM = stepUrn('logout_confirm');
+
+/** Every `href` of a page, in order: what it links or loads. */
+function hrefsOf(page: string): string[] {
+  return [...page.matchAll(/href="([^"]*)"/g)].map(([, href]) => href);
+}
 
 function confirmPage(identifier: string, client?: ClientDisplay): string {
   return endSessionPage(
@@ -79,7 +85,9 @@ describe('the refusal page (#675)', () => {
     expect(page).toContain('This sign-out request is not valid');
     expect(page).toContain('Reference: req-&lt;1&gt;');
     expect(page).not.toContain('<form');
-    expect(page).not.toContain('href=');
+    // Nothing links or loads anything but the /ui stylesheet, and nothing redirects.
+    expect(hrefsOf(page)).toEqual([UI_STYLESHEET_URL]);
+    expect(page).not.toMatch(/http-equiv/i);
   });
 });
 
@@ -114,7 +122,8 @@ describe('the signed-out page of a client the operator did not set up (#675)', (
       NONCE
     );
     expect(page).toContain('com.example.app');
-    expect(page).not.toContain('href=');
+    expect(hrefsOf(page)).toEqual([UI_STYLESHEET_URL]);
+    expect(page).not.toMatch(/http-equiv/i);
   });
 });
 

@@ -12,6 +12,7 @@ import {
   hiddenField,
 } from '../../../testing/email-verification-app';
 import { LOGIN_CSRF_COOKIE_NAME } from '../../helpers/session-cookie';
+import { UI_STYLESHEET_URL } from '../../helpers/ui-assets';
 
 /**
  * GET /auth/verify — the page the verification mail links to (42c4d1e4 left
@@ -65,10 +66,11 @@ describe('GET /auth/verify (the emailed link)', () => {
     expect(csp).toContain("form-action 'self'");
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).not.toContain("'unsafe-inline'");
-    // The page's one inline <style> carries this response's nonce.
-    const nonce = /style-src [^;]*'nonce-([^']+)'/.exec(csp)?.[1];
-    expect(nonce).toBeTruthy();
-    expect(res.body).toContain(`<style nonce="${nonce}">`);
+    // The page's styles are the /ui stylesheet (#472), a same-origin file the
+    // policy's `style-src 'self'` allows; it has no inline style of its own.
+    expect(csp).toMatch(/style-src 'self'/);
+    expect(res.body).toContain(`<link rel="stylesheet" href="${UI_STYLESHEET_URL}" />`);
+    expect(res.body).not.toContain('<style');
   });
 
   it('sets the signed login-CSRF cookie and puts its token in the form', async () => {

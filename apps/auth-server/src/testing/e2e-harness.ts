@@ -1385,9 +1385,9 @@ export function decodeHtmlEntities(value: string): string {
  * A page with its per-request CSP nonces blanked, for byte-comparing two
  * renders of what must be ONE refusal page (#405).
  *
- * Every server-rendered page here carries `nonce="…"` on its `<style>` and
- * `<script>`, minted per request; two renders of the same page therefore
- * differ in exactly those values and nothing else. Comparing with the nonces
+ * A server-rendered page carries `nonce="…"` on each inline `<style>` and
+ * `<script>` it has, minted per request; two renders of the same page
+ * therefore differ in exactly those values and nothing else. Comparing with the nonces
  * blanked is the strongest statement the wire allows: identical markup,
  * identical copy, identical links.
  */

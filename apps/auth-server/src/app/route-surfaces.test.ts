@@ -15,7 +15,8 @@
  * as they register. The CORS checks (#930) send requests, which the app
  * answers before anything reaches either: a preflight from an `onRequest`
  * hook, and a call to the authorization or token endpoint from its schema
- * validation.
+ * validation. The pages' stylesheet and fonts (#472), served from memory, are
+ * fetched through the app to check the headers every answer carries.
  */
 import { generateKeyPairSync } from 'node:crypto';
 
@@ -29,6 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { RealmHostLookup, RealmHostMatch } from './helpers/realm-host-cache';
 import { routeSurfaceProblem } from './helpers/route-surface';
+import { UI_ASSET_FILES, UI_STYLESHEET_URL } from './helpers/ui-assets';
 
 /** The origin `CORS_ORIGIN` lists: a browser-based application's (#930). */
 const SPA_ORIGIN = 'https://spa.example.com';
@@ -308,6 +310,25 @@ describe('no CORS on the browser surface of the assembled app (#930)', () => {
       }
     }
   });
+});
+
+describe('the server-rendered pages’ stylesheet and fonts (#472)', () => {
+  it.each([UI_STYLESHEET_URL, `/assets/ui/${UI_ASSET_FILES[1]}`])(
+    'serves %s for its own origin only, never sniffed, cacheable for a year',
+    async (url) => {
+      const response = await booted().inject({
+        method: 'GET',
+        url,
+        headers: { origin: 'https://elsewhere.example' },
+      });
+
+      expect(response.statusCode, url).toBe(200);
+      expect(response.headers['x-content-type-options'], url).toBe('nosniff');
+      expect(response.headers['cross-origin-resource-policy'], url).toBe('same-origin');
+      expect(response.headers['cache-control'], url).toBe('public, max-age=31536000, immutable');
+      expect(response.headers['access-control-allow-origin'], url).toBeUndefined();
+    }
+  );
 });
 
 describe('the authorization endpoint answers no CORS (OAuth 2.1 draft-17 §3.1)', () => {
