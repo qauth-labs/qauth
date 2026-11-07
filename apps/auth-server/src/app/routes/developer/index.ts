@@ -9,7 +9,7 @@ import { registerDeveloperConsentRoutes } from './consents';
  * THE DEVELOPER API, `/developer/v1-rc.0` (ADR-019 Decision 7, #524).
  *
  * A developer manages their OAuth clients, the clients' static API keys and,
- * until the account console takes them over (v0.3), their own consents. Every
+ * until the account console takes them over (v0.4), their own consents. Every
  * route follows the API conventions (`reference/api-conventions.md`, #506):
  * RFC 3339 times, cursor paging on lists, `ETag` and `If-Match` on updates,
  * problem documents for errors.

@@ -30,7 +30,7 @@ import { requestRealm } from './request-realm';
  * a token for one family never reaches the other's.
  *
  * - The account API, `/account/v1-rc.0/consents`, is the account console's
- *   (v0.3), which calls it from its backend with a Bearer or DPoP token for
+ *   (v0.4), which calls it from its backend with a Bearer or DPoP token for
  *   the account audience.
  * - The developer API, `/developer/v1-rc.0/consents`, is the developer
  *   portal's until the consents page moves to the account console.
