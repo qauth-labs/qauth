@@ -126,7 +126,12 @@ const LITERAL_STYLE =
 
 /** The inline `<style nonce="…">` blocks of a source file's pages. */
 function inlineStyles(source: string): string[] {
-  return [...source.matchAll(/<style nonce="[^"]*">([\s\S]*?)<\/style>/g)].map(([, css]) => css);
+  // Every <style> element carrying a nonce, whatever its other attributes and their order, so a
+  // page cannot slip a block past the guard by writing `<style id="x" nonce="…">`. A block without
+  // a nonce never applies under the pages' CSP; prose that names `<style>` is not read.
+  return [...source.matchAll(/<style\b[^>]*\bnonce=[^>]*>([\s\S]*?)<\/style>/gi)].map(
+    ([, css]) => css
+  );
 }
 
 /** The app's non-test sources. */
@@ -158,6 +163,20 @@ describe('no page draws a colour of its own (#472)', () => {
     expect(pages.map((file) => relative(APP_DIR, file))).toEqual(
       expect.arrayContaining([join('routes', 'ui', 'login.ts'), join('routes', 'ui', 'consent.ts')])
     );
+  });
+
+  it('reads every nonced <style> block, whatever its attributes and their order', () => {
+    const blocks = inlineStyles(
+      '<style nonce="n">a { color: var(--foreground); }</style>' +
+        '<style id="x" nonce="n" media="all">b { color: #123456; }</style>' +
+        '<STYLE NONCE="n">c { color: red; }</STYLE>' +
+        ' one inline `<style>` per page (#113) '
+    );
+    expect(blocks).toEqual([
+      'a { color: var(--foreground); }',
+      'b { color: #123456; }',
+      'c { color: red; }',
+    ]);
   });
 
   it('keeps the shared rules on tokens, but for the QR code box’s white', () => {
