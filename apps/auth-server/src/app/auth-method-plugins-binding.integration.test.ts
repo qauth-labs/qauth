@@ -77,7 +77,8 @@ interface Deployment {
   readonly booted: BootedAuthServer;
   readonly app: FastifyInstance;
   readonly admin: FastifyInstance;
-  readonly factor: TestApprovalFactor;
+  /** The test factor: `factor` for the engine, `answer` for its challenge. */
+  readonly approvals: TestApprovalFactor;
   readonly engine: typeof import('./admin/approvals/engine');
   readonly runtime: typeof import('./helpers/auth-method-plugins');
 }
@@ -130,7 +131,7 @@ describe("a realm's plugin state is bound to the plugin that wrote it (#949, rea
       booted,
       app: booted.app,
       admin: booted.admin,
-      factor: createTestApprovalFactor(),
+      approvals: createTestApprovalFactor(),
       engine: await import('./admin/approvals/engine'),
       runtime: await import('./helpers/auth-method-plugins'),
     };
@@ -212,10 +213,10 @@ describe("a realm's plugin state is bound to the plugin that wrote it (#949, rea
         approver: who.approver,
         sessionIssuedAtMs: Date.now(),
       };
-      const { challenge } = await at.engine.startApproval(at.app, at.factor, decision);
-      await at.engine.completeApproval(at.app, at.factor, {
+      const { challenge } = await at.engine.startApproval(at.app, at.approvals.factor, decision);
+      await at.engine.completeApproval(at.app, at.approvals.factor, {
         ...decision,
-        response: at.factor.answer(challenge, who.approver),
+        response: at.approvals.answer(challenge, who.approver),
       });
       return send('POST', pluginPath(suffix), body, { 'qauth-approval': approvalId });
     }
