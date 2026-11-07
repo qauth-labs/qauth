@@ -674,6 +674,20 @@ describe('linking an upstream account to an existing one (#670, real containers)
         accountContract.SECURITY_LOG_KINDS.account_linked.sources.map((source) => source.event)
       ).toContain('user.upstream_linked');
       await expectMail(EMAIL, 'upstream_linked');
+      // The account API lists it.
+      const listed = await linkedAccounts(
+        'GET',
+        await accountToken(ownerId, { authTime: signedInAgo(10), amr: ['pwd'] })
+      );
+      expect(listed.statusCode, listed.body).toBe(200);
+      expect(listed.json().items).toEqual([
+        {
+          id: credential?.id,
+          provider: TYPE,
+          providerName: PROVIDER_NAME,
+          createdAt: expect.any(String),
+        },
+      ]);
 
       // The provider now signs the owner in.
       const again = new CookieJar();
@@ -723,6 +737,28 @@ describe('linking an upstream account to an existing one (#670, real containers)
       expect((await upstreamCredentialOf())?.userId).toBe(ownerId);
       expect((await events(LINKED)).map((event) => event.subject_id)).toEqual([ownerId]);
       await expectMail(EMAIL, 'upstream_linked');
+    });
+
+    it('signs in without a link when the person comes back from the provider and signs in another way', async () => {
+      await registerPasswordAccount(app(), EMAIL);
+      const jar = new CookieJar();
+      const started = await startProvider(jar, { qauth_link: TYPE });
+      const cancelled = await callbackAt(jar, {
+        error: 'access_denied',
+        state: started.providerRequest.searchParams.get('state') ?? '',
+        iss: provider.issuer,
+      });
+      expect(cancelled.statusCode, withServerLog(cancelled.body)).toBe(200);
+
+      // The way back is the interaction's first step: an ordinary sign-in,
+      // which the provider never proved an identity for.
+      const done = await signInWithPassword(jar, started.interactionId);
+
+      expect(done.statusCode, withServerLog(done.body)).toBe(303);
+      codeAt(done.headers['location']);
+      expect(await upstreamCredentials()).toBe(0);
+      expect(await events(LINKED)).toEqual([]);
+      expect(await events(LINK_FAILED)).toEqual([]);
     });
 
     it('links nothing when the sign-in fails: a wrong password leaves the identity free', async () => {
