@@ -8,7 +8,6 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { readPage } from '../api-conventions/cursor';
 import type { Page } from '../api-conventions/paging';
-import { accountCredentialRefusal } from './account-validity';
 import type { EngineMailer, MailRealm } from './engine-mail';
 import type { RealmRow } from './request-realm';
 import { upstreamProviderCatalog } from './upstream-providers';
@@ -116,7 +115,9 @@ export async function linkUpstreamIdentity(
         return refused('account_unavailable');
       }
       const user = await repositories.users.findById(realm.id, userId, tx);
-      if (user === undefined || accountCredentialRefusal(user, undefined) !== null) {
+      // The sign-in that just finished proved the account after any earlier
+      // disablement: only one disabled since refuses the link.
+      if (user === undefined || !user.enabled) {
         return refused('account_unavailable');
       }
       const held = await repositories.userCredentials.findByRealmProviderSub(
