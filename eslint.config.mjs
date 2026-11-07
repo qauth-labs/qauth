@@ -128,6 +128,13 @@ function dependencyChecksConfigs() {
       // Starlight's `customCss`, as strings the rule does not read as imports.
       ignoredDependencies: ['@astrojs/markdown-remark', '@qauth-labs/ui'],
     },
+    {
+      files: ['apps/auth-server/package.json'],
+      // @qauth-labs/ui is the design system: helpers/ui-assets.ts reads its
+      // stylesheets and fonts as files (require.resolve), which the rule does
+      // not read as imports.
+      ignoredDependencies: ['@qauth-labs/ui'],
+    },
   ];
 
   // A later block replaces an earlier one's rule options for the files they

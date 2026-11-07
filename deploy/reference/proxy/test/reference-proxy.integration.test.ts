@@ -598,6 +598,20 @@ describe('the reference proxy (#482)', () => {
       }
     );
 
+    // The names the auth server gives its own /ui pages' stylesheet and fonts
+    // (#472, apps/auth-server/src/app/helpers/ui-assets.ts): the same rule
+    // caches them, whichever upstream serves /ui/*.
+    it.each([
+      '/ui/assets/qauth-1a2b3c4d.css',
+      '/ui/assets/dm-sans-latin-wght-normal-1a2b3c4d.woff2',
+    ])('lets a cache keep the auth server’s content-hashed %s', async (path) => {
+      if (!prerequisites) return;
+      const response = await send(path);
+
+      expect(response.headers['x-stub-upstream']).toBe('ceremony-app');
+      expect(headerValues(response, 'cache-control')).toEqual([IMMUTABLE]);
+    });
+
     it.each([
       ['a POST', '/ui/assets/index-BxY2abcd.js', { method: 'POST' }],
       ['a 404', '/ui/assets/index-BxY2abcd.js', { headers: { 'x-stub-status': '404' } }],

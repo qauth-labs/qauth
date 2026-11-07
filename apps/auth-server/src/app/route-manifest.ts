@@ -460,6 +460,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     load: () => import('./routes/ssf'),
   },
   {
+    module: 'ui/assets',
+    prefix: '/ui',
+    roles: ['web'],
+    plugins: [],
+    repositories: [],
+    load: () => import('./routes/ui/assets'),
+  },
+  {
     module: 'ui/consent',
     prefix: '/ui',
     roles: ['web'],
