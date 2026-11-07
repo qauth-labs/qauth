@@ -576,7 +576,12 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         expect(await users(app)).toBe(usersBefore + 1);
         expect(await credentialsOf(app, TYPE)).toBe(1);
         const credential = await credentialOf(app, server.realmId());
-        expect(credential).toMatchObject({ providerType: TYPE, externalSub: PERSON.sub });
+        // The credential that created the account is its primary identity (#846).
+        expect(credential).toMatchObject({
+          providerType: TYPE,
+          externalSub: PERSON.sub,
+          isPrimary: true,
+        });
         expect(credential.credentialData).toEqual({
           kind: 'upstream',
           iss: provider.issuer,

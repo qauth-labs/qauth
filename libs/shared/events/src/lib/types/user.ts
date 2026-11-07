@@ -492,6 +492,63 @@ export const userRecoveryCodesRegenerated = defineEventType({
     'CAEP 1.0 `credential-change` lists no credential type for a set of recovery codes, and none is agreed with receivers yet.',
 });
 
+/**
+ * What QAuth refused an account because it is not a verified owner (ADR-015
+ * Decision 8, #846). `client_registration` is the only one so far; the agent
+ * routes of the Authority Tree (#721) add theirs.
+ */
+export const AGENT_OWNERSHIP_ACTIONS = ['client_registration'] as const;
+
+/**
+ * Why an account is not a verified owner (`VERIFIED_OWNER_REFUSAL_REASONS` of
+ * `@qauth-labs/server-federation`, which holds the rule).
+ */
+export const AGENT_OWNERSHIP_REFUSAL_REASONS = [
+  'no_primary_identity',
+  'address_unverified',
+  'passkey_unverified',
+  'upstream_unverified',
+  'unproved_type',
+] as const;
+
+/** The kind of an account's primary identity, or `none`. */
+export const PRIMARY_IDENTITIES = [
+  'password',
+  'passkey',
+  'wallet',
+  'upstream',
+  'other',
+  'none',
+] as const;
+
+/**
+ * An account refused the ownership of an agent (ADR-015 Decision 8, #846):
+ * its primary identity, the credential that created it, is not proved. The
+ * subject is that account.
+ */
+export const userAgentOwnershipRefused = defineEventType({
+  name: 'user.agent_ownership_refused',
+  version: 1,
+  rc: 0,
+  description:
+    'QAuth refused to make an account the owner of an agent, because the account is not verified: its primary identity, the credential that created it, is not proved (ADR-015 Decision 8). A password account proves it with the code mailed to its address, a passkey account with a registration that checked user verification, a wallet account with the presentation QAuth verified, and an upstream account with the sign-in that created it while the provider’s verified switch is on. A credential added later never counts, and the setting that makes password sign-in ask for a confirmed address does not change the rule.',
+  category: 'user',
+  severity: 'warning',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    action: extensibleEnum(AGENT_OWNERSHIP_ACTIONS).describe(
+      '`client_registration`: an RFC 7591 dynamic registration of an agent client (`is_agent: true`) with the account’s developer access token, which would have made the account the client’s owner. The set may grow in a minor release.'
+    ),
+    reason: extensibleEnum(AGENT_OWNERSHIP_REFUSAL_REASONS).describe(
+      '`no_primary_identity`: the account has no primary credential (it was removed). `address_unverified`: a password account whose address was never confirmed. `passkey_unverified`: a passkey whose registration did not check user verification. `upstream_unverified`: an upstream account whose provider’s verified switch is off, or that the realm no longer offers. `unproved_type`: a primary credential of a type with no proof, or whose stored data is malformed. The set may grow in a minor release.'
+    ),
+    primaryIdentity: extensibleEnum(PRIMARY_IDENTITIES).describe(
+      'The kind of the account’s primary identity: `password`, `passkey`, `wallet`, `upstream`, `other`, or `none` when it has none. The set may grow in a minor release.'
+    ),
+  }),
+});
+
 export const USER_EVENT_TYPES = [
   userSignedIn,
   userSignInFailed,
@@ -515,4 +572,5 @@ export const USER_EVENT_TYPES = [
   userCredentialRemoved,
   userPasskeyRenamed,
   userRecoveryCodesRegenerated,
+  userAgentOwnershipRefused,
 ] as const;

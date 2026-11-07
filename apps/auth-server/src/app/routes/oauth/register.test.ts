@@ -21,6 +21,7 @@ const emitUserEventMock = vi.mocked(emitUserEvent);
 
 beforeEach(() => {
   emitUserEventMock.mockClear();
+  assertOwner.mockClear();
 });
 
 vi.mock('../../../config/env', () => ({
@@ -45,6 +46,14 @@ const { resolveDeveloperId } = vi.hoisted(() => ({
 vi.mock('../../helpers/registration-attribution', () => ({
   resolveRegistrationDeveloperId: resolveDeveloperId,
 }));
+
+// The verified-owner rule has its own tests (helpers/verified-owner.test.ts,
+// verified-owner.integration.test.ts). Here it is a seam: every owner
+// verified unless a test refuses one.
+const { assertOwner } = vi.hoisted(() => ({
+  assertOwner: vi.fn(async (): Promise<void> => undefined),
+}));
+vi.mock('../../helpers/verified-owner', () => ({ assertVerifiedOwner: assertOwner }));
 
 import { env } from '../../../config/env';
 import { dynamicClientRegistrationRequestSchema } from '../../schemas/oauth';
@@ -1004,6 +1013,77 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
       await register(fastify, ctx);
       expect(fastify.repositories.oauthClients.countByDeveloper).not.toHaveBeenCalled();
       expect(state.createdClients).toHaveLength(1);
+    });
+  });
+
+  describe('an agent owner is a verified account (ADR-015 Decision 8, #846)', () => {
+    const DEVELOPER = '0190a000-0000-7000-8000-00000000000b';
+
+    async function register(fastify: FastifyInstance, ctx: TestContext, isAgent: boolean) {
+      await registerRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+      const request = {
+        body: {
+          client_name: 'Agent',
+          redirect_uris: ['https://agent.example/cb'],
+          token_endpoint_auth_method: 'client_secret_basic',
+          ...(isAgent ? { is_agent: true } : {}),
+        },
+        ip: '127.0.0.1',
+        headers: {},
+      };
+      return { request, result: handler(request, createReply().reply) };
+    }
+
+    it("checks the developer's account of an attributed agent client, in the request's realm", async () => {
+      const { fastify, ctx, state } = createFastifyStub();
+      resolveDeveloperId.mockResolvedValueOnce(DEVELOPER);
+
+      const { request, result } = await register(fastify, ctx, true);
+      await result;
+      expect(assertOwner).toHaveBeenCalledExactlyOnceWith(
+        request,
+        { realmId: 'realm-1', userId: DEVELOPER },
+        'client_registration'
+      );
+      expect(state.createdClients[0]).toMatchObject({ isAgent: true, developerId: DEVELOPER });
+    });
+
+    it('writes nothing for an owner the rule refuses', async () => {
+      const { fastify, ctx, state } = createFastifyStub();
+      resolveDeveloperId.mockResolvedValueOnce(DEVELOPER);
+      assertOwner.mockRejectedValueOnce(
+        new ForbiddenError('Only a verified account can own an agent')
+      );
+
+      const { result } = await register(fastify, ctx, true);
+      await expect(result).rejects.toBeInstanceOf(ForbiddenError);
+      expect(fastify.repositories.oauthClients.countByDeveloper).not.toHaveBeenCalled();
+      expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+      expect(state.createdClients).toHaveLength(0);
+      // The refusal's own event is the rule's (user.agent_ownership_refused);
+      // no client.created is recorded.
+      expect(emitUserEventMock).not.toHaveBeenCalled();
+    });
+
+    it('checks no one for an anonymous agent client, which has no owner', async () => {
+      const { fastify, ctx, state } = createFastifyStub();
+
+      const { result } = await register(fastify, ctx, true);
+      await result;
+      expect(assertOwner).not.toHaveBeenCalled();
+      expect(state.createdClients[0]).toMatchObject({ isAgent: true, developerId: null });
+    });
+
+    it('checks no one for an attributed client that is no agent', async () => {
+      const { fastify, ctx, state } = createFastifyStub();
+      resolveDeveloperId.mockResolvedValueOnce(DEVELOPER);
+
+      const { result } = await register(fastify, ctx, false);
+      await result;
+      expect(assertOwner).not.toHaveBeenCalled();
+      expect(state.createdClients[0]).toMatchObject({ isAgent: false, developerId: DEVELOPER });
     });
   });
 });
