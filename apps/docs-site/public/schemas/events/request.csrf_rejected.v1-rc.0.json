@@ -154,7 +154,8 @@
             "wallet_link",
             "consent",
             "consent_revocation",
-            "interaction"
+            "interaction",
+            "account"
           ]
         }
       },

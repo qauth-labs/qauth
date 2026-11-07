@@ -25,7 +25,7 @@ import type {
 import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 import { DISPLAY_TEXT_PATTERN } from '@qauth-labs/shared-interaction-contract';
 import { resolveRpId } from '@qauth-labs/shared-validation';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import { REDIS_KEYS } from '../constants/redis-keys';
@@ -35,6 +35,7 @@ import {
   storePasskeyAccount,
   storePasskeyEnrolment,
 } from './passkey-enrolment';
+import { emitUserEvent } from './user-events';
 import { passkeyCeremonyOrigins } from './webauthn-relying-party';
 
 /**
@@ -178,6 +179,12 @@ function parseJson(text: string): unknown {
 /** What {@link createServerPasskeys} needs besides the server. */
 export interface ServerPasskeyOptions {
   readonly mailer: Pick<EngineMailer, 'sendUncounted'>;
+  /**
+   * The request the engine's round runs for, which a binding's
+   * `user.credential_added` event carries (#844). A binding outside one
+   * fails, closed: its transaction rolls back.
+   */
+  readonly requestOf: () => FastifyRequest | undefined;
   /** The provider; built over Redis by default. */
   readonly provider?: WebAuthnProvider;
   /** Where ceremonies wait; Redis by default. Must be the provider's. */
@@ -382,7 +389,25 @@ export function createServerPasskeys(
             realms: fastify.repositories.realms,
             userCredentials: credentials,
           },
-          { realmId, userId, enrolment: held.data, ...(replacing === true ? { replacing } : {}) }
+          {
+            realmId,
+            userId,
+            enrolment: held.data,
+            ...(replacing === true ? { replacing } : {}),
+            // The binding's record commits with it (ADR-019 Decision 8).
+            recorded: async (credential, tx) => {
+              const request = options.requestOf();
+              if (request === undefined) {
+                throw new Error('a passkey bound outside the request that asked for it');
+              }
+              await emitUserEvent(
+                request,
+                'urn:qauth:event:user.credential_added:v1-rc.0',
+                { type: 'passkey', credentialId: credential.id },
+                { tx, realmId, userId, actor: 'user' }
+              );
+            },
+          }
         );
       } catch (error) {
         // The realm already holds the credential id, for this account or

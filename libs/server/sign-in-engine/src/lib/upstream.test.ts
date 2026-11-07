@@ -13,6 +13,7 @@ import {
   passwordAccount,
   recordingAudit,
 } from '../testing/fakes';
+import { createMemoryPasskeys, fakeRegistration } from '../testing/memory-passkeys';
 import { createMemoryRecoveryCodes } from '../testing/memory-recovery-codes';
 import { createMemoryTotp } from '../testing/memory-totp';
 import { createProofOfWorkProvider } from './bot-challenge';
@@ -533,6 +534,38 @@ describe('the upstream provider’s callback (#639)', () => {
       ctx
     );
     expect(next).toMatchObject({ kind: 'redirect', reason: 'step_not_available' });
+    expect(built.sender.sent).toEqual([]);
+  });
+});
+
+describe('the passkey an account with no factor of its own asks for (#844)', () => {
+  it('is bound after the provider alone, with no mailbox asked for: such an account has no password', async () => {
+    const passkeys = createMemoryPasskeys([]);
+    const codes = createMemoryRecoveryCodes(() => T0);
+    // The account's first set is saved, so the binding owes no new one.
+    const set = await codes.replace({ realmId: REALM, userId: USER });
+    await codes.confirm({ realmId: REALM, userId: USER, setId: set.setId });
+    const built = build(upstreamAccount(), { passkeys, recoveryCodes: codes });
+    const ctx = context(built, { enrol: 'passkey' });
+
+    // A provider that gave no address: nothing could prove a mailbox.
+    const offered = await built.engine.completeUpstream(
+      await picked(built, ctx),
+      proof({ address: undefined }),
+      ctx
+    );
+    if (offered.kind !== 'step') throw new Error(`a ${offered.kind}, not a step`);
+    expect(offered.offer.current).toMatchObject({ step: 'webauthn_create' });
+    const done = await built.engine.advance(
+      kept(offered),
+      answer('webauthn_create', {
+        webauthn_response: fakeRegistration('credential-new', offered.offer.current.params),
+      }),
+      ctx
+    );
+
+    expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
+    expect(passkeys.passkeys.get('credential-new')).toMatchObject({ userId: USER });
     expect(built.sender.sent).toEqual([]);
   });
 });

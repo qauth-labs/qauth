@@ -229,6 +229,7 @@ const SYSTEM_ACTOR: SessionActor = Object.freeze({ type: 'system' });
  * @param userId - the session's owner. Required for a `user` actor: the
  *   service ends only that user's session and answers another's as not found,
  *   whose side record is then left alone too.
+ * @returns what the service did: `ended`, `already_ended` or `not_found`
  */
 export async function endBrowserSession(
   fastify: FastifyInstance,
@@ -237,7 +238,7 @@ export async function endBrowserSession(
   reason: SessionRevokedReason,
   actor: SessionActor,
   userId?: string
-): Promise<void> {
+): Promise<'ended' | 'already_ended' | 'not_found'> {
   const result = await fastify.sessionService.revoke({
     realmId,
     sid,
@@ -245,8 +246,9 @@ export async function endBrowserSession(
     actor,
     ...(userId === undefined ? {} : { userId }),
   });
-  if (userId !== undefined && result.outcome === 'not_found') return;
+  if (userId !== undefined && result.outcome === 'not_found') return result.outcome;
   await deleteSessionSideRecord(fastify, realmId, sid);
+  return result.outcome;
 }
 
 /**
@@ -275,7 +277,8 @@ export async function endBrowserSession(
  *
  * @param realmId - the user's realm: a session is only ever ended in it
  * @param ending - why: a sign-out everywhere by default, or the user's
- *   password reset (#642)
+ *   password reset (#642) or change (#844); and, for a change, the session
+ *   it was made in, which stays (`exceptSid`)
  */
 export async function endBrowserSessions(
   fastify: FastifyInstance,
@@ -283,12 +286,14 @@ export async function endBrowserSessions(
   userId: string,
   ending: {
     readonly reason: Extract<SessionRevokedReason, 'sign_out_everywhere' | 'reset'>;
+    readonly exceptSid?: string;
   } = { reason: 'sign_out_everywhere' }
 ): Promise<string[]> {
   const { sessions } = await fastify.sessionService.revokeAllForUser({
     realmId,
     userId,
     reason: ending.reason,
+    ...(ending.exceptSid === undefined ? {} : { exceptSid: ending.exceptSid }),
     // The user signs themselves out, or reset their password (#642).
     actor: { type: 'user', id: userId },
   });

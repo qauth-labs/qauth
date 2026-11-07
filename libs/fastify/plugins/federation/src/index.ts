@@ -469,7 +469,9 @@ export type {
 } from '@qauth-labs/server-federation';
 export {
   generateWebAuthnUserHandle,
+  normalisePasskeyNickname,
   WEBAUTHN_CEREMONY_TIMEOUT_MS,
+  WEBAUTHN_NICKNAME_MAX_LENGTH,
   webauthnCeremonyStateSchema,
   webauthnCredentialDataAfterAssertion,
   webauthnCredentialDataSchema,

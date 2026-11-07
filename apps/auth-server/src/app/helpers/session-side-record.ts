@@ -36,6 +36,13 @@ export interface SessionSideRecord {
    */
   apiCsrfToken?: string;
   /**
+   * CSRF token of the hosted account page's forms (#844): minted by the page
+   * that draws a form, posted back as its `csrf` field, compared in constant
+   * time. Long-lived per session, so several tabs work; a session's other
+   * tokens never stand in for it.
+   */
+  accountCsrfToken?: string;
+  /**
    * The exact scope set rendered on the most recent consent screen for a given
    * client, keyed by `client_id`. The consent POST handler grants ONLY these
    * scopes — the hidden `scope` form field is attacker-controllable, so the
@@ -66,6 +73,7 @@ export interface SessionSideRecordUpdate {
   identifier?: string;
   csrfToken?: string;
   apiCsrfToken?: string;
+  accountCsrfToken?: string;
   /**
    * The scopes and resources one consent screen named, for its client, and
    * whether it was the page for an AI agent.
@@ -78,6 +86,7 @@ const FIELD = {
   identifier: 'identifier',
   csrfToken: 'csrfToken',
   apiCsrfToken: 'apiCsrfToken',
+  accountCsrfToken: 'accountCsrfToken',
   consentScopesPrefix: 'consentScopes:',
   consentResourcesPrefix: 'consentResources:',
   consentAgentPrefix: 'consentAgent:',
@@ -114,6 +123,7 @@ export async function readSessionSideRecord(
     if (field === FIELD.identifier) record.identifier = value;
     else if (field === FIELD.csrfToken) record.csrfToken = value;
     else if (field === FIELD.apiCsrfToken) record.apiCsrfToken = value;
+    else if (field === FIELD.accountCsrfToken) record.accountCsrfToken = value;
     else if (field.startsWith(FIELD.consentScopesPrefix)) {
       const scopes = parseList(value);
       if (scopes) record.consentScopes[field.slice(FIELD.consentScopesPrefix.length)] = scopes;
@@ -146,6 +156,9 @@ export async function writeSessionSideRecord(
   if (update.identifier !== undefined) fields[FIELD.identifier] = update.identifier;
   if (update.csrfToken !== undefined) fields[FIELD.csrfToken] = update.csrfToken;
   if (update.apiCsrfToken !== undefined) fields[FIELD.apiCsrfToken] = update.apiCsrfToken;
+  if (update.accountCsrfToken !== undefined) {
+    fields[FIELD.accountCsrfToken] = update.accountCsrfToken;
+  }
   if (update.consent !== undefined) {
     const { clientId, scopes, resources, agent } = update.consent;
     fields[`${FIELD.consentScopesPrefix}${clientId}`] = JSON.stringify(scopes);

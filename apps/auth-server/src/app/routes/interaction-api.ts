@@ -16,6 +16,12 @@ import { ceremonyPagePath } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
+import {
+  accountRoundOf,
+  cancelAccountInteraction,
+  engineClientIdOf,
+  finishAccountInteraction,
+} from '../helpers/account-interaction';
 import { accountPoliciesOf } from '../helpers/account-policies';
 import { UnsupportedMediaTypeError } from '../helpers/api-request-errors';
 import {
@@ -520,30 +526,33 @@ async function decideAnswer(
   // person proves the account with its own factors, afresh.
   const signingInToLink = state.upstreamLink?.state === 'signing_in';
   const realmId = requestRealm(request).id;
+  // The authorization request, when the interaction is for one; the hosted
+  // account page's (#844) is for no client.
+  const authorization = state.purpose === 'authorization' ? state.request : undefined;
   // The engine counts by the client id as it is; an event carries it only
   // when the envelope's bound allows (a CIMD URL can be longer).
   const eventClientId = eventClientIdOf(state);
+  const engineClientId = engineClientIdOf(state);
   // The round limits' environment (#636; ADR-008 §5): development relaxes them.
-  const environment = await roundEnvironment(
-    request.server,
-    requestRealm(request),
-    state.request.client_id
-  );
+  const environment = await roundEnvironment(request.server, requestRealm(request), engineClientId);
   const context = (
     receivedAt: number,
     { linking }: { readonly linking: boolean } = { linking: signingInToLink }
   ): RoundContext => ({
     realm: { id: realmId },
-    client: { id: state.request.client_id },
+    client: { id: engineClientId },
     // `prompt=create` (#640): the engine's rounds are a registration's; a
     // sign-in to link an upstream account (#670) registers nobody.
-    ...(state.request.prompt === 'create' && !linking ? { flow: 'register' as const } : {}),
+    ...(authorization?.prompt === 'create' && !linking ? { flow: 'register' as const } : {}),
     // `prompt=login` and `max_age` ask for a fresh sign-in, which a password
     // reset never is (#642; ADR-017 Decision 8): no reset is offered. A
-    // sign-in to link an upstream account (#670) is always a fresh one.
-    ...(state.request.prompt === 'login' || state.request.max_age !== undefined || linking
+    // sign-in to link an upstream account (#670) is always a fresh one, and
+    // so is every sign-in of the account page, which may bind a factor
+    // (#844).
+    ...(authorization?.prompt === 'login' || authorization?.max_age !== undefined || linking
       ? { freshSignIn: true }
       : {}),
+    ...(state.purpose === 'account' ? accountRoundOf(state.request) : {}),
     receivedAt,
     ...ladderEndUserIp(request),
     environment,
@@ -808,6 +817,16 @@ export default async function (fastify: FastifyInstance) {
               location: await finishLogout(fastify, request, reply, result, logout),
             });
           }
+          if (result.purpose === 'account') {
+            // The account page's sign-in finished (#844): an upstream link
+            // it holds is attached, and the browser goes back to the page.
+            return respond(request, reply, parsed.encoding, {
+              location: await finishAccountInteraction(fastify, request, result, {
+                method: signedInMethod,
+                mailer: engines.mailer,
+              }),
+            });
+          }
           if (consent !== undefined) {
             // The consent answer finished the interaction (#629): nobody
             // signed in. It is decided now, with the step the interaction
@@ -909,7 +928,9 @@ export default async function (fastify: FastifyInstance) {
         location:
           result.purpose === 'logout'
             ? await cancelLogout(fastify, request, result)
-            : await cancelAuthorization(fastify, request, result.request),
+            : result.purpose === 'account'
+              ? cancelAccountInteraction(request, result)
+              : await cancelAuthorization(fastify, request, result.request),
       });
     }
   );

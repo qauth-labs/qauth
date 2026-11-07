@@ -411,6 +411,51 @@
       "stability": "stable"
     },
     {
+      "name": "event-user-password-changed-v1",
+      "description": "The urn:qauth:event:user.password_changed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #844).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.password_changed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-user-credential-added-v1",
+      "description": "The urn:qauth:event:user.credential_added:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #844).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.credential_added.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-user-credential-removed-v1",
+      "description": "The urn:qauth:event:user.credential_removed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #844).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.credential_removed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-user-passkey-renamed-v1",
+      "description": "The urn:qauth:event:user.passkey_renamed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #844).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.passkey_renamed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-user-recovery-codes-regenerated-v1",
+      "description": "The urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #844).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.recovery_codes_regenerated.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-user-registered-v1",
       "description": "The urn:qauth:event:user.registered:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
       "format": "json-schema",

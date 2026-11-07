@@ -103,6 +103,8 @@ export {
   type SendCapStore,
   type SessionEpochReader,
   SIGN_IN_MIN_RESPONSE_TIME_MS,
+  SIGN_IN_TRANSACTION_CLOCK_SKEW_MS,
+  SIGN_IN_TRANSACTION_MAX_AGE_MS,
   type SignInAuditRecord,
   type SignInEngine,
   type SignInEngineDependencies,
