@@ -634,7 +634,7 @@ describe('wallet linking API — same-device only (ADR-013 as amended 2026-11-07
     }
   });
 
-  it('(HAIP 1.0 §5.1) records the same-device choice on the link row and flow', async () => {
+  it('(HAIP 1.0 §5.1) records every link as same-device on the link row and flow', async () => {
     const { row, flow, postReply } = await startLink('user-1', { device: 'this' });
 
     expect(row['sameDevice']).toBe(true);
@@ -650,35 +650,39 @@ describe('wallet linking API — same-device only (ADR-013 as amended 2026-11-07
     });
   });
 
-  it('refuses `device: "other"` with a 400 validation_error problem naming /device, before the handler runs', async () => {
-    const app = await realApp();
-    try {
-      const response = await app.inject({
-        method: 'POST',
-        url: '/auth/link/wallet',
-        headers: { 'content-type': 'application/json', 'x-csrf-token': 'api-csrf-token' },
-        payload: { device: 'other' },
-      });
+  it.each(['other', 'THIS', ''])(
+    'refuses `device: %j` with a 400 validation_error problem naming /device, before the handler runs',
+    async (device) => {
+      const app = await realApp();
+      try {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/auth/link/wallet',
+          headers: { 'content-type': 'application/json', 'x-csrf-token': 'api-csrf-token' },
+          payload: { device },
+        });
 
-      expect(response.statusCode).toBe(400);
-      expect(response.headers['content-type']).toMatch(/^application\/problem\+json/);
-      const problem = response.json();
-      expect(problem).toMatchObject({
-        status: 400,
-        code: 'validation_error',
-        type: 'https://docs.qauth.dev/reference/problem-types/#validation-error',
-        instance: '/auth/link/wallet',
-      });
-      expect(problem.errors).toEqual([
-        {
-          pointer: '/device',
-          message: 'Linking works only with a wallet on this device; "other" is not accepted.',
-        },
-      ]);
-    } finally {
-      await app.close();
+        expect(response.statusCode).toBe(400);
+        expect(response.headers['content-type']).toMatch(/^application\/problem\+json/);
+        const problem = response.json();
+        expect(problem).toMatchObject({
+          status: 400,
+          code: 'validation_error',
+          type: 'https://docs.qauth.dev/reference/problem-types/#validation-error',
+          instance: '/auth/link/wallet',
+        });
+        expect(problem.errors).toEqual([
+          {
+            pointer: '/device',
+            message:
+              'Linking works only with a wallet on this device, so "device" must be "this" or left out.',
+          },
+        ]);
+      } finally {
+        await app.close();
+      }
     }
-  });
+  );
 
   it('accepts no body, an empty body and `this` past the schema, on to the session check', async () => {
     // The schema passes them, and the handler answers 401 for want of a session.

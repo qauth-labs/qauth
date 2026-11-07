@@ -386,10 +386,9 @@ describe('advanceWalletLinkFlow — same-device links never complete by polling 
 });
 
 /**
- * A cross-device link completed by polling, and nothing on that path tied the
- * wallet that answered to the browser that asked. Such a flow can now exist
- * only as one still pending from before the upgrade, and it must bind nothing,
- * by either surface, whoever's wallet answered it.
+ * Linking is same-device only (ADR-013 as amended 2026-11-07). A cross-device
+ * flow can now exist only as one still pending from before the upgrade, and it
+ * must bind nothing, by either surface, whoever's wallet answered it.
  */
 describe('advanceWalletLinkFlow — a cross-device link binds nothing (ADR-013 as amended 2026-11-07)', () => {
   it('refuses a cross-device link another wallet answered, on the starter’s poll: no link, no event, the flow ended', async () => {

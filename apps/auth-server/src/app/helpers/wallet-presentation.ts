@@ -508,10 +508,7 @@ export async function resolveWalletPresentation(
  * ## Same device only
  *
  * A presentation that answers a cross-device flow is refused here, before it
- * is validated (ADR-013 as amended 2026-11-07). A cross-device presentation
- * request names only the verifier, so whoever scans it answers it, and the
- * credential they present says nothing about the session's account. Only the
- * same-device return leg binds the answering wallet to the browser that asked.
+ * is validated: linking is same-device only (ADR-013 as amended 2026-11-07).
  * The link state machine refuses such a flow too; this is the writer's own
  * check, so a second caller cannot skip it.
  *

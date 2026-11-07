@@ -86,13 +86,8 @@ import { isWalletLoginHandle } from '../../helpers/wallet-login-flow';
  * frontend to pass the respective Response Code" — then `linked` once, from
  * the done-marker the return leg leaves.
  *
- * Why the other mode is gone: a cross-device link completed by this poll, and
- * nothing on that path ties the wallet that answers to the browser that
- * asked. Whoever scans a link code answers it, and the credential they present
- * says nothing about the account the code was made for. The Response Code is
- * what binds a presentation to the browser that requested it, and it exists
- * only on the same-device path. A cross-device flow started before this change
- * is refused when it is polled (`helpers/wallet-link-flow.ts`).
+ * A cross-device flow started before this change is refused when it is
+ * polled (`helpers/wallet-link-flow.ts`).
  */
 
 /** Header carrying the CSRF token on the state-changing POST. */
@@ -114,7 +109,8 @@ const startRequestSchema = z
      */
     device: z
       .literal('this', {
-        error: 'Linking works only with a wallet on this device; "other" is not accepted.',
+        error:
+          'Linking works only with a wallet on this device, so "device" must be "this" or left out.',
       })
       .optional(),
   })

@@ -176,9 +176,7 @@ function bindingClaimsOf(config: SubjectResolutionConfig): readonly string[] {
  * brought back (ADR-013 as amended 2026-11-07). A credential that failed any
  * of them must never reach this function — it would be planned into a row
  * exactly as a good one is, because linking asks nothing of the credential
- * that those gates do not already answer. The third is what ties the
- * credential to the session at all: this function binds whatever it is given
- * to `authenticatedUserId`, and nothing in a presentation names the account.
+ * that those gates do not already answer.
  *
  * @param credential - the validated, issuer-trusted presentation.
  * @param config - the deployment's resolved subject-resolution configuration.

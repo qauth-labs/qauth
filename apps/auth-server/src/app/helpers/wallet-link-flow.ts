@@ -82,19 +82,13 @@ import { linkWalletPresentation } from './wallet-presentation';
  * new one all mirror the login state machine's, and are documented on
  * {@link advanceWalletLinkFlow}.
  *
- * ## Why there is no cross-device link
+ * ## No cross-device link
  *
- * A cross-device link completes by polling, and nothing on that path ties the
- * wallet that answers to the browser that asked: the request names only the
- * verifier, and the credential presented says nothing about the session's
- * account. The Response Code is what binds a presentation to the browser that
- * requested it (OID4VP 1.0 §14.2), and it exists only on the same-device
- * path. So the maintainer decided on 2026-11-07 that linking is same-device
- * only: a request for the cross-device mode is refused at the route, this
- * helper never records one, and a cross-device flow recorded before that
- * decision is refused at completion, twice (here and in
- * `linkWalletPresentation`). Wallet SIGN-IN keeps its cross-device path; it
- * attaches nothing to an account.
+ * Linking is same-device only; a cross-device link is refused (ADR-013 as
+ * amended 2026-11-07). A request for the cross-device mode is refused at the
+ * route, this helper never records one, and a cross-device flow recorded
+ * before that decision is refused at completion, twice (here and in
+ * `linkWalletPresentation`). Wallet SIGN-IN keeps its cross-device path.
  */
 
 /** How a linking flow ended, as far as the browser is concerned. */
@@ -171,9 +165,8 @@ export async function startWalletLinkFlow(
   const capability = await resolveWalletLoginCapabilityIn(fastify, realm);
   if (capability === undefined) return undefined;
 
-  // Same-device, always (ADR-013 as amended 2026-11-07). A constant rather
-  // than a choice: a link is completed only on the return leg, whose Response
-  // Code is the one thing that binds the answering wallet to this browser.
+  // Same-device, always (ADR-013 as amended 2026-11-07): a constant rather
+  // than a choice, so a link completes only on the return leg.
   const sameDevice = true;
 
   const invocation = await buildWalletLoginInvocation(fastify, capability, realm);
@@ -314,9 +307,8 @@ async function concludeReturnLeg(
  * flow terminated, and nothing read of whatever the wallet parked. Since
  * linking became same-device only, {@link startWalletLinkFlow} records no
  * other kind, so the flows this refuses are the ones started before that, and
- * still pending when the server was upgraded. A cross-device link would
- * complete by polling, which binds the answering wallet to nothing, so such a
- * flow must not complete either way. The gate runs before the signal is read,
+ * still pending when the server was upgraded; such a flow must not complete
+ * on either surface. The gate runs before the signal is read,
  * so a pending one is refused on its first poll rather than once a wallet has
  * answered.
  *
@@ -414,8 +406,7 @@ export async function advanceWalletLinkFlow(
   }
 
   // Linking is same-device only (ADR-013 as amended 2026-11-07). A flow not
-  // recorded as same-device predates that decision, and would complete by
-  // polling, which binds the wallet that answered to nothing. Refused before
+  // recorded as same-device predates that decision and is refused, before
   // the signal is read, so no parked presentation is ever validated for it.
   if (flow.sameDevice !== true) {
     fastify.log.warn({ ip: request.ip }, CROSS_DEVICE_LINK_REFUSED_WARNING);

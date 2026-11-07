@@ -739,9 +739,8 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
   });
 
   it('(ADR-013 as amended 2026-11-07) refuses a cross-device flow before reading the presentation, and writes nothing', async () => {
-    // A cross-device presentation request names only the verifier, so whoever
-    // scans it answers it: nothing ties the credential to the session's
-    // account. The writer refuses it on its own, whatever its caller checked.
+    // Linking is same-device only. The writer refuses a cross-device flow on
+    // its own, whatever its caller checked.
     const store = createCredentialStore([PASSWORD_ROW]);
     const { fastify } = makeFastify(store);
 

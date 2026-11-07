@@ -640,7 +640,8 @@ describe('wallet-link UI — same-device only (ADR-013 as amended 2026-11-07)', 
         errors: [
           {
             pointer: '/device',
-            message: 'Linking works only with a wallet on this device; "other" is not accepted.',
+            message:
+              'Linking works only with a wallet on this device, so "device" must be "this" or left out.',
           },
         ],
       });
@@ -671,7 +672,7 @@ describe('wallet-link UI — same-device only (ADR-013 as amended 2026-11-07)', 
     expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
   });
 
-  it('(HAIP 1.0 §5.1) records the same-device choice on the link row and flow', async () => {
+  it('(HAIP 1.0 §5.1) records every link as same-device on the link row and flow', async () => {
     const { routes, row, flow, handle, postReply, sessionCookie, binderCookie } = await startLink();
     const body = String(postReply.state.body);
 

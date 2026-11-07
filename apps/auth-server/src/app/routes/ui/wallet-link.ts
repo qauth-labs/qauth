@@ -76,9 +76,8 @@ import {
  * wallet is handed a `redirect_uri` with a Response Code and brings the
  * browser to `/ui/wallet-login/return`, which dispatches on the flow's mode —
  * and never by polling (OID4VP 1.0 §14.2; HAIP 1.0 §5.1). There is no QR code
- * and no "scan with a wallet on another device" button: a cross-device link
- * completed by polling, and nothing on that path tied the wallet that
- * answered to the browser that asked. A form that still posts `device=other`
+ * and no "scan with a wallet on another device" button: linking is
+ * same-device only. A form that still posts `device=other`
  * is refused by the body schema with `400` `validation_error`; an absent field
  * is same-device. A person whose wallet is on their phone opens this page on
  * the phone. The terminal pages moved to `helpers/wallet-ui.ts` so the return
@@ -240,7 +239,8 @@ const linkFormSchema = z.object({
    */
   device: z
     .literal('this', {
-      error: 'Linking works only with a wallet on this device; "other" is not accepted.',
+      error:
+        'Linking works only with a wallet on this device, so "device" must be "this" or left out.',
     })
     .optional(),
 });
