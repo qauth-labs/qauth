@@ -4860,6 +4860,146 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     });
   });
 
+  describe("a browser-based client's family ends with its first token (RFC 10017 §6.3.2.3, #928)", () => {
+    const DAY = 24 * 60 * 60_000;
+    /** The realm's refresh lifetime in these fixtures: a week. */
+    const LIFESPAN_MS = 604_800_000;
+    const WEB_REDIRECT = 'https://app.example.com/callback';
+    const PUBLIC_CREDENTIALS = { client_id: 'public-client', client_secret: undefined };
+
+    type RefreshSetup = ReturnType<typeof setupRefreshStub>;
+    type RefreshClient = RefreshSetup['confidentialClient'] | RefreshSetup['publicClient'];
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /**
+     * Start a family for the client, its first token issued now for the
+     * refresh lifetime as the code exchange issues it, then refresh it once a
+     * day for `days` days, each time presenting the token the previous refresh
+     * stored.
+     *
+     * @returns the family's start and the expiry of each of its tokens, the
+     *   first's included, and the handler to present the last one again
+     */
+    async function rotateDaily(
+      clientOf: (setup: RefreshSetup) => RefreshClient & { redirectUris: string[] },
+      days: number,
+      credentials: Record<string, unknown> = {}
+    ): Promise<{
+      start: number;
+      expiries: number[];
+      presentLast: (at: number) => Promise<unknown>;
+    }> {
+      const setup = setupRefreshStub();
+      const client = clientOf(setup);
+      (setup.fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        client
+      );
+      const start = Date.now();
+      vi.setSystemTime(start);
+      let presented = {
+        ...setup.storedToken,
+        oauthClientId: client.id,
+        scopes: client.scopes,
+        familyCreatedAt: start,
+        expiresAt: start + LIFESPAN_MS,
+      };
+      const expiries = [presented.expiresAt];
+      await tokenRoute(setup.fastify);
+      const handler = setup.ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+      const present = (at: number): Promise<unknown> => {
+        vi.setSystemTime(at);
+        (
+          setup.fastify.repositories.refreshTokens
+            .findByTokenHashIncludingRevoked as unknown as Mock
+        ).mockResolvedValueOnce(presented);
+        return handler({ ...refreshRequest(credentials), realm: REALM }, createReply());
+      };
+
+      for (let day = 1; day <= days; day++) {
+        await expect(present(start + day * DAY)).resolves.toMatchObject({
+          refresh_token: 'new-refresh-token',
+        });
+        const calls = (setup.fastify.repositories.refreshTokens.create as unknown as Mock).mock
+          .calls;
+        const created = calls[calls.length - 1][0] as {
+          familyCreatedAt: number;
+          expiresAt: number;
+        };
+        // A rotation never restarts the family's clock.
+        expect(created.familyCreatedAt).toBe(start);
+        expiries.push(created.expiresAt);
+        presented = { ...presented, id: `token-rotated-${day}`, expiresAt: created.expiresAt };
+      }
+      return { start, expiries, presentLast: present };
+    }
+
+    it('gives no rotated token of a browser-based public client a later expiry than its first', async () => {
+      const { start, expiries, presentLast } = await rotateDaily(
+        (setup) => ({ ...setup.publicClient, redirectUris: [WEB_REDIRECT] }),
+        6,
+        PUBLIC_CREDENTIALS
+      );
+
+      // Six refreshes, a day apart: each would slide a week from its own
+      // time, and each is held at the first token's expiry instead.
+      const firstExpiry = start + LIFESPAN_MS;
+      expect(expiries).toHaveLength(7);
+      expect(expiries).toEqual(Array.from({ length: 7 }, () => firstExpiry));
+
+      // At the first token's expiry the family is over.
+      await expect(presentLast(firstExpiry)).rejects.toThrow(InvalidGrantError);
+      expect(emittedData(TOKEN_REQUEST_FAILED).at(-1)).toEqual({
+        grantType: 'refresh_token',
+        error: 'invalid_grant',
+        reason: 'refresh_token_expired',
+      });
+    });
+
+    it('keeps the sliding expiry for a confidential client with the same redirect URI', async () => {
+      const { start, expiries } = await rotateDaily(
+        (setup) => ({ ...setup.confidentialClient, redirectUris: [WEB_REDIRECT] }),
+        6
+      );
+
+      // Each refresh gives a whole lifetime from its own time.
+      expect(expiries).toEqual(
+        Array.from({ length: 7 }, (_unused, day) => start + day * DAY + LIFESPAN_MS)
+      );
+    });
+
+    it.each([
+      ['a loopback', 'http://127.0.0.1/callback'],
+      ['a private-use scheme', 'com.example.app:/callback'],
+    ])('keeps the sliding expiry for a native app calling back on %s URI', async (_kind, uri) => {
+      const { start, expiries } = await rotateDaily(
+        (setup) => ({ ...setup.publicClient, redirectUris: [uri] }),
+        3,
+        PUBLIC_CREDENTIALS
+      );
+
+      expect(expiries).toEqual(
+        Array.from({ length: 4 }, (_unused, day) => start + day * DAY + LIFESPAN_MS)
+      );
+    });
+
+    it('caps a public client that has a web redirect URI beside a native one', async () => {
+      const { start, expiries } = await rotateDaily(
+        (setup) => ({
+          ...setup.publicClient,
+          redirectUris: ['com.example.app:/callback', WEB_REDIRECT],
+        }),
+        3,
+        PUBLIC_CREDENTIALS
+      );
+
+      expect(expiries).toEqual(Array.from({ length: 4 }, () => start + LIFESPAN_MS));
+    });
+  });
+
   // ADR-007 §2 (#184): the refresh grant enforces the agent's CURRENT cap,
   // like every other grant. A token issued under agent:exec must not keep
   // refreshing into agent:exec after the operator lowers the cap.

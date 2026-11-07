@@ -5,6 +5,7 @@ import {
   buildRedirectUrl,
   isAllowedRedirectUriScheme,
   isHttpLocalhostRedirect,
+  isNativeAppRedirectUri,
   isRedirectUriAllowedForPolicy,
   redirectUriMatchesRegistered,
 } from './oauth-redirect';
@@ -426,5 +427,39 @@ describe('oauth-redirect — redirectUriMatchesRegistered (RFC 8252 §7.3, #414)
     ]) {
       expect(isHttpLocalhostRedirect(uri)).toBe(true);
     }
+  });
+});
+
+describe('isNativeAppRedirectUri (#928)', () => {
+  it('is a plain http loopback URI, whatever its port', () => {
+    for (const uri of [
+      'http://127.0.0.1/callback',
+      'http://127.0.0.1:53817/callback',
+      'http://[::1]/callback',
+      'http://localhost:8080/callback',
+    ]) {
+      expect(isNativeAppRedirectUri(uri)).toBe(true);
+    }
+  });
+
+  it('is a private-use or bare custom scheme URI', () => {
+    expect(isNativeAppRedirectUri('com.example.app:/callback')).toBe(true);
+    expect(isNativeAppRedirectUri('cursor://anysphere.cursor-mcp/oauth/callback')).toBe(true);
+  });
+
+  it('is never an https URI, not even one on a loopback host', () => {
+    for (const uri of [
+      'https://app.example.com/callback',
+      'https://localhost/callback',
+      'https://127.0.0.1:8443/callback',
+    ]) {
+      expect(isNativeAppRedirectUri(uri)).toBe(false);
+    }
+  });
+
+  it('is not a non-loopback http URI, nor one that does not parse', () => {
+    expect(isNativeAppRedirectUri('http://app.example.com/callback')).toBe(false);
+    expect(isNativeAppRedirectUri('not a uri')).toBe(false);
+    expect(isNativeAppRedirectUri('')).toBe(false);
   });
 });

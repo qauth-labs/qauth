@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { refreshFamilyEnd, refreshFamilyEnded, refreshTokenExpiresAt } from './refresh-family';
+import {
+  isBrowserBasedClient,
+  refreshFamilyEnd,
+  refreshFamilyEnded,
+  refreshTokenExpiresAt,
+  rotatedRefreshTokenExpiresAt,
+} from './refresh-family';
 
 const MINUTE = 60_000;
 const START = 1_792_918_800_000;
@@ -45,6 +51,83 @@ describe('refreshTokenExpiresAt (#552)', () => {
   it('slides as before when the family has no end', () => {
     const now = START + 59 * MINUTE;
     expect(refreshTokenExpiresAt(now, ONE_WEEK, null)).toBe(now + ONE_WEEK * 1000);
+  });
+});
+
+describe('isBrowserBasedClient (RFC 10017, #928)', () => {
+  const web = 'https://app.example.com/callback';
+  const loopback = 'http://127.0.0.1/callback';
+  const privateUse = 'com.example.app:/callback';
+
+  it('is a public client with a web redirect URI', () => {
+    expect(isBrowserBasedClient({ tokenEndpointAuthMethod: 'none', redirectUris: [web] })).toBe(
+      true
+    );
+  });
+
+  it('is a public client with a web redirect URI beside native ones', () => {
+    expect(
+      isBrowserBasedClient({
+        tokenEndpointAuthMethod: 'none',
+        redirectUris: [loopback, privateUse, web],
+      })
+    ).toBe(true);
+  });
+
+  it('is a public client with no redirect URI at all', () => {
+    expect(isBrowserBasedClient({ tokenEndpointAuthMethod: 'none', redirectUris: [] })).toBe(true);
+    expect(isBrowserBasedClient({ tokenEndpointAuthMethod: 'none' })).toBe(true);
+  });
+
+  it('is not a public client whose every redirect URI is a native app’s', () => {
+    for (const redirectUris of [[loopback], [privateUse], [loopback, privateUse]]) {
+      expect(isBrowserBasedClient({ tokenEndpointAuthMethod: 'none', redirectUris })).toBe(false);
+    }
+  });
+
+  it('is never a confidential client, nor one whose auth method is absent', () => {
+    for (const tokenEndpointAuthMethod of [
+      'client_secret_basic',
+      'client_secret_post',
+      'private_key_jwt',
+      undefined,
+    ]) {
+      expect(isBrowserBasedClient({ tokenEndpointAuthMethod, redirectUris: [web] })).toBe(false);
+    }
+  });
+});
+
+describe('rotatedRefreshTokenExpiresAt (#928)', () => {
+  const firstExpiry = START + ONE_WEEK * 1000;
+
+  it('holds a browser-based client’s token at the expiry of the one it replaces', () => {
+    const now = START + 3 * 24 * 60 * MINUTE;
+    expect(rotatedRefreshTokenExpiresAt(now, ONE_WEEK, null, firstExpiry, true)).toBe(firstExpiry);
+  });
+
+  it('slides for every other client, as refreshTokenExpiresAt does', () => {
+    const now = START + 3 * 24 * 60 * MINUTE;
+    expect(rotatedRefreshTokenExpiresAt(now, ONE_WEEK, null, firstExpiry, false)).toBe(
+      now + ONE_WEEK * 1000
+    );
+  });
+
+  it('is not lengthened by a realm that raised its refresh lifetime since', () => {
+    const now = START + MINUTE;
+    expect(rotatedRefreshTokenExpiresAt(now, 4 * ONE_WEEK, null, firstExpiry, true)).toBe(
+      firstExpiry
+    );
+  });
+
+  it('is shortened by a realm that lowered its refresh lifetime or ends the family sooner', () => {
+    const now = START + MINUTE;
+    expect(rotatedRefreshTokenExpiresAt(now, ONE_HOUR, null, firstExpiry, true)).toBe(
+      now + 60 * MINUTE
+    );
+    const familyEnd = refreshFamilyEnd(START, ONE_HOUR, null);
+    expect(rotatedRefreshTokenExpiresAt(now, ONE_WEEK, familyEnd, firstExpiry, true)).toBe(
+      START + 60 * MINUTE
+    );
   });
 });
 

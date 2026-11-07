@@ -3497,6 +3497,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A browser-based client's refresh family no longer slides** ([#928],
+  ADR-019 Decision 3). RFC 10017 (OAuth 2.0 for Browser-Based Applications)
+  §6.3.2.3, which OAuth 2.1 (draft-ietf-oauth-v2-1-17 §9.3.2) imports, says a
+  rotated refresh token of a browser-based application must not outlive the
+  family's first token. Every rotation gave the new token the realm's refresh
+  lifetime (`tokens.refreshTokenLifespanSeconds`, seeded from
+  `REFRESH_TOKEN_LIFESPAN`, a week by default) from the refresh, so unless the
+  realm set `sso_max_lifespan` a client that kept refreshing kept its family
+  alive for ever, and so did whoever stole a token and kept using it. A public
+  client with a redirect URI that is not a native app's, in practice an
+  `https` one, now gets a rotated token that expires no later than the one it
+  replaces: its family ends when its first token expires, and a refresh then
+  answers `invalid_grant` (the `token.request_failed` event's reason is
+  `refresh_token_expired`). A shorter `sso_max_lifespan` or browser session
+  still ends it sooner. Confidential clients and native apps, whose every
+  redirect URI is an `http` loopback or private-use scheme one, keep the
+  sliding expiry. A native app that calls back on a claimed `https` URI is
+  treated as browser-based. The client is classified from its registration at
+  each refresh. A browser-based client's family that is live at the upgrade
+  ends when its current token expires, within a refresh lifetime of the
+  upgrade. No migration.
+
 - **An ID-JAG bound to a DPoP key needs a proof under that key** ([#927],
   ADR-011 gate 16; only with `ID_JAG_ENABLED`, which is off by default). An
   identity provider may bind the ID-JAG it mints to the client's DPoP key with
@@ -3711,6 +3733,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#748]: https://github.com/qauth-labs/qauth/issues/748
 [#912]: https://github.com/qauth-labs/qauth/issues/912
 [#927]: https://github.com/qauth-labs/qauth/issues/927
+[#928]: https://github.com/qauth-labs/qauth/issues/928
 [#930]: https://github.com/qauth-labs/qauth/issues/930
 [#935]: https://github.com/qauth-labs/qauth/issues/935
 
