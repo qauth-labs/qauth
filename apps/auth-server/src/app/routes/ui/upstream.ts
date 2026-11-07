@@ -4,6 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
+import { engineClientIdOf } from '../../helpers/account-interaction';
 import { accountPoliciesOf } from '../../helpers/account-policies';
 import { createBackgroundTasks } from '../../helpers/background-tasks';
 import {
@@ -173,7 +174,7 @@ export default async function (fastify: FastifyInstance) {
           reply,
           { id: interactionId, revision: 0 },
           async (state) => {
-            if (state.purpose !== 'authorization') {
+            if (state.purpose !== 'authorization' && state.purpose !== 'account') {
               throw new UpstreamSignInRefusal('transaction_mismatch');
             }
             // A link the request asked for (#670) starts only the provider it
@@ -190,14 +191,17 @@ export default async function (fastify: FastifyInstance) {
             const back =
               mode === 'interaction'
                 ? ceremonyPageUrlOf(realm, interactionId)
-                : authorizeUrlOf(state.request);
+                : state.purpose === 'account'
+                  ? // The account page runs only with the interaction UI on (#844).
+                    ceremonyPageUrlOf(realm, interactionId)
+                  : authorizeUrlOf(state.request);
             wayBack = back;
             const round = await engine.advance(
               state.signInTransaction,
               null,
               upstreamRoundContext(request, state, {
                 receivedAt,
-                environment: await roundEnvironment(fastify, realm, state.request.client_id),
+                environment: await roundEnvironment(fastify, realm, engineClientIdOf(state)),
                 upstreamRoute: provider.entry,
                 startUpstream: upstreamStarter(
                   fastify,
