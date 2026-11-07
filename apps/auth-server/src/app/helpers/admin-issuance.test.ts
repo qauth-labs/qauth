@@ -240,12 +240,24 @@ describe('adminIssuance', () => {
     }
   });
 
-  it('never issues a qauth: scope that is not an admin scope', async () => {
+  it('never issues a qauth: scope that is neither an admin scope nor a family scope', async () => {
     const fastify = server([grant(null, 'security-admin')]);
-    const odd = ['qauth:other', 'QAuth:admin:read', 'qauth:admin:READ', 'qauth:admin:read '];
+    const odd = [
+      'qauth:other',
+      'QAuth:admin:read',
+      'qauth:admin:READ',
+      'qauth:admin:read ',
+      'QAuth:developer:read',
+      'qauth:developer:security',
+      'qauth:account:READ',
+    ];
     const decision = await adminIssuance(fastify, {
       realmId: OPERATOR,
-      client: ADMIN_CLIENT,
+      client: {
+        audience: [ADMIN, API_FAMILY_AUDIENCES.developer, API_FAMILY_AUDIENCES.account],
+        metadata: null,
+        dynamicRegisteredAt: null,
+      },
       userId: USER,
       scopes: odd,
       aud: ADMIN,
@@ -302,6 +314,109 @@ describe('adminIssuance', () => {
       dpopBound: true,
     });
     expect(fastify.repositories.adminGrants.listLive).toHaveBeenCalledWith(OPERATOR, USER);
+  });
+});
+
+describe('adminIssuance of the account and developer scopes (#933)', () => {
+  const DEVELOPER_SCOPES = ['qauth:developer:read', 'qauth:developer:write'];
+  const ACCOUNT_SCOPES = ['qauth:account:read', 'qauth:account:write'];
+  /** An operator-provisioned client that lists both family audiences. */
+  const FAMILY_CLIENT = {
+    audience: [API_FAMILY_AUDIENCES.developer, API_FAMILY_AUDIENCES.account],
+    metadata: null,
+    dynamicRegisteredAt: null,
+  };
+
+  it('issues them to a client that lists the audiences, for an account, reading no grant and needing no proof', async () => {
+    const fastify = server([]);
+    await expect(
+      adminIssuance(fastify, {
+        realmId: REALM_A,
+        client: FAMILY_CLIENT,
+        userId: USER,
+        scopes: ['openid', ...DEVELOPER_SCOPES, ...ACCOUNT_SCOPES],
+        aud: API_FAMILY_AUDIENCES.developer,
+        dpopBound: false,
+      })
+    ).resolves.toEqual({
+      scopes: ['openid', ...DEVELOPER_SCOPES, ...ACCOUNT_SCOPES],
+      withheld: [],
+      audienceRefused: false,
+      proofMissing: false,
+    });
+    expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+    expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+  });
+
+  it("withholds a family's scopes from a client that does not list its audience, or registered itself", async () => {
+    const fastify = server([]);
+    for (const client of [
+      { audience: [API_FAMILY_AUDIENCES.account], metadata: null, dynamicRegisteredAt: null },
+      { audience: [ADMIN], metadata: null, dynamicRegisteredAt: null },
+      { audience: null, metadata: null, dynamicRegisteredAt: null },
+      { ...FAMILY_CLIENT, metadata: { registrationType: 'dynamic' } },
+      { ...FAMILY_CLIENT, dynamicRegisteredAt: 1 },
+    ]) {
+      const decision = await adminIssuance(fastify, {
+        realmId: REALM_A,
+        client,
+        userId: USER,
+        scopes: ['openid', ...DEVELOPER_SCOPES],
+        aud: 'https://api.example.com',
+        dpopBound: true,
+      });
+      expect(decision, JSON.stringify(client)).toEqual({
+        scopes: ['openid'],
+        withheld: DEVELOPER_SCOPES,
+        audienceRefused: false,
+        proofMissing: false,
+      });
+    }
+  });
+
+  it('withholds them from a token that names no user, and keeps them on a delegated one', async () => {
+    const fastify = server([]);
+    const base = {
+      realmId: REALM_A,
+      client: FAMILY_CLIENT,
+      userId: null,
+      scopes: ACCOUNT_SCOPES,
+      aud: API_FAMILY_AUDIENCES.account,
+      dpopBound: false,
+    };
+    // `client_credentials` and the two ID-JAG grants.
+    await expect(adminIssuance(fastify, base)).resolves.toMatchObject({
+      scopes: [],
+      withheld: ACCOUNT_SCOPES,
+    });
+    // A delegated token of token exchange, decided for no account by the
+    // admin rule, names its user.
+    await expect(adminIssuance(fastify, { ...base, namesUser: true })).resolves.toEqual({
+      scopes: ACCOUNT_SCOPES,
+      withheld: [],
+      audienceRefused: false,
+      proofMissing: false,
+    });
+  });
+
+  it('keeps the admin rule for the admin scopes asked for beside them', async () => {
+    const fastify = server([grant(REALM_A, 'viewer')]);
+    await expect(
+      adminIssuance(fastify, {
+        realmId: OPERATOR,
+        client: { ...FAMILY_CLIENT, audience: [ADMIN, API_FAMILY_AUDIENCES.developer] },
+        userId: USER,
+        scopes: ['qauth:developer:write', ...ALL_ADMIN_SCOPES],
+        aud: API_FAMILY_AUDIENCES.developer,
+        dpopBound: false,
+      })
+    ).resolves.toEqual({
+      // The viewer's read scope the grants allow still needs a proof.
+      scopes: ['qauth:developer:write'],
+      withheld: ALL_ADMIN_SCOPES,
+      audienceRefused: false,
+      proofMissing: true,
+    });
   });
 });
 

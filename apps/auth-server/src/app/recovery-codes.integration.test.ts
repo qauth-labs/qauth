@@ -61,7 +61,9 @@ import type { InteractionEngines } from './helpers/interaction-engines';
 const ORIGIN = 'https://auth.example.com';
 const CLIENT_ID = 'recovery-codes-notes-app';
 const REDIRECT_URI = 'https://client.example.com/callback';
-const SCOPES = ['openid', 'email'];
+// `qauth:account:write`: the scope the guarded account operations need (#933),
+// issued because the client lists the account API's audience.
+const SCOPES = ['openid', 'email', 'qauth:account:write'];
 const EMAIL = 'recovery-owner@example.test';
 const IDENTIFIER = stepUrn('identifier');
 const PASSWORD = stepUrn('password');
@@ -158,6 +160,8 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
               url: `${accountContract.ACCOUNT_API_PREFIX}${operation.path.replace(/\{([^}]+)\}/g, ':$1')}`,
               preValidation: accountOperation({
                 operationId: operation.id,
+                operationClass: operation.class,
+                permission: operation.permission,
                 freshAuthentication: operation.freshAuthentication,
                 actChain: operation.actChain,
               }).guard,
@@ -534,6 +538,8 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
       sub: userId,
       amr: ['pwd'],
       sid: session?.id,
+      // The account scope, issued to a client that lists the audience (#933).
+      scope: SCOPES.join(' '),
     });
 
     const call = (id: (typeof GUARDED)[number]) =>
