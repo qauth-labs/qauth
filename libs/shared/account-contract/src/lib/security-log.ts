@@ -199,6 +199,7 @@ export const NOT_IN_SECURITY_LOG: Readonly<Record<string, string>> = {
   'userinfo.served': 'An app reading the person’s claims: no change.',
   'userinfo.request_failed': 'A refused userinfo request: no change.',
   'wallet.link_failed': 'A link that did not happen changes nothing on the account.',
+  'user.upstream_link_failed': 'A link that did not happen changes nothing on the account.',
   'interaction.created': 'A sign-in page opened; the sign-in itself is the entry.',
   'interaction.answered': 'One answer within a sign-in; the sign-in itself is the entry.',
   'interaction.cancelled': 'A sign-in the person abandoned changes nothing on the account.',

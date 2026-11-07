@@ -259,6 +259,19 @@ export interface UserCredentialsRepository {
     externalSub: string,
     tx?: DbClient
   ): Promise<UserCredential | undefined>;
+  /**
+   * Lock the user's row until `tx` ends (#670), so changes to one account's
+   * set of credentials (a link, an unlink and its last-credential check)
+   * serialize. `false` when the realm has no such user.
+   */
+  lockUser(realmId: string, userId: string, tx: DbClient): Promise<boolean>;
+  /**
+   * Delete one credential of the realm by id (#670): an unlinked upstream
+   * identity. Another realm's is not deleted.
+   *
+   * @returns the deleted credential, or `undefined` when there was none
+   */
+  deleteById(realmId: string, id: string, tx?: DbClient): Promise<UserCredential | undefined>;
 }
 
 /**

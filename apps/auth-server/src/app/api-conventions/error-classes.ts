@@ -39,6 +39,7 @@ import {
 import {
   DelegatedTokenRefusedError,
   InsufficientUserAuthenticationError,
+  LastCredentialError,
 } from '../helpers/account-operation-errors';
 import {
   InvalidCursorError,
@@ -290,6 +291,9 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
     code: 'delegated_token_refused',
     oauthError: 'access_denied',
   },
+  // An account change that would leave no way to sign in (#670): unlinking
+  // the last upstream account of an account that holds nothing else.
+  { errorClass: LastCredentialError, code: 'last_credential', oauthError: 'invalid_request' },
   // `@qauth-labs/server-ssf`, through the SSF plugin: a stream request the
   // protocol refuses. Its message, which echoes no value, is the `detail`.
   { errorClass: SsfRequestError, code: 'bad_request', oauthError: 'invalid_request' },

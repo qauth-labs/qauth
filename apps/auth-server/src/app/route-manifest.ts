@@ -209,12 +209,19 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'account',
     prefix: '/account/v1-rc.0',
     roles: ['api'],
-    plugins: ['jwt'],
+    // The linked accounts (#670): the provider catalog's discovery reads
+    // through the egress client, and the unlink notice goes out by email.
+    plugins: ['egress', 'email', 'jwt'],
     repositories: [
       'authorizationCodes',
       'events',
       'oauthClients',
       'oauthConsents',
+      // The linked accounts (#670): the realm's upstream provider catalog,
+      // and the realm's mail settings for the unlink notice.
+      'realmAuthMethodPlugins',
+      'realmUpstreamProviders',
+      'realms',
       'refreshTokens',
       // The operation guard (#663): the account's bound factors, and the
       // browser session behind a token for a recovery-code sign-in.

@@ -108,10 +108,12 @@ const ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
  */
 const ROUTES_ADDED_SINCE: readonly string[] = [
   'DELETE /account/v1-rc.0/consents/:consentId',
+  'DELETE /account/v1-rc.0/linked-accounts/:linkedAccountId',
   'DELETE /developer/v1-rc.0/clients/:clientId',
   'DELETE /developer/v1-rc.0/clients/:clientId/api-keys/:keyId',
   'DELETE /developer/v1-rc.0/consents/:consentId',
   'GET /account/v1-rc.0/consents',
+  'GET /account/v1-rc.0/linked-accounts',
   'GET /developer/v1-rc.0/clients',
   'GET /developer/v1-rc.0/clients/:clientId',
   'GET /developer/v1-rc.0/clients/:clientId/api-keys',

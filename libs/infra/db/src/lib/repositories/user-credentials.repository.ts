@@ -8,6 +8,7 @@ import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 
 import type { NewUserCredential, UserCredential, UserCredentialsRepository } from '../../types';
 import { DbClient } from '../db';
+import { users } from '../schema/core';
 import { userCredentials } from '../schema/identity';
 
 /** The `provider_type` of a password credential (`PASSWORD_PROVIDER_TYPE` of `@qauth-labs/server-federation`). */
@@ -408,6 +409,36 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
             isNotNull(userCredentials.disabledAt)
           )
         )
+        .returning();
+      return credential;
+    },
+
+    /**
+     * Lock the user's row until `tx` ends (#670): `SELECT … FOR NO KEY
+     * UPDATE`, which serializes every change to one account's set of
+     * credentials that takes it and lets an insert that only references the
+     * user through. `false` when the realm has no such user.
+     */
+    async lockUser(realmId: string, userId: string, tx: DbClient): Promise<boolean> {
+      const [user] = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.realmId, realmId), eq(users.id, userId)))
+        .limit(1)
+        .for('no key update');
+      return user !== undefined;
+    },
+
+    /** Delete one credential of the realm by id (#670); the deleted row, or `undefined`. */
+    async deleteById(
+      realmId: string,
+      id: string,
+      tx?: DbClient
+    ): Promise<UserCredential | undefined> {
+      const invoker = tx ?? defaultDb;
+      const [credential] = await invoker
+        .delete(userCredentials)
+        .where(and(eq(userCredentials.realmId, realmId), eq(userCredentials.id, id)))
         .returning();
       return credential;
     },
