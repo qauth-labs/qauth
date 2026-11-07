@@ -41,6 +41,7 @@
     "@qauth-labs/shared-interaction-client": "workspace:*",
     "@qauth-labs/shared-interaction-contract": "workspace:*",
     "@qauth-labs/shared-stability": "workspace:*",
+    "@qauth-labs/ui": "workspace:*",
     "fastify-plugin": "catalog:",
     "jose": "catalog:",
     "prom-client": "catalog:",

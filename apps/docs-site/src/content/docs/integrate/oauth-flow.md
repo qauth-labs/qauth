@@ -469,6 +469,17 @@ curl -s -X POST http://localhost:3000/oauth/token \
   the whole family. Send the user through `/oauth/authorize` again. A silent
   `prompt=none` authorization just before the session ends gives a family that
   ends with the session.
+- A **browser-based client** gets no more time on a refresh, whatever the realm
+  sets (RFC 10017 §6.3.2.3, OAuth 2.1 §9.3.2): for a public client with an
+  `https` redirect URI, each new refresh token expires when the one it replaces
+  does, so the whole family ends when its first token expires, a week after the
+  code exchange by default. A refresh then fails with `invalid_grant`; send the
+  user through `/oauth/authorize` again, silently with `prompt=none` while the
+  browser session lasts. Confidential clients and native apps, whose every
+  redirect URI is a loopback (`http://127.0.0.1/…`) or private-use scheme
+  (`com.example.app:/…`) one, keep the expiry that slides with each refresh. A
+  native app that calls back on a claimed `https` URI is treated as
+  browser-based, since the server cannot tell that URI from a web page's.
 - `scope` may be passed to **down-scope** only; requesting a scope not in the
   original set returns `invalid_scope`. Omit it to keep the original scopes.
 - The refreshed scopes must still be allowed for the client. If a scope was

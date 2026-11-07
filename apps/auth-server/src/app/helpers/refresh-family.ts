@@ -1,3 +1,5 @@
+import { isNativeAppRedirectUri } from './oauth-redirect';
+
 /**
  * The lifetime of a refresh-token family under its realm's `sso_max_lifespan`
  * (ADR-019 Decision 3, issue #552).
@@ -21,7 +23,41 @@
  * The limit is read from the request's realm row at each use (the realm
  * resolver's, at most its cache time old), never stored on the token, so a
  * realm that lowers it ends its older families at their next use.
+ *
+ * A browser-based client's family never slides, whatever the realm sets
+ * (RFC 10017 §6.3.2.3, OAuth 2.1 -17 §9.3.2; ADR-019 Decision 3, #928): a
+ * rotated token expires no later than the token it replaces, so no token of
+ * the family expires after the family's first token. The family lasts the
+ * refresh lifetime from its start at most, and the realm's limit, when it is
+ * shorter, ends it sooner. Confidential clients and native apps keep the
+ * sliding expiry.
  */
+
+/**
+ * Whether a client is a browser-based application for its refresh tokens
+ * (RFC 10017, OAuth 2.0 for Browser-Based Applications; #928): a public client
+ * (`token_endpoint_auth_method` `none`, RFC 6749 §2.1) with a redirect URI
+ * that is not a native app's ({@link isNativeAppRedirectUri}), in practice an
+ * `https` one. A public client that has one is browser-based even when it also
+ * has native ones, and so is a public client that has none: only a client whose
+ * every redirect URI is a native app's is a native app. A native app that calls
+ * back on a claimed `https` URI (RFC 8252 §7.2) is treated as browser-based
+ * too, since no server can tell that URI from a web page's.
+ *
+ * Read from the client's registration at each refresh, as the rest of the
+ * refresh grant reads it. A client whose `tokenEndpointAuthMethod` is absent
+ * is confidential, as the token endpoint treats it.
+ *
+ * @param client - the client presenting the refresh token
+ */
+export function isBrowserBasedClient(client: {
+  readonly tokenEndpointAuthMethod?: string;
+  readonly redirectUris?: readonly string[];
+}): boolean {
+  if (client.tokenEndpointAuthMethod !== 'none') return false;
+  const redirectUris = client.redirectUris ?? [];
+  return redirectUris.length === 0 || !redirectUris.every(isNativeAppRedirectUri);
+}
 
 /**
  * When a family ends, in epoch milliseconds: the earlier of its start plus the
@@ -60,6 +96,34 @@ export function refreshTokenExpiresAt(
 ): number {
   const sliding = now + lifespanSeconds * 1000;
   return familyEnd === null ? sliding : Math.min(sliding, familyEnd);
+}
+
+/**
+ * The expiry of the refresh token a rotation issues at `now` in place of the
+ * presented one: {@link refreshTokenExpiresAt}, and for a browser-based client
+ * ({@link isBrowserBasedClient}) never later than the token it replaces
+ * (RFC 10017 §6.3.2.3, #928). Every rotation of such a family applies it, so
+ * no token of the family expires after its first token: the family's first
+ * expiry is carried down the chain, and a realm that raises its refresh
+ * lifetime later does not lengthen it. A realm that lowers the lifetime or the
+ * family's end shortens it further. The presented token is live when this
+ * runs, so the new token is never issued expired.
+ *
+ * @param now - when the token is issued, in epoch milliseconds
+ * @param lifespanSeconds - the realm's refresh lifetime (`tokenLifetimesOf`, #527)
+ * @param familyEnd - from {@link refreshFamilyEnd}
+ * @param replacedExpiresAt - the presented token's expiry, in epoch milliseconds
+ * @param browserBased - from {@link isBrowserBasedClient}
+ */
+export function rotatedRefreshTokenExpiresAt(
+  now: number,
+  lifespanSeconds: number,
+  familyEnd: number | null,
+  replacedExpiresAt: number,
+  browserBased: boolean
+): number {
+  const expiresAt = refreshTokenExpiresAt(now, lifespanSeconds, familyEnd);
+  return browserBased ? Math.min(expiresAt, replacedExpiresAt) : expiresAt;
 }
 
 /**

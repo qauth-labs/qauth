@@ -28,7 +28,10 @@ import {
  * re-authorization just before the session's end therefore starts a family
  * that ends with the session. The limit is read from the realm at each
  * refresh, so lowering it ends an older family at its next refresh. Without a
- * limit every refresh slides the expiry forward, as before.
+ * limit every refresh slides the expiry forward, as before, for a native app
+ * or a confidential client. A browser-based client's family never slides
+ * (RFC 10017 §6.3.2.3, #928): no rotated token expires after the family's
+ * first.
  *
  * The suite moves the clock the server reads (`Date` only; timers stay real)
  * to reach minute 59 or 61 of a family without waiting.
@@ -40,9 +43,31 @@ import {
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 const REFRESH_TOKEN_LIFESPAN_SECONDS = 604_800;
-const CLIENT_ID = 'family-native-app';
-const REDIRECT_URI = 'https://client.example.com/callback';
 const SCOPES = ['openid', 'email'];
+
+/** A client the suite runs the code flow for; a confidential one has a secret. */
+interface FamilyClient {
+  readonly clientId: string;
+  readonly redirectUri: string;
+  readonly secret?: string;
+}
+
+/** A public native app: its one redirect URI is a private-use scheme's. */
+const NATIVE_APP: FamilyClient = {
+  clientId: 'family-native-app',
+  redirectUri: 'com.example.family:/callback',
+};
+/** A public browser-based app: it calls back on an `https` URI (#928). */
+const BROWSER_APP: FamilyClient = {
+  clientId: 'family-browser-app',
+  redirectUri: 'https://client.example.com/callback',
+};
+/** A confidential client on the browser app's redirect URI (#928). */
+const CONFIDENTIAL_APP: FamilyClient = {
+  clientId: 'family-web-server',
+  redirectUri: 'https://client.example.com/callback',
+  secret: 'family-web-server-secret',
+};
 
 interface RefreshRow {
   readonly family_created_at: string;
@@ -103,12 +128,16 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
   }
 
   /**
-   * Run the code flow for a public client with the user's stored consent, so
-   * the exchange starts a refresh-token family.
+   * Run the code flow for a client, the public native app unless another is
+   * named, with the user's stored consent, so the exchange starts a
+   * refresh-token family.
    *
    * @returns the refresh token, its family and the family's start (epoch ms)
    */
-  async function startFamily(app: FastifyInstance): Promise<{
+  async function startFamily(
+    app: FastifyInstance,
+    familyClient: FamilyClient = NATIVE_APP
+  ): Promise<{
     refreshToken: string;
     familyId: string;
     familyCreatedAt: number;
@@ -121,11 +150,14 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
     if (!realm) throw new Error('default realm missing');
     const client = await app.repositories.oauthClients.create({
       realmId: realm.id,
-      clientId: CLIENT_ID,
-      clientSecretHash: 'unused-public-client',
-      tokenEndpointAuthMethod: 'none',
-      name: 'Family native app',
-      redirectUris: [REDIRECT_URI],
+      clientId: familyClient.clientId,
+      clientSecretHash:
+        familyClient.secret === undefined
+          ? 'unused-public-client'
+          : await app.passwordHasher.hashPassword(familyClient.secret),
+      tokenEndpointAuthMethod: familyClient.secret === undefined ? 'none' : 'client_secret_post',
+      name: `Family app ${familyClient.clientId}`,
+      redirectUris: [familyClient.redirectUri],
       scopes: SCOPES,
       grantTypes: ['authorization_code', 'refresh_token'],
       enabled: true,
@@ -134,7 +166,12 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
     await app.repositories.oauthConsents.upsertGrant(realm.id, userId, client.id, SCOPES);
     const jar = await signInWithPassword(app, email);
     const cookie = jar.header() as string;
-    const { refreshToken, familyId, familyCreatedAt, sessionEnd } = await codeFamily(app, cookie);
+    const { refreshToken, familyId, familyCreatedAt, sessionEnd } = await codeFamily(
+      app,
+      cookie,
+      {},
+      familyClient
+    );
     return { refreshToken, familyId, familyCreatedAt, sessionEnd, cookie };
   }
 
@@ -149,7 +186,8 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
   async function codeFamily(
     app: FastifyInstance,
     cookie: string,
-    extra: Record<string, string> = {}
+    extra: Record<string, string> = {},
+    familyClient: FamilyClient = NATIVE_APP
   ): Promise<{
     refreshToken: string;
     familyId: string;
@@ -161,8 +199,8 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
       method: 'GET',
       url: `/oauth/authorize?${new URLSearchParams({
         response_type: 'code',
-        client_id: CLIENT_ID,
-        redirect_uri: REDIRECT_URI,
+        client_id: familyClient.clientId,
+        redirect_uri: familyClient.redirectUri,
         scope: SCOPES.join(' '),
         code_challenge: pkce.challenge,
         code_challenge_method: 'S256',
@@ -179,9 +217,9 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
     const exchange = await tokenRequest(app, {
       grant_type: 'authorization_code',
       code,
-      redirect_uri: REDIRECT_URI,
-      client_id: CLIENT_ID,
+      redirect_uri: familyClient.redirectUri,
       code_verifier: pkce.verifier,
+      ...credentialsOf(familyClient),
     });
     expect(exchange.statusCode).toBe(200);
     const refreshToken = (exchange.json() as { refresh_token?: string }).refresh_token;
@@ -218,17 +256,25 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
     });
   }
 
-  /** Refresh at `at` on the server's clock. */
+  /** The client's own token request fields: its id, and its secret if it has one. */
+  function credentialsOf(familyClient: FamilyClient): Record<string, string> {
+    return familyClient.secret === undefined
+      ? { client_id: familyClient.clientId }
+      : { client_id: familyClient.clientId, client_secret: familyClient.secret };
+  }
+
+  /** Refresh at `at` on the server's clock, as the native app unless another is named. */
   async function refreshAt(
     app: FastifyInstance,
     refreshToken: string,
-    at: number
+    at: number,
+    familyClient: FamilyClient = NATIVE_APP
   ): Promise<LightMyRequestResponse> {
     vi.setSystemTime(at);
     return tokenRequest(app, {
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
-      client_id: CLIENT_ID,
+      ...credentialsOf(familyClient),
     });
   }
 
@@ -311,7 +357,7 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
     expect(await tokenFailureReasons(app)).toEqual(['refresh_family_expired']);
   });
 
-  it('slides the expiry as before when the realm sets no sso_max_lifespan', async () => {
+  it('slides the expiry as before for a native app when the realm sets no sso_max_lifespan', async () => {
     const app = server();
     await setRealmLimit(app, null);
     const family = await startFamily(app);
@@ -437,5 +483,76 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
         revoked_reason: null,
       },
     ]);
+  });
+
+  describe('a browser-based client’s family ends with its first token (RFC 10017 §6.3.2.3, #928)', () => {
+    const lifespanMs = REFRESH_TOKEN_LIFESPAN_SECONDS * 1000;
+
+    /**
+     * Refresh the family on days 2, 4 and 6 of its first token's week, each
+     * time with the token the previous refresh issued.
+     *
+     * @returns the last token issued
+     */
+    async function refreshEveryOtherDay(
+      app: FastifyInstance,
+      family: { refreshToken: string; familyCreatedAt: number },
+      familyClient: FamilyClient
+    ): Promise<string> {
+      let current = family.refreshToken;
+      for (const day of [2, 4, 6]) {
+        const refreshed = await refreshAt(
+          app,
+          current,
+          family.familyCreatedAt + day * DAY,
+          familyClient
+        );
+        expect(refreshed.statusCode, refreshed.body).toBe(200);
+        current = (refreshed.json() as { refresh_token: string }).refresh_token;
+      }
+      return current;
+    }
+
+    it("gives no rotated token of a public browser app a later expiry than the family's first", async () => {
+      const app = server();
+      await setRealmLimit(app, null);
+      const family = await startFamily(app, BROWSER_APP);
+      const firstExpiry = family.familyCreatedAt + lifespanMs;
+
+      // Each refresh would slide a week from its own time; with no realm
+      // limit, every token of the family keeps the first one's expiry.
+      const current = await refreshEveryOtherDay(app, family, BROWSER_APP);
+      const rows = await familyRows(app, family.familyId);
+      expect(rows.map((row) => Number(row.expires_at))).toEqual([
+        firstExpiry,
+        firstExpiry,
+        firstExpiry,
+        firstExpiry,
+      ]);
+      expect(rows.every((row) => row.family_created_at === String(family.familyCreatedAt))).toBe(
+        true
+      );
+
+      // At the first token's expiry the family is over.
+      const late = await refreshAt(app, current, firstExpiry, BROWSER_APP);
+      expect(late.statusCode).toBe(400);
+      expect(late.json()).toMatchObject({ error: 'invalid_grant' });
+      expect(await tokenFailureReasons(app)).toEqual(['refresh_token_expired']);
+    });
+
+    it('slides the expiry as before for a confidential client on the same redirect URI', async () => {
+      const app = server();
+      await setRealmLimit(app, null);
+      const family = await startFamily(app, CONFIDENTIAL_APP);
+
+      await refreshEveryOtherDay(app, family, CONFIDENTIAL_APP);
+      const rows = await familyRows(app, family.familyId);
+      expect(rows.map((row) => Number(row.expires_at))).toEqual([
+        family.familyCreatedAt + lifespanMs,
+        family.familyCreatedAt + 2 * DAY + lifespanMs,
+        family.familyCreatedAt + 4 * DAY + lifespanMs,
+        family.familyCreatedAt + 6 * DAY + lifespanMs,
+      ]);
+    });
   });
 });

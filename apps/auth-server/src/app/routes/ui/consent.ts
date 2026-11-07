@@ -50,6 +50,7 @@ import {
   writeSessionSideRecord,
 } from '../../helpers/session-side-record';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
+import { uiStylesheetLink } from '../../helpers/ui-assets';
 import { emitUserEvent } from '../../helpers/user-events';
 import { markRelaxedCsp } from '../../plugins/security-headers';
 import { type ConsentForm, consentFormSchema } from '../../schemas/consent';
@@ -201,7 +202,7 @@ function consentPage(opts: {
   audience: string[];
   scopes: string[];
   csrfToken: string;
-  /** Per-request CSP nonce (issue #113) stamped onto the inline <style> tag. */
+  /** Per-request CSP nonce (issue #113) stamped onto the page's own inline <style>. */
   cspNonce: string;
   authorizeParams: Record<string, string | undefined>;
   /** RFC 8707 resource indicators — emitted as one hidden input per URI. */
@@ -249,48 +250,30 @@ function consentPage(opts: {
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
           <title>${clientTitle(opts.client)}</title>
+          ${uiStylesheetLink()}
           <style nonce="${opts.cspNonce}">
-            body {
-              font-family:
-                system-ui,
-                -apple-system,
-                Segoe UI,
-                Roboto,
-                sans-serif;
-              background: #f6f7f9;
-              color: #1a1a1a;
-              margin: 0;
-              min-height: 100vh;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-            }
             .card {
-              background: #fff;
-              padding: 32px;
-              border-radius: 12px;
-              box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
-              width: 100%;
-              max-width: 520px;
+              max-width: 32.5rem;
             }
             h1 {
-              margin: 0 0 8px;
-              font-size: 20px;
+              margin-bottom: 0.5rem;
             }
             .domain {
               overflow-wrap: anywhere;
             }
             .verified {
-              color: #1d6b3a;
-              font-size: 13px;
+              margin-top: 0;
+              color: var(--success);
+            }
+            .declared,
+            .as-user {
+              color: var(--muted-foreground);
+            }
+            .as-user {
               margin-top: 0;
             }
-            .declared {
-              color: #6b7280;
-              font-size: 13px;
-            }
             .declared-name {
-              color: #1a1a1a;
+              color: var(--foreground);
               overflow-wrap: anywhere;
               display: inline-block;
               max-width: 100%;
@@ -298,87 +281,61 @@ function consentPage(opts: {
               vertical-align: bottom;
             }
             ul.scopes {
-              padding-left: 20px;
+              padding-left: 1.25rem;
             }
             ul.scopes li {
-              margin: 6px 0;
+              margin: 0.375rem 0;
             }
-            code {
-              background: #f0f1f4;
-              padding: 1px 6px;
-              border-radius: 4px;
-              font-size: 12px;
+            .agent,
+            .badge,
+            .warn {
+              margin: 1rem 0;
+              padding: 0.625rem 0.75rem;
+              border-radius: var(--radius-control);
             }
             .agent {
-              background: #eef2ff;
-              color: #1e3a8a;
-              border: 1px solid #c7d2fe;
-              border-radius: 6px;
-              padding: 10px 12px;
-              margin: 16px 0;
-              font-size: 13px;
+              background-color: var(--muted);
+              color: var(--foreground);
             }
             .agent p {
               margin: 0;
+              color: inherit;
             }
             .agent p + p {
-              margin-top: 4px;
+              margin-top: 0.25rem;
             }
             .badge {
-              background: #fff4e5;
-              color: #8a4b08;
-              border: 1px solid #f5c16c;
-              border-radius: 6px;
-              padding: 10px 12px;
-              margin: 16px 0;
-              font-size: 13px;
+              background-color: var(--warning-surface);
+              color: var(--warning);
             }
             .warn {
-              background: #fdecea;
-              color: #8a1c12;
-              border: 1px solid #f1a59c;
-              border-radius: 6px;
-              padding: 10px 12px;
-              margin: 16px 0;
-              font-size: 13px;
-            }
-            .redirect {
-              font-size: 13px;
-              color: #374151;
+              background-color: var(--destructive-surface);
+              color: var(--destructive);
             }
             .actions {
               display: flex;
-              gap: 12px;
-              margin-top: 24px;
+              gap: 0.75rem;
+              margin-top: 1.5rem;
             }
-            button {
+            .actions button {
               flex: 1;
-              padding: 10px;
-              border-radius: 6px;
-              border: 0;
-              font-weight: 600;
-              font-size: 14px;
-              cursor: pointer;
-            }
-            button.allow {
-              background: #2a5bd7;
-              color: #fff;
-            }
-            button.deny {
-              background: #e9ecf2;
-              color: #1a1a1a;
-            }
-            .as-user {
-              color: #6b7280;
-              font-size: 13px;
               margin-top: 0;
             }
+            button.deny {
+              border-color: var(--input);
+              background-color: transparent;
+              color: var(--foreground);
+            }
+            button.deny:hover {
+              background-color: var(--muted);
+            }
             .forever {
-              font-size: 13px;
-              margin-top: 16px;
               display: flex;
               align-items: center;
-              gap: 8px;
+              gap: 0.5rem;
+              margin-top: 1rem;
+              font-weight: var(--font-weight-regular);
+              color: var(--body);
             }
           </style>
         </head>

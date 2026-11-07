@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { UI_STYLESHEET_URL } from './ui-assets';
 import {
   WALLET_LINK_REBOUND,
   WALLET_LINKED,
@@ -42,7 +43,9 @@ describe('walletReturnRefusalPage (#405)', () => {
   it('scrubs the Response Code from the address bar with a nonced inline script', () => {
     expect(page).toContain('<script nonce="script-nonce">');
     expect(page).toContain(`history.replaceState(null, '', "${returnPath}")`);
-    expect(page).toContain('<style nonce="style-nonce">');
+    // The styles are the /ui stylesheet (#472), which needs no nonce.
+    expect(page).toContain(`<link rel="stylesheet" href="${UI_STYLESHEET_URL}" />`);
+    expect(page).not.toContain('<style');
     expect(page).toContain('<meta name="robots" content="noindex" />');
   });
 });

@@ -134,6 +134,13 @@ export type OAuthClientLike = {
   metadata?: Record<string, unknown> | null;
   /** When `/oauth/register` registered the client; null for any other client. */
   dynamicRegisteredAt?: number | null;
+  /**
+   * The client's registered redirect URIs. Optional for older callers; every
+   * stored row and every CIMD-resolved client carries them. Read by the
+   * refresh grant through `isBrowserBasedClient` (#928), which treats a
+   * public client without any as browser-based.
+   */
+  redirectUris?: string[];
 };
 
 /**

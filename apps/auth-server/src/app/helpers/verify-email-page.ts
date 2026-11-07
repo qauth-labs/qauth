@@ -1,13 +1,14 @@
 import type { FastifyReply } from 'fastify';
 
 import { html, render, type SafeHtml } from './html';
+import { uiStylesheetLink } from './ui-assets';
 
 /**
  * The page behind the emailed verification link (`GET /auth/verify?token=…`)
  * and the answers of its form (`POST /ui/verify`).
  *
- * Server-rendered like `/ui/login`: no script, one inline `<style>` carrying
- * the per-request CSP nonce, and nothing loaded from anywhere else. The form
+ * Server-rendered like `/ui/login`: no script, no inline style, the `/ui`
+ * pages' stylesheet (#472), and nothing loaded from another origin. The form
  * posts to `/ui/verify` and works without JavaScript.
  *
  * Interim: the email-code step (#638) and the hosted account verification UI
@@ -115,9 +116,8 @@ function content(state: VerifyEmailPageState): { title: string; body: SafeHtml }
  * Render the page for `state`.
  *
  * @param state - what to show.
- * @param cspNonce - the per-request style nonce (`reply.cspNonce.style`, #113).
  */
-export function verifyEmailPage(state: VerifyEmailPageState, cspNonce: string): string {
+export function verifyEmailPage(state: VerifyEmailPageState): string {
   const { title, body } = content(state);
   return render(
     html`<!doctype html>
@@ -127,77 +127,7 @@ export function verifyEmailPage(state: VerifyEmailPageState, cspNonce: string): 
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
           <title>${title} — QAuth</title>
-          <style nonce="${cspNonce}">
-            body {
-              font-family:
-                system-ui,
-                -apple-system,
-                Segoe UI,
-                Roboto,
-                sans-serif;
-              background: #f6f7f9;
-              color: #1a1a1a;
-              margin: 0;
-              min-height: 100vh;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-            }
-            .card {
-              background: #fff;
-              padding: 32px;
-              border-radius: 12px;
-              box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
-              width: 100%;
-              max-width: 420px;
-            }
-            h1 {
-              margin: 0 0 16px;
-              font-size: 20px;
-            }
-            p {
-              margin: 0 0 8px;
-              font-size: 14px;
-              line-height: 1.5;
-              color: #374151;
-            }
-            label {
-              display: block;
-              margin-top: 16px;
-              font-size: 13px;
-              font-weight: 600;
-            }
-            input[type='password'] {
-              display: block;
-              width: 100%;
-              padding: 10px 12px;
-              margin-top: 6px;
-              border: 1px solid #d8dbe0;
-              border-radius: 6px;
-              font-size: 14px;
-              box-sizing: border-box;
-            }
-            button {
-              margin-top: 24px;
-              width: 100%;
-              padding: 10px;
-              border: 0;
-              border-radius: 6px;
-              background: #2a5bd7;
-              color: #fff;
-              font-weight: 600;
-              font-size: 14px;
-              cursor: pointer;
-            }
-            .error {
-              background: #fdecea;
-              color: #a1261b;
-              padding: 10px 12px;
-              border-radius: 6px;
-              font-size: 13px;
-              margin-bottom: 16px;
-            }
-          </style>
+          ${uiStylesheetLink()}
         </head>
         <body>
           <main class="card">${body}</main>
@@ -227,5 +157,5 @@ export function sendVerifyEmailPage(
   reply.header('Cache-Control', 'no-store');
   reply.header('Referrer-Policy', 'no-referrer');
   reply.code(statusCode);
-  return reply.send(verifyEmailPage(state, reply.cspNonce.style));
+  return reply.send(verifyEmailPage(state));
 }

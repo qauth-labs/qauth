@@ -3,6 +3,7 @@ import type { FastifyReply } from 'fastify';
 import { redirectHost } from './consent';
 import { html, render, safe, safeUrl } from './html';
 import { type AuthorizationResponseParams, buildRedirectUrl } from './oauth-redirect';
+import { uiStylesheetLink } from './ui-assets';
 
 /** The provisioning-origin field of an `oauth_clients` row. */
 export interface ClientOriginLike {
@@ -56,9 +57,10 @@ function untrustedRedirectPage(location: string, params: AuthorizationErrorParam
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
           <title>Sign-in not completed</title>
+          ${uiStylesheetLink()}
         </head>
         <body>
-          <main>
+          <main class="card">
             <h1>Sign-in not completed</h1>
             <p>
               The application's sign-in request ended with the error

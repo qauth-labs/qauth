@@ -82,7 +82,8 @@ const DEFAULT_ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
 
 /**
  * The routes added since the manifest replaced the autoload: the account and
- * developer APIs under their versioned prefixes (#524).
+ * developer APIs under their versioned prefixes (#524), and the stylesheet
+ * and fonts of the auth server's own pages (#472).
  */
 const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   'DELETE /account/v1-rc.0/consents/:consentId',
@@ -92,6 +93,7 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   'DELETE /developer/v1-rc.0/consents/:consentId',
   'GET /account/v1-rc.0/consents',
   'GET /account/v1-rc.0/linked-accounts',
+  'GET /assets/ui/:file',
   'GET /developer/v1-rc.0/clients',
   'GET /developer/v1-rc.0/clients/:clientId',
   'GET /developer/v1-rc.0/clients/:clientId/api-keys',

@@ -199,9 +199,12 @@ that a plugin registered after routes is broken. Decide per extension point, usi
 
 What genuinely matters about the security headers plugin is inside it, not around it:
 
-- **The nonce.** The login and consent pages ship inline `<style>` blocks and stamp
-  `reply.cspNonce.style` onto each one rather than weakening the policy with `'unsafe-inline'`.
-  Add an inline `<style>` without the nonce and the browser refuses it.
+- **The nonce.** The server-rendered pages link the design system's stylesheet and fonts, which
+  the auth server serves itself under `/assets/ui/` (`helpers/ui-assets.ts`): same-origin files
+  that `style-src 'self'` and `font-src 'self'` allow. A page that adds rules of its own, such as
+  the login and consent pages, ships an inline `<style>` and stamps `reply.cspNonce.style` onto it
+  rather than weakening the policy with `'unsafe-inline'`. Add an inline `<style>` without the
+  nonce and the browser refuses it.
 - **The `/docs` exception.** Swagger UI bundles its own inline scripts and cannot use the nonce,
   so that one prefix is served a relaxed policy. The exception is scoped to the prefix; every
   other route keeps the strict policy (`apps/auth-server/src/app/plugins/security-headers.ts`).

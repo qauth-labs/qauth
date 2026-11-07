@@ -8,14 +8,14 @@
  * leaves out the dark set, which `theme.css` would bring back.
  */
 import { contrastRatio, oklchToRgb, parseHex, type Rgb, toHex } from './color';
-import { themeCss } from './theme-css';
 import {
   COLOR_TOKENS,
   type ColorMode,
   type ColorToken,
   contrastFailures,
   oklchCss,
-} from './tokens';
+} from './read-tokens';
+import { themeCss } from './theme-css';
 
 /**
  * The fonts a brand may pick. Each is self-hosted by `libs/ui` or is the system's own, so a brand

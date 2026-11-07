@@ -1333,7 +1333,9 @@ refresh_tokens.authorization_code_id uuid NULL → authorization_codes(id) ON DE
 - Refresh-family lifetime (question 23, decided 2026-10-09). When a realm's `sso_max_lifespan` is
   set, it caps every refresh family in that realm. When it is unset, today's sliding
   `REFRESH_TOKEN_LIFESPAN` is unchanged. As of 2026-10-09 the column exists on `realms`, is
-  nullable, and nothing reads it.
+  nullable, and nothing reads it. A browser-based client's family never slides, whatever the realm
+  sets: it ends with its first token (RFC 10017 §6.3.2.3; ADR-019 Decision 3, amended 2026-11-07,
+  #928).
 - `amr` and `auth_time` appear in the ID token and the JWT access token for challenge-issued codes
   and for browser sign-ins alike, fixed across refreshes (browser sign-ins since #662, amended
   2026-11-06; this was F5).
