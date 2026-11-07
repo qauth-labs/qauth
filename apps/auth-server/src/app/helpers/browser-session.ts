@@ -91,7 +91,9 @@ export async function createBrowserSession(
     userId: signIn.userId,
     authTime: signIn.authTime ?? Date.now(),
     amr: signIn.amr ?? [],
-    recoveryCodeUsed: signIn.recoveryCodeUsed === true,
+    // Only a sign-in that took a recovery code says so (#663); the column
+    // defaults to false for every other.
+    ...(signIn.recoveryCodeUsed === true ? { recoveryCodeUsed: true } : {}),
     assuranceLevel: signIn.assuranceLevel ?? null,
     ipAddress: origin?.ip ?? null,
     userAgent: origin?.userAgent ?? null,
