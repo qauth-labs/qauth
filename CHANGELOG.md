@@ -29,8 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credentials are all passkeys by the code alone, through a per-realm
   Argon2id lookup digest of each code of its set (new column
   `user_recovery_codes.lookup_digest`, migration 0066). The code then binds
-  a new passkey within 5 minutes, which the next round signs in with; a code
-  alone never signs in. A registration by passkey counts against the realm's
+  a new passkey within 5 minutes in place of the lost one (the account's
+  other passkeys are disabled in the same write), which the next round signs
+  in with; a code alone never signs in. A registration by passkey counts against the realm's
   registration cap, and each answer is a credential round on the sign-in
   limiters.
 - **TOTP as a second factor, with its own failure ladder** ([#653], ADR-017
