@@ -3377,7 +3377,7 @@
           },
           "upstreamLink": {
             "type": "object",
-            "description": "The upstream identity this sign-in links, while the person signs in to their existing account to link it (#670): the screen says so (\"Sign in to link Example Corp\"). Present from the answer `link` to the `upstream_link` step until the interaction ends; absent on any other interaction. It names the provider only, never the identity or the account.",
+            "description": "The upstream identity this sign-in links, while the person signs in to their existing account to link it (#670): the screen says so (\"Sign in to link Example Corp\"). Present from the answer `link` to the `upstream_link` step, or from the provider’s callback when the authorization request asked for the link (`qauth_link`), until the interaction ends; absent on any other interaction. It names the provider only, never the identity or the account.",
             "properties": {
               "provider": {
                 "type": "string",
@@ -6281,7 +6281,7 @@
           },
           "create": {
             "type": "boolean",
-            "description": "Whether the person may start a new account with the identity: the realm allows sign-up. `false` offers the existing account only."
+            "description": "Whether the person may start a new account with the identity: the realm allows sign-up, the new account can be verified (the provider vouches for its address, or gave one an emailed code verifies), and the provider’s claims fit what the interaction keeps. `false` offers the existing account only."
           }
         },
         "required": [

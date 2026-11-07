@@ -287,7 +287,7 @@ export const interactionSchema = object(
         ),
       },
       ['provider', 'name'],
-      'The upstream identity this sign-in links, while the person signs in to their existing account to link it (#670): the screen says so ("Sign in to link Example Corp"). Present from the answer `link` to the `upstream_link` step until the interaction ends; absent on any other interaction. It names the provider only, never the identity or the account.'
+      'The upstream identity this sign-in links, while the person signs in to their existing account to link it (#670): the screen says so ("Sign in to link Example Corp"). Present from the answer `link` to the `upstream_link` step, or from the provider’s callback when the authorization request asked for the link (`qauth_link`), until the interaction ends; absent on any other interaction. It names the provider only, never the identity or the account.'
     ),
   },
   ['step', 'alternatives', 'params', 'csrf', 'brand', 'expiresAt'],

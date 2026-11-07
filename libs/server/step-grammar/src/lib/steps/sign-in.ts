@@ -238,7 +238,7 @@ export const upstreamLink = defineStep({
     }),
     create: z.boolean().meta({
       description:
-        'Whether the person may start a new account with the identity: the realm allows sign-up. `false` offers the existing account only.',
+        'Whether the person may start a new account with the identity: the realm allows sign-up, the new account can be verified (the provider vouches for its address, or gave one an emailed code verifies), and the provider’s claims fit what the interaction keeps. `false` offers the existing account only.',
     }),
   }),
   personal: EMPTY_OBJECT,

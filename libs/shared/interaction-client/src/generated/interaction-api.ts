@@ -32,7 +32,7 @@ export interface Interaction {
   uiLocales?: string[];
   /** When the interaction expires. */
   expiresAt: string;
-  /** The upstream identity this sign-in links, while the person signs in to their existing account to link it (#670): the screen says so ("Sign in to link Example Corp"). Present from the answer `link` to the `upstream_link` step until the interaction ends; absent on any other interaction. It names the provider only, never the identity or the account. */
+  /** The upstream identity this sign-in links, while the person signs in to their existing account to link it (#670): the screen says so ("Sign in to link Example Corp"). Present from the answer `link` to the `upstream_link` step, or from the provider’s callback when the authorization request asked for the link (`qauth_link`), until the interaction ends; absent on any other interaction. It names the provider only, never the identity or the account. */
   upstreamLink?: {
     /** The provider’s name: the AuthMethod `type`. */
     provider: string;
@@ -709,7 +709,7 @@ export interface UpstreamLinkParams {
     /** The provider’s name as the operator set it, for the screen’s text. */
     name: string;
   };
-  /** Whether the person may start a new account with the identity: the realm allows sign-up. `false` offers the existing account only. */
+  /** Whether the person may start a new account with the identity: the realm allows sign-up, the new account can be verified (the provider vouches for its address, or gave one an emailed code verifies), and the provider’s claims fit what the interaction keeps. `false` offers the existing account only. */
   create: boolean;
 }
 

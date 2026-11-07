@@ -405,7 +405,7 @@ export const upstreamLink = defineStep({
   summary:
     'Asks whether an upstream identity QAuth does not know starts a new account or joins an existing one.',
   description:
-    'Shown once an upstream identity provider proved an identity no account of the realm holds (#670; ADR-020 §3). The person picks a new account with that identity, which only a realm that allows sign-up offers (`create`), or the account they already have, which they then sign in to in this interaction with its own factors and its MFA policy: the `identifier` step, and every step that account’s sign-in asks for. The identity joins that account only once that sign-in completes, in the same browser and the same interaction; no other way to sign in is offered meanwhile, neither another provider nor a password reset. Nothing on the step names the identity or the account: no address and no hint, and no account is ever found by an attribute such as an email address. Works without JavaScript: each choice is a button of a plain form post.',
+    'Shown once an upstream identity provider proved an identity no account of the realm holds (#670; ADR-020 §3). The person picks a new account with that identity, which is offered only where the realm allows sign-up and the new account can be verified (`create`), or the account they already have, which they then sign in to in this interaction with its own factors and its MFA policy: the `identifier` step, and every step that account’s sign-in asks for. The identity joins that account only once that sign-in completes, in the same browser and the same interaction; no other way to sign in is offered meanwhile, neither another provider nor a password reset. Nothing on the step names the identity or the account: no address and no hint, and no account is ever found by an attribute such as an email address. Works without JavaScript: each choice is a button of a plain form post.',
   params: object(
     {
       provider: object(
@@ -422,7 +422,7 @@ export const upstreamLink = defineStep({
       create: {
         type: 'boolean',
         description:
-          'Whether the person may start a new account with the identity: the realm allows sign-up. `false` offers the existing account only.',
+          'Whether the person may start a new account with the identity: the realm allows sign-up, the new account can be verified (the provider vouches for its address, or gave one an emailed code verifies), and the provider’s claims fit what the interaction keeps. `false` offers the existing account only.',
       },
     },
     ['provider', 'create']
