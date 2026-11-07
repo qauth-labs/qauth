@@ -247,9 +247,11 @@ describe('the hosted account pages (#844, real containers)', () => {
       ...baseEnvironment(infra, await generateJwtPem()),
       INTERACTION_UI_ENABLED: 'true',
       WEBAUTHN_ENABLED: 'true',
-      // Each test registers its accounts through POST /auth/register, and
-      // drives dozens of page loads from one address.
+      // Each test registers and verifies its accounts through POST
+      // /auth/register and /auth/verify, and drives dozens of page loads from
+      // one address.
       REGISTRATION_RATE_LIMIT: '10000',
+      VERIFICATION_RATE_LIMIT: '10000',
       AUTHORIZE_RATE_LIMIT: '10000',
       AUTHORIZE_RATE_LIMIT_LENIENT: '10000',
     });
@@ -375,7 +377,8 @@ describe('the hosted account pages (#844, real containers)', () => {
     const row = await server().repositories.userCredentials.create({
       userId,
       realmId,
-      providerType: 'acme-sso',
+      // An AuthMethod type, as the events that name a provider require.
+      providerType: 'oidc_acme',
       externalSub: `upstream-${randomUUID()}`,
       credentialData: { kind: 'upstream', iss: 'https://idp.acme.example', verified: true },
     });
