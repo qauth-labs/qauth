@@ -749,3 +749,78 @@ describe('the held ceremony', () => {
     expect(readSignInTransaction(early)).toBeNull();
   });
 });
+
+describe('the passkey the person asked for (#844)', () => {
+  /** A passkey account whose first set of recovery codes is saved. */
+  const withSavedSet = async (built: Built) => {
+    const set = await built.codes.replace({ realmId: REALM, userId: USER });
+    await built.codes.confirm({ realmId: REALM, userId: USER, setId: set.setId });
+  };
+
+  it('adds a second passkey after the downgrade rule, with no mailed code and no new set', async () => {
+    const built = build();
+    await withSavedSet(built);
+    const ctx = context(built, { enrol: 'passkey' });
+    const afterPassword = await signInWithPassword(built, ctx);
+    // The strongest bound factor first: the passkey the account holds.
+    expect(offerOf(afterPassword).current.step).toBe('webauthn_get');
+    const offered = await built.engine.advance(kept(afterPassword), assertion(afterPassword), ctx);
+    expect(offered).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'webauthn_create', params: { optional: true } } },
+      personal: { user: { name: IDENTIFIER } },
+    });
+    const sent = built.sender.sent.length;
+    const done = await built.engine.advance(
+      kept(offered),
+      answer('webauthn_create', {
+        webauthn_response: fakeRegistration('credential-new', paramsOf(offered, 'webauthn_create')),
+      }),
+      ctx
+    );
+    expect(built.passkeys.passkeys.get('credential-new')).toMatchObject({ userId: USER });
+    expect(built.sender.sent).toHaveLength(sent);
+    expect(done).toMatchObject({
+      kind: 'complete',
+      signIn: { subject: USER, amr: ['pwd', 'pop', 'mfa'] },
+    });
+  });
+
+  it('is not offered without the request to an account that holds a passkey', async () => {
+    const built = build();
+    await withSavedSet(built);
+    const ctx = context(built);
+    const afterPassword = await signInWithPassword(built, ctx);
+    const done = await built.engine.advance(kept(afterPassword), assertion(afterPassword), ctx);
+    expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd', 'pop', 'mfa'] } });
+    expect(built.passkeys.calls).not.toContain('startRegistration');
+  });
+
+  it('may be declined: the sign-in completes and nothing is bound', async () => {
+    const built = build();
+    await withSavedSet(built);
+    const ctx = context(built, { enrol: 'passkey' });
+    const afterPassword = await signInWithPassword(built, ctx);
+    const offered = await built.engine.advance(kept(afterPassword), assertion(afterPassword), ctx);
+    const declined = await built.engine.advance(kept(offered), answer('webauthn_create', {}), ctx);
+    expect(declined).toMatchObject({ kind: 'complete' });
+    expect([...built.passkeys.passkeys.keys()]).toEqual([PASSKEY, OTHER_PASSKEY]);
+  });
+
+  it('asks a password-only account for its mailbox first, as the offer does', async () => {
+    const built = build(passwordAccount(USER, PASSWORD));
+    const ctx = context(built, { enrol: 'passkey' });
+    const offered = await signInWithPassword(built, ctx);
+    const registered = await built.engine.advance(
+      kept(offered),
+      answer('webauthn_create', {
+        webauthn_response: fakeRegistration('credential-new', paramsOf(offered, 'webauthn_create')),
+      }),
+      ctx
+    );
+    expect(registered).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'email_code', params: { purpose: 'recovery' } } },
+    });
+  });
+});

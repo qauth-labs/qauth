@@ -168,6 +168,7 @@ export type {
   CompletedSignIn,
   EmailCodeSender,
   EmailCodeSendOutcome,
+  EnrolmentRequest,
   Recovered,
   RefusalReason,
   Registered,

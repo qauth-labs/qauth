@@ -3499,18 +3499,37 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const enrolPasskey = async (
       passkeys: PasskeyCeremonies,
       current: SignInAccount,
-      subject: string
+      subject: string,
+      requested: boolean
     ): Promise<RoundResult | null> => {
       const enrolment = state.transaction.passkeyEnrolment;
-      const { identifier } = state.transaction;
-      if (enrolment === 'declined' || enrolment === 'bound' || identifier === undefined) {
+      // A passkey the person asked for (#844) names the account by the
+      // address its password credential holds, or by none (a passkey-only
+      // account): the port makes a name for it, as at a rebind.
+      const identifier =
+        state.transaction.identifier ?? (requested ? current.identifier : undefined);
+      if (
+        enrolment === 'declined' ||
+        enrolment === 'bound' ||
+        (identifier === undefined && !requested)
+      ) {
         return null;
       }
+      /**
+       * The account's first factor beyond its password: its mailbox is proved
+       * before the binding (ADR-017 Decision 8). The optional offer is only
+       * ever made to such an account.
+       */
+      const passwordOnly = current.factors.every((factor) => factor.type === 'password');
       const fresh = (): boolean => {
         const { authTime } = state.transaction;
         return authTime !== undefined && clock.now() - authTime <= PASSKEY_BINDING_MAX_AUTH_AGE_MS;
       };
-      const create = creationStep(passkeys, { userId: subject, identifier, optional: true });
+      const create = creationStep(passkeys, {
+        userId: subject,
+        ...(identifier === undefined ? {} : { identifier }),
+        optional: true,
+      });
       /** Offer the step again with a new ceremony, the refused answer audited. */
       const refuseEnrolment = async (): Promise<RoundResult> => {
         await audit('refused', 'webauthn_create', 'invalid_credentials');
@@ -3518,14 +3537,20 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       };
       let registration = typeof enrolment === 'object' ? enrolment.registration : undefined;
       if (registration === undefined) {
+        // The optional offer follows a password a password-only account
+        // proved; a passkey the person asked for (#844) follows whatever the
+        // sign-in needed, rule 8's downgrade rule included.
         const offered =
           served.has('webauthn_create') &&
           served.has('recovery_codes') &&
           recoveryCodes !== undefined &&
           fresh() &&
-          current.factors.every((factor) => factor.type === 'password') &&
-          state.transaction.verified.some((step) => step.step === 'password') &&
-          (provedMailbox() || (emailCodes !== undefined && served.has('email_code')));
+          (requested ||
+            (passwordOnly &&
+              state.transaction.verified.some((step) => step.step === 'password'))) &&
+          (!passwordOnly ||
+            provedMailbox() ||
+            (emailCodes !== undefined && served.has('email_code')));
         if (!offered) return null;
         let offer: StepOffer;
         try {
@@ -3571,7 +3596,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
       // The first passkey of a password-only account: its mailbox, proved in
       // this transaction (ADR-017 Decision 8). The code adds no amr value.
-      if (!provedMailbox()) {
+      if (passwordOnly && !provedMailbox()) {
         if (emailCodes === undefined) return redirect('step_not_available');
         const result = await verifyAddress(emailCodes, subject, RECOVERY);
         if (result !== null) return result;
@@ -4020,10 +4045,42 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (result !== null) return result;
     }
 
-    // Rule 8: the optional passkey enrolment (#651; ADR-017 Decision 4),
-    // after every factor the sign-in needs and the forced update.
+    // Rule 8: the authenticator app the person asked to set up (#844), on
+    // an account that holds none, after every factor the sign-in needs and
+    // the forced update. One the transport cannot serve, or with no label to
+    // show the app (an account with no address), is skipped.
+    if (
+      context.enrol === 'totp' &&
+      !registering &&
+      deps.totp !== undefined &&
+      recoveryCodes !== undefined &&
+      served.has('totp_setup') &&
+      served.has('recovery_codes') &&
+      !holdsTotp(account) &&
+      !enrolledTotp() &&
+      (state.transaction.identifier ??
+        account.identifier ??
+        state.transaction.upstream?.address) !== undefined
+    ) {
+      const result = await enrolTotp(deps.totp, account, subject);
+      if (result !== null) return result;
+      const reread = await readAccount();
+      if (reread === null || reread.userId !== subject)
+        return ended('identifier', 'subject_mismatch');
+      if (!reread.enabled) return ended('identifier', 'account_disabled');
+      account = reread;
+    }
+
+    // Rule 8: the passkey enrolment (#651; ADR-017 Decision 4), after every
+    // factor the sign-in needs and the forced update: the optional offer to a
+    // password-only account, or the passkey the person asked for (#844).
     if (deps.passkeys !== undefined && !registering) {
-      const result = await enrolPasskey(deps.passkeys, account, subject);
+      const result = await enrolPasskey(
+        deps.passkeys,
+        account,
+        subject,
+        context.enrol === 'passkey'
+      );
       if (result !== null) return result;
     }
 
