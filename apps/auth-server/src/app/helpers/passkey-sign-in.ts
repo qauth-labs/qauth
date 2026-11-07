@@ -368,7 +368,7 @@ export function createServerPasskeys(
       return { kind: 'verified', registration: JSON.stringify(enrolment) };
     },
 
-    async bind({ realmId, userId, registration }): Promise<PasskeyBinding> {
+    async bind({ realmId, userId, registration, replacing }): Promise<PasskeyBinding> {
       const held = heldRegistrationSchema.safeParse(parseJson(registration));
       if (!held.success) throw new Error('a held passkey registration that is not well formed');
       const user = await fastify.repositories.users.findById(realmId, userId);
@@ -382,7 +382,7 @@ export function createServerPasskeys(
             realms: fastify.repositories.realms,
             userCredentials: credentials,
           },
-          { realmId, userId, enrolment: held.data }
+          { realmId, userId, enrolment: held.data, ...(replacing === true ? { replacing } : {}) }
         );
       } catch (error) {
         // The realm already holds the credential id, for this account or

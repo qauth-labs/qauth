@@ -220,13 +220,18 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
       }
       return { kind: 'verified', registration: JSON.stringify({ id: answer.id, userId }) };
     },
-    async bind({ realmId, userId, registration }): Promise<PasskeyBinding> {
-      calls.push('bind');
+    async bind({ realmId, userId, registration, replacing }): Promise<PasskeyBinding> {
+      calls.push(replacing === true ? 'bind replacing' : 'bind');
       if (memory.bindRefusal !== undefined) return { kind: 'refused', reason: memory.bindRefusal };
       const held = JSON.parse(registration) as { id: string; userId: string };
       if (held.userId !== userId) return { kind: 'refused', reason: 'subject_mismatch' };
       if (passkeys.has(held.id)) return { kind: 'refused', reason: 'credential_exists' };
       const passkey: MemoryPasskey = { id: held.id, userId, disabled: false };
+      if (replacing === true) {
+        for (const other of passkeys.values()) {
+          if (other.userId === userId) other.disabled = true;
+        }
+      }
       passkeys.set(held.id, passkey);
       notices.push({ realmId, userId });
       memory.onBind?.(passkey);

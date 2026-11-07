@@ -885,12 +885,17 @@ export interface PasskeyCeremonies {
    * §4.1.2.1. A notice that fails is reported and binds the passkey all the
    * same. The engine records the binding as the `webauthn_create` step passed;
    * the security log's own event comes with its account pages (#686).
+   *
+   * `replacing` is the rebind after a lost passkey (#655): in the same write,
+   * every other passkey of the account in the realm is disabled, so the lost
+   * one signs in no more. A disabled passkey still counts as bound.
    */
   bind(input: {
     readonly realmId: string;
     readonly clientId: string;
     readonly userId: string;
     readonly registration: string;
+    readonly replacing?: boolean;
   }): Promise<PasskeyBinding>;
 }
 

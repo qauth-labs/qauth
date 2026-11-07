@@ -382,6 +382,15 @@ describe('a registration by passkey', () => {
     );
     expect(offerOf(coded).current.step).toBe('email_code');
     expect(built.sender.sent).toHaveLength(1);
+    // The passkey's ceremony went with the address: the next round reads the
+    // transaction back and goes on to the new password.
+    expect(kept(coded).ceremony).toBeUndefined();
+    const proved = await built.engine.advance(
+      kept(coded),
+      answer('email_code', { otp: built.sender.last }),
+      ctx
+    );
+    expect(offerOf(proved).current.step).toBe('new_password');
   });
 
   it('signs in with the passkey later, and owes no new codes', async () => {
@@ -431,7 +440,13 @@ describe('a recovery code before any first factor', () => {
     expect((await built.codes.status({ realmId: REALM, userId: PASSKEY_USER })).unused).toBe(9);
 
     const proof = await built.engine.advance(recovering, creation(rebind), ctx);
-    expect(built.passkeys.passkeys.get(NEW_PASSKEY)).toMatchObject({ userId: PASSKEY_USER });
+    expect(built.passkeys.passkeys.get(NEW_PASSKEY)).toMatchObject({
+      userId: PASSKEY_USER,
+      disabled: false,
+    });
+    // In place of the lost one: the account's other passkeys are disabled.
+    expect(built.passkeys.calls).toContain('bind replacing');
+    expect(built.passkeys.passkeys.get(OLD_PASSKEY)).toMatchObject({ disabled: true });
     expect(proof).toMatchObject({
       kind: 'step',
       offer: { current: { step: 'webauthn_get' }, alternatives: [] },

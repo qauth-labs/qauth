@@ -402,6 +402,27 @@ describe('the upstream provider’s callback (#639)', () => {
     expect(next).toMatchObject({ kind: 'redirect', reason: 'step_not_available' });
   });
 
+  it('lets a recovery code stand in for the disabled passkey after the provider, and completes (#655)', async () => {
+    const clock = manualClock();
+    const recoveryCodes = createMemoryRecoveryCodes(clock.now);
+    const set = await recoveryCodes.replace({ realmId: REALM, userId: USER });
+    await recoveryCodes.confirm({ realmId: REALM, userId: USER, setId: set.setId });
+    const account = upstreamAccount({ others: [{ type: 'passkey', disabled: true }] });
+    const built = build(account, { clock, recoveryCodes });
+    const ctx = context(built);
+    const next = await built.engine.completeUpstream(await picked(built, ctx), proof(), ctx);
+    expect(next).toMatchObject({ kind: 'step', offer: { current: { step: 'recovery_code' } } });
+
+    // The provider named the account: the code stands in for its passkey, as
+    // after any first factor, and binds no new one.
+    const done = await built.engine.advance(
+      kept(next),
+      answer('recovery_code', { recovery_code: set.codes[0] }),
+      ctx
+    );
+    expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER, amr: [] } });
+  });
+
   it('applies the MFA policy as after any first factor', async () => {
     const built = build();
     built.policy.policy = { realm: 'required', client: 'off' };

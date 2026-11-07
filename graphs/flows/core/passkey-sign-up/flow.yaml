@@ -385,7 +385,8 @@ states:
     title: Verify the new passkey and bind it
     description: >-
       The port verifies the response for the account's user handle, then binds it while at most 5 minutes have passed
-      since the code was taken. No notice is mailed: the account has no address.
+      since the code was taken, in place of the lost one: the same write disables the account's other passkeys, which
+      still count as bound. No notice is mailed: the account has no address.
     invoke: { external: passkeys }
     on:
       DONE:

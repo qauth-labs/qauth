@@ -52,9 +52,42 @@ export async function storePasskeyEnrolment(
     readonly realmId: string;
     readonly userId: string;
     readonly enrolment: WebAuthnEnrolment;
+    /**
+     * The rebind after a lost passkey (#655): after step 3, every other
+     * enabled passkey of the account in the realm is disabled, in the same
+     * transaction, so the lost one signs in no more.
+     */
+    readonly replacing?: boolean;
   }
 ): Promise<UserCredential> {
-  return deps.db.transaction(async (tx: EnrolmentTransaction) => writePasskey(deps, tx, input));
+  return deps.db.transaction(async (tx: EnrolmentTransaction) => {
+    const created = await writePasskey(deps, tx, input);
+    if (input.replacing === true) {
+      const passkeys = await deps.userCredentials.findAllByUserIdAndType(
+        input.userId,
+        WEBAUTHN_PROVIDER_TYPE,
+        tx
+      );
+      const at = Date.now();
+      for (const other of passkeys) {
+        if (
+          other.realmId !== input.realmId ||
+          other.externalSub === created.externalSub ||
+          (other.disabledAt !== null && other.disabledAt !== undefined)
+        ) {
+          continue;
+        }
+        await deps.userCredentials.setDisabledAt(
+          input.realmId,
+          WEBAUTHN_PROVIDER_TYPE,
+          other.externalSub,
+          at,
+          tx
+        );
+      }
+    }
+    return created;
+  });
 }
 
 /** The database transaction an enrolment writes in. */

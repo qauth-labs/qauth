@@ -105,6 +105,7 @@ describe('the server passkey ceremonies (#651)', () => {
     findByUserIdAndType: ReturnType<typeof vi.fn>;
     updateCredentialData: ReturnType<typeof vi.fn>;
     create: ReturnType<typeof vi.fn>;
+    setDisabledAt: ReturnType<typeof vi.fn>;
   };
   let users: { findById: ReturnType<typeof vi.fn> };
   let lockRpIdForEnrolment: ReturnType<typeof vi.fn>;
@@ -177,7 +178,8 @@ describe('the server passkey ceremonies (#651)', () => {
       findAllByUserIdAndType: vi.fn(async () => []),
       findByUserIdAndType: vi.fn(async () => ({ realmId: REALM_ID, externalSub: ADDRESS })),
       updateCredentialData: vi.fn(async () => passkeyRow()),
-      create: vi.fn(async () => passkeyRow()),
+      create: vi.fn(async () => passkeyRow({ externalSub: ENROLMENT.externalSub })),
+      setDisabledAt: vi.fn(async () => passkeyRow()),
     };
     users = { findById: vi.fn(async () => ({ id: USER_ID, enabled: true })) };
     lockRpIdForEnrolment = vi.fn(async () => ({ rpId: 'auth.example.test' }));
@@ -512,6 +514,44 @@ describe('the server passkey ceremonies (#651)', () => {
       expect(mailer.sendUncounted).toHaveBeenCalledWith(REALM, ADDRESS, {
         template: 'passkey_added',
       });
+    });
+
+    it('disables nothing else for a passkey added beside the others', async () => {
+      credentials.findAllByUserIdAndType.mockResolvedValue([passkeyRow()]);
+
+      expect(await bind()).toEqual({ kind: 'bound' });
+      expect(credentials.setDisabledAt).not.toHaveBeenCalled();
+    });
+
+    it('disables the account’s other passkeys of the realm in the same transaction, for a rebind (#655)', async () => {
+      credentials.findAllByUserIdAndType.mockResolvedValue([
+        passkeyRow(),
+        passkeyRow({ id: 'row-new', externalSub: ENROLMENT.externalSub }),
+        passkeyRow({ id: 'row-disabled', externalSub: 'ZGlzYWJsZWQ', disabledAt: 5 }),
+        passkeyRow({ id: 'row-other-realm', realmId: 'another-realm', externalSub: 'b3RoZXI' }),
+      ]);
+
+      const bound = await build().bind({
+        realmId: REALM_ID,
+        clientId: CLIENT_ID,
+        userId: USER_ID,
+        registration: JSON.stringify(ENROLMENT),
+        replacing: true,
+      });
+
+      expect(bound).toEqual({ kind: 'bound' });
+      expect(credentials.findAllByUserIdAndType).toHaveBeenCalledWith(USER_ID, 'webauthn', 'tx');
+      expect(credentials.setDisabledAt).toHaveBeenCalledTimes(1);
+      expect(credentials.setDisabledAt).toHaveBeenCalledWith(
+        REALM_ID,
+        'webauthn',
+        CREDENTIAL_ID,
+        expect.any(Number),
+        'tx'
+      );
+      expect(credentials.create.mock.invocationCallOrder[0]).toBeLessThan(
+        credentials.setDisabledAt.mock.invocationCallOrder[0] as number
+      );
     });
 
     it('refuses a disabled account, and writes nothing', async () => {

@@ -1634,11 +1634,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     /**
      * Whether a recovery code found the account before any first factor
      * (#655): the code stood in for the lost passkey of an account with no
-     * address, and no factor of this transaction proved the account yet.
+     * address, and nothing else of this transaction named the account: no
+     * factor, and no upstream provider (which has no factor of its own).
      */
     const codeAlone = (): boolean =>
       tookRecoveryCode() &&
-      !state.transaction.verified.some((step) => factorOf(step.step) !== undefined);
+      !state.transaction.verified.some(
+        (step) => step.step === 'upstream' || factorOf(step.step) !== undefined
+      );
     /**
      * Whether this transaction proved a password: the one first factor that
      * makes `mfa` with a TOTP (an upstream sign-in adds no `amr` value).
@@ -3185,7 +3188,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         // brought now cannot be checked against it, so it ends the
         // transaction.
         if (state.transaction.subject !== undefined) return mismatch(step);
-        state.transaction = { ...state.transaction, identifier };
+        // A registration's passkey ceremony (#655) was offered beside the
+        // address: the address taken, the ceremony goes, as a registration
+        // with an address holds none.
+        const { ceremony } = state.transaction;
+        state.transaction =
+          state.transaction.flow === 'register' && ceremony?.step === 'webauthn_create'
+            ? { ...state.transaction, identifier, ceremony: undefined }
+            : { ...state.transaction, identifier };
       } else if (state.transaction.identifier !== identifier) {
         return mismatch(step);
       }
@@ -3603,8 +3613,9 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * that serves it; the binding needs the code taken at most
      * {@link PASSKEY_BINDING_MAX_AUTH_AGE_MS} ago, so past it the transaction
      * ends (`authentication_stale`). A response is a credential round on the
-     * limiters; the port verifies it for the account and binds it, with no
-     * mailbox to prove and no mail to send. `webauthn_create` then joins the
+     * limiters; the port verifies it for the account and binds it in place
+     * of the account's other passkeys, which it disables in the same write,
+     * with no mailbox to prove and no mail to send. `webauthn_create` then joins the
      * verified steps with no `amr`: a registration response proves no
      * possession, so the sign-in completes only once the downgrade rule's
      * passkey assertion proves the account. Returns the round's result, or
@@ -3641,8 +3652,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
       await settleRound(limited.reservation, 'success', subject);
       if (!fresh()) return ended('webauthn_create', 'authentication_stale');
+      // In place of the lost one: the account's other passkeys are disabled
+      // in the same write, so the lost one signs in no more.
       const bound: unknown = await fromStore('passkeys', () =>
-        passkeys.bind({ realmId, clientId, userId: subject, registration })
+        passkeys.bind({ realmId, clientId, userId: subject, registration, replacing: true })
       );
       const binding = bound as Partial<{ kind: string; reason: unknown }> | null;
       if (binding?.kind === 'bound') {

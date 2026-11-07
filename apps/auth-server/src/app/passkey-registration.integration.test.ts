@@ -58,6 +58,7 @@ const WEBAUTHN_GET = stepUrn('webauthn_get');
 const WEBAUTHN_CREATE = stepUrn('webauthn_create');
 const RECOVERY_CODE = stepUrn('recovery_code');
 const RECOVERY_CODES = stepUrn('recovery_codes');
+const NEW_PASSWORD = stepUrn('new_password');
 const CONSENT = stepUrn('consent');
 const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 /** A post from a page of the realm origin, as the ceremony page sends it. */
@@ -65,6 +66,8 @@ const SAME_ORIGIN = { origin: ORIGIN, 'sec-fetch-site': 'same-origin' };
 const IP = '203.0.113.20';
 /** An address of the registration that takes the address instead. */
 const ADDRESS = 'address-person@example.test';
+/** The browser session's cookie. */
+const SESSION_COOKIE = '__Host-qauth_session';
 
 /** The step view the ceremony page reads. */
 interface StepView {
@@ -97,6 +100,8 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
   let clientRowId = '';
   /** Every mail the server attempted, by method. */
   const attempted: string[] = [];
+  /** The codes the attempted mails carried, in order. */
+  const mailedCodes: string[] = [];
 
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
@@ -118,6 +123,10 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
       if (typeof original !== 'function') continue;
       service[name] = async (...args: unknown[]) => {
         attempted.push(name);
+        for (const arg of args) {
+          const code = (arg as { code?: unknown } | null)?.code;
+          if (typeof code === 'string') mailedCodes.push(code);
+        }
         return (original as (...inner: unknown[]) => unknown).apply(service, args);
       };
     }
@@ -172,6 +181,7 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
     const app = booted.app;
     await resetE2eState(app);
     attempted.length = 0;
+    mailedCodes.length = 0;
     const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
     if (!realm) throw new Error('default realm missing');
     realmId = realm.id;
@@ -424,10 +434,18 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
     // Nobody exists before the ceremony.
     expect(await userCount()).toBe(usersBefore);
 
-    // The address registration is still beside it: its code is mailed.
+    // The address registration is still beside it: its code is mailed, and
+    // the code leads on to the new password.
     const identified = await answer(flow, IDENTIFIER, { login_hint: ADDRESS });
     expect(identified.statusCode, identified.body).toBe(303);
     expect((await read(flow.id)).step).toBe(EMAIL_CODE);
+    const deadline = performance.now() + 5_000;
+    while (mailedCodes.length === 0 && performance.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const coded = await answer(flow, EMAIL_CODE, { otp: mailedCodes[0] as string });
+    expect(coded.statusCode, coded.body).toBe(303);
+    expect((await read(flow.id)).step).toBe(NEW_PASSWORD);
   });
 
   it('creates the account with its passkey and no address, and issues no code before the codes are confirmed', async () => {
@@ -514,7 +532,7 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
   });
 
   it('recovers a lost passkey with a recovery code on the hosted pages, then signs in with the new one', async () => {
-    const { userId, codes } = await registered();
+    const { userId, codes, passkey: lost } = await registered();
     const flow = await start(false);
 
     // The hosted page asks for the code offered beside the first steps.
@@ -524,7 +542,7 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
     expect(redeemed.statusCode, redeemed.body).toBe(303);
     // A code alone never signs in: a new passkey is owed, and no session exists.
     expect(String(redeemed.headers['location'])).not.toContain(REDIRECT_URI);
-    expect(flow.jar.header() ?? '').not.toContain('qauth_session');
+    expect(flow.jar.header() ?? '').not.toContain(SESSION_COOKIE);
     const owed = await read(flow.id);
     expect(owed.step).toBe(WEBAUTHN_CREATE);
     expect(owed.alternatives ?? []).toEqual([]);
@@ -567,6 +585,25 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
     ).toHaveLength(1);
     expect(await eventsOf('user.recovery_code_used', userId)).toEqual([{ remaining: 9 }]);
     expect(await mailsAttempted()).toEqual([]);
+
+    // The new passkey took the lost one's place: the lost one is disabled,
+    // and signs in no more.
+    const [old] = await query<{ disabled_at: string | null }>(
+      "SELECT disabled_at FROM user_credentials WHERE provider_type = 'webauthn' AND external_sub = $1",
+      [lost.credentialId]
+    );
+    expect(old?.disabled_at).not.toBeNull();
+    const thief = await start(false);
+    const offered = (await read(thief.id)).params?.[WEBAUTHN_GET] as {
+      challenge: string;
+      rpId: string;
+    };
+    const refused = await answer(thief, WEBAUTHN_GET, { webauthn_response: lost.assert(offered) });
+    expect(refused.statusCode, refused.body).toBe(303);
+    expect(String(refused.headers['location'])).not.toContain(REDIRECT_URI);
+    const again = await read(thief.id);
+    expect(again.step).toBe(WEBAUTHN_GET);
+    expect(again.error).toBe('invalid_credentials');
   });
 
   it('refuses a wrong code before any first factor the same way, naming nobody', async () => {
@@ -596,6 +633,26 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
       // A sign-in offers no passkey creation in its place.
       const first = await read((await start(false)).id);
       expect([first.step, ...(first.alternatives ?? [])]).not.toContain(WEBAUTHN_CREATE);
+    });
+
+    it('refuses the passkey of a registration the realm stopped allowing after it started', async () => {
+      const flow = await start(true);
+      const options = creationOptionsOf((await page(flow, 'passkey-enrolment')).body);
+      const passkey = softPasskey(RP_ID, options.user.id);
+      const usersBefore = await userCount();
+      await realmAccounts({ allowSignUp: false });
+
+      const refused = await answer(flow, WEBAUTHN_CREATE, {
+        webauthn_response: passkey.create(options),
+      });
+      expect(refused.statusCode, refused.body).toBeLessThan(500);
+      expect(String(refused.headers['location'] ?? '')).not.toContain('code=');
+      expect(await userCount()).toBe(usersBefore);
+      expect(
+        await query('SELECT 1 FROM user_credentials WHERE external_sub = $1', [
+          passkey.credentialId,
+        ])
+      ).toEqual([]);
     });
 
     it('offers no registration to a client whose flows do not name register', async () => {
