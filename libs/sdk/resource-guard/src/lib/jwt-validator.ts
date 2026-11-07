@@ -24,6 +24,7 @@ import {
 import type { ValidatedToken } from '../types.js';
 import { InvalidTokenError } from './errors.js';
 import { parseScopes } from './scope.js';
+import { refuseNonBearerToken } from './sender-constraint.js';
 
 export interface JwtValidatorOptions {
   /** JWKS document URL. */
@@ -111,9 +112,11 @@ export class JwtValidator {
    * Verify a bearer token. Resolves to the normalised claims on success.
    *
    * @throws {InvalidTokenError} for any verification failure — bad signature,
-   * expiry, wrong issuer, wrong/absent audience, disallowed algorithm, or a
-   * `typ` that is not `at+jwt` (#283). The reason is short and non-sensitive
-   * (safe for `error_description`/logs); the token is never included.
+   * expiry, wrong issuer, wrong/absent audience, disallowed algorithm, a
+   * `typ` that is not `at+jwt` (#283), or a sender-constrained token (one
+   * carrying `cnf`, such as a DPoP-bound token), which needs a proof this SDK
+   * does not verify. The reason is short and non-sensitive (safe for
+   * `error_description`/logs); the token is never included.
    */
   async validate(token: string): Promise<ValidatedToken> {
     let payload: JoseJWTPayload;
@@ -137,6 +140,10 @@ export class JwtValidator {
     // attacker rewrites at will. Outside the try/catch above so this rejection
     // is not laundered into a generic jose-error string.
     this.assertAccessTokenTyp(protectedHeader['typ']);
+    // RFC 9449 §7.2: a token bound to a key (`cnf`) needs a proof of
+    // possession, and this SDK verifies none, so it is refused rather than
+    // accepted as a plain bearer. Read from the verified payload only.
+    refuseNonBearerToken(payload['cnf']);
     return toValidatedToken(payload);
   }
 

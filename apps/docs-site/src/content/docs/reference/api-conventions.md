@@ -781,7 +781,7 @@ Each answers as before, in its own shape, and carries `Deprecation: @1793404800`
 response, errors included (`api-conventions/deprecation.ts`). No sunset date is set yet: before 1.0
 nothing is promised, and the release-candidate cleanup removes these paths once their callers have
 moved. The developer portal calls only the replacements; the cookie-authenticated `/consents`
-serves the hosted UI until the account console (v0.3) takes its place.
+serves the hosted UI until the account console (v0.4) takes its place.
 
 ## Enforcement
 

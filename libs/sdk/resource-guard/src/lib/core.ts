@@ -48,6 +48,20 @@ const BEARER_SCHEME = /^Bearer +/i;
 const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
 
 /**
+ * The RFC 9449 §7.1 `DPoP` scheme, matched case-insensitively (RFC 9110
+ * §11.1), which this version does not accept.
+ */
+const DPOP_SCHEME = /^DPoP +/i;
+
+/**
+ * Why a request under the `DPoP` scheme is refused. This version verifies no
+ * DPoP proof, so it accepts only the `Bearer` scheme, and a sender-constrained
+ * token is refused under that scheme too.
+ */
+const DPOP_SCHEME_UNSUPPORTED =
+  'The DPoP authorization scheme is not supported; this resource accepts unbound Bearer tokens only';
+
+/**
  * Extract a bearer token from an `Authorization` header value (RFC 6750 §2.1).
  * The scheme match is case-insensitive; the credential is returned verbatim.
  * Returns `null` when the header is absent or not a non-empty Bearer.
@@ -214,8 +228,11 @@ export class ResourceGuard {
    * @param scopes additional per-operation scopes to require on top of the
    *   guard's default `requiredScopes` (the step-up surface).
    * @returns the validated, audience-bound token claims.
-   * @throws {MissingTokenError} when no bearer is present (→ 401, bare challenge).
-   * @throws {InvalidTokenError} when validation fails (→ 401 `invalid_token`).
+   * @throws {MissingTokenError} when no bearer is present (→ 401, bare
+   *   challenge), the `DPoP` scheme included: this version accepts `Bearer`
+   *   only, and the error's message says so.
+   * @throws {InvalidTokenError} when validation fails (→ 401 `invalid_token`),
+   *   a sender-constrained (`cnf`-carrying) token included.
    * @throws {InsufficientScopeError} when scopes are insufficient
    *   (→ 403 `insufficient_scope` step-up challenge).
    */
@@ -229,7 +246,17 @@ export class ResourceGuard {
       // per-call step-up scopes) on the 401 challenge — #284. Same set the 403
       // step-up would advertise, so an unauthenticated client and a
       // under-scoped one are told the same thing.
-      throw new MissingTokenError(dedupe([...this.requiredScopes, ...scopes]));
+      const required = dedupe([...this.requiredScopes, ...scopes]);
+      // A `DPoP` credential gets the same bare `Bearer` challenge as no
+      // credential at all: RFC 6750 §3.1 gives no error code to a request
+      // that "attempted using an unsupported authentication method", and a
+      // `DPoP` challenge would advertise support this version lacks. The
+      // challenge naming only `Bearer` tells the client which scheme is
+      // accepted; the message tells the host's logs why.
+      if (authorization && DPOP_SCHEME.test(authorization.trim())) {
+        throw new MissingTokenError(required, DPOP_SCHEME_UNSUPPORTED);
+      }
+      throw new MissingTokenError(required);
     }
     const validated = await this.validator.validate(token);
     this.assertScopes(validated, scopes);

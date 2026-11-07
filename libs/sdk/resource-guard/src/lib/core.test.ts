@@ -167,6 +167,15 @@ describe('ResourceGuard.authenticate (JWT mode)', () => {
     await expect(guard().authenticate(`Bearer ${token}`)).rejects.toBeInstanceOf(InvalidTokenError);
   });
 
+  // RFC 9449 §7.2: no proof is verified here, so a bound token is refused.
+  it('refuses a DPoP-bound token sent under Bearer as invalid_token', async () => {
+    const token = await signToken(
+      { sub: 'u', client_id: 'c', scope: 'mcp:read', cnf: { jkt: 'thumbprint' } },
+      RESOURCE
+    );
+    await expect(guard().authenticate(`Bearer ${token}`)).rejects.toBeInstanceOf(InvalidTokenError);
+  });
+
   it('throws InsufficientScopeError listing the full required set on step-up', async () => {
     const token = await signToken({ sub: 'u', client_id: 'c', scope: 'mcp:read' }, RESOURCE);
     try {
@@ -187,10 +196,20 @@ describe('ResourceGuard.authenticate (introspection mode)', () => {
   // One fetch for both upstreams: the JWKS, and an introspection endpoint that
   // records every token it is asked about and answers "active".
   function introspectionGuard(
-    options: { jwksDown?: boolean; introspectionLocalCheck?: boolean } = {}
+    options: {
+      jwksDown?: boolean;
+      introspectionLocalCheck?: boolean;
+      introspectionBody?: Record<string, unknown>;
+    } = {}
   ) {
     const introspected: string[] = [];
-    const active = { active: true, sub: 'u', client_id: 'c', scope: 'mcp:read', aud: RESOURCE };
+    const active = options.introspectionBody ?? {
+      active: true,
+      sub: 'u',
+      client_id: 'c',
+      scope: 'mcp:read',
+      aud: RESOURCE,
+    };
     const fetch = (async (input: string | URL, init?: { body?: string }) => {
       const isIntrospection = String(input) === INTROSPECTION_ENDPOINT;
       if (isIntrospection) {
@@ -248,6 +267,82 @@ describe('ResourceGuard.authenticate (introspection mode)', () => {
     const claims = await guard.authenticate('Bearer opaque-token-value', ['mcp:read']);
     expect(introspected).toEqual(['opaque-token-value']);
     expect(claims.sub).toBe('u');
+  });
+
+  // RFC 9449 §7.2. What QAuth's introspection endpoint answers for a
+  // DPoP-bound token; the SDK verifies no proof, so it must refuse it.
+  const BOUND = {
+    active: true,
+    sub: 'u',
+    client_id: 'c',
+    scope: 'mcp:read',
+    aud: RESOURCE,
+    token_type: 'DPoP',
+    cnf: { jkt: 'thumbprint' },
+  };
+
+  it('refuses a DPoP-bound JWT at the local check, without introspecting it', async () => {
+    const { guard, introspected } = introspectionGuard({ introspectionBody: BOUND });
+    const token = await signToken(
+      { sub: 'u', client_id: 'c', scope: 'mcp:read', cnf: { jkt: 'thumbprint' } },
+      RESOURCE
+    );
+    await expect(guard.authenticate(`Bearer ${token}`)).rejects.toThrow(/DPoP-bound/);
+    expect(introspected).toEqual([]);
+  });
+
+  it('refuses a DPoP-bound token the introspection reports, when the JWKS is down', async () => {
+    const { guard, introspected } = introspectionGuard({
+      jwksDown: true,
+      introspectionBody: BOUND,
+    });
+    const token = await signToken(
+      { sub: 'u', client_id: 'c', scope: 'mcp:read', cnf: { jkt: 'thumbprint' } },
+      RESOURCE
+    );
+    await expect(guard.authenticate(`Bearer ${token}`)).rejects.toBeInstanceOf(InvalidTokenError);
+    expect(introspected).toEqual([token]);
+  });
+
+  it('refuses a DPoP-bound opaque token when the local check is turned off', async () => {
+    const { guard } = introspectionGuard({
+      introspectionLocalCheck: false,
+      introspectionBody: BOUND,
+    });
+    await expect(guard.authenticate('Bearer opaque-bound')).rejects.toThrow(/DPoP-bound/);
+  });
+});
+
+describe('ResourceGuard.authenticate — the DPoP scheme is not accepted', () => {
+  function guard(requiredScopes: string[] = []) {
+    return new ResourceGuard({
+      resource: RESOURCE,
+      authorizationServer: ISSUER,
+      requiredScopes,
+      fetch: jwksFetch({ keys: [publicJwk] }),
+    });
+  }
+
+  // RFC 6750 §3.1: a request that "attempted using an unsupported
+  // authentication method" gets the credential-absent answer, with no error
+  // code. The message names the scheme so a host's logs show why.
+  it.each(['DPoP', 'dpop', 'DPOP'])(
+    'answers the %s scheme as a missing bearer, naming the scheme',
+    async (scheme) => {
+      const token = await signToken({ sub: 'u', client_id: 'c', scope: 'mcp:read' }, RESOURCE);
+      const rejection = guard(['mcp:read']).authenticate(`${scheme} ${token}`);
+      await expect(rejection).rejects.toBeInstanceOf(MissingTokenError);
+      await expect(rejection).rejects.toMatchObject({
+        message:
+          'The DPoP authorization scheme is not supported; this resource accepts unbound Bearer tokens only',
+        requiredScopes: ['mcp:read'],
+      });
+    }
+  );
+
+  it('keeps the generic message for other schemes', async () => {
+    await expect(guard().authenticate('Basic abc')).rejects.toThrow('No bearer token presented');
+    await expect(guard().authenticate('DPoPabc')).rejects.toThrow('No bearer token presented');
   });
 });
 

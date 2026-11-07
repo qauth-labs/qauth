@@ -76,9 +76,9 @@ export interface ReleaseInfo {
 }
 
 export const CURRENT_RELEASE: ReleaseInfo = {
-  version: 'v0.1.3',
+  version: 'v0.2.0',
   stage: 'pre-1.0',
-  date: '2026-10-21',
+  date: '2026-11-07',
 };
 
 /**

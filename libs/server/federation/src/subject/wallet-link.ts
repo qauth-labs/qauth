@@ -170,11 +170,13 @@ function bindingClaimsOf(config: SubjectResolutionConfig): readonly string[] {
  * Plan the `user_credentials` row for a wallet credential being linked to the
  * session's account.
  *
- * PRECONDITIONS, both enforced by the caller and neither re-checkable here:
- * the presentation has been validated (#234) and its issuer is trusted (#236).
- * A credential that failed either must never reach this function — it would be
- * planned into a row exactly as a good one is, because linking asks nothing of
- * the credential that those two gates do not already answer.
+ * PRECONDITIONS, all enforced by the caller and none re-checkable here: the
+ * presentation has been validated (#234), its issuer is trusted (#236), and it
+ * answered a SAME-DEVICE request whose Response Code the session's own browser
+ * brought back (ADR-013 as amended 2026-11-07). A credential that failed any
+ * of them must never reach this function — it would be planned into a row
+ * exactly as a good one is, because linking asks nothing of the credential
+ * that those gates do not already answer.
  *
  * @param credential - the validated, issuer-trusted presentation.
  * @param config - the deployment's resolved subject-resolution configuration.

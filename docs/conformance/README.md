@@ -253,7 +253,9 @@ Three things about these rows are worth knowing before adding to them:
   narrowed to that, because §14.2 itself says the technique is not applicable
   cross-device.
 - **HAIP's RECOMMENDED same-device-only is waived, not n/a.** The cross-device
-  QR flow stays on both profiles; the waiver names ADR-013 and a revisit date.
+  QR sign-in flow stays on both profiles; the waiver names ADR-013 and a revisit
+  date. Account linking follows the recommendation: it is same-device only
+  since ADR-013's 2026-11-07 amendment, so the waiver covers sign-in alone.
   "Wallets MUST follow the redirect" and §14.3.1 are Wallet obligations and are
   n/a.
 - **Two rows are proven by tests that predate the registry.** The §14.2

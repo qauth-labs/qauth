@@ -1,4 +1,6 @@
-import type { FastifyInstance } from 'fastify';
+import formbody from '@fastify/formbody';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 /**
@@ -82,6 +84,7 @@ import {
   walletLinkTerminalPage,
   walletReturnRefusalPage,
 } from '../../helpers/wallet-ui';
+import errorHandler from '../../plugins/error-handler';
 import walletLinkRoute from './wallet-link';
 import walletLoginRoute from './wallet-login';
 
@@ -254,8 +257,11 @@ function cookieValue(setCookies: string[], name: string): string {
 async function startLink(
   opts: {
     userId?: string;
-    /** Which submit button was pressed (#405). Absent = the field was not sent. */
-    device?: 'this' | 'other';
+    /**
+     * The `device` field the form posts: `this`, or absent. The stub runs no
+     * schema, so what the schema refuses is pinned on a real Fastify instance.
+     */
+    device?: 'this';
     /** Reuse an already-registered server, to start a SECOND flow against it. */
     context?: ReturnType<typeof makeFastify>;
     /** The wallet-flow cookie this browser already holds, if any. */
@@ -498,11 +504,12 @@ describe('wallet-link UI — signed in, or nothing (ADR-009 §5)', () => {
 });
 
 describe('wallet-link UI — the pending screen and completion', () => {
-  it('renders a QR code and polls the authenticated status endpoint', async () => {
+  it('renders the "Open my wallet" link, no QR code, and polls the authenticated status endpoint', async () => {
     const { postReply, handle } = await startLink();
     const body = String(postReply.state.body);
 
-    expect(body).toContain('<svg');
+    expect(body).toContain('href="openid4vp://?');
+    expect(body).not.toContain('<svg');
     expect(body).toContain(`/auth/link/wallet/${handle}`);
   });
 
@@ -524,74 +531,46 @@ describe('wallet-link UI — the pending screen and completion', () => {
     expect(flow['realmId']).toBe('realm-2');
   });
 
+  /**
+   * A link completes on the return leg (ADR-013 as amended 2026-11-07): the
+   * wallet answers, is handed a Response Code, and brings this browser back.
+   * What the original tab then renders is read from the marker that leg left.
+   */
+  async function linkOnReturnLeg(resolution: () => void) {
+    const started = await startLink();
+    publishSignal(started.sessionUtils, started.flow['stateHash'], 'received');
+    const code = issueResponseCode(started.responseCodes, started.flow['stateHash']);
+    resolution();
+    const cookie = `${started.sessionCookie}; __Host-qauth_wallet_flow=${started.binderCookie}`;
+    const landed = await followReturn(started.routes, code, cookie);
+    const original = await renderLinkPage(started.routes, started.handle, cookie);
+    return { landed, original };
+  }
+
   it('renders the success screen once the credential is linked', async () => {
-    const { routes, sessionUtils, sessionCookie, handle, flow, binderCookie } = await startLink();
-    sessionUtils.store.set(`wallet-login-signal:${flow['stateHash']}`, {
-      signal: 'received',
-      at: Date.now(),
-    });
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue({
-      status: 'linked',
-      credentialId: 'cred-1',
-      externalSub: 'alice@example.com',
-      subjectSource: 'asserted-lookup',
-      rebound: false,
-    });
+    const { landed, original } = await linkOnReturnLeg(() => linkAs(LINKED));
 
-    const { reply, state } = createReply();
-    await routes.get('GET /wallet-link/:handle')!(
-      {
-        headers: { cookie: `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}` },
-        params: { handle },
-        ip: '1.2.3.4',
-      },
-      reply
-    );
-
-    expect(String(state.body)).toContain('now linked to this account');
+    expect(landed.statusCode).toBe(200);
+    expect(String(landed.body)).toContain('now linked to this account');
+    expect(String(original.body)).toContain('now linked to this account');
   });
 
   it('renders the conflict screen with a 409 — the one specific outcome', async () => {
-    const { routes, sessionUtils, sessionCookie, handle, flow, binderCookie } = await startLink();
-    sessionUtils.store.set(`wallet-login-signal:${flow['stateHash']}`, {
-      signal: 'received',
-      at: Date.now(),
-    });
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue({ status: 'conflict' });
-
-    const { reply, state } = createReply();
-    await routes.get('GET /wallet-link/:handle')!(
-      {
-        headers: { cookie: `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}` },
-        params: { handle },
-        ip: '1.2.3.4',
-      },
-      reply
+    const { landed, original } = await linkOnReturnLeg(() =>
+      (linkWalletPresentation as unknown as Mock).mockResolvedValue({ status: 'conflict' })
     );
 
-    expect(state.statusCode).toBe(409);
-    expect(String(state.body)).toContain('already linked to a different account');
+    expect(landed.statusCode).toBe(409);
+    expect(original.statusCode).toBe(409);
+    expect(String(original.body)).toContain('already linked to a different account');
   });
 
   it('renders one refusal for a rejected link', async () => {
-    const { routes, sessionUtils, sessionCookie, handle, flow, binderCookie } = await startLink();
-    sessionUtils.store.set(`wallet-login-signal:${flow['stateHash']}`, {
-      signal: 'received',
-      at: Date.now(),
-    });
+    const { landed, original } = await linkOnReturnLeg(() => undefined);
 
-    const { reply, state } = createReply();
-    await routes.get('GET /wallet-link/:handle')!(
-      {
-        headers: { cookie: `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}` },
-        params: { handle },
-        ip: '1.2.3.4',
-      },
-      reply
-    );
-
-    expect(state.statusCode).toBe(401);
-    expect(String(state.body)).toContain('We could not link that credential');
+    expect(landed.statusCode).toBe(401);
+    expect(original.statusCode).toBe(401);
+    expect(String(original.body)).toContain('We could not link that credential');
   });
 });
 
@@ -606,42 +585,100 @@ describe('wallet-link UI — the pending screen and completion', () => {
  * `issueResponseCode`, and the wallet's browser following the redirect by
  * `followReturn`.
  */
-describe('wallet-link UI — the device choice at flow start (#405)', () => {
-  it('offers both device choices on the confirmation form, as plain submit buttons', async () => {
+describe('wallet-link UI — same-device only (ADR-013 as amended 2026-11-07)', () => {
+  it('offers one choice on the confirmation form: a wallet on this device', async () => {
     const { getReply } = await startLink();
     const body = String(getReply.state.body);
 
-    expect(body).toContain('name="device" value="other"');
-    expect(body).toContain('name="device" value="this"');
-    expect(body).toContain('Scan with a wallet on another device');
+    expect(body).toContain('<button type="submit" name="device" value="this">');
     expect(body).toContain('Use a wallet on this device');
+    expect(body).not.toContain('value="other"');
+    expect(body).not.toContain('another device</button>');
+    expect(body).not.toContain('Scan with a wallet on another device');
     // Still no identifier field: the account is the session's.
     expect(body).not.toContain('name="identifier"');
   });
 
-  it('defaults an absent device field to cross-device (link)', async () => {
+  it('starts a same-device link for a form that sends no device field', async () => {
     const { row, flow, postReply } = await startLink();
-    const body = String(postReply.state.body);
-
-    expect(row['sameDevice']).toBe(false);
-    expect(flow['sameDevice']).toBeUndefined();
-    // The QR, and only the QR.
-    expect(body).toContain('<svg');
-    expect(body).not.toContain('Open my wallet');
-    expect(body).not.toContain('href="openid4vp://');
-    expect(body).toContain('Waiting for your wallet');
-    expect(body).toContain('href="/ui/wallet-link">Start again</a>');
-  });
-
-  it('(HAIP 1.0 §5.1) records the same-device choice on the link row and flow', async () => {
-    const { routes, row, flow, handle, postReply, sessionCookie, binderCookie } = await startLink({
-      device: 'this',
-    });
     const body = String(postReply.state.body);
 
     expect(row['sameDevice']).toBe(true);
     expect(flow['sameDevice']).toBe(true);
-    // Written together, from one choice: neither side can be same-device alone.
+    // The anchor, and only the anchor.
+    expect(body).toContain('Open my wallet');
+    expect(body).not.toContain('<svg');
+    expect(body).not.toContain('Scan this code');
+    expect(body).toContain('href="/ui/wallet-link">Start again</a>');
+  });
+
+  it('refuses a form posting `device=other` with a 400 validation_error problem naming /device', async () => {
+    // A page rendered before the change, or a hand-made form, still sends the
+    // old cross-device button's value. The schema refuses it before the
+    // handler runs, so nothing is started and no session is needed to see it.
+    const app = Fastify({ logger: false });
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    await app.register(formbody);
+    await app.register(errorHandler);
+    await app.register(walletLinkRoute, { prefix: '/ui' });
+    await app.ready();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/ui/wallet-link',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        payload: new URLSearchParams({ csrf_token: 'token', device: 'other' }).toString(),
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.headers['content-type']).toMatch(/^application\/problem\+json/);
+      expect(response.json()).toMatchObject({
+        status: 400,
+        code: 'validation_error',
+        instance: '/ui/wallet-link',
+        errors: [
+          {
+            pointer: '/device',
+            message:
+              'Linking works only with a wallet on this device, so "device" must be "this" or left out.',
+          },
+        ],
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a cross-device link flow left from before the upgrade, and links nothing', async () => {
+    // The record a cross-device link carried: no `sameDevice`. Whoever's
+    // wallet answered it, the page's refresh renders the refusal.
+    const { routes, sessionUtils, handle, flow, sessionCookie, binderCookie } = await startLink();
+    const { sameDevice: _sameDevice, ...legacy } = flow;
+    sessionUtils.store.set(`wallet-login:${handle}`, legacy);
+    publishSignal(sessionUtils, flow['stateHash'], 'received');
+    linkAs(LINKED);
+
+    const rendered = await renderLinkPage(
+      routes,
+      handle,
+      `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`
+    );
+
+    expect(rendered.statusCode).toBe(401);
+    expect(String(rendered.body)).toContain('We could not link that credential');
+    expect(linkWalletPresentation).not.toHaveBeenCalled();
+    expect(emittedTypes()).not.toContain(WALLET_LINKED_EVENT);
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+  });
+
+  it('(HAIP 1.0 §5.1) records every link as same-device on the link row and flow', async () => {
+    const { routes, row, flow, handle, postReply, sessionCookie, binderCookie } = await startLink();
+    const body = String(postReply.state.body);
+
+    expect(row['sameDevice']).toBe(true);
+    expect(flow['sameDevice']).toBe(true);
+    // Written together, from one constant: neither side can be cross-device alone.
     expect(row['stateHash']).toBe(flow['stateHash']);
 
     // The anchor, and only the anchor.
@@ -652,7 +689,7 @@ describe('wallet-link UI — the device choice at flow start (#405)', () => {
     expect(body).toContain(`/auth/link/wallet/${handle}`);
     expect(body).toContain('href="/ui/wallet-link">Start again</a>');
 
-    // The noscript re-render keeps the variant the flow was started with.
+    // The noscript re-render renders the same one affordance.
     const rerender = await renderLinkPage(
       routes,
       handle,
@@ -675,7 +712,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       flow,
       sessionCookie,
       binderCookie,
-    } = await startLink({ userId: 'user-9', device: 'this' });
+    } = await startLink({ userId: 'user-9' });
     publishSignal(sessionUtils, flow['stateHash'], 'received');
     const code = issueResponseCode(responseCodes, flow['stateHash']);
     linkAs(LINKED);
@@ -750,7 +787,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
         flow,
         sessionCookie,
         binderCookie,
-      } = await startLink({ device: 'this' });
+      } = await startLink();
       publishSignal(sessionUtils, flow['stateHash'], 'received');
       sessionUtils.store.set(`wallet-presentation:${flow['stateHash']}`, {
         presentations: [{ format: 'dc+sd-jwt', compact: 'a.b.c' }],
@@ -807,7 +844,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       flow,
       sessionCookie,
       binderCookie,
-    } = await startLink({ userId: 'user-1', device: 'this' });
+    } = await startLink({ userId: 'user-1' });
     publishSignal(sessionUtils, flow['stateHash'], 'received');
     sessionUtils.store.set(`wallet-presentation:${flow['stateHash']}`, {
       presentations: [{ format: 'dc+sd-jwt', compact: 'a.b.c' }],
@@ -873,7 +910,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
 
   it('the original link tab consumes the done-marker once', async () => {
     const { routes, sessionUtils, responseCodes, handle, flow, sessionCookie, binderCookie } =
-      await startLink({ device: 'this' });
+      await startLink();
     publishSignal(sessionUtils, flow['stateHash'], 'received');
     const code = issueResponseCode(responseCodes, flow['stateHash']);
     linkAs(LINKED);
@@ -1039,7 +1076,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
         flow,
         sessionCookie,
         binderCookie,
-      } = await startLink({ device: 'this' });
+      } = await startLink();
       publishSignal(sessionUtils, flow['stateHash'], 'wallet_error');
       const code = issueResponseCode(responseCodes, flow['stateHash']);
       const cookie = `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`;
@@ -1071,7 +1108,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       expect((await renderLinkPage(routes, handle, cookie)).statusCode).toBe(410);
 
       // Byte for byte what the page GET renders for the same outcome.
-      const other = await startLink({ device: 'this' });
+      const other = await startLink();
       publishSignal(other.sessionUtils, other.flow['stateHash'], 'wallet_error');
       const rendered = await renderLinkPage(
         other.routes,
@@ -1085,7 +1122,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
     // conflict: the one specific outcome, 409 on both surfaces.
     {
       const { routes, sessionUtils, responseCodes, handle, flow, sessionCookie, binderCookie } =
-        await startLink({ device: 'this' });
+        await startLink();
       publishSignal(sessionUtils, flow['stateHash'], 'received');
       const code = issueResponseCode(responseCodes, flow['stateHash']);
       (linkWalletPresentation as unknown as Mock).mockResolvedValue({ status: 'conflict' });
@@ -1109,19 +1146,10 @@ describe('wallet-link UI — the return leg (#405)', () => {
       const original = await renderLinkPage(routes, handle, cookie);
       expect(original.statusCode).toBe(409);
       expect(original.body).toBe(landed.body);
+      // The original tab's page GET above is the page GET's own rendering of
+      // the outcome: a link resolves by no other path (ADR-013 as amended
+      // 2026-11-07), so that is the byte-for-byte comparison.
       expect((await renderLinkPage(routes, handle, cookie)).statusCode).toBe(410);
-
-      // Byte for byte what the page GET renders for the same outcome — on a
-      // CROSS-device flow, since a same-device one never resolves by polling.
-      const other = await startLink({ device: 'other' });
-      publishSignal(other.sessionUtils, other.flow['stateHash'], 'received');
-      const rendered = await renderLinkPage(
-        other.routes,
-        other.handle,
-        `${other.sessionCookie}; __Host-qauth_wallet_flow=${other.binderCookie}`
-      );
-      expect(rendered.statusCode).toBe(409);
-      expect(rendered.body).toBe(landed.body);
     }
   });
 
@@ -1135,7 +1163,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       flow,
       sessionCookie,
       binderCookie,
-    } = await startLink({ device: 'this' });
+    } = await startLink();
     publishSignal(sessionUtils, flow['stateHash'], 'received');
     const code = issueResponseCode(responseCodes, flow['stateHash']);
     linkAs(LINKED);
@@ -1174,7 +1202,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
     // has nothing to advance on. `pending` on the return leg is the refusal
     // page — the same bytes as a foreign landing — and the code is spent.
     const { fastify, routes, responseCodes, handle, flow, sessionCookie, binderCookie } =
-      await startLink({ device: 'this' });
+      await startLink();
     const code = issueResponseCode(responseCodes, flow['stateHash']);
     linkAs(LINKED);
     const cookie = `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`;

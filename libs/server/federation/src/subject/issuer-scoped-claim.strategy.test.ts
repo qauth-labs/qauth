@@ -74,6 +74,8 @@ describe('createIssuerScopedClaimStrategy (ADR-009 §2)', () => {
       const subject = deriveIssuerScopedSubject(credential, SUBJECT_CLAIM) as string;
       const lookup = lookupOf({
         wallet: { [subject]: [{ userId: 'user-1', walletBinding: null }] },
+        // The account's own identifier, which the user asserted.
+        asserted: { 'alice@example.com': [{ userId: 'user-1', walletBinding: null }] },
       });
 
       await expect(strategy().resolve(credential, contextOf(lookup))).resolves.toEqual({
@@ -254,6 +256,187 @@ describe('createIssuerScopedClaimStrategy (ADR-009 §2)', () => {
         strategy().resolve(credential, contextOf(lookup, { onLookupError }))
       ).resolves.toEqual({ kind: 'rejected' });
       expect(onLookupError).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * ADR-009 §1: there is no usernameless wallet sign-in. Under this strategy
+   * the credential's subject finds the account the holder's wallet is linked
+   * to, and the asserted identifier must name that same account — compared the
+   * way `asserted-lookup` compares it, never through a credential claim.
+   */
+  describe('the asserted identifier must name the account the subject resolved to', () => {
+    async function subjectOf() {
+      const credential = await validatedFixtureCredential({
+        issuer: OPTED_IN_ISSUER,
+        claims: EMPLOYEE_CLAIMS,
+      });
+      return {
+        credential,
+        subject: deriveIssuerScopedSubject(credential, SUBJECT_CLAIM) as string,
+      };
+    }
+
+    it('signs in when the asserted identifier names the account the subject resolved to', async () => {
+      const { credential, subject } = await subjectOf();
+      const lookup = lookupOf({
+        wallet: { [subject]: [{ userId: 'holder', walletBinding: null }] },
+        asserted: { 'alice@example.com': [{ userId: 'holder', walletBinding: null }] },
+      });
+
+      await expect(
+        strategy().resolve(
+          credential,
+          contextOf(lookup, { assertedIdentifier: '  Alice@Example.COM ' })
+        )
+      ).resolves.toEqual({ kind: 'matched', userId: 'holder' });
+      // Normalized exactly as asserted-lookup normalizes it.
+      expect(lookup.assertedCalls).toEqual(['alice@example.com']);
+    });
+
+    it('refuses a subject match whose account the asserted identifier does not name, exactly as an unentitled one', async () => {
+      // The browser asked for one account; the credential resolves to another.
+      const { credential, subject } = await subjectOf();
+      const lookup = lookupOf({
+        wallet: { [subject]: [{ userId: 'holder', walletBinding: null }] },
+        asserted: { 'starter@example.com': [{ userId: 'starter', walletBinding: null }] },
+      });
+
+      const outcome = await strategy().resolve(
+        credential,
+        contextOf(lookup, { assertedIdentifier: 'starter@example.com' })
+      );
+
+      expect(outcome).toEqual({ kind: 'rejected' });
+      // The very refusal `asserted-lookup` gives a presentation that is not
+      // entitled to the account it asserted: one value, so no caller can
+      // answer the two differently.
+      const otherIssuer = await validatedFixtureCredential({
+        issuer: OTHER_ISSUER,
+        claims: EMPLOYEE_CLAIMS,
+      });
+      const unentitled = await strategy().resolve(
+        otherIssuer,
+        contextOf(
+          lookupOf({
+            asserted: { 'alice@example.com': [{ userId: 'someone', walletBinding: 'wb1:not-it' }] },
+          })
+        )
+      );
+      expect(outcome).toBe(unentitled);
+    });
+
+    it('refuses a subject match when the asserted identifier names no account at all', async () => {
+      const { credential, subject } = await subjectOf();
+      const lookup = lookupOf({
+        wallet: { [subject]: [{ userId: 'holder', walletBinding: null }] },
+      });
+
+      await expect(
+        strategy().resolve(
+          credential,
+          contextOf(lookup, { assertedIdentifier: 'nobody@example.com' })
+        )
+      ).resolves.toEqual({ kind: 'rejected' });
+    });
+
+    it('runs the same two lookups whether the subject is found or not', async () => {
+      // "Subject found, identifier differs" must cost what "no such subject"
+      // costs, so neither the answer nor the work tells them apart.
+      const { credential, subject } = await subjectOf();
+      const found = lookupOf({
+        wallet: { [subject]: [{ userId: 'holder', walletBinding: null }] },
+        asserted: { 'starter@example.com': [{ userId: 'starter', walletBinding: null }] },
+      });
+      const missing = lookupOf({
+        asserted: { 'starter@example.com': [{ userId: 'starter', walletBinding: null }] },
+      });
+
+      await strategy().resolve(
+        credential,
+        contextOf(found, { assertedIdentifier: 'starter@example.com' })
+      );
+      await strategy().resolve(
+        credential,
+        contextOf(missing, { assertedIdentifier: 'starter@example.com' })
+      );
+
+      expect(found.walletCalls).toEqual([subject]);
+      expect(missing.walletCalls).toEqual([subject]);
+      expect(found.assertedCalls).toEqual(['starter@example.com']);
+      expect(missing.assertedCalls).toEqual(['starter@example.com']);
+    });
+
+    it.each([
+      ['absent', undefined],
+      ['empty', ''],
+      ['blank', '   '],
+      ['an isc1: value', 'isc1:abc'],
+    ])('refuses before any lookup when the asserted identifier is %s', async (_label, asserted) => {
+      const { credential, subject } = await subjectOf();
+      const lookup = lookupOf({
+        wallet: { [subject]: [{ userId: 'holder', walletBinding: null }] },
+      });
+
+      await expect(
+        strategy().resolve(
+          credential,
+          asserted === undefined
+            ? { realmId: REALM, lookup }
+            : contextOf(lookup, { assertedIdentifier: asserted })
+        )
+      ).resolves.toEqual({ kind: 'rejected' });
+      expect(lookup.walletCalls).toEqual([]);
+      expect(lookup.assertedCalls).toEqual([]);
+    });
+
+    it('accepts the account when another account also holds a credential on the identifier', async () => {
+      // Membership, not "the sole account": another row on the same
+      // identifier does not make it name the holder's account any less.
+      const { credential, subject } = await subjectOf();
+      const lookup = lookupOf({
+        wallet: { [subject]: [{ userId: 'holder', walletBinding: null }] },
+        asserted: {
+          'alice@example.com': [
+            { userId: 'other', walletBinding: 'wb1:other' },
+            { userId: 'holder', walletBinding: null },
+          ],
+        },
+      });
+
+      await expect(strategy().resolve(credential, contextOf(lookup))).resolves.toEqual({
+        kind: 'matched',
+        userId: 'holder',
+      });
+    });
+
+    it('refuses when the identifier lookup throws, and reports it', async () => {
+      const { credential, subject } = await subjectOf();
+      const onLookupError = vi.fn();
+      const lookup: SubjectAccountLookup = {
+        byAssertedIdentifier: () => Promise.reject(new Error('store down')),
+        byWalletSubject: async (_realmId, externalSub) =>
+          externalSub === subject ? [{ userId: 'holder', walletBinding: null }] : [],
+      };
+
+      await expect(
+        strategy().resolve(credential, contextOf(lookup, { onLookupError }))
+      ).resolves.toEqual({ kind: 'rejected' });
+      expect(onLookupError).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a structurally unusable identifier candidate', async () => {
+      const { credential, subject } = await subjectOf();
+      const lookup = lookupOf({
+        wallet: { [subject]: [{ userId: 'holder', walletBinding: null }] },
+        asserted: {
+          'alice@example.com': [{ userId: '', walletBinding: null }] as SubjectAccountCandidate[],
+        },
+      });
+
+      await expect(strategy().resolve(credential, contextOf(lookup))).resolves.toEqual({
+        kind: 'rejected',
+      });
     });
   });
 

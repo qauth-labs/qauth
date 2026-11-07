@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-07
+
 ### Added
 
 - **An agent's owner is a verified account** ([#846], ADR-015 Decision 8
@@ -2301,6 +2303,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (resource servers on `@qauth-labs/resource-guard`): a
+  sender-constrained token is refused** (RFC 9449 §7.2). A token bound to a
+  key, which QAuth issues with `DPOP_ENABLED=true` (`cnf.jkt` in the token,
+  `token_type: DPoP` and `cnf` in the introspection answer), was accepted as a
+  plain Bearer token, because neither validator read the binding: anyone who
+  copied such a token could use it at a resource server on the SDK until it
+  expired. The SDK verifies no proof of possession of any kind, so both
+  validators now refuse every sender-constrained token after verification,
+  with `401` and `WWW-Authenticate: Bearer error="invalid_token"`. JWT mode
+  refuses any token whose payload carries `cnf`, DPoP-bound or
+  certificate-bound (`x5t#S256`) alike; introspection mode refuses an answer
+  with a `cnf` member, or whose `token_type` is present and not `Bearer`,
+  compared ignoring case (`DPoP`, and any bound type another authorization
+  server names differently). A
+  request under the `DPoP` authorization scheme still gets the bare `Bearer`
+  challenge, as before, and the thrown `MissingTokenError` now says the scheme
+  is not supported. An integration that sends a DPoP-bound token as Bearer to
+  such a resource server stops working: its client sends no `DPoP` proof to
+  the token endpoint, so its tokens stay unbound, and a public client whose
+  refresh token is already bound to a key authorizes again without one. Three
+  kinds of token are always bound, so they cannot be used at such a resource
+  server until the SDK verifies proofs: the tokens of a client marked
+  `dpop_bound_access_tokens`, a token exchanged from a DPoP-bound subject
+  token, and an access token issued for a `cnf`-bound ID-JAG. Verifying DPoP
+  proofs in the SDK is planned as a feature of its own.
+- **Linking a wallet to an account is same-device only** (ADR-013, amended
+  2026-11-07). A wallet credential is linked only from a browser on the same
+  device as the wallet, and a cross-device link is refused: the link completes
+  on the same-device return leg, with its single-use Response Code.
+  `/ui/wallet-link` shows one button, **Use a
+  wallet on this device**, and the "Open my wallet" link; it no longer shows a
+  QR code. `POST /ui/wallet-link` and `POST /auth/link/wallet` accept `device`
+  `this` or no `device` at all, and refuse `device=other` with `400`
+  `validation_error`, whose `errors` names `/device`. A link flow started
+  cross-device before the upgrade is answered `rejected` when it is polled,
+  and nothing is linked. Wallet sign-in is unchanged and still offers both
+  devices. **Action:** a client that started links with no `device` and
+  rendered the invocation URI as a QR code must render it as a link that opens
+  a wallet on the same device; a person whose wallet is on their phone signs
+  in on the phone to link it.
+- **`issuer-scoped-claim` wallet sign-in checks the asserted identifier**
+  (ADR-009 §2, amended 2026-11-07). With
+  `OID4VP_SUBJECT_RESOLUTION=issuer-scoped-claim`, a presentation's
+  `(validated issuer, claim)` subject still finds the account its wallet is
+  linked to, and the identifier typed on `/ui/wallet-login` must now name that
+  same account. It is normalized and looked up exactly as under
+  `asserted-lookup`. An identifier that names another account, or none, gets
+  the same refusal as any other non-match, after the same lookups, and a
+  sign-in with no usable identifier is refused. The fallback to
+  `asserted-lookup` and `asserted-lookup` itself are unchanged. **Action:**
+  none for accounts that hold a password; their owners type their own
+  identifier as before. An account that wallet sign-in created under
+  `issuer-scoped-claim` before the 2026-10-19 change holds no credential on a
+  typed identifier, so it can no longer sign in with its wallet.
 - **docs.qauth.dev and the developer portal use the design system** ([#472]).
   The portal's pages name the tokens of `libs/ui` instead of Tailwind's
   palette. The docs site maps Starlight's theme onto the same tokens and
@@ -3782,6 +3838,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#638]) and the hosted account verification UI ([#644]) replace link
   verification.
 
+### Security
+
+- **Two security advisories are fixed in this release.** Every earlier
+  version is affected, from `v0.1.0` to `v0.2.0-rc.2`, and so is
+  `@qauth-labs/resource-guard` before `0.2.0`: upgrade to `v0.2.0`. What
+  each fix changes, and what an integration has to do about it, is under
+  **Changed** above.
+  - Medium: [GHSA-jw7g-6qgq-pw38](https://github.com/qauth-labs/qauth/security/advisories/GHSA-jw7g-6qgq-pw38) — `@qauth-labs/resource-guard` accepted a sender-constrained access token as a plain Bearer token
+  - Medium: [GHSA-85h3-2x3x-8gg3](https://github.com/qauth-labs/qauth/security/advisories/GHSA-85h3-2x3x-8gg3) — Wallet federation: a cross-device account link could bind a relayed credential to another account
+
 [#492]: https://github.com/qauth-labs/qauth/issues/492
 [#638]: https://github.com/qauth-labs/qauth/issues/638
 [#644]: https://github.com/qauth-labs/qauth/issues/644
@@ -4372,7 +4438,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/qauth-labs/qauth/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/qauth-labs/qauth/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/qauth-labs/qauth/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/qauth-labs/qauth/compare/v0.1.0...v0.1.1

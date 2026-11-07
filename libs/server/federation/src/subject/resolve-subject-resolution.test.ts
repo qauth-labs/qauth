@@ -235,10 +235,18 @@ describe('switching the configured strategy changes resolution, with no protocol
     const binding = deriveWalletBinding(credential, [...BINDING_CLAIMS].sort()) as string;
     const subject = deriveIssuerScopedSubject(credential, 'employee_number') as string;
 
+    // The asserted identifier names both accounts: one holds a wallet row
+    // bound on it, the other a credential with no binding. That is what lets
+    // each strategy reach a different account with the same input, since
+    // `issuer-scoped-claim` accepts a subject match only for an account the
+    // asserted identifier names (ADR-009 §1).
     const lookup: SubjectAccountLookup = {
       async byAssertedIdentifier(_realmId, identifier) {
         return identifier === 'alice@example.com'
-          ? [{ userId: 'user-by-assertion', walletBinding: binding }]
+          ? [
+              { userId: 'user-by-assertion', walletBinding: binding },
+              { userId: 'user-by-issuer-claim', walletBinding: null },
+            ]
           : [];
       },
       async byWalletSubject(_realmId, externalSub) {

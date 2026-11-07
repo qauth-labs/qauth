@@ -10,7 +10,6 @@ import {
 } from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { html, render, safe, safeCustomSchemeUrl } from '../../helpers/html';
-import { encodeQrCode, renderQrCodeSvg } from '../../helpers/qr-code';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
 import {
@@ -70,32 +69,28 @@ import {
  * One completion path, one set of gates; two would be two places for the session
  * re-check to be forgotten.
  *
- * ## Same device or another device — the user says which (#405, ADR-013)
+ * ## Same device only (#405, ADR-013 as amended 2026-11-07)
  *
- * The confirmation form ends in TWO submit buttons, `device=other` ("Scan with
- * a wallet on another device") and `device=this` ("Use a wallet on this
- * device"), exactly as the wallet sign-in form does and for the same reason:
- * the two flows END differently. A same-device link completes on the return
- * leg — the wallet is handed a `redirect_uri` with a Response Code and brings
- * the browser to `/ui/wallet-login/return`, which dispatches on the flow's
- * mode — and never by polling (OID4VP 1.0 §14.2; HAIP 1.0 §5.1). A
- * cross-device link completes by polling exactly as before. So the pending
- * page renders exactly ONE affordance per flow, and the choice is recorded at
- * start in both records (`helpers/wallet-link-flow.ts`). An absent field is
- * cross-device, so every existing client and harness keeps the QR path it had.
- * The terminal pages moved to `helpers/wallet-ui.ts` so the return route
- * renders the same outcome bytes this page does.
+ * The confirmation form ends in ONE submit button, "Use a wallet on this
+ * device" (`device=this`). A link completes only on the return leg — the
+ * wallet is handed a `redirect_uri` with a Response Code and brings the
+ * browser to `/ui/wallet-login/return`, which dispatches on the flow's mode —
+ * and never by polling (OID4VP 1.0 §14.2; HAIP 1.0 §5.1). There is no QR code
+ * and no "scan with a wallet on another device" button: linking is
+ * same-device only. A form that still posts `device=other`
+ * is refused by the body schema with `400` `validation_error`; an absent field
+ * is same-device. A person whose wallet is on their phone opens this page on
+ * the phone. The terminal pages moved to `helpers/wallet-ui.ts` so the return
+ * route renders the same outcome bytes this page does.
  */
 
 /**
  * Confirmation screen — a CSRF-protected POST starts the flow.
  *
- * Two submit buttons on the one form, named `device` (#405): the button the
- * user taps IS the same-device choice. Both are plain submits, so a browser
- * with scripts off makes the same choice the same way. The first button in
- * source order is the cross-device one on purpose — it is the path every
- * deployment served before #405, and the one that cannot strand a user on a
- * device with no wallet.
+ * One submit button (ADR-013 as amended 2026-11-07): a link is made only with
+ * a wallet on this device. The button still names `device=this`, so the form
+ * posts exactly what the schema accepts, and a browser with scripts off makes
+ * the same request the same way.
  */
 function confirmPage(opts: { cspNonce: string; csrfToken: string; error?: string }): string {
   const { cspNonce, csrfToken, error } = opts;
@@ -121,15 +116,11 @@ function confirmPage(opts: { cspNonce: string; csrfToken: string; error?: string
             <p class="hint">
               Your wallet does not tell us who you are, so this only works while you are signed in.
             </p>
-            <button type="submit" name="device" value="other">
-              Scan with a wallet on another device
-            </button>
-            <button type="submit" name="device" value="this" class="secondary">
-              Use a wallet on this device
-            </button>
+            <button type="submit" name="device" value="this">Use a wallet on this device</button>
             <p class="hint" id="device-hint">
-              Choose where your wallet is: scanning shows a code for a wallet on your phone; using
-              this device opens a wallet installed here and brings you back when you're done.
+              This opens a wallet installed on this device and brings you back when you're done. If
+              your wallet is on another device, such as your phone, sign in there and link it from
+              that device.
             </p>
             <a class="footer-link" href="/">Cancel</a>
           </form>
@@ -138,27 +129,27 @@ function confirmPage(opts: { cspNonce: string; csrfToken: string; error?: string
   );
 }
 
+/** What the pending page says while the wallet is open. */
+const PENDING_STATUS =
+  "Opening your wallet on this device… When you're done, your wallet will bring you back here.";
+
 /**
  * The wallet invocation, plus the wait.
  *
- * Exactly one affordance (#405): a same-device flow renders the "Open my
- * wallet" anchor and NO QR; a cross-device flow renders the QR and NO anchor.
- * The two are not interchangeable once the flow has started — see the
- * `pendingPage` JSDoc in `wallet-login.ts`, which this mirrors — so each
- * variant gets a "Start again" footer link to `/ui/wallet-link`, which begins
- * a FRESH flow with the other choice available. The anchor is a plain
- * user-gesture `href` through `safeCustomSchemeUrl()`, exactly as before; the
- * QR degrades to an explanation past `QR_MAX_BYTES` rather than to a deep
- * link a scanning device could not use.
+ * Exactly one affordance: the "Open my wallet" anchor, and NO QR code — a
+ * link is same-device only (ADR-013 as amended 2026-11-07). The anchor is a
+ * plain user-gesture `href` through `safeCustomSchemeUrl()`, exactly as
+ * before, and a "Start again" footer link to `/ui/wallet-link` begins a FRESH
+ * flow. The page polls only so the original tab can render the outcome the
+ * return leg reached (from its done-marker); the poll never completes a link.
  */
 function pendingPage(opts: {
   handle: string;
   invocationUri: string;
-  sameDevice: boolean;
   cspNonce: string;
   scriptNonce: string;
 }): string {
-  const { handle, invocationUri, sameDevice, cspNonce, scriptNonce } = opts;
+  const { handle, invocationUri, cspNonce, scriptNonce } = opts;
   const statusPath = `/auth/link/wallet/${handle}`;
 
   return render(
@@ -174,13 +165,9 @@ function pendingPage(opts: {
         <body>
           <div class="card">
             <h1>Present a credential</h1>
-            ${sameDevice ? sameDeviceInvocation(invocationUri) : crossDeviceInvocation(invocationUri)}
+            ${sameDeviceInvocation(invocationUri)}
             <div class="status" id="wallet-status" role="status" aria-live="polite">
-              ${
-                sameDevice
-                  ? "Opening your wallet on this device… When you're done, your wallet will bring you back here."
-                  : 'Waiting for your wallet…'
-              }
+              ${PENDING_STATUS}
             </div>
             <noscript>
               <p class="hint">
@@ -224,7 +211,7 @@ function pendingPage(opts: {
 }
 
 /**
- * The same-device half of the pending page: the "Open my wallet" anchor.
+ * The pending page's one affordance: the "Open my wallet" anchor.
  * `safeCustomSchemeUrl()` rather than `safeUrl()` because the href is
  * `openid4vp://…` by design; when it refuses, the page renders an explanation
  * and no href at all.
@@ -241,34 +228,21 @@ function sameDeviceInvocation(invocationUri: string) {
     }`;
 }
 
-/** The cross-device half of the pending page: the QR code. */
-function crossDeviceInvocation(invocationUri: string) {
-  const qr = encodeQrCode(invocationUri);
-  return html`<p>Scan this code with the wallet on your other device.</p>
-    ${
-      qr === undefined
-        ? html`<p class="hint">
-            This request is too large to show as a code, so it cannot be scanned. Contact your
-            administrator, or <a href="/ui/wallet-link">start again</a> and use a wallet on this
-            device instead.
-          </p>`
-        : html`<div class="qr">
-            ${safe(renderQrCodeSvg(qr, 'QR code containing the wallet linking request'))}
-          </div>`
-    }`;
-}
-
 const linkFormSchema = z.object({
   csrf_token: z.string().min(1),
   /**
-   * Which submit button was pressed (#405): `this` opens a wallet on this
-   * device and completes on the return leg; `other` renders a QR and completes
-   * by polling. Defaults to `other` so a body without the field — the E2E
-   * harness, a client built before #405 — keeps the cross-device path it had.
-   * `startWalletLinkFlow` ALSO treats anything but `'this'` as `other`, so the
-   * default holds even for a caller that bypasses schema validation.
+   * The submit button's value: `this`, a wallet on this device, the one value
+   * accepted (ADR-013 as amended 2026-11-07). `other` — the cross-device
+   * button this form had before — is refused with `400` `validation_error`;
+   * an absent field means `this`. `startWalletLinkFlow` takes no device at
+   * all, so a caller that bypassed this schema still starts a same-device flow.
    */
-  device: z.enum(['this', 'other']).default('other'),
+  device: z
+    .literal('this', {
+      error:
+        'Linking works only with a wallet on this device, so "device" must be "this" or left out.',
+    })
+    .optional(),
 });
 
 type LinkForm = z.infer<typeof linkFormSchema>;
@@ -344,9 +318,10 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'Starts a wallet-linking flow for the signed-in user and issues an OID4VP presentation request. Issue #238.',
+          'Starts a wallet-linking flow for the signed-in user and issues an OID4VP presentation request for a wallet on this device. Linking is same-device only (ADR-013, amended 2026-11-07): the form field `device` accepts only `this`, which is also what an absent field means, and `other` (cross-device) is refused with `400` `validation_error`. Issues #238, #405.',
         tags: ['UI'],
         'x-qauth-stability': 'experimental',
+        'x-qauth-errors': [400],
         body: linkFormSchema,
       },
       config: {
@@ -397,12 +372,9 @@ export default async function (fastify: FastifyInstance) {
 
       let started;
       try {
-        // The device choice is the user's own form submission (#405); the
-        // helper records it on both the row and the flow record, and reports
-        // back what it recorded so the page renders the matching affordance.
-        started = await startWalletLinkFlow(fastify, request, reply, session.userId, {
-          device: body.device,
-        });
+        // Same-device, always: the helper takes no device (ADR-013 as amended
+        // 2026-11-07), and the schema has refused every value but `this`.
+        started = await startWalletLinkFlow(fastify, request, reply, session.userId);
       } catch (error) {
         fastify.log.error({ err: error }, 'failed to start a wallet-link flow');
         return sendHtml(
@@ -437,7 +409,6 @@ export default async function (fastify: FastifyInstance) {
         pendingPage({
           handle: started.handle,
           invocationUri: started.invocationUri,
-          sameDevice: started.sameDevice,
           cspNonce: reply.cspNonce.style,
           scriptNonce: reply.cspNonce.script,
         })
@@ -496,7 +467,6 @@ export default async function (fastify: FastifyInstance) {
             pendingPage({
               handle,
               invocationUri: outcome.flow.invocationUri,
-              sameDevice: outcome.flow.sameDevice === true,
               cspNonce: reply.cspNonce.style,
               scriptNonce: reply.cspNonce.script,
             })

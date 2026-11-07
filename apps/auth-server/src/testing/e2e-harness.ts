@@ -36,6 +36,7 @@ import {
 } from '../app/helpers/request-bounds';
 import type { SandboxRealmTransaction } from '../app/helpers/sandbox-realm';
 import type { InternalRouteModule } from '../app/internal/route-manifest';
+import { parseOid4vpResponseAck } from './mock-wallet';
 
 /**
  * TEST SUPPORT — booting the REAL auth-server against throwaway Postgres and Redis
@@ -1196,15 +1197,16 @@ export interface StartedWalletLink {
 
 /**
  * Start a linking flow through the server-rendered screens (#238), as the
- * signed-in browser holding `jar`, choosing where the wallet is (#405) — or
- * not choosing, which is the cross-device default.
+ * signed-in browser holding `jar`. A link is same-device only (ADR-013 as
+ * amended 2026-11-07). The form is posted with no `device` field, which means
+ * what the page's one button (`device=this`) sends, and the pending page must
+ * carry the "Open my wallet" anchor and no QR code.
  *
  * @throws Error when either screen does not answer 200.
  */
 export async function startWalletLink(
   app: FastifyInstance,
-  jar: CookieJar,
-  device?: WalletDeviceChoice
+  jar: CookieJar
 ): Promise<StartedWalletLink> {
   const confirm = await app.inject({
     method: 'GET',
@@ -1223,10 +1225,7 @@ export async function startWalletLink(
       'content-type': 'application/x-www-form-urlencoded',
       cookie: jar.header() as string,
     },
-    payload: new URLSearchParams({
-      csrf_token: extractCsrfToken(confirm.body),
-      ...(device === undefined ? {} : { device }),
-    }).toString(),
+    payload: new URLSearchParams({ csrf_token: extractCsrfToken(confirm.body) }).toString(),
   });
   if (started.statusCode !== 200) {
     throw new Error(`POST /ui/wallet-link answered ${started.statusCode}: ${started.body}`);
@@ -1235,7 +1234,7 @@ export async function startWalletLink(
 
   return {
     handle: extractFlowHandle(started.body),
-    invocationUri: await readInvocationUriFromPendingPage(app, started.body, device === 'this'),
+    invocationUri: await readInvocationUriFromPendingPage(app, started.body, true),
     page: started.body,
   };
 }
@@ -1247,8 +1246,9 @@ const WALLET_LINKED_TITLE = 'Wallet credential linked';
  * Give a wallet credential an account the one way QAuth allows since ADR-009
  * §1's 2026-10-19 amendment: wallet SIGN-IN never creates an account, so the
  * account is registered with a password, signed in, and the wallet is linked
- * from that session (#238) — cross-device, completed by the link page's
- * no-JavaScript refresh.
+ * from that session (#238) — on the same device, the only way a link is made
+ * since ADR-013's 2026-11-07 amendment: the wallet follows the `redirect_uri`
+ * back into the signed-in browser, and the link completes on that return leg.
  *
  * `answer` IS the wallet: it receives the invocation URI and returns the form
  * body to post to `/oid4vp/response`. Each suite passes its own, so the link
@@ -1278,14 +1278,14 @@ export async function linkWalletToNewAccount(
       `the wallet's link response was refused (${posted.statusCode}): ${posted.body}`
     );
   }
+  const { redirectUri } = parseOid4vpResponseAck(posted.json());
+  if (redirectUri === undefined) {
+    throw new Error('the Response Endpoint handed a same-device link no redirect_uri');
+  }
 
-  const completed = await app.inject({
-    method: 'GET',
-    url: `/ui/wallet-link/${link.handle}`,
-    headers: { cookie: jar.header() as string },
-  });
-  jar.absorb(completed.headers['set-cookie']);
-  // The pending page also answers 200, so the heading is what says "linked".
+  // The wallet brings the SAME browser back, which completes the link.
+  const completed = await followRedirect(app, jar, redirectUri);
+  // The heading is what says "linked": this leg's refusal page answers 200 too.
   if (completed.statusCode !== 200 || !completed.body.includes(WALLET_LINKED_TITLE)) {
     throw new Error(`the wallet link did not complete (${completed.statusCode})`);
   }
@@ -1361,6 +1361,36 @@ export async function backdateWalletPresentationSignal(
     key,
     { ...record, at: record['at'] - byMs },
     Math.floor(WALLET_LOGIN_FLOW_TTL_MS / 1000)
+  );
+}
+
+/**
+ * Turn a started wallet LINK flow into the state a CROSS-device link left
+ * before linking became same-device only (ADR-013 as amended 2026-11-07): no
+ * `sameDevice` on the Redis flow record, and `same_device = false` on its
+ * `oid4vp_request_states` row, so the Response Endpoint answers the wallet
+ * `{}` as it did for a QR flow. No route starts such a flow any more; this is
+ * how a suite models one still pending across the upgrade.
+ *
+ * Written back through the app's own session utilities with the flow TTL, and
+ * through the app's own pool, so the server reads exactly what was written.
+ *
+ * @throws Error when the flow does not exist or is not a link flow.
+ */
+export async function makeLegacyCrossDeviceLinkFlow(
+  app: FastifyInstance,
+  handle: string
+): Promise<void> {
+  const key = WALLET_FLOW_SESSION_KEY(handle);
+  const record = await app.sessionUtils.getSession<Record<string, unknown>>(key);
+  if (record === null) throw new Error(`no wallet flow record for handle ${handle}`);
+  if (record['mode'] !== 'link') throw new Error('the flow is not a wallet LINK flow');
+
+  const { sameDevice: _sameDevice, ...legacy } = record;
+  await app.sessionUtils.setSession(key, legacy, Math.floor(WALLET_LOGIN_FLOW_TTL_MS / 1000));
+  await app.dbPool.query(
+    'UPDATE oid4vp_request_states SET same_device = false WHERE state_hash = $1',
+    [record['stateHash']]
   );
 }
 
