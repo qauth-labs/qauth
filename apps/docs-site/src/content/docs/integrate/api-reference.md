@@ -460,6 +460,9 @@ Key contract facts:
   operator marked `dpop_bound_access_tokens` in the seed manifest must send a
   proof on every token request, or gets `400 invalid_dpop_proof`. Discovery
   then lists the accepted proof algorithms in `dpop_signing_alg_values_supported`.
+  A resource server built on `@qauth-labs/resource-guard` refuses a bound token,
+  because the SDK verifies no DPoP proof yet; a client that calls one sends no
+  proof, so its tokens stay unbound.
 - Dynamic Client Registration (`POST /oauth/register`) accepts the optional
   QAuth extension field `is_agent` (boolean, default `false`) marking the client
   as an AI agent; it is echoed back in the response. The flag is self-asserted
@@ -512,7 +515,8 @@ An inactive/expired/unknown/wrong-audience token returns `{ "active": false }`,
 and so does a user's token once that user is disabled or deleted. A DPoP-bound
 token is reported with `"token_type": "DPoP"` and `"cnf": { "jkt": "…" }`, the
 thumbprint of its key (RFC 9449 §6.2): the resource server checks the request's
-DPoP proof against it.
+DPoP proof against it. `@qauth-labs/resource-guard` checks no DPoP proof yet, so
+it refuses such a token with `401 invalid_token`.
 
 ### UserInfo response (`GET|POST /oauth/userinfo`, `200 OK`)
 

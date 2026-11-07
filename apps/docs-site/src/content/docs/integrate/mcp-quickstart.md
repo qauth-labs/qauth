@@ -345,6 +345,12 @@ The no-passthrough guarantee rests on **audience binding** (RFC 8707):
 A token minted for resource A therefore cannot be replayed against resource B,
 even if both trust the same QAuth instance.
 
+`resource-guard` also refuses a sender-constrained token, one bound to a key by
+`cnf`, such as the DPoP-bound tokens QAuth issues with `DPOP_ENABLED=true`. It
+answers `401 invalid_token`, because this version verifies no DPoP proof, and it
+does not accept the `DPoP` authorization scheme. A client that calls it uses an
+unbound token: it sends no `DPoP` proof to the token endpoint.
+
 ---
 
 ## Troubleshooting
