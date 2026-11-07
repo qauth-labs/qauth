@@ -832,7 +832,11 @@ export default async function (fastify: FastifyInstance) {
             );
           }
           const link = result.upstreamLink;
-          if (link !== undefined) {
+          // A link the request asked for (`qauth_link`, #670) whose provider
+          // proved nobody yet holds no identity: the person came back from
+          // the provider, or never went, and signed in another way. Nothing
+          // is attached, and the sign-in finishes as any other.
+          if (link !== undefined && link.state !== 'requested') {
             // The interaction holds an upstream identity (#670): only the
             // sign-in to an existing account, just finished in this browser
             // and this interaction, attaches it, to the account it proved.
