@@ -50,6 +50,11 @@ export interface TestHostOptions {
   readonly signerClientId?: string;
   /** Answers instead of the provider. */
   readonly egress?: (call: HostEgressCall) => Promise<AuthMethodEgressResponse>;
+  /**
+   * The config's secret members by path, as the plugin runtime hands them
+   * to the context (#600): kept out of the log lines and the egress labels.
+   */
+  readonly secrets?: ReadonlyMap<string, string>;
 }
 
 export const TEST_ORIGIN = 'https://auth.example.com';
@@ -123,6 +128,7 @@ export async function testHost<TConfig>(
     };
   const context = createAuthMethodContext(method, {
     config,
+    ...(options.secrets === undefined ? {} : { secrets: options.secrets }),
     origin: options.origin ?? TEST_ORIGIN,
     realmName: options.realmName ?? 'acme',
     realmId,
