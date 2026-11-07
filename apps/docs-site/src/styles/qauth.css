@@ -1,0 +1,101 @@
+/*
+ * docs.qauth.dev in QAuth's design system: the tokens of libs/ui on Starlight's theme variables,
+ * the design system's fonts, square corners and the focus outline.
+ *
+ * Starlight always sets data-theme="light" or "dark" on <html> (its theme picker, or the system's
+ * setting), and theme.css switches the tokens on that attribute, so each mapping below holds in
+ * both modes. These rules are unlayered: they win over Starlight's own, which sit in its cascade
+ * layers.
+ */
+
+:root {
+  /* Starlight's scale runs from "white", the strongest text, to "black", the page, in both modes. */
+  --sl-color-white: var(--foreground);
+  --sl-color-gray-1: var(--foreground);
+  --sl-color-gray-2: var(--body);
+  --sl-color-gray-3: var(--muted-foreground);
+  --sl-color-gray-4: var(--input);
+  --sl-color-gray-5: var(--border);
+  --sl-color-gray-6: var(--card);
+  --sl-color-gray-7: var(--card);
+  --sl-color-black: var(--background);
+
+  --sl-color-accent-low: var(--muted);
+  --sl-color-accent: var(--primary);
+  --sl-color-accent-high: var(--primary-text);
+
+  /* Every pair here is one the tokens declare and check for AA in both modes. */
+  --sl-color-text: var(--body);
+  --sl-color-text-accent: var(--primary-text);
+  /* Text on an accent fill (the sidebar's current page): the page colour on primary-text, 7.9:1
+     dark and 6.4:1 light. */
+  --sl-color-text-invert: var(--background);
+  --sl-color-bg: var(--background);
+  --sl-color-bg-nav: var(--card);
+  --sl-color-bg-sidebar: var(--card);
+  --sl-color-bg-inline-code: var(--muted);
+  --sl-color-bg-accent: var(--primary-text);
+  --sl-color-hairline-light: var(--border);
+  --sl-color-hairline: var(--border);
+  --sl-color-hairline-shade: var(--border);
+
+  --sl-font: var(--font-sans);
+  --sl-font-mono: var(--font-mono);
+
+  /* The design system's corners are square. */
+  --sl-search-corners: var(--radius-control);
+}
+
+/* Page and section headings in the display serif, at its one weight, as on the website. */
+.sl-markdown-content :is(h1, h2, h3),
+h1#_top,
+.site-title {
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: -0.01em;
+}
+
+.site-title {
+  font-size: var(--sl-text-2xl);
+}
+
+/* Even lines in headings, and no lone word on the last line of a paragraph. */
+.sl-markdown-content :is(h1, h2, h3, h4) {
+  text-wrap: balance;
+}
+
+.sl-markdown-content :is(p, li, dd, figcaption, blockquote, td, th) {
+  text-wrap: pretty;
+}
+
+/* Square corners on Starlight's own boxes and buttons. */
+site-search button,
+.sidebar-content a,
+.pagination-links a,
+.sl-link-card,
+.sl-link-button,
+.sl-badge,
+.card,
+.starlight-aside,
+.sl-markdown-content :is(code, pre, table, img),
+mobile-starlight-toc .toggle,
+.sl-menu-button {
+  border-radius: var(--radius-control);
+}
+
+/* The mobile menu button is an outline button, like the design system's. */
+.sl-menu-button {
+  box-shadow: none;
+  border: 1px solid var(--input);
+  background-color: transparent;
+  color: var(--foreground);
+}
+
+/*
+ * One focus indicator for every control: a 2px outline in the ring colour (the teal accent), 2px
+ * outside its edge. An outline, unlike a box-shadow ring, also shows in forced-colors mode.
+ */
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--ring);
+  outline-offset: var(--focus-ring-offset);
+}

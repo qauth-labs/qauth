@@ -2237,6 +2237,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **docs.qauth.dev and the developer portal use the design system** ([#472]).
+  The portal's pages name the tokens of `libs/ui` instead of Tailwind's
+  palette. The docs site maps Starlight's theme onto the same tokens and
+  fonts. Both follow the system's light or dark setting and draw one focus
+  outline, in the teal accent, on every control.
 - **A process whose only role is `delivery` skips the default realm's boot
   step** ([#498]). The step creates and updates the realm row, which the
   delivery role's database user may not write; any other role's process runs
