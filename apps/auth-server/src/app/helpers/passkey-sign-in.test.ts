@@ -6,7 +6,7 @@ import {
 } from '@qauth-labs/fastify-plugin-federation';
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';
 import { DISPLAY_TEXT_PATTERN } from '@qauth-labs/shared-interaction-contract';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { REDIS_KEYS } from '../constants/redis-keys';
@@ -18,6 +18,12 @@ import {
   createServerPasskeys,
   type ServerPasskeyAccountOptions,
 } from './passkey-sign-in';
+import { emitUserEvent } from './user-events';
+
+vi.mock('./user-events', () => ({ emitUserEvent: vi.fn(async () => 'event-id') }));
+
+/** The request the engine's round runs for. */
+const REQUEST = { id: 'request-1' } as unknown as FastifyRequest;
 
 const REALM_ID = 'realm-1';
 const USER_ID = 'user-1';
@@ -206,6 +212,7 @@ describe('the server passkey ceremonies (#651)', () => {
       } as unknown as FastifyInstance,
       {
         mailer: mailer as unknown as EngineMailer,
+        requestOf: () => REQUEST,
         provider: provider as unknown as WebAuthnProvider,
         challenges: challenges as unknown as WebAuthnChallengeStore,
         now: () => 1_000,
@@ -514,6 +521,13 @@ describe('the server passkey ceremonies (#651)', () => {
       expect(mailer.sendUncounted).toHaveBeenCalledWith(REALM, ADDRESS, {
         template: 'passkey_added',
       });
+      // The binding's record went into its transaction (#844).
+      expect(emitUserEvent).toHaveBeenCalledWith(
+        REQUEST,
+        'urn:qauth:event:user.credential_added:v1-rc.0',
+        { type: 'passkey', credentialId: 'row-1' },
+        { tx: 'tx', realmId: REALM_ID, userId: USER_ID, actor: 'user' }
+      );
     });
 
     it('disables nothing else for a passkey added beside the others', async () => {

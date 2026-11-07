@@ -337,6 +337,8 @@ describe('TOTP as a second factor on the hosted pages (#653, real containers)', 
       ladder: createServerLadderParts(server(), mailer.passwordDisabledNotices).ladder,
       hostedPages,
       passkeys: false,
+      // No round runs here: nothing it does binds a TOTP.
+      requestOf: () => undefined,
     });
   }
 

@@ -63,6 +63,7 @@ function setup(
     user?: { id: string; enabled: boolean } | undefined;
     rows?: FakeRow[];
     armed?: boolean;
+    recordFails?: boolean;
   } = {}
 ) {
   let clock = T0;
@@ -157,11 +158,17 @@ function setup(
     issuerOf: async () => 'auth.example.com',
     hardActionArmed: vi.fn(async () => options.armed ?? true),
     bound: vi.fn(async () => undefined),
+    recorded: vi.fn(
+      async (_input: { realmId: string; userId: string; credentialId: string }, tx: FakeTx) => {
+        reads.push(tx);
+        if (options.recordFails === true) throw new Error('the record could not be written');
+      }
+    ),
     disabled: vi.fn(async () => undefined),
     failedAfterPassword: vi.fn(async () => undefined),
     report: vi.fn(),
     clock: { now: () => clock, sleep: async () => undefined },
-  } satisfies RepositoryTotpOptions;
+  } satisfies RepositoryTotpOptions<FakeTx>;
   const totp = createRepositoryTotp<FakeTx>(
     repos,
     async (work) => {
@@ -232,6 +239,22 @@ describe('the TOTP over user_credentials (#653)', () => {
     expect(await verify(codeOf(secret, built.step()))).toEqual({ kind: 'refused' });
   });
 
+  it('records the binding in its own transaction, and a record that fails binds nothing (#844)', async () => {
+    const built = setup();
+    await bound(built);
+    expect(built.opts.recorded).toHaveBeenCalledWith(
+      { ...ACCOUNT, credentialId: built.totpRow()?.id },
+      built.transactions[0]
+    );
+
+    const failing = setup({ recordFails: true });
+    const started = await failing.totp.start({ ...ACCOUNT, identifier: 'alice@example.com' });
+    await expect(
+      failing.totp.bind({ ...ACCOUNT, clientId: CLIENT, sealed: started.sealed, step: 1 })
+    ).rejects.toThrow('the record could not be written');
+    expect(failing.opts.bound).not.toHaveBeenCalled();
+  });
+
   it('refuses to bind for an unclaimed, a disabled or a missing account', async () => {
     const unclaimed = setup({
       rows: [
@@ -255,8 +278,10 @@ describe('the TOTP over user_credentials (#653)', () => {
     expect(await bind(disabled)).toEqual({ kind: 'refused', reason: 'account_disabled' });
     const gone = setup({ user: undefined });
     expect(await bind(gone)).toEqual({ kind: 'refused', reason: 'subject_mismatch' });
-    for (const built of [unclaimed, disabled, gone])
+    for (const built of [unclaimed, disabled, gone]) {
       expect(built.opts.bound).not.toHaveBeenCalled();
+      expect(built.opts.recorded).not.toHaveBeenCalled();
+    }
   });
 
   it("never rewrites another account's row", async () => {

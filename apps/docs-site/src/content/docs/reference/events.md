@@ -226,6 +226,11 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.upstream_linked:v1-rc.0`](#userupstream_linked-v1-rc0)                           | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.upstream_unlinked:v1-rc.0`](#userupstream_unlinked-v1-rc0)                       | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.upstream_link_failed:v1-rc.0`](#userupstream_link_failed-v1-rc0)                 | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.password_changed:v1-rc.0`](#userpassword_changed-v1-rc0)                         | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.credential_added:v1-rc.0`](#usercredential_added-v1-rc0)                         | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.credential_removed:v1-rc.0`](#usercredential_removed-v1-rc0)                     | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.passkey_renamed:v1-rc.0`](#userpasskey_renamed-v1-rc0)                           | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0`](#userrecovery_codes_regenerated-v1-rc0)     | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0 |
 | [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                           | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                   | user     | info     | v0.2.0 |
@@ -326,7 +331,7 @@ QAuth could not check a password against the realm's breach list (the local list
 
 ### user.signed_out v1-rc.0
 
-A person signed out, and QAuth ended their browser sessions: the one session the relying party named at the end-session endpoint (OpenID Connect RP-Initiated Logout 1.0), or every session of the user at `POST /auth/logout`.
+A person signed out, and QAuth ended their browser sessions: the one session the relying party named at the end-session endpoint (OpenID Connect RP-Initiated Logout 1.0), one session the person ended on the hosted account page, or every session of the user at `POST /auth/logout` or at "sign out everywhere" on the hosted account page.
 
 - Identifier: `urn:qauth:event:user.signed_out:v1-rc.0`
 - Category: `user` · Severity: `info` · Since: v0.2.0
@@ -334,9 +339,9 @@ A person signed out, and QAuth ended their browser sessions: the one session the
 - Schema: [user.signed_out.v1-rc.0.json](/schemas/events/user.signed_out.v1-rc.0.json)
 - Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/session-revoked` ([SSF events](/reference/ssf-events/))
 
-| Member | Type | Required | Meaning                                                                                                                                                                                  |
-| ------ | ---- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sid`  | UUID | no       | The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` does. |
+| Member | Type | Required | Meaning                                                                                                                                                                                                          |
+| ------ | ---- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sid`  | UUID | no       | The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` and "sign out everywhere" do. |
 
 ### user.client_session_ended v1-rc.0
 
@@ -499,6 +504,73 @@ An upstream identity could not be linked. `reason`: `already_linked`, another ac
 | ---------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
 | `provider` | string | yes      | The upstream identity provider, by its type, such as `oidc_corp`.                               |
 | `reason`   | string | yes      | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release. |
+
+### user.password_changed v1-rc.0
+
+A person changed their account's password with the current one, after a fresh sign-in with the account's strongest factor, on the hosted account page. The new password met the realm's password policy. Every other browser session and every refresh token of the account ended; the session the change was made in stays. The person is told by email.
+
+- Identifier: `urn:qauth:event:user.password_changed:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.password_changed.v1-rc.0.json](/schemas/events/user.password_changed.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/credential-change` ([SSF events](/reference/ssf-events/))
+
+`data` has no members: the envelope carries the event.
+
+### user.credential_added v1-rc.0
+
+A passkey or an authenticator app (TOTP) was bound to a person’s account, in a step of the hosted pages the person answered: after a sign-in that offered or asked for it, in a recovery that replaced a lost passkey, or from the hosted account page after a fresh sign-in. A passkey an account was registered with is recorded by the registration (`user.registered`).
+
+- Identifier: `urn:qauth:event:user.credential_added:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.credential_added.v1-rc.0.json](/schemas/events/user.credential_added.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+| Member         | Type                                       | Required | Meaning                                                                                                  |
+| -------------- | ------------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------- |
+| `type`         | one of `passkey`, `totp`, or a later value | yes      | `passkey`: a WebAuthn passkey. `totp`: an authenticator app (TOTP). The set may grow in a minor release. |
+| `credentialId` | UUID                                       | yes      | The id of the account credential that was bound.                                                         |
+
+### user.credential_removed v1-rc.0
+
+A person removed a passkey or their authenticator app (TOTP) from their account on the hosted account page, after a fresh sign-in with the account’s strongest factor or with a recovery code in place of a lost one. The account no longer signs in with it.
+
+- Identifier: `urn:qauth:event:user.credential_removed:v1-rc.0`
+- Category: `user` · Severity: `warning` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.credential_removed.v1-rc.0.json](/schemas/events/user.credential_removed.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+| Member         | Type                                       | Required | Meaning                                                                                                  |
+| -------------- | ------------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------- |
+| `type`         | one of `passkey`, `totp`, or a later value | yes      | `passkey`: a WebAuthn passkey. `totp`: an authenticator app (TOTP). The set may grow in a minor release. |
+| `credentialId` | UUID                                       | yes      | The id of the account credential that was removed.                                                       |
+
+### user.passkey_renamed v1-rc.0
+
+A person changed the name they gave one of their passkeys, on the hosted account page. A name is no credential: the passkey signs in as before.
+
+- Identifier: `urn:qauth:event:user.passkey_renamed:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.passkey_renamed.v1-rc.0.json](/schemas/events/user.passkey_renamed.v1-rc.0.json)
+
+| Member         | Type | Required | Meaning                                     |
+| -------------- | ---- | -------- | ------------------------------------------- |
+| `credentialId` | UUID | yes      | The id of the passkey’s account credential. |
+
+### user.recovery_codes_regenerated v1-rc.0
+
+A person issued a new set of recovery codes on the hosted account page, after a fresh sign-in with the account’s strongest factor: every code of the old set stopped working, and the new codes were shown once. The person is told by email.
+
+- Identifier: `urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0`
+- Category: `user` · Severity: `warning` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.recovery_codes_regenerated.v1-rc.0.json](/schemas/events/user.recovery_codes_regenerated.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+`data` has no members: the envelope carries the event.
 
 ### authorization.completed v1-rc.0
 
@@ -1008,9 +1080,9 @@ A form post was refused because its CSRF check failed: the token was missing or 
 - Subject: `user`, when known
 - Schema: [request.csrf_rejected.v1-rc.0.json](/schemas/events/request.csrf_rejected.v1-rc.0.json)
 
-| Member | Type                                                                                                                | Required | Meaning                                                        |
-| ------ | ------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------- |
-| `form` | one of `sign_in`, `wallet_sign_in`, `wallet_link`, `consent`, `consent_revocation`, `interaction`, or a later value | yes      | The form that was posted. The set may grow in a minor release. |
+| Member | Type                                                                                                                           | Required | Meaning                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------ | -------- | -------------------------------------------------------------- |
+| `form` | one of `sign_in`, `wallet_sign_in`, `wallet_link`, `consent`, `consent_revocation`, `interaction`, `account`, or a later value | yes      | The form that was posted. The set may grow in a minor release. |
 
 ### request.account_operation_refused v1-rc.0
 

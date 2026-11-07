@@ -412,7 +412,9 @@ export function createInteractionEngines(
   // after its password (the downgrade rule): only a recovery code stands in
   // for it, and without one the round ends.
   const passkeys =
-    fastify.passkeySignIn === true ? createServerPasskeys(fastify, { mailer }) : undefined;
+    fastify.passkeySignIn === true
+      ? createServerPasskeys(fastify, { mailer, requestOf: () => roundRequests.getStore() })
+      : undefined;
   // A registration by passkey alone, with no address (#655), while passkeys
   // are on: the same gate and challenge as a password registration.
   const registrations: AccountRegistrations =
@@ -435,6 +437,7 @@ export function createInteractionEngines(
     ladder: ladder.ladder,
     hostedPages: env.INTERACTION_UI_ENABLED === true,
     passkeys: passkeys !== undefined,
+    requestOf: () => roundRequests.getStore(),
   });
   const build = (requireVerifiedAccount: boolean) =>
     createCheckedSignInEngine({

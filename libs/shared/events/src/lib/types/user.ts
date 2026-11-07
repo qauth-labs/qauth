@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { defineEventType } from '../definition';
+import { extensibleEnum } from '../envelope';
 import {
   CAEP_CREDENTIAL_CHANGE,
   CAEP_SESSION_REVOKED,
@@ -109,14 +110,14 @@ export const userSignedOut = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'A person signed out, and QAuth ended their browser sessions: the one session the relying party named at the end-session endpoint (OpenID Connect RP-Initiated Logout 1.0), or every session of the user at `POST /auth/logout`.',
+    'A person signed out, and QAuth ended their browser sessions: the one session the relying party named at the end-session endpoint (OpenID Connect RP-Initiated Logout 1.0), one session the person ended on the hosted account page, or every session of the user at `POST /auth/logout` or at "sign out everywhere" on the hosted account page.',
   category: 'user',
   severity: 'info',
   since: FIRST_RELEASE,
   subject: 'user',
   data: z.strictObject({
     sid: recordId(
-      'The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` does.'
+      'The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` and "sign out everywhere" do.'
     ).optional(),
   }),
   security: true,
@@ -382,6 +383,115 @@ export const userUpstreamLinkFailed = defineEventType({
   ssfNote: 'Nothing changed: no credential was created, changed or deleted.',
 });
 
+/**
+ * A person's own changes to the ways into their account (#844; ADR-020 §3):
+ * a password changed, a passkey or an authenticator app bound or removed, a
+ * passkey renamed, a new set of recovery codes. Each is recorded in the
+ * transaction of the change, but for the recovery codes, whose set is
+ * replaced by the store's own write and recorded right after it.
+ */
+
+/** The kinds of credential a person binds or removes beside the password. */
+export const OWN_CREDENTIAL_TYPES = ['passkey', 'totp'] as const;
+
+const ownCredentialType = () =>
+  extensibleEnum(OWN_CREDENTIAL_TYPES).describe(
+    '`passkey`: a WebAuthn passkey. `totp`: an authenticator app (TOTP). The set may grow in a minor release.'
+  );
+
+export const userPasswordChanged = defineEventType({
+  name: 'user.password_changed',
+  version: 1,
+  rc: 0,
+  description:
+    "A person changed their account's password with the current one, after a fresh sign-in with the account's strongest factor, on the hosted account page. The new password met the realm's password policy. Every other browser session and every refresh token of the account ended; the session the change was made in stays. The person is told by email.",
+  category: 'user',
+  severity: 'info',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({}),
+  security: true,
+  ssf: {
+    event: CAEP_CREDENTIAL_CHANGE,
+    members: {
+      credential_type: { value: 'password' },
+      change_type: { value: 'update' },
+    },
+  },
+});
+
+export const userCredentialAdded = defineEventType({
+  name: 'user.credential_added',
+  version: 1,
+  rc: 0,
+  description:
+    'A passkey or an authenticator app (TOTP) was bound to a person’s account, in a step of the hosted pages the person answered: after a sign-in that offered or asked for it, in a recovery that replaced a lost passkey, or from the hosted account page after a fresh sign-in. A passkey an account was registered with is recorded by the registration (`user.registered`).',
+  category: 'user',
+  severity: 'info',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    type: ownCredentialType(),
+    credentialId: recordId('The id of the account credential that was bound.'),
+  }),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'CAEP 1.0 `credential-change` tells a platform passkey (`fido2-platform`) from a roaming one (`fido2-roaming`), and QAuth does not record which kind of authenticator created a passkey.',
+});
+
+export const userCredentialRemoved = defineEventType({
+  name: 'user.credential_removed',
+  version: 1,
+  rc: 0,
+  description:
+    'A person removed a passkey or their authenticator app (TOTP) from their account on the hosted account page, after a fresh sign-in with the account’s strongest factor or with a recovery code in place of a lost one. The account no longer signs in with it.',
+  category: 'user',
+  severity: 'warning',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    type: ownCredentialType(),
+    credentialId: recordId('The id of the account credential that was removed.'),
+  }),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'CAEP 1.0 `credential-change` tells a platform passkey (`fido2-platform`) from a roaming one (`fido2-roaming`), and QAuth does not record which kind of authenticator created a passkey.',
+});
+
+export const userPasskeyRenamed = defineEventType({
+  name: 'user.passkey_renamed',
+  version: 1,
+  rc: 0,
+  description:
+    'A person changed the name they gave one of their passkeys, on the hosted account page. A name is no credential: the passkey signs in as before.',
+  category: 'user',
+  severity: 'info',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    credentialId: recordId('The id of the passkey’s account credential.'),
+  }),
+});
+
+export const userRecoveryCodesRegenerated = defineEventType({
+  name: 'user.recovery_codes_regenerated',
+  version: 1,
+  rc: 0,
+  description:
+    'A person issued a new set of recovery codes on the hosted account page, after a fresh sign-in with the account’s strongest factor: every code of the old set stopped working, and the new codes were shown once. The person is told by email.',
+  category: 'user',
+  severity: 'warning',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({}),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'CAEP 1.0 `credential-change` lists no credential type for a set of recovery codes, and none is agreed with receivers yet.',
+});
+
 export const USER_EVENT_TYPES = [
   userSignedIn,
   userSignInFailed,
@@ -400,4 +510,9 @@ export const USER_EVENT_TYPES = [
   userUpstreamLinked,
   userUpstreamUnlinked,
   userUpstreamLinkFailed,
+  userPasswordChanged,
+  userCredentialAdded,
+  userCredentialRemoved,
+  userPasskeyRenamed,
+  userRecoveryCodesRegenerated,
 ] as const;

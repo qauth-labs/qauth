@@ -14,10 +14,11 @@ import {
   type TotpDisplay,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { TOTP_SECRET_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import type { EngineMailer, MailRealm } from './engine-mail';
 import { realmIssuer, type RealmUrlSource } from './realm-url';
+import { emitUserEvent } from './user-events';
 
 /**
  * TOTP AT SIGN-IN ON THE AUTH SERVER (#653; ADR-017 Decisions 7 and 8,
@@ -133,6 +134,12 @@ export interface ServerTotpDependencies {
   /** The failure ladder: a binding ends the TOTP counter's run. */
   readonly ladder: Pick<RedisFailureLadder, 'resetAccount'>;
   /**
+   * The request the engine's round runs for, which a binding's
+   * `user.credential_added` event carries (#844). A binding outside one
+   * fails, closed: its transaction rolls back.
+   */
+  readonly requestOf: () => FastifyRequest | undefined;
+  /**
    * Whether the hosted pages are on (`INTERACTION_UI_ENABLED`): a recovery
    * code is redeemed there, so without them the hard action is never armed.
    */
@@ -185,6 +192,19 @@ export function createServerTotp(
         return passkeys.some(
           (row) =>
             row.realmId === realmId && (row.disabledAt === undefined || row.disabledAt === null)
+        );
+      },
+      // The binding's record commits with it (ADR-019 Decision 8).
+      async recorded({ realmId, userId, credentialId }, tx) {
+        const request = deps.requestOf();
+        if (request === undefined) {
+          throw new Error('a TOTP bound outside the request that asked for it');
+        }
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.credential_added:v1-rc.0',
+          { type: 'totp', credentialId },
+          { tx, realmId, userId, actor: 'user' }
         );
       },
       async bound({ realmId, userId }) {
