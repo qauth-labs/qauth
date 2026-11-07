@@ -216,6 +216,10 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'oauthClients',
       'oauthConsents',
       'refreshTokens',
+      // The operation guard (#663): the account's bound factors, and the
+      // browser session behind a token for a recovery-code sign-in.
+      'sessions',
+      'userCredentials',
       'users',
     ],
     load: () => import('./routes/account'),

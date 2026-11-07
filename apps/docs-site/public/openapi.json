@@ -1111,6 +1111,8 @@
         "x-qauth-stability": "stable",
         "x-qauth-class": "read",
         "x-qauth-permission": "consents.read",
+        "x-qauth-fresh-authentication": "none",
+        "x-qauth-act-chain": "accepted",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -1253,6 +1255,8 @@
         "x-qauth-stability": "stable",
         "x-qauth-class": "write",
         "x-qauth-permission": "consents.write",
+        "x-qauth-fresh-authentication": "none",
+        "x-qauth-act-chain": "accepted",
         "responses": {
           "204": {
             "description": "Default Response"

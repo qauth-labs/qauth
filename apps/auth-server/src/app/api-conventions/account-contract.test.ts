@@ -90,6 +90,12 @@ describe('the account API contract document', () => {
       for (const key of ['operationId', 'x-qauth-class', 'x-qauth-permission']) {
         expect(contract?.[key], `${at} ${key}`).toEqual(operation[key]);
       }
+      // What the operation guard checks (#663): a served operation states
+      // the contract's rules, through `accountOperation`.
+      for (const key of ['x-qauth-fresh-authentication', 'x-qauth-act-chain']) {
+        expect(operation[key], `${at} ${key}`).toBeDefined();
+        expect(contract?.[key], `${at} ${key}`).toEqual(operation[key]);
+      }
     }
   });
 });

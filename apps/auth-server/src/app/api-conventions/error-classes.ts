@@ -37,15 +37,15 @@ import {
 } from '@qauth-labs/shared-errors';
 
 import {
+  DelegatedTokenRefusedError,
+  InsufficientUserAuthenticationError,
+} from '../helpers/account-operation-errors';
+import {
   InvalidCursorError,
   SandboxCeilingError,
   UnprocessableContentError,
   UnsupportedMediaTypeError,
 } from '../helpers/api-request-errors';
-import {
-  DelegatedTokenRefusedError,
-  InsufficientUserAuthenticationError,
-} from '../helpers/account-operation-errors';
 import { ApprovalRequiredError, ApprovalStateError } from '../helpers/approval-required';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
