@@ -4236,7 +4236,7 @@
       "delete": {
         "operationId": "account.linkedAccounts.delete",
         "summary": "Unlink an upstream account",
-        "description": "Remove a linked upstream account: the account no longer signs in through its provider, and the attributes the provider gave stay. The last way the account can sign in is refused with `last_credential`. Needs a fresh sign-in with the strongest factor the account holds, or any fresh sign-in for an account that holds no password, passkey or authenticator app; an act-chain token is refused (ADR-019 Decision 7). The \"account unlinked\" notice goes out, and the security log records it.\n\nToken: audience `urn:qauth:aud:account:v1-rc.0`; fresh authentication with the account’s strongest factor (at most 300 seconds old); an act-chain token is refused.",
+        "description": "Remove a linked upstream account: the account no longer signs in through its provider, and the attributes the provider gave stay. The last way the account can sign in is refused with `last_credential`. Needs a fresh sign-in with the strongest factor the account holds, as every change to the ways into the account does; an act-chain token is refused (ADR-019 Decision 7). The \"account unlinked\" notice goes out, and the security log records it.\n\nToken: audience `urn:qauth:aud:account:v1-rc.0`; fresh authentication with the account’s strongest factor (at most 300 seconds old); an act-chain token is refused.",
         "tags": [
           "Linked accounts"
         ],

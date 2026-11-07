@@ -519,7 +519,7 @@ export const ACCOUNT_OPERATIONS: readonly AccountOperation[] = [
     tag: 'Linked accounts',
     summary: 'Unlink an upstream account',
     description:
-      'Remove a linked upstream account: the account no longer signs in through its provider, and the attributes the provider gave stay. The last way the account can sign in is refused with `last_credential`. Needs a fresh sign-in with the strongest factor the account holds, or any fresh sign-in for an account that holds no password, passkey or authenticator app; an act-chain token is refused (ADR-019 Decision 7). The "account unlinked" notice goes out, and the security log records it.',
+      'Remove a linked upstream account: the account no longer signs in through its provider, and the attributes the provider gave stay. The last way the account can sign in is refused with `last_credential`. Needs a fresh sign-in with the strongest factor the account holds, as every change to the ways into the account does; an act-chain token is refused (ADR-019 Decision 7). The "account unlinked" notice goes out, and the security log records it.',
     class: 'write',
     permission: 'linkedAccounts.write',
     freshAuthentication: 'strongest-factor',
