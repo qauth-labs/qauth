@@ -39,7 +39,8 @@ export const requestCsrfRejected = defineEventType({
  * - `delegated_token`: an act-chain token (RFC 8693 `act`) at an operation
  *   that takes none (ADR-019 Decision 7);
  * - `authentication_too_old`: the sign-in behind the token is more than five
- *   minutes old, or the token says nothing of when it happened;
+ *   minutes old, or the token says nothing of when it happened or dates it
+ *   more than a minute ahead of the server's clock;
  * - `strongest_factor_missing`: the sign-in is recent, but its `amr` lacks the
  *   account's strongest bound factor, and no recovery code stood in for it
  *   where the operation takes one (ADR-017 Decision 8);
@@ -79,7 +80,7 @@ export const requestAccountOperationRefused = defineEventType({
         'The refused operation: its `operationId` in the account API contract, such as `account.password.change`.'
       ),
     reason: extensibleEnum(ACCOUNT_OPERATION_REFUSAL_REASONS).describe(
-      '`delegated_token`: an act-chain token at an operation that takes none. `authentication_too_old`: the sign-in is more than five minutes old. `strongest_factor_missing`: the sign-in lacks the account’s strongest bound factor. `lookup_failed`: the bound factors or the session could not be read. The set may grow in a minor release.'
+      '`delegated_token`: an act-chain token at an operation that takes none. `authentication_too_old`: the sign-in is more than five minutes old, or the token gives no time for it or one more than a minute ahead of the server’s clock. `strongest_factor_missing`: the sign-in lacks the account’s strongest bound factor. `lookup_failed`: the bound factors or the session could not be read. The set may grow in a minor release.'
     ),
     requiredFactor: extensibleEnum(ACCOUNT_FACTORS)
       .optional()

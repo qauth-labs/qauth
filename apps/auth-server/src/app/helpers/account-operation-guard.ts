@@ -30,9 +30,11 @@ import { emitUserEvent } from './user-events';
  * 3. An operation that asks for fresh authentication (ADR-017 Decision 8)
  *    needs a sign-in at most {@link FRESH_AUTHENTICATION_MAX_AGE_SECONDS} old
  *    (the token's `auth_time`) whose `amr` holds the account's strongest bound
- *    factor ({@link requiredFactorOf}). A sign-in too old, or one the token
- *    says nothing of, gets the RFC 9470 §3 challenge with `max_age="300"`; a
- *    recent one without the factor gets it with `max_age="0"`.
+ *    factor ({@link requiredFactorOf}). A sign-in too old, one the token says
+ *    nothing of, or one dated ahead of the server's clock by more than
+ *    {@link AUTH_TIME_CLOCK_SKEW_LEEWAY_SECONDS}, gets the RFC 9470 §3
+ *    challenge with `max_age="300"`; a recent one without the factor gets it
+ *    with `max_age="0"`.
  * 4. Where the operation takes `strongest-factor-or-recovery-code`, a recent
  *    sign-in that used a recovery code in place of a lost factor passes too.
  *    A recovery code adds no `amr` value, so the guard reads the browser
@@ -51,6 +53,16 @@ import { emitUserEvent } from './user-events';
 
 /** How old a sign-in may be, in seconds, where an operation asks for fresh authentication. */
 export const FRESH_AUTHENTICATION_MAX_AGE_SECONDS = 300;
+
+/**
+ * How far, in seconds, a token's `auth_time` may lie ahead of the server's
+ * clock and still count: the leeway the server gives a client assertion's
+ * `iat` (`CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS`), for nodes whose clocks
+ * disagree a little. A time further ahead is one no sign-in had: a node whose
+ * clock ran ahead dated it, and taking it would stretch the five minutes by
+ * as much as that clock was off. The guard's own value, not the contract's.
+ */
+export const AUTH_TIME_CLOCK_SKEW_LEEWAY_SECONDS = 60;
 
 /** What an operation needs of the sign-in behind the token: `x-qauth-fresh-authentication`. */
 export const FRESH_AUTHENTICATION_RULES = [
@@ -124,10 +136,12 @@ export function requiredFactorOf(
  * Whether the sign-in behind a token, at `authTime` (epoch ms, from the
  * token's `auth_time`), is fresh at `now`: at most
  * {@link FRESH_AUTHENTICATION_MAX_AGE_SECONDS} old. A token that says nothing
- * of when its sign-in happened is not fresh.
+ * of when its sign-in happened is not fresh, nor is one that dates it more
+ * than {@link AUTH_TIME_CLOCK_SKEW_LEEWAY_SECONDS} ahead of `now`.
  */
 export function isFreshSignIn(authTime: number | undefined, now: number): boolean {
   if (typeof authTime !== 'number' || !Number.isFinite(authTime)) return false;
+  if (authTime - now > AUTH_TIME_CLOCK_SKEW_LEEWAY_SECONDS * 1000) return false;
   return now - authTime <= FRESH_AUTHENTICATION_MAX_AGE_SECONDS * 1000;
 }
 

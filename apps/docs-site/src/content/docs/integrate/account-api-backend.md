@@ -51,7 +51,8 @@ Content-Type: application/problem+json
 {"type":"https://docs.qauth.dev/reference/problem-types/#insufficient-user-authentication","title":"Insufficient user authentication","status":401,"code":"insufficient_user_authentication","trace_id":"…","max_age":300}
 ```
 
-- `max_age="300"`: the sign-in is too old, or the token says nothing of when it happened.
+- `max_age="300"`: the sign-in is too old, or the token says nothing of when it happened, or it
+  dates the sign-in more than a minute ahead of the server's clock.
 - `max_age="0"`: the sign-in is recent but lacks the strongest factor. The person signs in again
   now.
 - A DPoP-bound token gets the same challenge under the `DPoP` scheme, with the proof algorithms in

@@ -154,7 +154,7 @@
         },
         "reason": {
           "type": "string",
-          "description": "`delegated_token`: an act-chain token at an operation that takes none. `authentication_too_old`: the sign-in is more than five minutes old. `strongest_factor_missing`: the sign-in lacks the account’s strongest bound factor. `lookup_failed`: the bound factors or the session could not be read. The set may grow in a minor release.",
+          "description": "`delegated_token`: an act-chain token at an operation that takes none. `authentication_too_old`: the sign-in is more than five minutes old, or the token gives no time for it or one more than a minute ahead of the server’s clock. `strongest_factor_missing`: the sign-in lacks the account’s strongest bound factor. `lookup_failed`: the bound factors or the session could not be read. The set may grow in a minor release.",
           "x-extensible-enum": [
             "delegated_token",
             "authentication_too_old",

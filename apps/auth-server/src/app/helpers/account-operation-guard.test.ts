@@ -13,6 +13,7 @@ import {
   accountOperation,
   type AccountOperationRules,
   ACT_CHAIN_RULES,
+  AUTH_TIME_CLOCK_SKEW_LEEWAY_SECONDS,
   checkAccountOperation,
   FRESH_AUTHENTICATION_MAX_AGE_SECONDS,
   FRESH_AUTHENTICATION_RULES,
@@ -206,6 +207,14 @@ describe('the account operation guard (#663)', () => {
       expect(isFreshSignIn(undefined, Date.now())).toBe(false);
       expect(isFreshSignIn(Number.NaN, Date.now())).toBe(false);
     });
+
+    it('takes a time up to a minute ahead of the clock, and not one millisecond more', () => {
+      const now = 1_800_000_000_000;
+      expect(AUTH_TIME_CLOCK_SKEW_LEEWAY_SECONDS).toBe(60);
+      expect(isFreshSignIn(now + 60_000, now)).toBe(true);
+      expect(isFreshSignIn(now + 60_001, now)).toBe(false);
+      expect(isFreshSignIn(now + 86_400_000, now)).toBe(false);
+    });
   });
 
   describe('a call', () => {
@@ -261,6 +270,22 @@ describe('the account operation guard (#663)', () => {
 
       expect(response.statusCode).toBe(401);
       expect(response.json()).toMatchObject({ max_age: 300 });
+      await harness.app.close();
+    });
+
+    it('challenges a sign-in dated ahead of the clock as a sign-in too old', async () => {
+      const harness = await buildHarness();
+      // A node whose clock ran an hour ahead dated it.
+      harness.claims = { ...harness.claims, authTime: signedInAgo(-3600) };
+
+      const response = await call(harness, 'account.password.change');
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ max_age: 300 });
+      expect(harness.credentials).not.toHaveBeenCalled();
+      expect(harness.events).toMatchObject([
+        { type: REFUSED, data: { reason: 'authentication_too_old', maxAge: 300 } },
+      ]);
       await harness.app.close();
     });
 
