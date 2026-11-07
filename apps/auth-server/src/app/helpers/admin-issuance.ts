@@ -44,7 +44,8 @@
  * A family scope follows `namesUser` instead: withheld from a
  * `client_credentials` token and from both ID-JAG grants, but kept on a
  * delegated token of token exchange when its subject token carried it and the
- * agent's own client lists the family's audience. The account API takes an
+ * agent's own client lists the family's audience (the exchange route also
+ * keeps it only when the agent's `scopes` list it). The account API takes an
  * act-chain token where its contract says so (ADR-019 Decision 7), and the
  * developer API's guard refuses one.
  *

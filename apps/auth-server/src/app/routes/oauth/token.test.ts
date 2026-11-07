@@ -6019,6 +6019,98 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
         expect.objectContaining({ aud: ACCOUNT_AUDIENCE })
       );
     });
+
+    describe('with an account scope the subject token carried (#933)', () => {
+      const SCOPE = 'read:docs qauth:account:write';
+
+      it('keeps it for an agent that lists the audience and the scope', async () => {
+        const { fastify, ctx, client } = setupExchangeStub({
+          subjectAud: ACCOUNT_AUDIENCE,
+          subjectScope: SCOPE,
+        });
+        client.audience = [ACCOUNT_AUDIENCE] as never;
+        client.scopes = ['read:docs', 'qauth:account:write'];
+
+        const result = (await invoke(
+          fastify,
+          ctx,
+          exchangeRequest({ audience: [ACCOUNT_AUDIENCE] })
+        )) as Record<string, unknown>;
+
+        expect(result['scope']).toBe(SCOPE);
+        expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+          IN_REQUEST_REALM,
+          expect.objectContaining({
+            aud: ACCOUNT_AUDIENCE,
+            scope: SCOPE,
+            act: { sub: AGENT_CLIENT_ID },
+          })
+        );
+        // A family scope reads no admin grant.
+        expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+      });
+
+      it('withholds it from an agent whose registration does not list the scope', async () => {
+        const { fastify, ctx, client } = setupExchangeStub({
+          subjectAud: ACCOUNT_AUDIENCE,
+          subjectScope: SCOPE,
+        });
+        client.audience = [ACCOUNT_AUDIENCE] as never;
+        client.scopes = ['read:docs', 'qauth:account:read'];
+
+        const result = (await invoke(
+          fastify,
+          ctx,
+          exchangeRequest({ audience: [ACCOUNT_AUDIENCE] })
+        )) as Record<string, unknown>;
+
+        expect(result['scope']).toBe('read:docs');
+        expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+          IN_REQUEST_REALM,
+          expect.objectContaining({ scope: 'read:docs' })
+        );
+      });
+
+      it('refuses the exchange when it is all the agent would get', async () => {
+        const { fastify, ctx, client } = setupExchangeStub({
+          subjectAud: ACCOUNT_AUDIENCE,
+          subjectScope: SCOPE,
+        });
+        client.audience = [ACCOUNT_AUDIENCE] as never;
+        client.scopes = ['read:docs'];
+
+        await expect(
+          invoke(
+            fastify,
+            ctx,
+            exchangeRequest({ audience: [ACCOUNT_AUDIENCE], scope: 'qauth:account:write' })
+          )
+        ).rejects.toThrow(InvalidScopeError);
+        expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+        expect(emitUserEventMock).toHaveBeenCalledWith(
+          expect.anything(),
+          TOKEN_REQUEST_FAILED,
+          expect.objectContaining({ error: 'invalid_scope', reason: 'reserved_scope_not_issued' }),
+          expect.anything()
+        );
+      });
+
+      it('withholds it from an agent that lists the scope but not the audience', async () => {
+        const { fastify, ctx, client } = setupExchangeStub({
+          subjectAud: ['https://api.example.com', ACCOUNT_AUDIENCE],
+          subjectScope: SCOPE,
+        });
+        client.scopes = ['read:docs', 'qauth:account:write'];
+
+        const result = (await invoke(
+          fastify,
+          ctx,
+          exchangeRequest({ audience: ['https://api.example.com'] })
+        )) as Record<string, unknown>;
+
+        expect(result['scope']).toBe('read:docs');
+      });
+    });
   });
 
   // #510: an admin acts as itself, never through an exchanged token. The

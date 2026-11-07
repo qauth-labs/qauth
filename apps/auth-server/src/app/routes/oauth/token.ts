@@ -2299,9 +2299,26 @@ async function handleTokenExchange(
   // token (#933): it names the user, and the agent's client must list the
   // family's audience. The account API refuses an act-chain token per
   // operation; the developer API refuses every one.
+  //
+  // The agent's own registration must also list the scope, as every other
+  // grant issues one only to a client whose `scopes` list it
+  // (`validateScopes`): the operator who gave the agent the family's audience
+  // also says which of its scopes the agent may act with. One it does not list
+  // is withheld, and when nothing else is left the exchange is refused. This
+  // is the rule of QAuth's reserved scopes, not GATE 4d, which ADR-014 brings
+  // to this branch for every scope behind `AUTHORITY_TREE_ENABLED`.
+  const registeredScopes = new Set(client.scopes);
+  const unregistered = grantedScopes.filter(
+    (scope) => familyScopeOf(scope) !== undefined && !registeredScopes.has(scope)
+  );
+  const delegable = grantedScopes.filter((scope) => !unregistered.includes(scope));
+  if (delegable.length === 0 && unregistered.length > 0) {
+    await emitRequestFailed(ctx, 'invalid_scope', 'reserved_scope_not_issued', user.id);
+    throw new InvalidScopeError(`${unregistered.join(' ')} not issued to this agent`);
+  }
   const issuedScopes = await issuableScopes(
     ctx,
-    { userId: null, namesUser: true, scopes: grantedScopes, aud },
+    { userId: null, namesUser: true, scopes: delegable, aud },
     user.id
   );
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;

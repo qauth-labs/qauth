@@ -375,8 +375,9 @@ of `approvals.approve`.
   is read and no DPoP proof is needed. It is withheld, as above, from a client that does not list
   the audience, from a `client_credentials` token, from an ID-JAG and from a token of the
   jwt-bearer grant. A delegated token of token exchange keeps one its subject token carried when
-  the agent's own client lists the family's audience: the account API refuses an act-chain token
-  per operation, and the developer API refuses every one. The client asks for the scope like any
+  the agent's own client lists the family's audience and the scope in its `scopes`, and withholds
+  it otherwise: the account API refuses an act-chain token per operation, and the developer API
+  refuses every one. The client asks for the scope like any
   other, so it must also hold it in its `scopes`, which only an operator writes: the developer API
   and dynamic registration refuse or drop a `qauth:` scope.
 - No other scope of the reserved `qauth:` namespace is ever issued.

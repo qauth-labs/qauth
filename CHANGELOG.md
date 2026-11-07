@@ -24,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose `audience` an operator set to that family's audience, for a token
   that names a user (never `client_credentials`, an ID-JAG or the jwt-bearer
   grant; a delegated token of token exchange keeps one its subject token
-  carried), with no admin grant and no DPoP proof; a refresh carries them
+  carried when the agent's own registration lists the scope), with no admin
+  grant and no DPoP proof; a refresh carries them
   forward. The developer portal's token from `POST /auth/login` carries both
   developer scopes. The deprecated `/api/clients` and `/api/consents` routes
   need the scope of the operation each aliases, and `POST /oauth/register`
