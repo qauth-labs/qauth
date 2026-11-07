@@ -15,6 +15,7 @@ import {
   followRedirect,
   generateJwtPem,
   linkWalletToNewAccount,
+  makeLegacyCrossDeviceLinkFlow,
   type PemKeyPair,
   pkcePair,
   registerPasswordAccount,
@@ -881,9 +882,9 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
      * request answered by a wallet that is not on the signed-in browser's
      * device — whoever holds it — must bind nothing to the account that asked,
      * under `issuer-scoped-claim` too, where a linked row would carry that
-     * wallet's stable subject. Two ways in, each refused: the cross-device
-     * mode at both starts, and the same-device request answered from another
-     * device.
+     * wallet's stable subject. Three ways in, each refused: the cross-device
+     * mode at both starts, the same-device request answered from another
+     * device, and a cross-device flow still pending from before the upgrade.
      */
     it.each<{ strategy: string; env: Record<string, string> }>([
       { strategy: 'asserted-lookup', env: {} },
@@ -994,6 +995,23 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
             // The code is spent: the starter cannot redeem it either.
             const late = await followRedirect(app, jar, redirectUri);
             expect(late.body).toContain(RETURN_REFUSAL_TITLE);
+
+            // (3) A cross-device flow still pending from before the upgrade:
+            // the wallet is answered `{}` as a QR flow was, and the starter's
+            // poll — which used to complete the link — refuses it.
+            const legacy = await startWalletLink(app, jar);
+            await makeLegacyCrossDeviceLinkFlow(app, legacy.handle);
+            const legacyAnswer = await postWalletResponse(
+              app,
+              (await otherWallet.buildResponse(legacy.invocationUri)).formBody
+            );
+            expect(legacyAnswer.statusCode).toBe(200);
+            expect(legacyAnswer.body).toEqual({});
+            expect(await pollLink(app, jar, legacy.handle)).toEqual({
+              status: 'rejected',
+              message: 'We could not link that credential. Please try again.',
+            });
+            expect((await pollLink(app, jar, legacy.handle)).status).toBe('expired');
 
             // Nothing was bound: the account holds its password and nothing
             // else, and no wallet row exists anywhere.

@@ -649,6 +649,28 @@ describe('wallet-link UI — same-device only (ADR-013 as amended 2026-11-07)', 
     }
   });
 
+  it('refuses a cross-device link flow left from before the upgrade, and links nothing', async () => {
+    // The record a cross-device link carried: no `sameDevice`. Whoever's
+    // wallet answered it, the page's refresh renders the refusal.
+    const { routes, sessionUtils, handle, flow, sessionCookie, binderCookie } = await startLink();
+    const { sameDevice: _sameDevice, ...legacy } = flow;
+    sessionUtils.store.set(`wallet-login:${handle}`, legacy);
+    publishSignal(sessionUtils, flow['stateHash'], 'received');
+    linkAs(LINKED);
+
+    const rendered = await renderLinkPage(
+      routes,
+      handle,
+      `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`
+    );
+
+    expect(rendered.statusCode).toBe(401);
+    expect(String(rendered.body)).toContain('We could not link that credential');
+    expect(linkWalletPresentation).not.toHaveBeenCalled();
+    expect(emittedTypes()).not.toContain(WALLET_LINKED_EVENT);
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+  });
+
   it('(HAIP 1.0 §5.1) records the same-device choice on the link row and flow', async () => {
     const { routes, row, flow, handle, postReply, sessionCookie, binderCookie } = await startLink();
     const body = String(postReply.state.body);

@@ -521,7 +521,10 @@ export type WalletSignalGateDecision =
  * - `received` on a cross-device flow → `proceed` by polling, exactly as
  *   before #405. A return can never reach such a flow, because the Response
  *   Endpoint emits no `redirect_uri` for a cross-device row and the
- *   repository refuses to redeem a code for one.
+ *   repository refuses to redeem a code for one. Only a LOGIN flow gets here
+ *   cross-device: the link machine refuses a cross-device flow before it asks
+ *   this gate, because linking is same-device only (ADR-013 as amended
+ *   2026-11-07).
  *
  * Pure: it reads the clock only through `now`, writes nothing and logs
  * nothing, so the caller — which holds the request, the flow and the

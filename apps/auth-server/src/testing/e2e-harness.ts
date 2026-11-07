@@ -1365,6 +1365,36 @@ export async function backdateWalletPresentationSignal(
 }
 
 /**
+ * Turn a started wallet LINK flow into the state a CROSS-device link left
+ * before linking became same-device only (ADR-013 as amended 2026-11-07): no
+ * `sameDevice` on the Redis flow record, and `same_device = false` on its
+ * `oid4vp_request_states` row, so the Response Endpoint answers the wallet
+ * `{}` as it did for a QR flow. No route starts such a flow any more; this is
+ * how a suite models one still pending across the upgrade.
+ *
+ * Written back through the app's own session utilities with the flow TTL, and
+ * through the app's own pool, so the server reads exactly what was written.
+ *
+ * @throws Error when the flow does not exist or is not a link flow.
+ */
+export async function makeLegacyCrossDeviceLinkFlow(
+  app: FastifyInstance,
+  handle: string
+): Promise<void> {
+  const key = WALLET_FLOW_SESSION_KEY(handle);
+  const record = await app.sessionUtils.getSession<Record<string, unknown>>(key);
+  if (record === null) throw new Error(`no wallet flow record for handle ${handle}`);
+  if (record['mode'] !== 'link') throw new Error('the flow is not a wallet LINK flow');
+
+  const { sameDevice: _sameDevice, ...legacy } = record;
+  await app.sessionUtils.setSession(key, legacy, Math.floor(WALLET_LOGIN_FLOW_TTL_MS / 1000));
+  await app.dbPool.query(
+    'UPDATE oid4vp_request_states SET same_device = false WHERE state_hash = $1',
+    [record['stateHash']]
+  );
+}
+
+/**
  * The five entities `helpers/html.ts` escapes, reversed — for asserting page
  * COPY (an apostrophe renders as `&#39;`) rather than wire bytes.
  *

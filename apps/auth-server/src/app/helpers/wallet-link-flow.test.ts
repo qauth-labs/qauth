@@ -173,6 +173,21 @@ async function startLink(opts: { userId?: string } = {}) {
   };
 }
 
+/**
+ * Rewrite a started flow into the record a CROSS-device link left before
+ * linking became same-device only (ADR-013 as amended 2026-11-07): the
+ * record carried no `sameDevice` at all. This is the shape a flow still
+ * pending across the upgrade has, and the only way one can exist now.
+ */
+function makeCrossDeviceFlow(sessionUtils: ReturnType<typeof createSessionUtils>, handle: string) {
+  const key = `wallet-login:${handle}`;
+  const { sameDevice: _sameDevice, ...legacy } = sessionUtils.store.get(key) as Record<
+    string,
+    unknown
+  >;
+  sessionUtils.store.set(key, legacy);
+}
+
 function publishSignal(
   sessionUtils: ReturnType<typeof createSessionUtils>,
   stateHash: string,
@@ -367,6 +382,103 @@ describe('advanceWalletLinkFlow — same-device links never complete by polling 
     );
     expect(linkWalletPresentation).not.toHaveBeenCalled();
     expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+  });
+});
+
+/**
+ * A cross-device link completed by polling, and nothing on that path tied the
+ * wallet that answered to the browser that asked. Such a flow can now exist
+ * only as one still pending from before the upgrade, and it must bind nothing,
+ * by either surface, whoever's wallet answered it.
+ */
+describe('advanceWalletLinkFlow — a cross-device link binds nothing (ADR-013 as amended 2026-11-07)', () => {
+  it('refuses a cross-device link another wallet answered, on the starter’s poll: no link, no event, the flow ended', async () => {
+    const { fastify, sessionUtils, handle, flow, userId, binderCookie } = await startLink({
+      userId: 'starter',
+    });
+    makeCrossDeviceFlow(sessionUtils, handle);
+    // A wallet answered the request: any wallet, on any device.
+    publishSignal(sessionUtils, flow['stateHash'], 'received');
+    sessionUtils.store.set(`wallet-presentation:${flow['stateHash']}`, {
+      presentations: [{ queryId: 'q', format: 'dc+sd-jwt', presentation: 'someone-else' }],
+    });
+    linkAs(LINKED);
+
+    // The starter's browser holds the binder and the session: every gate but
+    // the device one passes.
+    const { outcome } = await advance(fastify, handle, userId, {
+      cookie: `__Host-qauth_wallet_flow=${binderCookie}`,
+    });
+
+    expect(outcome).toEqual({ status: 'rejected' });
+    expect(linkWalletPresentation).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
+    expect(fastify.log.warn).toHaveBeenCalledWith(
+      expect.anything(),
+      'cross-device wallet link refused: linking is same-device only'
+    );
+    // Terminal: the flow, its signal and the parked presentation are gone, and
+    // a later poll is expired.
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+    expect(sessionUtils.store.has(`wallet-login-signal:${flow['stateHash']}`)).toBe(false);
+    expect(sessionUtils.store.has(`wallet-presentation:${flow['stateHash']}`)).toBe(false);
+    expect(
+      (
+        await advance(fastify, handle, userId, {
+          cookie: `__Host-qauth_wallet_flow=${binderCookie}`,
+        })
+      ).outcome.status
+    ).toBe('expired');
+  });
+
+  it('refuses a pending cross-device link on its first poll, before any wallet answered', async () => {
+    const { fastify, sessionUtils, handle, userId, binderCookie } = await startLink();
+    makeCrossDeviceFlow(sessionUtils, handle);
+
+    const { outcome } = await advance(fastify, handle, userId, {
+      cookie: `__Host-qauth_wallet_flow=${binderCookie}`,
+    });
+
+    expect(outcome).toEqual({ status: 'rejected' });
+    expect(linkWalletPresentation).not.toHaveBeenCalled();
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+  });
+
+  it('refuses a cross-device link on the return leg too, leaving a rejected marker', async () => {
+    // Unreachable through the routes — a cross-device row's Response Code is
+    // never handed out or redeemed — and refused here all the same.
+    const { fastify, sessionUtils, handle, flow, userId, binderCookie } = await startLink();
+    makeCrossDeviceFlow(sessionUtils, handle);
+    publishSignal(sessionUtils, flow['stateHash'], 'received');
+    linkAs(LINKED);
+
+    const { outcome } = await advance(fastify, handle, userId, {
+      cookie: `__Host-qauth_wallet_flow=${binderCookie}`,
+      via: 'return',
+    });
+
+    expect(outcome).toEqual({ status: 'rejected' });
+    expect(linkWalletPresentation).not.toHaveBeenCalled();
+    expect(sessionUtils.store.get(`wallet-login-done:${handle}`)).toMatchObject({
+      mode: 'link',
+      outcome: 'rejected',
+    });
+  });
+
+  it('hands the writer the recorded device mode, so it can refuse on its own', async () => {
+    const { fastify, sessionUtils, handle, flow, userId, binderCookie } = await startLink();
+    publishSignal(sessionUtils, flow['stateHash'], 'received');
+    linkAs(LINKED);
+
+    await advance(fastify, handle, userId, {
+      cookie: `__Host-qauth_wallet_flow=${binderCookie}`,
+      via: 'return',
+    });
+
+    expect(linkWalletPresentation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sameDevice: true })
+    );
   });
 });
 

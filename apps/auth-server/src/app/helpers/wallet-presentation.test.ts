@@ -132,6 +132,13 @@ const REQUEST = {
   dcqlQuery: DCQL,
 };
 
+/**
+ * The request a LINK answers: {@link REQUEST} on a flow recorded as
+ * same-device, the only kind a link is made for (ADR-013 as amended
+ * 2026-11-07).
+ */
+const LINK = { ...REQUEST, sameDevice: true } as const;
+
 interface CredentialRow {
   id: string;
   userId: string;
@@ -718,7 +725,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     const { fastify } = makeFastify(store);
 
     const result = await linkWalletPresentation(fastify, {
-      ...REQUEST,
+      ...LINK,
       authenticatedUserId: 'user-1',
     });
 
@@ -731,6 +738,42 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     });
   });
 
+  it('(ADR-013 as amended 2026-11-07) refuses a cross-device flow before reading the presentation, and writes nothing', async () => {
+    // A cross-device presentation request names only the verifier, so whoever
+    // scans it answers it: nothing ties the credential to the session's
+    // account. The writer refuses it on its own, whatever its caller checked.
+    const store = createCredentialStore([PASSWORD_ROW]);
+    const { fastify } = makeFastify(store);
+
+    await expect(
+      linkWalletPresentation(fastify, { ...LINK, sameDevice: false, authenticatedUserId: 'user-1' })
+    ).resolves.toEqual({ status: 'rejected' });
+
+    expect(verifyWalletPresentations).not.toHaveBeenCalled();
+    expect(prepareWalletLink).not.toHaveBeenCalled();
+    expect(store.repository.create).not.toHaveBeenCalled();
+    expect(store.rows).toHaveLength(1);
+    expect(fastify.log.warn).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      'cannot link a wallet credential: the flow is not same-device'
+    );
+  });
+
+  it('refuses a caller that states no device mode at all, as a cross-device one', async () => {
+    // A caller that reached the writer around its types (a missing field
+    // reads as `undefined`) is refused exactly as `false` is: only `true` links.
+    const { fastify } = makeFastify(createCredentialStore([PASSWORD_ROW]));
+    const { sameDevice: _omitted, ...withoutMode } = LINK;
+
+    await expect(
+      linkWalletPresentation(fastify, {
+        ...withoutMode,
+        authenticatedUserId: 'user-1',
+      } as unknown as Parameters<typeof linkWalletPresentation>[1])
+    ).resolves.toEqual({ status: 'rejected' });
+    expect(verifyWalletPresentations).not.toHaveBeenCalled();
+  });
+
   it('takes external_sub from the ACCOUNT’s existing credential row', async () => {
     // ADR-009 §1: the same column `PasswordProvider` fills. Reading it from the
     // account rather than from user input is what makes a later wallet login
@@ -738,7 +781,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     const store = createCredentialStore([PASSWORD_ROW]);
     const { fastify } = makeFastify(store);
 
-    await linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1' });
+    await linkWalletPresentation(fastify, { ...LINK, authenticatedUserId: 'user-1' });
 
     expect(prepareWalletLink).toHaveBeenCalledWith(
       CREDENTIAL,
@@ -754,7 +797,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     const { fastify } = makeFastify(createCredentialStore());
 
     await expect(
-      linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1' })
+      linkWalletPresentation(fastify, { ...LINK, authenticatedUserId: 'user-1' })
     ).resolves.toEqual({ status: 'rejected' });
     expect(prepareWalletLink).not.toHaveBeenCalled();
   });
@@ -765,7 +808,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     const { fastify } = makeFastify(store);
 
     await expect(
-      linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1' })
+      linkWalletPresentation(fastify, { ...LINK, authenticatedUserId: 'user-1' })
     ).resolves.toEqual({ status: 'rejected' });
     expect(store.rows).toHaveLength(1);
   });
@@ -776,7 +819,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     const { fastify } = makeFastify(store);
 
     await expect(
-      linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1' })
+      linkWalletPresentation(fastify, { ...LINK, authenticatedUserId: 'user-1' })
     ).resolves.toEqual({ status: 'conflict' });
     expect(store.rows).toHaveLength(1);
   });
@@ -796,7 +839,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     const { fastify } = makeFastify(store);
 
     await expect(
-      linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1' })
+      linkWalletPresentation(fastify, { ...LINK, authenticatedUserId: 'user-1' })
     ).resolves.toEqual({ status: 'conflict' });
     expect(store.rows[1]?.credentialData['wallet_binding']).toBe('wb1:someone-else');
   });
@@ -819,7 +862,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     const { fastify } = makeFastify(store);
 
     await expect(
-      linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1' })
+      linkWalletPresentation(fastify, { ...LINK, authenticatedUserId: 'user-1' })
     ).resolves.toMatchObject({ status: 'linked', rebound: true, credentialId: 'cred-w' });
     expect(store.rows).toHaveLength(2);
     expect(store.rows[1]?.credentialData['wallet_binding']).toBe(BINDING);
@@ -834,7 +877,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     const { fastify } = makeFastify(store);
 
     await expect(
-      linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1' })
+      linkWalletPresentation(fastify, { ...LINK, authenticatedUserId: 'user-1' })
     ).resolves.toEqual({ status: 'conflict' });
   });
 
@@ -845,7 +888,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     const { fastify } = makeFastify(store);
 
     await expect(
-      linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1' })
+      linkWalletPresentation(fastify, { ...LINK, authenticatedUserId: 'user-1' })
     ).rejects.toBe(boom);
   });
 
@@ -862,7 +905,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     });
 
     const result = await linkWalletPresentation(fastify, {
-      ...REQUEST,
+      ...LINK,
       authenticatedUserId: 'user-1',
       onLinked,
     });
@@ -880,7 +923,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     const conflict = makeFastify(createCredentialStore([PASSWORD_ROW]));
     await expect(
       linkWalletPresentation(conflict.fastify, {
-        ...REQUEST,
+        ...LINK,
         authenticatedUserId: 'user-1',
         onLinked,
       })
@@ -890,7 +933,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
     // Thrown inside the transaction, so the real one rolls the row back.
     const { fastify } = makeFastify(createCredentialStore([PASSWORD_ROW]));
     await expect(
-      linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1', onLinked })
+      linkWalletPresentation(fastify, { ...LINK, authenticatedUserId: 'user-1', onLinked })
     ).rejects.toThrow('event refused');
     expect(onLinked).toHaveBeenCalledTimes(1);
   });
@@ -931,7 +974,7 @@ describe('#238 AC3 — after linking, both credentials name the same users.id', 
     );
 
     const linked = await linkWalletPresentation(fastify, {
-      ...REQUEST,
+      ...LINK,
       authenticatedUserId: 'user-1',
     });
     expect(linked.status).toBe('linked');

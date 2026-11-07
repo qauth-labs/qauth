@@ -91,7 +91,8 @@ import { isWalletLoginHandle } from '../../helpers/wallet-login-flow';
  * asked. Whoever scans a link code answers it, and the credential they present
  * says nothing about the account the code was made for. The Response Code is
  * what binds a presentation to the browser that requested it, and it exists
- * only on the same-device path.
+ * only on the same-device path. A cross-device flow started before this change
+ * is refused when it is polled (`helpers/wallet-link-flow.ts`).
  */
 
 /** Header carrying the CSRF token on the state-changing POST. */
@@ -229,7 +230,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'Poll a wallet-linking flow. A link is same-device only (ADR-013, amended 2026-11-07): it completes on the return leg, writing a second user_credentials row (provider_type=wallet) under the same users.id, and this poll answers `pending` until then, then `linked` once (#405). Issue #238.',
+          'Poll a wallet-linking flow. A link is same-device only (ADR-013, amended 2026-11-07): it completes on the return leg, writing a second user_credentials row (provider_type=wallet) under the same users.id, and this poll answers `pending` until then, then `linked` once (#405). A cross-device flow started before that change is answered `rejected`. Issue #238.',
         tags: ['Auth'],
         'x-qauth-stability': 'experimental',
         'x-qauth-errors': [400, 401],

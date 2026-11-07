@@ -1745,7 +1745,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Poll a wallet-linking flow. A link is same-device only (ADR-013, amended 2026-11-07): it completes on the return leg, writing a second user_credentials row (provider_type=wallet) under the same users.id, and this poll answers `pending` until then, then `linked` once (#405). Issue #238.",
+        "description": "Poll a wallet-linking flow. A link is same-device only (ADR-013, amended 2026-11-07): it completes on the return leg, writing a second user_credentials row (provider_type=wallet) under the same users.id, and this poll answers `pending` until then, then `linked` once (#405). A cross-device flow started before that change is answered `rejected`. Issue #238.",
         "parameters": [
           {
             "schema": {

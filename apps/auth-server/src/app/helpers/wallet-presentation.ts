@@ -183,6 +183,15 @@ export interface WalletLinkInput extends WalletPresentationRequestView {
    */
   readonly authenticatedUserId: string;
   /**
+   * Whether the flow this presentation answers is recorded as same-device:
+   * `sameDevice` on the browser-side flow record, written when the flow was
+   * started. A link is made ONLY for a same-device flow (ADR-013 as amended
+   * 2026-11-07), whose presentation reached the server through a Response
+   * Code the session's own browser presented; anything but `true` is refused
+   * before the presentation is read. Required, so no caller can leave it out.
+   */
+  readonly sameDevice: boolean;
+  /**
    * Called inside the link's transaction once the credential row is written,
    * just before the `linked` result is returned: what it writes with `tx`
    * (the `wallet.linked` event) commits with the link, or neither does. A
@@ -496,6 +505,16 @@ export async function resolveWalletPresentation(
  *
  * A row owned by a DIFFERENT account is a `conflict` and is never overwritten.
  *
+ * ## Same device only
+ *
+ * A presentation that answers a cross-device flow is refused here, before it
+ * is validated (ADR-013 as amended 2026-11-07). A cross-device presentation
+ * request names only the verifier, so whoever scans it answers it, and the
+ * credential they present says nothing about the session's account. Only the
+ * same-device return leg binds the answering wallet to the browser that asked.
+ * The link state machine refuses such a flow too; this is the writer's own
+ * check, so a second caller cannot skip it.
+ *
  * @param fastify - server instance, for repositories and logging.
  * @param input - the session's account and the request that was answered.
  */
@@ -503,6 +522,14 @@ export async function linkWalletPresentation(
   fastify: FastifyInstance,
   input: WalletLinkInput
 ): Promise<WalletLinkResolution> {
+  if (input.sameDevice !== true) {
+    fastify.log.warn(
+      { userId: input.authenticatedUserId },
+      'cannot link a wallet credential: the flow is not same-device'
+    );
+    return { status: 'rejected' };
+  }
+
   const credential = await verifyPresentedCredential(fastify, input);
   if (credential === null) return { status: 'rejected' };
 

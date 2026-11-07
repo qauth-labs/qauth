@@ -90,8 +90,10 @@ import { linkWalletPresentation } from './wallet-presentation';
  * account. The Response Code is what binds a presentation to the browser that
  * requested it (OID4VP 1.0 §14.2), and it exists only on the same-device
  * path. So the maintainer decided on 2026-11-07 that linking is same-device
- * only: a request for the cross-device mode is refused at the route, and this
- * helper never records one. Wallet SIGN-IN keeps its cross-device path; it
+ * only: a request for the cross-device mode is refused at the route, this
+ * helper never records one, and a cross-device flow recorded before that
+ * decision is refused at completion, twice (here and in
+ * `linkWalletPresentation`). Wallet SIGN-IN keeps its cross-device path; it
  * attaches nothing to an account.
  */
 
@@ -128,6 +130,14 @@ export interface AdvanceWalletLinkFlowOptions {
  * may read as a completion.
  */
 type WalletLinkDoneOutcome = 'linked' | 'rebound' | 'conflict' | 'rejected';
+
+/**
+ * The log line for a link flow refused because it is not recorded as
+ * same-device (ADR-013 as amended 2026-11-07): one started before linking
+ * became same-device only.
+ */
+export const CROSS_DEVICE_LINK_REFUSED_WARNING =
+  'cross-device wallet link refused: linking is same-device only';
 
 /** Copy the linking surfaces share. One sentence per outcome. */
 export const WALLET_LINK_REFUSAL = 'We could not link that credential. Please try again.';
@@ -213,7 +223,7 @@ export async function startWalletLinkFlow(
     dcqlQuery: { ...invocation.request.dcql_query },
     // The same value, on the record the poll reads (#405): this is what makes
     // the state machine refuse to complete the link by polling and wait for
-    // the return leg instead.
+    // the return leg instead, and what its cross-device gate checks.
     sameDevice,
     returnTo: '/',
     binder,
@@ -297,11 +307,24 @@ async function concludeReturnLeg(
  * return `expired`: indistinguishable by design, so a handle harvested from a
  * screen share or a log cannot be probed for whether it was ever real.
  *
+ * ## The cross-device gate (ADR-013 as amended 2026-11-07)
+ *
+ * After the mode, binder, same-user and expiry gates, a flow that is not
+ * recorded as same-device is refused: `rejected`, a warning in the log, the
+ * flow terminated, and nothing read of whatever the wallet parked. Since
+ * linking became same-device only, {@link startWalletLinkFlow} records no
+ * other kind, so the flows this refuses are the ones started before that, and
+ * still pending when the server was upgraded. A cross-device link would
+ * complete by polling, which binds the answering wallet to nothing, so such a
+ * flow must not complete either way. The gate runs before the signal is read,
+ * so a pending one is refused on its first poll rather than once a wallet has
+ * answered.
+ *
  * ## The same-device gate (#405, ADR-013 D7)
  *
- * After the mode, binder, same-user and expiry gates, the signal record
- * decides — in `decideSignalGate`, the ONE function both this machine and
- * the login machine call, documented there: a wallet error or a foreign
+ * After the cross-device gate, the signal record decides — in
+ * `decideSignalGate`, the ONE function both this machine and the login
+ * machine call, documented there: a wallet error or a foreign
  * landing is `rejected` on every flow via either surface; `received` on a
  * same-device flow is `pending` by poll until the Response Code deadline and
  * `rejected` after it; `received` via the return leg, or on a cross-device
@@ -390,6 +413,20 @@ export async function advanceWalletLinkFlow(
     return { status: 'expired' };
   }
 
+  // Linking is same-device only (ADR-013 as amended 2026-11-07). A flow not
+  // recorded as same-device predates that decision, and would complete by
+  // polling, which binds the wallet that answered to nothing. Refused before
+  // the signal is read, so no parked presentation is ever validated for it.
+  if (flow.sameDevice !== true) {
+    fastify.log.warn({ ip: request.ip }, CROSS_DEVICE_LINK_REFUSED_WARNING);
+    if (via === 'return') {
+      await concludeReturnLeg(fastify, handle, flow, userId, 'rejected');
+    } else {
+      await terminate(fastify, handle, flow);
+    }
+    return { status: 'rejected' };
+  }
+
   const record = await readWalletPresentationSignalRecord(fastify, flow.stateHash);
   if (record === null) return { status: 'pending', flow };
 
@@ -420,6 +457,9 @@ export async function advanceWalletLinkFlow(
     realmId: flow.realmId,
     stateHash: flow.stateHash,
     authenticatedUserId: userId,
+    // Checked again by the writer itself: the gate above is not the only
+    // thing between a cross-device flow and a credential row.
+    sameDevice: flow.sameDevice === true,
     nonce: flow.nonce ?? '',
     clientId: flow.clientId ?? '',
     dcqlQuery: flow.dcqlQuery ?? {},
@@ -441,8 +481,10 @@ export async function advanceWalletLinkFlow(
   });
 
   if (via === 'poll') {
-    // By POLL the flow ends here, right after the link: only a cross-device
-    // flow started before linking became same-device only gets this far. By
+    // By POLL the flow would end here, right after the link. Since linking is
+    // same-device only the poll never gets this far — the gates above leave
+    // it `pending` or `rejected` — and the branch stays so that the machine
+    // still ends a flow correctly on either surface if that ever changes. By
     // RETURN it ends in `concludeReturnLeg` below, AFTER the marker for the
     // original tab is written.
     await terminate(fastify, handle, flow);

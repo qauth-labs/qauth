@@ -474,7 +474,7 @@ describe('wallet linking API — completion gates (#238)', () => {
     await returnLeg(fastify, handle, 'user-7', cookie);
     expect(linkWalletPresentation).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ authenticatedUserId: 'user-7' })
+      expect.objectContaining({ authenticatedUserId: 'user-7', sameDevice: true })
     );
   });
 
@@ -775,6 +775,35 @@ describe('wallet linking API — same-device links never complete by polling (#4
     expect(polled.body).toEqual({ status: 'rejected', message: WALLET_LINK_REFUSAL });
     expect(linkWalletPresentation).not.toHaveBeenCalled();
     expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+  });
+
+  it('(ADR-013 as amended 2026-11-07) refuses a cross-device link left from before the upgrade, and links nothing', async () => {
+    // A cross-device flow, as one started before linking became same-device
+    // only recorded it: no `sameDevice` on the flow record. Whoever's wallet
+    // answered it, the starter's poll must bind nothing.
+    const { routes, sessionUtils, session, handle, flow, binderCookie } = await startLink();
+    const { sameDevice: _sameDevice, ...legacy } = flow;
+    sessionUtils.store.set(`wallet-login:${handle}`, legacy);
+    publishSignal(sessionUtils, flow['stateHash']);
+    (linkWalletPresentation as unknown as Mock).mockResolvedValue({
+      status: 'linked',
+      credentialId: 'cred-1',
+      externalSub: 'alice@example.com',
+      subjectSource: 'asserted-lookup',
+      rebound: false,
+    });
+    const cookie = `${session.cookie}; __Host-qauth_wallet_flow=${binderCookie}`;
+
+    const polled = await pollStatus(routes, handle, cookie);
+
+    expect(polled.body).toEqual({ status: 'rejected', message: WALLET_LINK_REFUSAL });
+    expect(linkWalletPresentation).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+    expect((await pollStatus(routes, handle, cookie)).body).toEqual({
+      status: 'expired',
+      message: WALLET_LINK_EXPIRED,
+    });
   });
 });
 
