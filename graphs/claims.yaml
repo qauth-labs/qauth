@@ -17,7 +17,9 @@ operations:
   POST /ui/login: { flow: [sign-in-page] }
   GET /ui/resume/{handle}: { flow: [sign-in-page] }
   GET /ui/upstream/{type}: { flow: [upstream-sign-in] }
-  GET /ui/upstream/{type}/start: { flow: [upstream-sign-in] }
+  GET /ui/upstream/{type}/start: { flow: [upstream-sign-in, upstream-link] }
+  GET /ui/upstream-link/{interactionId}: { flow: [upstream-link] }
+  GET /ui/upstream-link-refused: { flow: [upstream-link] }
   GET /ui/consent: { flow: [consent-page] }
   POST /ui/consent: { flow: [consent-page] }
   GET /ui/recovery-code/{interactionId}: { flow: [recovery-code, passkey-sign-up] }
@@ -26,9 +28,10 @@ operations:
   GET /ui/passkey-enrolment/{interactionId}: { flow: [passkey, passkey-sign-up] }
   GET /ui/totp/{interactionId}: { flow: [totp] }
   GET /ui/totp-setup/{interactionId}: { flow: [totp] }
-  GET /interaction/v1-rc.0/{interactionId}: { flow: [consent, logout] }
+  GET /interaction/v1-rc.0/{interactionId}: { flow: [consent, logout, upstream-link] }
   GET /interaction/v1-rc.0/{interactionId}/personal: { flow: [consent, logout] }
-  POST /interaction/v1-rc.0/{interactionId}/answer: { flow: [consent, logout] }
+  POST /interaction/v1-rc.0/{interactionId}/answer: { flow: [consent, logout, upstream-link] }
   POST /interaction/v1-rc.0/{interactionId}/cancel: { flow: [authorization, logout] }
   POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/enable: { flow: [plugin-enable] }
   POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/disable: { flow: [plugin-enable] }
+  DELETE /account/v1-rc.0/linked-accounts/{linkedAccountId}: { flow: [unlink-upstream] }
