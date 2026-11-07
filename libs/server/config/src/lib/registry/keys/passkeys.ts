@@ -4,8 +4,8 @@ import { defineKeys } from '../types';
  * Passkeys (ADR-017 Decision 14, ADR-019 Decision 2, issue #467): the keys of
  * `webauthnEnvSchema`.
  *
- * All `advanced` while phase F2b is incomplete: the switch is refused, and the
- * names may still change before passkeys ship.
+ * All `advanced`: passkeys are off by default, and the RP ID and the
+ * association files are a deployment's deliberate choice.
  */
 export const PASSKEY_KEYS = defineKeys([
   {
