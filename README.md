@@ -93,8 +93,10 @@ the open work.
   realm's upstream OpenID Connect providers: a button per provider on the
   sign-in page, or `qauth_upstream=<type>` on the authorization request. An
   account is found by the provider's subject under its issuer, never matched by
-  email. Providers are stored in `realm_upstream_providers`; the admin API to
-  manage them is still to come.
+  email. With the Interaction API's ceremony page, an upstream account links to
+  an existing account after a fresh sign-in to it, and the account API lists
+  and unlinks linked accounts. Providers are stored in
+  `realm_upstream_providers`; the admin API to manage them is still to come.
 - Realms: separate tenants, each with its own issuer and hosts.
 - A developer portal for OAuth clients and API keys.
 - Security headers, CSRF protection and `__Host-` cookies.
