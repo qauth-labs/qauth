@@ -36,7 +36,7 @@ export function CopyField({ value, label, mono = true }: CopyFieldProps) {
       <div className="flex items-stretch gap-2">
         <code
           data-testid="copy-field-value"
-          className={`rounded-control border-input bg-muted text-foreground flex h-9 min-w-0 flex-1 items-center overflow-x-auto border px-3 text-sm whitespace-nowrap ${
+          className={`rounded-control border-input bg-muted text-foreground flex min-h-9 min-w-0 flex-1 items-center overflow-x-auto border px-3 py-1.5 text-sm whitespace-nowrap ${
             mono ? 'font-mono' : ''
           }`}
         >
