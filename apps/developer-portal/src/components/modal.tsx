@@ -90,7 +90,7 @@ export function Modal({ title, children, footer, onClose, dismissible = true }: 
       onClick={() => {
         if (dismissible) onClose();
       }}
-      className="bg-scrim fixed inset-0 z-50 flex items-center justify-center px-4"
+      className="bg-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
     >
       <div
         ref={dialogRef}
@@ -99,7 +99,7 @@ export function Modal({ title, children, footer, onClose, dismissible = true }: 
         aria-label={title}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="rounded-surface border-border bg-card w-full max-w-lg space-y-4 border p-6 outline-none"
+        className="rounded-surface border-border bg-card max-h-full w-full max-w-lg space-y-4 overflow-y-auto border p-6 outline-none"
       >
         <h2 className="text-foreground text-2xl leading-tight">{title}</h2>
         <div className="text-body space-y-3 text-sm">{children}</div>

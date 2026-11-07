@@ -28,9 +28,11 @@ function AuthedLayout() {
   return (
     <div className="bg-background min-h-screen">
       <header className="border-border bg-card border-b px-6 py-3">
-        <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <div className="flex items-center gap-6">
-            <span className="font-display text-foreground text-xl">QAuth Developer Portal</span>
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-x-6 gap-y-2">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+            <span className="font-display text-foreground text-xl whitespace-nowrap">
+              QAuth Developer Portal
+            </span>
             <nav className="flex items-center gap-4">
               <Link to="/clients" className="text-body hover:text-foreground text-sm">
                 Clients
@@ -46,8 +48,10 @@ function AuthedLayout() {
               </Link>
             </nav>
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-muted-foreground text-sm">{user.email ?? user.sub}</span>
+          <div className="flex min-w-0 items-center gap-4">
+            <span className="text-muted-foreground min-w-0 truncate text-sm">
+              {user.email ?? user.sub}
+            </span>
             <Button variant="ghost" size="sm" type="button" onClick={() => void handleLogout()}>
               Log out
             </Button>
