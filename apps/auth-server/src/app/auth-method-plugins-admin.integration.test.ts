@@ -354,6 +354,8 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
             enabled: false,
             config: {},
             secrets: [{ path: 'clientSecret', set: false }],
+            configuredBy: null,
+            mismatch: null,
             version: 0,
           },
         ],
@@ -377,6 +379,9 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     expect(configured.done.json()).toMatchObject({
       config: CONFIG,
       secrets: [{ path: 'clientSecret', set: true }],
+      // The state records the plugin it was written for (#949).
+      configuredBy: { package: PLUGIN_PACKAGE, type: 'corp_sso' },
+      mismatch: null,
       version: 1,
     });
     const enabled = await approved(realm.id, requester, 'plugins.enable', '/corp/enable', {

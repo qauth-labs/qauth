@@ -93,7 +93,7 @@ export const UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX = 'upstream-oidc:client-secre
 
 /**
  * The `context` prefix of an AuthMethod plugin's secret config member
- * (`auth-method-plugin:<plugin id>:<path>`, #600): the third kind of
+ * (`auth-method-plugin:<plugin id>:<package>:<type>:<path>`, #600, #949): the third kind of
  * `data_at_rest` ciphertext the `api` role may decrypt, so the host can open a
  * realm's plugin config for the plugin's context, which signs that plugin's
  * client assertions as `api` too. The auth server builds its contexts from

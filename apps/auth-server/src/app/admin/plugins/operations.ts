@@ -115,7 +115,7 @@ export const PLUGIN_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
     effects: [],
     permissions: ['plugins.read'],
     description:
-      "Read one installed AuthMethod plugin with the realm's state of it; secret members show only whether they hold a value.",
+      "Read one installed AuthMethod plugin with the realm's state of it; secret members show only whether they hold a value, and a state another package or type wrote says so.",
   },
   {
     id: PLUGIN_OPERATION_IDS.seal,
@@ -131,7 +131,7 @@ export const PLUGIN_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
     effects: ['credential-path'],
     permissions: ['plugins.security'],
     description:
-      "Replace an AuthMethod plugin's configuration in a realm, set or clear its secret members, checked against the plugin's config schema; it never changes plugin code.",
+      "Replace an AuthMethod plugin's configuration in a realm, set or clear its secret members, checked against the plugin's config schema, and record the installed package and type it is written for; it never changes plugin code.",
     render: renderUpdate,
   },
   {
@@ -140,7 +140,7 @@ export const PLUGIN_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
     effects: ['credential-path'],
     permissions: ['plugins.security'],
     description:
-      "Enable an AuthMethod plugin in a realm, so its sign-in routes answer there; its configuration must pass the plugin's config schema, and the request names the version of the state it enables.",
+      "Enable an AuthMethod plugin in a realm, so its sign-in routes answer there; its configuration must pass the plugin's config schema and have been written for the installed package and type, and the request names the version of the state it enables.",
     render: renderStateChange('Enable the sign-in plugin'),
   },
   {
