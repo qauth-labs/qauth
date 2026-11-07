@@ -183,6 +183,8 @@ export function createUpstreamOidcMethod(
  * What {@link upstreamOidcClientMethod} builds a method from: the method's
  * own names and config, and the provider's config, which the client runs
  * on, read from the method's parsed config at every use.
+ *
+ * @experimental
  */
 export interface UpstreamOidcClientParts<TConfig> {
   readonly id: string;
@@ -195,6 +197,12 @@ export interface UpstreamOidcClientParts<TConfig> {
    * plugin (#951).
    */
   readonly providerConfig: (config: TConfig) => UpstreamOidcConfig;
+  /**
+   * The only origins the provider's endpoints may be on, discovered ones
+   * included: a preset's `origins` (#951). Without it, as for the generic
+   * client, a discovered endpoint may be on any host.
+   */
+  readonly endpointOrigins?: ReadonlySet<string>;
 }
 
 /**
@@ -202,6 +210,8 @@ export interface UpstreamOidcClientParts<TConfig> {
  * it: the generic client's (`oidc`, `oidc_<alias>`, its own config) or a
  * preset plugin's (`createUpstreamOidcPresetMethod`). Each method keeps its
  * own discovery documents, key sets and results.
+ *
+ * @experimental
  */
 export function upstreamOidcClientMethod<TConfig>(
   parts: UpstreamOidcClientParts<TConfig>
@@ -224,16 +234,20 @@ export function upstreamOidcClientMethod<TConfig>(
    * {@link UPSTREAM_DISCOVERY_FAILURE_TTL_MS}. Only the fetch is kept: the
    * checks against the config run at every use.
    */
-  const metadataFor = (
+  const metadataFor = async (
     context: AuthMethodContext<UpstreamOidcConfig>
   ): Promise<UpstreamProviderMetadata> => {
     const { config } = context;
     const scope = context.routeUrl(UPSTREAM_OIDC_CALLBACK_PATH);
-    return resolveProviderMetadata(config, () =>
+    const metadata = await resolveProviderMetadata(config, () =>
       documents.get(JSON.stringify([scope, config.issuer]), () =>
         fetchDiscoveryDocument(context.egress, config.issuer)
       )
     );
+    if (parts.endpointOrigins !== undefined) {
+      requireEndpointsOn(metadata, parts.endpointOrigins);
+    }
+    return metadata;
   };
 
   async function start(
@@ -413,6 +427,36 @@ export function upstreamOidcClientMethod<TConfig>(
     },
   };
   return Object.freeze(method);
+}
+
+/**
+ * Refuse metadata with an endpoint off `origins`: a discovery document that
+ * names a token endpoint on another host would have the client send the
+ * client secret there, and one whose authorization endpoint or key set is
+ * elsewhere would hand the browser, or the ID token's trust, to that host.
+ */
+function requireEndpointsOn(
+  metadata: UpstreamProviderMetadata,
+  origins: ReadonlySet<string>
+): void {
+  const endpoints: [name: string, url: string | undefined][] = [
+    ['authorization endpoint', metadata.authorizationEndpoint],
+    ['token endpoint', metadata.tokenEndpoint],
+    ['JWKS URI', metadata.jwksUri],
+    ['userinfo endpoint', metadata.userinfoEndpoint],
+  ];
+  for (const [name, url] of endpoints) {
+    if (url === undefined) continue;
+    let origin: string | undefined;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      origin = undefined;
+    }
+    if (origin === undefined || !origins.has(origin)) {
+      throw invalidResponse(`the provider names its ${name} off the preset's origins`);
+    }
+  }
 }
 
 /**

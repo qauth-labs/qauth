@@ -31,7 +31,7 @@ import {
   type FakeClientAuthentication,
   type FakeSignIn,
 } from '../testing/fake-provider';
-import { TEST_ORIGIN, testHost } from '../testing/test-host';
+import { type HostEgressCall, TEST_ORIGIN, testHost } from '../testing/test-host';
 import { createUpstreamOidcMethod } from './upstream-oidc-method';
 import { createUpstreamOidcPresetMethod } from './upstream-oidc-preset';
 
@@ -42,7 +42,8 @@ import { createUpstreamOidcPresetMethod } from './upstream-oidc-preset';
  */
 
 const CLIENT_ID = 'qauth-client';
-const CLIENT_SECRET = 'a-preset-client-secret-of-some-length';
+// Characters that encode, so each spelling of it on the wire differs.
+const CLIENT_SECRET = 'a-preset/client+secret of=some&length';
 const CALLBACK = `${TEST_ORIGIN}/upstream/${EXAMPLE_PRESET_TYPE}/callback`;
 const PERSON: FakeSignIn = {
   sub: 'user-1',
@@ -65,6 +66,31 @@ function importer(modules: Readonly<Record<string, unknown>>) {
     (error as NodeJS.ErrnoException).code = 'ERR_MODULE_NOT_FOUND';
     throw error;
   };
+}
+
+/** Every spelling of the client secret a call could carry it in. */
+function secretSpellings(secret: string): string[] {
+  const form = (value: string) => new URLSearchParams([['v', value]]).toString().slice(2);
+  const base64 = (value: string) => Buffer.from(value, 'utf8').toString('base64');
+  return [
+    secret,
+    encodeURIComponent(secret),
+    form(secret),
+    base64(secret),
+    base64(`${CLIENT_ID}:${secret}`),
+    base64(`${form(CLIENT_ID)}:${form(secret)}`),
+  ];
+}
+
+/** An egress call as text, its body read as UTF-8. */
+function callText(call: HostEgressCall): string {
+  const body =
+    call.body === undefined
+      ? ''
+      : typeof call.body === 'string'
+        ? call.body
+        : Buffer.from(call.body).toString('utf8');
+  return JSON.stringify({ ...call, body });
 }
 
 /** A preset whose mapping a test chooses, on the example's provider. */
@@ -257,41 +283,46 @@ describe('a sign-in through a preset (#951)', () => {
   });
 
   // Acceptance: its client secret is write-only end to end.
-  it('sends the secret only to the token endpoint, never in a log line or an egress label', async () => {
-    const { provider, method, host } = await presetHost();
-    const start = await startUpstreamStep(method, { uiLocales: [] }, host.context);
-    // A refused callback logs: its line must not carry the secret either.
-    await callbackRoute(method).handle(
-      {
-        method: 'GET',
-        query: authMethodParameters({ state: 'x'.repeat(43) }),
-        form: authMethodParameters(undefined),
-        transaction: start.transaction,
-      },
-      host.context
-    );
-    await callbackRoute(method).handle(
-      {
-        method: 'GET',
-        query: authMethodParameters(provider.authorize(new URL(start.redirectTo), PERSON)),
-        form: authMethodParameters(undefined),
-        transaction: start.transaction,
-      },
-      host.context
-    );
-    const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`, 'utf8').toString('base64');
-    const withSecret = host.egressCalls.filter((call) => JSON.stringify(call).includes(basic));
-    expect(withSecret.map((call) => call.url)).toEqual([provider.tokenEndpoint]);
-    expect(host.logLines.length).toBeGreaterThan(0);
-    for (const line of host.logLines) {
-      const text = JSON.stringify(line);
-      expect(text).not.toContain(CLIENT_SECRET);
-      expect(text).not.toContain(basic);
+  it.each(['client_secret_basic', 'client_secret_post'] as const)(
+    'sends the secret with %s only to the token endpoint, never in a log line or an egress label',
+    async (authentication) => {
+      const { provider, method, host } = await presetHost(authentication);
+      const start = await startUpstreamStep(method, { uiLocales: [] }, host.context);
+      // A refused callback logs: its line must not carry the secret either.
+      await callbackRoute(method).handle(
+        {
+          method: 'GET',
+          query: authMethodParameters({ state: 'x'.repeat(43) }),
+          form: authMethodParameters(undefined),
+          transaction: start.transaction,
+        },
+        host.context
+      );
+      await callbackRoute(method).handle(
+        {
+          method: 'GET',
+          query: authMethodParameters(provider.authorize(new URL(start.redirectTo), PERSON)),
+          form: authMethodParameters(undefined),
+          transaction: start.transaction,
+        },
+        host.context
+      );
+      const spellings = secretSpellings(CLIENT_SECRET);
+      const withSecret = host.egressCalls.filter((call) =>
+        spellings.some((spelling) => callText(call).includes(spelling))
+      );
+      expect(withSecret.map((call) => call.url)).toEqual([provider.tokenEndpoint]);
+      expect(provider.tokenRequests).toHaveLength(1);
+      expect(host.logLines.length).toBeGreaterThan(0);
+      for (const line of host.logLines) {
+        const text = JSON.stringify(line);
+        for (const spelling of spellings) expect(text).not.toContain(spelling);
+      }
+      for (const call of host.egressCalls) {
+        expect(`${call.purpose} ${call.source}`).not.toContain(CLIENT_SECRET);
+      }
     }
-    for (const call of host.egressCalls) {
-      expect(`${call.purpose} ${call.source}`).not.toContain(CLIENT_SECRET);
-    }
-  });
+  );
 
   it('stores the secret apart from the plain members, and refuses it spelled among them', () => {
     const [path] = authMethodSecretPaths(examplePresetMethod());
@@ -311,12 +342,68 @@ describe('a sign-in through a preset (#951)', () => {
   });
 
   it('reaches its provider as a remote document: the egress allowlist never opens a private address for it', async () => {
-    const { method, host } = await presetHost();
-    await startUpstreamStep(method, { uiLocales: [] }, host.context);
-    expect(host.egressCalls.length).toBeGreaterThan(0);
+    const { provider, method, host } = await presetHost();
+    const start = await startUpstreamStep(method, { uiLocales: [] }, host.context);
+    const outcome = await callbackRoute(method).handle(
+      {
+        method: 'GET',
+        query: authMethodParameters(provider.authorize(new URL(start.redirectTo), PERSON)),
+        form: authMethodParameters(undefined),
+        transaction: start.transaction,
+      },
+      host.context
+    );
+    expect((outcome as { kind: string }).kind).toBe('result');
+    // Discovery, the code exchange and the key set: every call of a sign-in.
+    expect(host.egressCalls.map((call) => call.url)).toEqual(
+      expect.arrayContaining([provider.discoveryUrl, provider.tokenEndpoint, provider.jwksUri])
+    );
     expect(new Set(host.egressCalls.map((call) => call.source))).toEqual(
       new Set(['remote_document'])
     );
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['token endpoint', { token_endpoint: 'https://tokens.attacker.example/token' }],
+    ['authorization endpoint', { authorization_endpoint: 'https://attacker.example/authorize' }],
+    ['JWKS URI', { jwks_uri: 'https://attacker.example/jwks' }],
+    ['userinfo endpoint', { userinfo_endpoint: 'https://attacker.example/userinfo' }],
+  ])(
+    'refuses a discovery document that names its %s off the origins, and never calls it',
+    async (name, discovery) => {
+      const { provider, method, host } = await presetHost();
+      provider.tamper.discovery = discovery;
+      await expect(startUpstreamStep(method, { uiLocales: [] }, host.context)).rejects.toThrow(
+        `the provider names its ${name} off the preset's origins`
+      );
+      expect(host.egressCalls.map((call) => call.url)).toEqual([provider.discoveryUrl]);
+    }
+  );
+
+  it('refuses at the callback a discovery document that moved its token endpoint off the origins', async () => {
+    const { provider, method, host } = await presetHost();
+    const start = await startUpstreamStep(method, { uiLocales: [] }, host.context);
+    // Another method of the same preset, as after a restart: it reads the
+    // document again, which now sends the code, and the secret, elsewhere.
+    const restarted = examplePresetMethod();
+    provider.tamper.discovery = { token_endpoint: 'https://tokens.attacker.example/token' };
+    const outcome = await callbackRoute(restarted).handle(
+      {
+        method: 'GET',
+        query: authMethodParameters(provider.authorize(new URL(start.redirectTo), PERSON)),
+        form: authMethodParameters(undefined),
+        transaction: start.transaction,
+      },
+      host.context
+    );
+    expect(outcome).toEqual({ kind: 'failed', reason: 'invalid_response' });
+    expect(provider.tokenRequests).toEqual([]);
+    for (const call of host.egressCalls) {
+      expect(new URL(call.url).origin).toBe(EXAMPLE_PRESET_ISSUER);
+      for (const spelling of secretSpellings(CLIENT_SECRET)) {
+        expect(callText(call)).not.toContain(spelling);
+      }
+    }
   });
 
   it('signs a client assertion for the preset as its provider', async () => {
@@ -426,6 +513,46 @@ describe("the secret bound to the preset's provider (#951)", () => {
       parseAuthMethodConfig(method, { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET })
     ).toThrow(AuthMethodConfigError);
   });
+
+  it.each<[string, string, (config: WithDomain) => unknown]>([
+    [
+      'the client id',
+      'clientId',
+      (config) => ({
+        ...fromDomain(config),
+        clientId: `${config.clientId}.${config.clientSecret}`,
+      }),
+    ],
+    [
+      "the issuer's path",
+      'issuer',
+      (config) => ({
+        ...fromDomain(config),
+        issuer: `https://${config.domain}/${config.clientSecret}`,
+      }),
+    ],
+    [
+      'a scope',
+      'scopes.1',
+      (config) => ({ ...fromDomain(config), scopes: ['openid', config.clientSecret] }),
+    ],
+  ])(
+    "refuses a secret member's value in %s, which would go out in the clear",
+    (_case, at, mapping) => {
+      const method = presetWith(withDomain, mapping);
+      const secret = 'secret-value-of-the-member';
+      const config = { domain: 'idp.example.com', clientId: CLIENT_ID, clientSecret: secret };
+      expect(() => parseAuthMethodConfig(method, config)).toThrow(AuthMethodConfigError);
+      // The schema's own issue names where, never the value.
+      const parsed = method.configSchema.safeParse(config);
+      expect(parsed.success ? [] : parsed.error.issues.map((issue) => issue.message)).toEqual([
+        `the provider config carries the value of a secret member at ${at}, which would be sent in the clear`,
+      ]);
+      expect(() => parseAuthMethodConfig(method, config)).not.toThrow(secret);
+      // The same mapping without the secret in it parses.
+      expect(parseAuthMethodConfig(presetWith(withDomain, fromDomain), config)).toEqual(config);
+    }
+  );
 
   it('refuses a config whose provider config does not parse, or whose mapping throws', () => {
     const schema = z.strictObject({ clientId: z.string() });

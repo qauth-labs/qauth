@@ -37,20 +37,27 @@ import { upstreamOidcClientMethod, type UpstreamOidcTransaction } from './upstre
  *   use. Its client secret is a member the preset's schema marks
  *   `.meta({ writeOnly: true })`, so the plugin runtime keeps it write-only
  *   and stores it encrypted under the plugin's own context;
- * - **its provider's origins**, which bind the secret to its destination.
+ * - **its provider's origins**, which bind the secret to its provider.
  *   The generic client binds its stored secret to the issuer and the token
  *   endpoint it was entered for; a plugin's secret is bound to the plugin.
  *   So a preset names the `https` origins its provider answers on, and the
- *   issuer and every endpoint `upstreamConfig` makes for a config must be on
- *   one of them: whatever a realm's admin configures, the secret goes to
- *   that provider and to no other host. A provider whose host an admin
- *   chooses is the generic client's, not a preset's.
+ *   issuer and every endpoint the client calls must be on one of them: the
+ *   ones `upstreamConfig` makes for a config, checked when the config is
+ *   parsed, and the ones the discovery document names, checked at every
+ *   use. Whatever a realm's admin configures, the secret goes to that
+ *   provider's origins and to no other host. Within them it is not bound to
+ *   a tenant: a member that shapes the issuer's path (a tenant, a region)
+ *   may change while the stored secret is kept, where the generic client
+ *   asks for the secret again. A provider whose host an admin chooses is
+ *   the generic client's, not a preset's.
  *
  * What it adds to the generic client, it checks when the config is parsed,
  * so the admin API refuses such a config at the configure: a config whose
- * provider config does not parse, names a URL off the preset's origins, or
+ * provider config does not parse, names a URL off the preset's origins,
  * sends a client secret that is not the value of one of the preset's secret
- * members (a secret taken from a plain member would be stored in the clear).
+ * members (a secret taken from a plain member would be stored in the clear),
+ * or carries a secret member's value anywhere but in the client secret (a
+ * client id, a scope or a URL goes out, and is logged, in the clear).
  * Everything else is the generic client's, unchanged: discovery, PKCE with
  * S256, `state` and `nonce`, the ID token checks, the callback and its
  * `form_post` bounce, `verify()` and the attributes, under the preset's type.
@@ -87,7 +94,9 @@ export interface UpstreamOidcPresetOptions<TConfig> {
   /**
    * The `https` origins the provider answers on, such as
    * `https://idp.example.com`: bare origins, at most eight. The issuer
-   * and every endpoint the provider config names must be on one of them.
+   * and every endpoint the client calls must be on one of them, those the
+   * discovery document names included: a provider whose token endpoint or
+   * key set is on another host lists that host's origin too.
    */
   readonly origins: readonly string[];
   /**
@@ -105,8 +114,15 @@ export interface UpstreamOidcPresetOptions<TConfig> {
   upstreamConfig(config: TConfig): UpstreamOidcConfigInput;
 }
 
-/** The most origins a preset may name. */
+/**
+ * The most origins a preset may name.
+ *
+ * @experimental
+ */
 export const MAX_UPSTREAM_OIDC_PRESET_ORIGINS = 8;
+
+/** Where the generic client's config holds the client secret. */
+const CLIENT_SECRET_PATH = 'clientAuthentication.clientSecret';
 
 /** The preset's origins, checked: each a bare `https` origin. */
 function presetOrigins(origins: unknown): ReadonlySet<string> {
@@ -151,6 +167,23 @@ function providerUrls(config: UpstreamOidcConfig): [name: string, url: string][]
     if (typeof url === 'string') urls.push([`endpoints.${name}`, url]);
   }
   return urls;
+}
+
+/** Every string of a provider config but its client secret, each with its path. */
+function providerStrings(
+  value: unknown,
+  path: readonly string[] = []
+): [path: string, value: string][] {
+  if (typeof value === 'string') {
+    const name = path.join('.');
+    return name === CLIENT_SECRET_PATH ? [] : [[name, value]];
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.entries(value).flatMap(([key, member]) =>
+      providerStrings(member, [...path, key])
+    );
+  }
+  return [];
 }
 
 /**
@@ -255,6 +288,18 @@ export function createUpstreamOidcPresetMethod<TConfig>(
         "the client secret is not the value of one of the preset's secret members, so it would be stored in the clear"
       );
     }
+    // A secret member's value anywhere else, in part too (a URL's path, a
+    // scope), would go out and be logged in the clear.
+    const secretValues = presetSecretPaths()
+      .map((path) => configMemberAt(config, path))
+      .filter((value): value is string => typeof value === 'string' && value.length > 0);
+    for (const [name, value] of providerStrings(parsed.data)) {
+      if (secretValues.some((secret) => value.includes(secret))) {
+        problems.push(
+          `the provider config carries the value of a secret member at ${name}, which would be sent in the clear`
+        );
+      }
+    }
     return problems.length > 0 ? { problems } : { config: parsed.data };
   };
 
@@ -271,6 +316,9 @@ export function createUpstreamOidcPresetMethod<TConfig>(
         for (const message of resolved.problems) context.addIssue({ code: 'custom', message });
       }
     }),
+    // Discovered endpoints too: the document is the provider's, but a path
+    // of its origin an admin's config points the issuer at may serve one.
+    endpointOrigins: origins,
     providerConfig(config) {
       const resolved = resolve(config);
       if ('problems' in resolved) {
