@@ -18,7 +18,7 @@ import {
   removeCredential,
   renamePasskey,
 } from '../../helpers/account-changes';
-import { accountCeremonies,type AccountCeremony } from '../../helpers/account-interaction';
+import { accountCeremonies, type AccountCeremony } from '../../helpers/account-interaction';
 import {
   ACCOUNT_NOTICES,
   ACCOUNT_PAGE_PATH,
