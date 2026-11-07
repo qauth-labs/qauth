@@ -531,7 +531,6 @@ describe('linking an upstream account to an existing one (#670, real containers)
     return app().repositories.userCredentials.findByRealmProviderSub(realmId, TYPE, sub);
   }
 
-  /** Give `userId` an identity of the provider, as a first sign-in or a link stores it. */
   /** A new account whose primary identity is the provider's identity `sub`. */
   async function accountHolding(sub = PERSON.sub): Promise<{ id: string; credentialId: string }> {
     const user = await app().repositories.users.create(
@@ -545,6 +544,7 @@ describe('linking an upstream account to an existing one (#670, real containers)
     return { id: user.id, credentialId: user.primaryCredential.id };
   }
 
+  /** Give `userId` an identity of the provider, as a link stores it. */
   async function holdIdentity(userId: string, sub = PERSON.sub): Promise<string> {
     const credential = await app().repositories.userCredentials.create({
       userId,
