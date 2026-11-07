@@ -12,7 +12,7 @@ import {
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import type { EngineMailer, MailRealm } from './engine-mail';
-import { EVENT_CLIENT_ID_MAX_LENGTH } from './interaction-record';
+import { eventClientIdOfEngineClient } from './interaction-record';
 import { emitUserEvent, type EventTransaction } from './user-events';
 
 /**
@@ -136,7 +136,7 @@ export function createServerRecoveryCodes(
             tx,
             realmId,
             userId,
-            clientId: clientId.length <= EVENT_CLIENT_ID_MAX_LENGTH ? clientId : null,
+            clientId: eventClientIdOfEngineClient(clientId),
             actor: 'user',
           }
         );

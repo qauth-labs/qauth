@@ -42,6 +42,8 @@ const EVERY_MAIL: readonly EngineMail[] = [
   { template: 'recovery_codes_failed' },
   { template: 'passkey_added' },
   { template: 'totp_added' },
+  { template: 'passkey_removed' },
+  { template: 'totp_removed' },
   { template: 'second_factor_disabled' },
   { template: 'second_factor_failed' },
   { template: 'upstream_linked', providerName: 'Example Corp' },
@@ -209,6 +211,28 @@ describe('the engine mail registry (#637)', () => {
           { baseUrl: BASE_URL, brand: DEFAULT_MAIL_BRAND }
         )
       ).rejects.toThrow(/provider name/);
+    }
+  );
+
+  it.each([
+    ['passkey_removed', 'A passkey was removed from your account', 'no longer signs in'],
+    [
+      'totp_removed',
+      'The authenticator app was removed from your account',
+      'no longer asks for a code',
+    ],
+  ] as const)(
+    'sends the removal notice %s, with no link and no switch (#844)',
+    async (template, subject, says) => {
+      const rendered = await renderEngineMail(
+        { template },
+        { baseUrl: BASE_URL, brand: DEFAULT_MAIL_BRAND }
+      );
+      expect(rendered.subject).toBe(subject);
+      expect(rendered.text.replace(/\s+/g, ' ')).toContain(says);
+      expect(rendered.text).toContain('Forgot password');
+      expect(engineMailCarriesCode({ template })).toBe(false);
+      expect(isSwitchedOffByRealm(template, new Set(ENGINE_MAIL_NAMES))).toBe(false);
     }
   );
 

@@ -31,6 +31,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import { env } from '../../config/env';
+import { accountRoundOf, engineClientIdOf, finishAccountInteraction } from './account-interaction';
 import { accountPoliciesOf } from './account-policies';
 import { finishAuthorization } from './authorization-interaction';
 import { matchFlowSecret, readFlowSecrets } from './flow-cookie';
@@ -275,15 +276,17 @@ export function upstreamStarter(
  */
 export function upstreamRoundContext(
   request: FastifyRequest,
-  state: InteractionState & { readonly purpose: 'authorization' },
+  state: InteractionState & { readonly purpose: 'authorization' | 'account' },
   extra: Omit<RoundContext, 'realm' | 'client' | 'audit'>
 ): RoundContext {
   const realmId = requestRealm(request).id;
   const clientId = eventClientIdOf(state);
   return {
     realm: { id: realmId },
-    client: { id: state.request.client_id },
+    client: { id: engineClientIdOf(state) },
     ...ladderEndUserIp(request),
+    // An account page's round (#844): a fresh sign-in, and the factor it binds.
+    ...(state.purpose === 'account' ? accountRoundOf(state.request) : {}),
     ...extra,
     audit: async (record) => {
       const event = signInAuditEvent(record);
@@ -685,7 +688,7 @@ export async function providerAddress(
 export interface UpstreamLinkChoice {
   readonly engine: SignInEngine;
   readonly catalog: UpstreamProviderCatalog;
-  readonly state: InteractionState & { readonly purpose: 'authorization' };
+  readonly state: InteractionState & { readonly purpose: 'authorization' | 'account' };
   readonly decision: 'create' | 'link';
   readonly receivedAt: number;
   /**
@@ -744,7 +747,9 @@ export async function decideUpstreamLinkChoice(
         linked
       );
     }
-    if (!link.create) throw new InvalidAnswerError('the step offered no new account');
+    if (!link.create || state.purpose !== 'authorization') {
+      throw new InvalidAnswerError('the step offered no new account');
+    }
     const realm = requestRealm(request);
     const provider = await input.catalog.find(realm.id, link.provider);
     if (provider?.method.type !== link.provider) {
@@ -922,10 +927,15 @@ export function upstreamRouteHost(
         reply,
         { id: pending.interactionId, revision: pending.revision },
         async (state) => {
-          if (state.purpose !== 'authorization') {
+          if (state.purpose !== 'authorization' && state.purpose !== 'account') {
             throw new UpstreamSignInRefusal('transaction_mismatch');
           }
-          const environment = await roundEnvironment(fastify, realm, state.request.client_id);
+          // An account page's sign-in (#844) runs as an interaction only: the
+          // pages' way registers an identity no account holds.
+          if (state.purpose === 'account' && pending.mode !== 'interaction') {
+            throw new UpstreamSignInRefusal('transaction_mismatch');
+          }
+          const environment = await roundEnvironment(fastify, realm, engineClientIdOf(state));
           const link = state.upstreamLink;
           if (link !== undefined) {
             // A link the request asked for (`qauth_link`, #670): only the
@@ -958,7 +968,10 @@ export function upstreamRouteHost(
             // An identity no account holds (#670; ADR-020 §3): the person
             // chooses between a new account and the existing one they sign
             // in to next. Nothing is matched, by an email or anything else.
+            // An account page's sign-in (#844) never registers: it offers the
+            // existing account only.
             const create =
+              state.purpose === 'authorization' &&
               newAccountRefusal(fastify, realm, provider, attributes, 'interaction') === null &&
               keepsUpstreamAttributes(attributes);
             return {
@@ -1036,6 +1049,16 @@ export function upstreamRouteHost(
         // sign-in to the account to link): the ceremony page shows it.
         return reply.redirect(ceremonyPageUrlOf(realm, pending.interactionId), 303);
       case 'finished': {
+        if (result.purpose === 'account') {
+          // A sign-in of the account page (#844) the provider proved: it is
+          // recorded there, and the browser goes back to the page.
+          const location = await finishAccountInteraction(fastify, request, result, {
+            method: 'upstream',
+            mailer: engines.mailer,
+          });
+          reply.header('Cache-Control', 'no-store');
+          return reply.redirect(location, 303);
+        }
         if (result.purpose !== 'authorization') return refuse('transaction_mismatch');
         const userId = result.transaction.userId ?? accountIdOf(account);
         if (userId === undefined) throw new Error('an upstream sign-in finished for nobody');

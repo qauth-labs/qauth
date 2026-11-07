@@ -93,17 +93,17 @@ export const SECURITY_LOG_KINDS = {
   },
   password_changed: {
     description: 'The account’s password was changed.',
-    sources: [registered('user.password_reset'), planned('user.password_changed', 685)],
+    sources: [registered('user.password_reset'), registered('user.password_changed')],
     reportable: false,
   },
   credential_added: {
     description: 'A passkey or an authenticator app (TOTP) was added to the account.',
-    sources: [planned('user.credential_added', 686)],
+    sources: [registered('user.credential_added')],
     reportable: false,
   },
   credential_removed: {
     description: 'A passkey or an authenticator app (TOTP) was removed from the account.',
-    sources: [planned('user.credential_removed', 686)],
+    sources: [registered('user.credential_removed')],
     reportable: false,
   },
   credential_disabled: {
@@ -119,7 +119,7 @@ export const SECURITY_LOG_KINDS = {
   },
   recovery_codes_regenerated: {
     description: 'A new set of recovery codes replaced the old one.',
-    sources: [planned('user.recovery_codes_regenerated', 687)],
+    sources: [registered('user.recovery_codes_regenerated')],
     reportable: false,
   },
   recovery_codes_failed: {
@@ -207,6 +207,7 @@ export const NOT_IN_SECURITY_LOG: Readonly<Record<string, string>> = {
   'request.csrf_rejected': 'A refused request changes nothing on the account.',
   'request.account_operation_refused':
     'A refused account change changes nothing on the account; the change, once made, is the entry.',
+  'user.passkey_renamed': 'A passkey’s name is no credential: the passkey signs in as before.',
 };
 
 /** How long the log keeps an entry by default; a realm setting (#689). */

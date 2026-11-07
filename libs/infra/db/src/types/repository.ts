@@ -198,14 +198,20 @@ export interface UserCredentialsRepository {
    * other key, and clears the failure ladder's disabled mark (#615). A second
    * factor's credential is never touched: only a `password` row matches.
    *
+   * With `expectedPasswordHash`, the row matches only while its
+   * `password_hash` is that one, read in the statement itself: a change
+   * checked against a hash that a concurrent writer (a reset) replaced since
+   * writes nothing (#844).
+   *
    * @returns the credential; `undefined` when the realm holds no `password`
-   *   credential `id`
+   *   credential `id`, or its hash is not `expectedPasswordHash`
    */
   updatePassword(
     realmId: string,
     id: string,
     passwordData: Readonly<Record<string, unknown>>,
-    tx?: DbClient
+    tx?: DbClient,
+    options?: { readonly expectedPasswordHash?: string }
   ): Promise<UserCredential | undefined>;
   /**
    * Set the hard action's disabled mark on the credential `(realm,

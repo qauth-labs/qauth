@@ -38,9 +38,9 @@ import {
  * - **A binding** is one transaction: the account is read (enabled, and
  *   claimed: every password credential's address and every upstream
  *   credential verified, ADR-017 Decision 8), then one INSERT binds the
- *   TOTP or rewrites the account's own row, clearing its mark. After the
- *   commit, `bound` ends the TOTP counter's run and sends the "TOTP added"
- *   notice.
+ *   TOTP or rewrites the account's own row, clearing its mark, and
+ *   `recorded` records it in the same transaction. After the commit,
+ *   `bound` ends the TOTP counter's run and sends the "TOTP added" notice.
  * - **The hard action** at the ladder's ceiling: while `hardActionArmed`
  *   says so, the TOTP's mark is set in one statement that only an unmarked
  *   row passes, and once it is set the "second factor disabled" notice goes
@@ -82,7 +82,7 @@ export interface TotpRepositories<Tx> {
         readonly at: number;
       },
       tx?: Tx
-    ): Promise<unknown>;
+    ): Promise<{ readonly id: string } | undefined>;
     setDisabledAt(
       realmId: string,
       providerType: string,
@@ -104,7 +104,7 @@ export interface TotpRepositories<Tx> {
 export type TotpTransaction<Tx> = <T>(work: (tx: Tx) => Promise<T>) => Promise<T>;
 
 /** Options of {@link createRepositoryTotp}. */
-export interface RepositoryTotpOptions {
+export interface RepositoryTotpOptions<Tx = unknown> {
   /** Seals and opens a secret under the realm's `data_at_rest` key. */
   readonly cipher: TotpCipher;
   /** The issuer an authenticator app shows beside the account: the realm's. */
@@ -122,6 +122,16 @@ export interface RepositoryTotpOptions {
    * the binding stands.
    */
   readonly bound: (input: TotpAccount & { readonly clientId: string }) => Promise<void>;
+  /**
+   * In the binding's transaction, once the row is written: record the
+   * binding (the auth server's `user.credential_added` event, #844), so a
+   * binding always has its record and a rolled-back one leaves none. A throw
+   * rolls the binding back. Absent, nothing is recorded.
+   */
+  readonly recorded?: (
+    input: TotpAccount & { readonly credentialId: string },
+    tx: Tx
+  ) => Promise<void>;
   /** After the hard action set the mark: the "second factor disabled" notice. */
   readonly disabled: (account: TotpAccount) => Promise<void>;
   /**
@@ -186,7 +196,7 @@ function claimed(credentials: readonly TotpCredentialRow[]): boolean {
 export function createRepositoryTotp<Tx>(
   repos: TotpRepositories<Tx>,
   transaction: TotpTransaction<Tx>,
-  options: RepositoryTotpOptions
+  options: RepositoryTotpOptions<Tx>
 ): TotpCredentials {
   const credentials = repos.userCredentials;
   const clock = options.clock ?? SYSTEM_CLOCK;
@@ -223,9 +233,9 @@ export function createRepositoryTotp<Tx>(
           { realmId, userId, credentialData: { secret: sealed, last_step: step }, at: clock.now() },
           tx
         );
-        return row === undefined
-          ? { kind: 'refused', reason: 'subject_mismatch' }
-          : { kind: 'bound' };
+        if (row === undefined) return { kind: 'refused', reason: 'subject_mismatch' };
+        await options.recorded?.({ realmId, userId, credentialId: row.id }, tx);
+        return { kind: 'bound' };
       }),
   };
 

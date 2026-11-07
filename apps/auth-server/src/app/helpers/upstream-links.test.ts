@@ -382,6 +382,29 @@ describe('unlinkUpstreamIdentity (#670)', () => {
     expect(sendUncounted).not.toHaveBeenCalled();
   });
 
+  it('counts neither a marked credential nor the identity of a provider switched off as a way in (#844)', async () => {
+    const gone = { ...upstream, id: 'cred-gone', providerType: 'oidc_gone', externalSub: 'gone-1' };
+    const marked = { ...password, disabledAt: 1_700_000_000_000 };
+    const { server, calls } = recordingServer({
+      'userCredentials.lockUser': async () => true,
+      'userCredentials.findAllByUserId': async () => [upstream, gone, marked, totp],
+    });
+
+    expect(await unlink(server, upstream.id, mailer().mailer)).toEqual({
+      kind: 'last_credential',
+    });
+    expect(calls.some((call) => call.name === 'userCredentials.deleteById')).toBe(false);
+
+    // The identity of a provider that is on is one: the other may go.
+    const kept = recordingServer({
+      'userCredentials.lockUser': async () => true,
+      'userCredentials.findAllByUserId': async () => [upstream, gone],
+      'userCredentials.deleteById': async () => gone,
+      'userCredentials.findByUserIdAndType': async () => undefined,
+    });
+    expect(await unlink(kept.server, gone.id, mailer().mailer)).toEqual({ kind: 'unlinked' });
+  });
+
   it.each([
     ['a credential that is no upstream identity (the password)', password.id],
     ['an id the account does not hold', 'cred-elsewhere'],

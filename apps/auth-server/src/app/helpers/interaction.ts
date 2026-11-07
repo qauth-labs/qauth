@@ -21,6 +21,7 @@ import {
 import { interactionCsrf, matchesInteractionCsrf, mintCsrfKey } from './interaction-csrf';
 import { InteractionExpiredError } from './interaction-expired';
 import {
+  type AccountRequest,
   type AnswerableInteractionRecord,
   type CarriedSession,
   deleteInteraction,
@@ -207,6 +208,14 @@ export type InteractionState =
       readonly request: LogoutRequest;
       /** The browser session the logout is for (#675). */
       readonly carriedSession?: CarriedSession;
+    })
+  | (InteractionStateFields & {
+      readonly purpose: 'account';
+      readonly request: AccountRequest;
+      /** The upstream identity a `link` interaction attaches (#670, #844), while there is one. */
+      readonly upstreamLink?: UpstreamLink;
+      /** The browser session the account page's interaction started for (#844). */
+      readonly carriedSession?: CarriedSession;
     });
 
 /** Who an answer proved, for {@link InteractionDecision} `authenticated`. */
@@ -245,7 +254,7 @@ export type InteractionDecision =
       readonly signInTransaction?: SignInTransaction | null;
       /**
        * The upstream link to keep (#670): absent keeps the stored one, `null`
-       * ends it. Only an authorization interaction holds one.
+       * ends it. Only an authorization or an account interaction holds one.
        */
       readonly upstreamLink?: UpstreamLink | null;
     }
@@ -318,6 +327,15 @@ export type InteractionFinished =
       readonly carriedSession?: CarriedSession;
       readonly transaction: InteractionTransaction;
       readonly continuation: InteractionContinuation;
+    }
+  | {
+      readonly kind: 'finished';
+      readonly purpose: 'account';
+      readonly request: AccountRequest;
+      readonly transaction: InteractionTransaction;
+      readonly continuation: InteractionContinuation;
+      /** The upstream link a `link` interaction held when it finished (#670, #844). */
+      readonly upstreamLink?: UpstreamLink;
     };
 
 /**
@@ -347,7 +365,8 @@ export type InteractionCancelResult =
       readonly request: LogoutRequest;
       /** The browser session the logout was for: it stays. */
       readonly carriedSession?: CarriedSession;
-    };
+    }
+  | { readonly kind: 'cancelled'; readonly purpose: 'account'; readonly request: AccountRequest };
 
 /** What {@link switchInteractionUser} did. */
 export type InteractionSwitchResult =
@@ -423,7 +442,8 @@ function viewOf(record: InteractionRecord): InteractionView {
     deadline: interactionDeadline(record),
     revision: record.revision,
     csrf: interactionCsrf(record),
-    ...(record.purpose === 'authorization' && record.upstreamLink?.state === 'signing_in'
+    ...((record.purpose === 'authorization' || record.purpose === 'account') &&
+    record.upstreamLink?.state === 'signing_in'
       ? { upstreamLink: { provider: record.upstreamLink.provider, name: record.upstreamLink.name } }
       : {}),
   };
@@ -603,7 +623,8 @@ export interface StartedInteraction {
 type InteractionTarget =
   | { readonly purpose: 'authorization'; readonly request: InteractionRequest }
   | { readonly purpose: 'logout'; readonly request: LogoutRequest }
-  | { readonly purpose: 'mailed_pass'; readonly request: MailedPassRequest };
+  | { readonly purpose: 'mailed_pass'; readonly request: MailedPassRequest }
+  | { readonly purpose: 'account'; readonly request: AccountRequest };
 
 /** The input of {@link createInteraction}. */
 interface CreateInteractionInput extends Omit<StartInteractionInput, 'request'> {
@@ -624,8 +645,12 @@ async function createInteraction(
   input: CreateInteractionInput
 ): Promise<StartedInteraction> {
   const step = interactionStepSchema.parse(input.step);
-  if (input.upstreamLink !== undefined && input.target.purpose !== 'authorization') {
-    throw new Error('only an authorization interaction holds an upstream link');
+  if (
+    input.upstreamLink !== undefined &&
+    input.target.purpose !== 'authorization' &&
+    input.target.purpose !== 'account'
+  ) {
+    throw new Error('only an authorization or an account interaction holds an upstream link');
   }
   const id = mintInteractionId();
   const secret = mintFlowSecret();
@@ -759,6 +784,44 @@ export async function startMailedPassInteraction(
   return createInteraction(request, reply, {
     step: input.step,
     target: { purpose: 'mailed_pass', request: input.request },
+    secrets: readFlowSecrets(request),
+  });
+}
+
+/** The input of {@link startAccountInteraction}. */
+export interface StartAccountInteractionInput {
+  /** What the account page asked for, and the page the interaction returns to. */
+  readonly request: AccountRequest;
+  /** The first step: the identifier step, or the engine's passkey-first round. */
+  readonly step: InteractionStep;
+  readonly personal?: InteractionPersonalData;
+  /** The engine's transaction of a passkey-first first step (#651). */
+  readonly signInTransaction?: SignInTransaction;
+  /** The browser session the page was opened with, when there was one. */
+  readonly carriedSession?: CarriedSession;
+  /** The upstream link a `link` interaction asks for (#670): `requested`. */
+  readonly upstreamLink?: UpstreamLink;
+}
+
+/**
+ * Start an interaction for the hosted account page (#844): a sign-in, a
+ * fresh sign-in before a change, an enrolment or an upstream link, of
+ * purpose `account`, in the request's realm, bound to this browser as
+ * {@link startInteraction} binds one. It names no client, and its
+ * transaction starts empty: whoever opened the page signs in again in it.
+ * It finishes at the account page its request names.
+ *
+ * @throws {InvalidRequestError} as {@link startInteraction}
+ */
+export async function startAccountInteraction(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  input: StartAccountInteractionInput
+): Promise<StartedInteraction> {
+  const { request: account, ...rest } = input;
+  return createInteraction(request, reply, {
+    ...rest,
+    target: { purpose: 'account', request: account },
     secrets: readFlowSecrets(request),
   });
 }
@@ -1040,6 +1103,15 @@ function stateOf(taken: AnswerableInteractionRecord): InteractionState {
       ...(taken.upstreamLink === undefined ? {} : { upstreamLink: taken.upstreamLink }),
     };
   }
+  if (taken.purpose === 'account') {
+    return {
+      ...fields,
+      purpose: 'account',
+      request: taken.request,
+      ...(taken.upstreamLink === undefined ? {} : { upstreamLink: taken.upstreamLink }),
+      ...(taken.carriedSession === undefined ? {} : { carriedSession: taken.carriedSession }),
+    };
+  }
   return {
     ...fields,
     purpose: 'logout',
@@ -1059,6 +1131,16 @@ function finishedOf(
     return {
       kind: 'finished',
       purpose: 'authorization',
+      request: taken.request,
+      transaction,
+      continuation,
+      ...(upstreamLink === undefined ? {} : { upstreamLink }),
+    };
+  }
+  if (taken.purpose === 'account') {
+    return {
+      kind: 'finished',
+      purpose: 'account',
       request: taken.request,
       transaction,
       continuation,
@@ -1121,7 +1203,8 @@ async function settleAnswer(
 
   if (decision.kind === 'registered') {
     // Only an authorization interaction in which nobody has signed in
-    // registers: an engine bug otherwise, thrown before anything is written.
+    // registers (an account page's never does, #844): an engine bug
+    // otherwise, thrown before anything is written.
     if (taken.purpose !== 'authorization' || taken.transaction.userId !== undefined) {
       throw new Error('a registration finishes an authorization nobody has signed in to');
     }
@@ -1252,24 +1335,26 @@ async function settleAnswer(
   return { kind: 'step', view: viewOf(next) };
 }
 
-/** The upstream link an authorization record holds, if any (#670). */
+/** The upstream link an authorization or an account record holds, if any (#670, #844). */
 function heldLinkOf(record: AnswerableInteractionRecord): UpstreamLink | undefined {
-  return record.purpose === 'authorization' ? record.upstreamLink : undefined;
+  return record.purpose === 'authorization' || record.purpose === 'account'
+    ? record.upstreamLink
+    : undefined;
 }
 
 /**
  * `taken` with the upstream link a decision keeps (#670): `undefined` keeps
  * the stored one, `null` ends it, a link replaces it. Only an authorization
- * interaction holds one; a link for another is an engine bug, thrown before
- * anything is written.
+ * or an account interaction holds one; a link for another is an engine bug,
+ * thrown before anything is written.
  */
 function withUpstreamLink(
   taken: AnswerableInteractionRecord,
   link: UpstreamLink | null | undefined
 ): AnswerableInteractionRecord {
   if (link === undefined) return taken;
-  if (taken.purpose !== 'authorization') {
-    throw new Error('only an authorization interaction holds an upstream link');
+  if (taken.purpose !== 'authorization' && taken.purpose !== 'account') {
+    throw new Error('only an authorization or an account interaction holds an upstream link');
   }
   if (link !== null) return { ...taken, upstreamLink: link };
   const rest = { ...taken };
@@ -1349,6 +1434,9 @@ export async function cancelInteraction(
   });
   if (taken.purpose === 'authorization') {
     return { kind: 'cancelled', purpose: 'authorization', request: taken.request };
+  }
+  if (taken.purpose === 'account') {
+    return { kind: 'cancelled', purpose: 'account', request: taken.request };
   }
   return {
     kind: 'cancelled',

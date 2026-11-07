@@ -411,10 +411,55 @@ const mailedPassRecordSchema = z.strictObject({
   request: mailedPassRequestSchema,
 });
 
+/**
+ * What an account interaction is for (#844): the hosted account page's own
+ * ceremonies, which run on the sign-in engine with no client.
+ *
+ * - `sign_in`: a browser with no session signs in to reach the page.
+ * - `reauthenticate`: a fresh sign-in, with the account's strongest factor
+ *   first (ADR-017 Decision 8), before a change that asks for one.
+ * - `passkey`, `totp`: a fresh sign-in that then binds the factor through
+ *   the engine's own enrolment step (`RoundContext.enrol`).
+ * - `link`: the sign-in at an upstream provider, then the fresh sign-in to
+ *   this account that attaches the identity it proved (#670).
+ */
+export const ACCOUNT_INTENTS = ['sign_in', 'reauthenticate', 'passkey', 'totp', 'link'] as const;
+
+export type AccountIntent = (typeof ACCOUNT_INTENTS)[number];
+
+/** The account pages an account interaction returns to: a fixed list, never a request's word. */
+export const ACCOUNT_RETURN_PATHS = ['/ui/account', '/ui/account/password'] as const;
+
+export type AccountReturnPath = (typeof ACCOUNT_RETURN_PATHS)[number];
+
+/** What an `account` interaction holds (#844): its intent and the page it returns to. */
+export const accountRequestSchema = z.strictObject({
+  intent: z.enum(ACCOUNT_INTENTS),
+  returnTo: z.enum(ACCOUNT_RETURN_PATHS),
+});
+
+export type AccountRequest = z.infer<typeof accountRequestSchema>;
+
+/**
+ * An interaction the hosted account page started (#844): a sign-in, a fresh
+ * sign-in before a change, an enrolment or an upstream link, for no client.
+ * The browser session it started for, when there was one, is the carried
+ * session. The record format is the same version: a server from before it
+ * reads an `account` record as absent, as any record it cannot parse.
+ */
+const accountRecordSchema = z.strictObject({
+  ...recordFields,
+  purpose: z.literal('account'),
+  request: accountRequestSchema,
+  /** The upstream identity a `link` interaction attaches (#670), while there is one. */
+  upstreamLink: upstreamLinkSchema.optional(),
+});
+
 export const interactionRecordSchema = z.discriminatedUnion('purpose', [
   authorizationRecordSchema,
   logoutRecordSchema,
   mailedPassRecordSchema,
+  accountRecordSchema,
 ]);
 
 export type InteractionRecord = z.infer<typeof interactionRecordSchema>;
@@ -431,15 +476,18 @@ export type LogoutInteractionRecord = Extract<InteractionRecord, { purpose: 'log
 /** A record of an interaction a mailed pass link opened (#637). */
 export type MailedPassInteractionRecord = Extract<InteractionRecord, { purpose: 'mailed_pass' }>;
 
+/** A record of an interaction the hosted account page started (#844). */
+export type AccountInteractionRecord = Extract<InteractionRecord, { purpose: 'account' }>;
+
 /** A record an answer, a cancel or a user switch may act on: not a mailed pass's (#637). */
 export type AnswerableInteractionRecord = Exclude<InteractionRecord, MailedPassInteractionRecord>;
 
 /** What {@link requestClientIdOf} reads: a record's request, or one shaped like it. */
 type RequestHolder = {
-  readonly request: { readonly client_id?: string } | MailedPassRequest;
+  readonly request: { readonly client_id?: string } | MailedPassRequest | AccountRequest;
 };
 
-/** The client the record's request names, if any: a mailed pass's names none. */
+/** The client the record's request names, if any: a mailed pass's and an account page's name none. */
 export function requestClientIdOf(record: RequestHolder): string | undefined {
   return 'client_id' in record.request ? record.request.client_id : undefined;
 }
@@ -453,6 +501,26 @@ export function requestClientIdOf(record: RequestHolder): string | undefined {
 export const EVENT_CLIENT_ID_MAX_LENGTH = 255;
 
 /**
+ * The client the sign-in engine binds the transactions of an account
+ * interaction to (#844): the hosted account page is no OAuth client, and the
+ * engine's transaction names one. A URN, which no registered client's id
+ * (server-made) or a CIMD client's (an `https` URL) can be, so no client's
+ * settings ever apply to these sign-ins. No event names it: the account
+ * page's events name no client ({@link eventClientIdOfEngineClient}).
+ */
+export const ACCOUNT_PAGES_ENGINE_CLIENT_ID = 'urn:qauth:account-pages';
+
+/**
+ * The client an event names for the client a sign-in engine round ran for:
+ * none for the account page's ({@link ACCOUNT_PAGES_ENGINE_CLIENT_ID}), and
+ * none for an id longer than an event carries.
+ */
+export function eventClientIdOfEngineClient(clientId: string): string | null {
+  if (clientId === ACCOUNT_PAGES_ENGINE_CLIENT_ID) return null;
+  return clientId.length <= EVENT_CLIENT_ID_MAX_LENGTH ? clientId : null;
+}
+
+/**
  * The record's `client_id` for an event, or `null` when it names none (a
  * logout request that named no client, a mailed pass's) or it does not fit
  * one.
@@ -464,12 +532,16 @@ export function eventClientIdOf(record: RequestHolder): string | null {
 
 /**
  * The user an interaction's events name: the one its transaction proved or is
- * for, or, for a logout, the account of the session it ends (#675).
+ * for, or, for a logout, the account of the session it ends (#675), and for
+ * an account page's interaction, the account of the session it started for
+ * (#844).
  */
 export function eventUserIdOf(record: InteractionRecord): string | null {
   const proved = record.transaction.userId;
   if (proved !== undefined) return proved;
-  return record.purpose === 'logout' ? (record.carriedSession?.userId ?? null) : null;
+  return record.purpose === 'logout' || record.purpose === 'account'
+    ? (record.carriedSession?.userId ?? null)
+    : null;
 }
 
 /**

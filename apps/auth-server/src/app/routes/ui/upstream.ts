@@ -4,6 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
+import { engineClientIdOf } from '../../helpers/account-interaction';
 import { accountPoliciesOf } from '../../helpers/account-policies';
 import { createBackgroundTasks } from '../../helpers/background-tasks';
 import {
@@ -173,7 +174,14 @@ export default async function (fastify: FastifyInstance) {
           reply,
           { id: interactionId, revision: 0 },
           async (state) => {
-            if (state.purpose !== 'authorization') {
+            if (state.purpose !== 'authorization' && state.purpose !== 'account') {
+              throw new UpstreamSignInRefusal('transaction_mismatch');
+            }
+            // An account page's sign-in (#844) starts as an interaction only:
+            // a node with the interaction UI off (one a rolling restart that
+            // turns it on has not reached) would send it the pages' way,
+            // which registers an identity no account holds.
+            if (state.purpose === 'account' && mode !== 'interaction') {
               throw new UpstreamSignInRefusal('transaction_mismatch');
             }
             // A link the request asked for (#670) starts only the provider it
@@ -188,7 +196,7 @@ export default async function (fastify: FastifyInstance) {
               throw new UpstreamSignInRefusal('transaction_mismatch');
             }
             const back =
-              mode === 'interaction'
+              mode === 'interaction' || state.purpose === 'account'
                 ? ceremonyPageUrlOf(realm, interactionId)
                 : authorizeUrlOf(state.request);
             wayBack = back;
@@ -197,7 +205,7 @@ export default async function (fastify: FastifyInstance) {
               null,
               upstreamRoundContext(request, state, {
                 receivedAt,
-                environment: await roundEnvironment(fastify, realm, state.request.client_id),
+                environment: await roundEnvironment(fastify, realm, engineClientIdOf(state)),
                 upstreamRoute: provider.entry,
                 startUpstream: upstreamStarter(
                   fastify,

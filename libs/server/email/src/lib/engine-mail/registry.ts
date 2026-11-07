@@ -6,6 +6,12 @@ import {
   EngineAccountExistsEmail,
 } from '../templates/engine/account-exists';
 import { CodeEmail, codeEmailSubject, type MailCodePurpose } from '../templates/engine/code-email';
+import {
+  PASSKEY_REMOVED_SUBJECT,
+  PasskeyRemovedEmail,
+  TOTP_REMOVED_SUBJECT,
+  TotpRemovedEmail,
+} from '../templates/engine/credential-removed';
 import { PASSKEY_ADDED_SUBJECT, PasskeyAddedEmail } from '../templates/engine/passkey-added';
 import {
   PASSWORD_CHANGED_SUBJECT,
@@ -115,6 +121,8 @@ export type EngineMail =
   | { readonly template: 'recovery_codes_failed' }
   | { readonly template: 'passkey_added' }
   | { readonly template: 'totp_added' }
+  | { readonly template: 'passkey_removed' }
+  | { readonly template: 'totp_removed' }
   | { readonly template: 'second_factor_disabled' }
   | { readonly template: 'second_factor_failed' }
   | {
@@ -328,6 +336,22 @@ export const ENGINE_MAIL_TEMPLATES: {
     subject: () => TOTP_ADDED_SUBJECT,
     element: (_mail: MailOf<'totp_added'>, { baseUrl, brand }: EngineMailContext) =>
       createElement(TotpAddedEmail, { brand, baseUrl }),
+  }),
+  passkey_removed: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => PASSKEY_REMOVED_SUBJECT,
+    element: (_mail: MailOf<'passkey_removed'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(PasskeyRemovedEmail, { brand, baseUrl }),
+  }),
+  totp_removed: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => TOTP_REMOVED_SUBJECT,
+    element: (_mail: MailOf<'totp_removed'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(TotpRemovedEmail, { brand, baseUrl }),
   }),
   second_factor_disabled: Object.freeze({
     realmMaySwitchOff: false,

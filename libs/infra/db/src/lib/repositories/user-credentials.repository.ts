@@ -247,15 +247,19 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
      * Replace a `password` credential's password (#642): the owner's reset.
      * One statement, so a concurrent writer of a sibling key keeps it: the
      * three keys the password shape owns are dropped and `passwordData`
-     * merged in, and the disabled mark cleared with them.
+     * merged in, and the disabled mark cleared with them. An expected hash
+     * is compared in the same statement's `WHERE`, which Postgres checks
+     * again on the row a concurrent writer left (#844).
      */
     async updatePassword(
       realmId: string,
       id: string,
       passwordData: Readonly<Record<string, unknown>>,
-      tx?: DbClient
+      tx?: DbClient,
+      options?: { readonly expectedPasswordHash?: string }
     ): Promise<UserCredential | undefined> {
       const invoker = tx ?? defaultDb;
+      const expected = options?.expectedPasswordHash;
       const [credential] = await invoker
         .update(userCredentials)
         .set({
@@ -267,7 +271,10 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
           and(
             eq(userCredentials.realmId, realmId),
             eq(userCredentials.id, id),
-            eq(userCredentials.providerType, PASSWORD_PROVIDER_TYPE)
+            eq(userCredentials.providerType, PASSWORD_PROVIDER_TYPE),
+            expected === undefined
+              ? undefined
+              : sql`${userCredentials.credentialData} ->> 'password_hash' = ${expected}`
           )
         )
         .returning();

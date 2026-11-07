@@ -181,7 +181,24 @@ export interface RoundContext {
    * with a redirect (#642).
    */
   readonly freshSignIn?: boolean;
+  /**
+   * An enrolment the person asked for (#844): the hosted account page's "Add
+   * a passkey" or "Set up an authenticator app", passed on every round of the
+   * transaction. Rule 8 binds the factor it names after every factor the
+   * sign-in needs and the forced update, before the recovery codes: a passkey
+   * for any account, not only a password-only one as the optional offer
+   * after a sign-in, and an authenticator app for an account that holds
+   * none. Each binding keeps its own rules: a factor proved at most five
+   * minutes before, and the mailbox of a password-only account's first one
+   * (ADR-017 Decision 8). One the transport cannot serve, or the account
+   * cannot take (it holds an authenticator app already), is skipped, and the
+   * sign-in completes without it. A registration never takes one.
+   */
+  readonly enrol?: EnrolmentRequest;
 }
+
+/** A factor a sign-in binds because the person asked for it (#844). */
+export type EnrolmentRequest = 'passkey' | 'totp';
 
 /** A flow other than a sign-in: registration (#640), or the owner's password reset (#642). */
 export type SignInFlow = 'register' | 'reset';

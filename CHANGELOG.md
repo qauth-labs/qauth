@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The hosted account pages** ([#844], ADR-017 Decision 8, ADR-020 §3).
+  `/ui/account` gives a signed-in person their own account on the hosted
+  pages, in the current server-rendered style, until the design-system
+  account console replaces it (#685–#688): the sign-in methods, a password
+  change under the realm's password policy, passkeys (add, rename, remove),
+  the authenticator app (set up, turn off), a new set of recovery codes
+  shown once, linked upstream accounts (link by signing in, unlink) and the
+  sessions (sign one out, sign out everywhere). A browser with no session
+  signs in first and comes back. Every form works without JavaScript and is
+  refused from another site or without the session's CSRF value; every
+  change asks for the fresh authentication the account API asks of the same
+  operation (#663), and a refused one offers "Confirm it's you". Adding a
+  passkey or an authenticator app runs the sign-in engine's own enrolment
+  step after that fresh sign-in. A removal never leaves the account without
+  a way to sign in, nor without a second factor the realm requires, and a
+  removed passkey or authenticator app mails the owner (`passkey_removed`,
+  `totp_removed`, which no realm can switch off). Ending a
+  session tells every relying party with a back-channel logout URI. The
+  changes are recorded as the new user events `user.password_changed`,
+  `user.credential_added`, `user.credential_removed`,
+  `user.passkey_renamed` and `user.recovery_codes_regenerated`, which the
+  security log shows (the rename aside). The pages exist while
+  `INTERACTION_UI_ENABLED` is on, and their routes are experimental.
 - **Linking an upstream account to an existing one** ([#670], ADR-020 §3).
   On the Interaction API's ceremony page, the first upstream sign-in of an
   identity no account holds now asks at the new `upstream_link` step: "I
@@ -3482,6 +3505,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#709]: https://github.com/qauth-labs/qauth/issues/709
 [#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
+[#844]: https://github.com/qauth-labs/qauth/issues/844
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 [#857]: https://github.com/qauth-labs/qauth/issues/857
 [#891]: https://github.com/qauth-labs/qauth/issues/891

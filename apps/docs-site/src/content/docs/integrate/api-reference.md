@@ -789,6 +789,29 @@ bounce.
 | `/ui/totp/{interactionId}`              | GET       | "Enter the code from your authenticator app": the `totp` step's form (#653)         |
 | `/ui/totp-setup/{interactionId}`        | GET       | "Set up an authenticator app": the secret as a QR code and text, and a first code   |
 
+The account pages below are registered **only** while the hosted pages are on
+(`INTERACTION_UI_ENABLED`); with the switch off every path 404s. They are
+experimental: the design-system account console replaces them. See
+[Hosted UI → The account pages](/integrate/hosted-ui/#the-account-pages) for
+the checks every form post meets (#844).
+
+| Endpoint                                               | Method    | Purpose                                                                                 |
+| ------------------------------------------------------ | --------- | --------------------------------------------------------------------------------------- |
+| `/ui/account`                                          | GET       | The overview of the browser session's account; a browser with no session signs in first |
+| `/ui/account/password`                                 | GET, POST | Change the password, with the current one, under the realm's password policy            |
+| `/ui/account/reauthenticate`                           | POST      | "Confirm it's you": a fresh sign-in, then back to the page                              |
+| `/ui/account/passkeys/add`                             | POST      | Add a passkey: a fresh sign-in, then the `webauthn_create` step                         |
+| `/ui/account/passkeys/{passkeyId}/rename`              | POST      | Rename a passkey                                                                        |
+| `/ui/account/passkeys/{passkeyId}/remove`              | POST      | Remove a passkey                                                                        |
+| `/ui/account/totp/setup`                               | POST      | Set up an authenticator app: a fresh sign-in, then the `totp_setup` step                |
+| `/ui/account/totp/remove`                              | POST      | Turn the authenticator app off                                                          |
+| `/ui/account/recovery-codes/regenerate`                | POST      | A new set of recovery codes, shown once                                                 |
+| `/ui/account/recovery-codes/confirm`                   | POST      | Confirm the new set is saved                                                            |
+| `/ui/account/sessions/{sessionId}/end`                 | POST      | Sign one session out                                                                    |
+| `/ui/account/sessions/end-all`                         | POST      | Sign out everywhere                                                                     |
+| `/ui/account/linked-accounts/link`                     | POST      | Link an upstream account by signing in to it                                            |
+| `/ui/account/linked-accounts/{linkedAccountId}/unlink` | POST      | Unlink an upstream account                                                              |
+
 The wallet-login screens below are registered **only** when
 `WALLET_FEDERATION_ENABLED` is on; with the flag off (the default) every path
 404s. See [Wallet sign-in](/integrate/wallet-login/) for the flow they implement.
