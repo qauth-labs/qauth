@@ -533,7 +533,7 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
 
   it('recovers a lost passkey with a recovery code on the hosted pages, then signs in with the new one', async () => {
     const { userId, codes, passkey: lost } = await registered();
-    /** The passkeys bound to the account, as its security log records them. */
+    /** The passkeys bound to the account, as its events record them. */
     const passkeysBound = async () =>
       (await eventsOf('user.sign_in_step_passed', userId)).filter(
         (data) => data['step'] === WEBAUTHN_CREATE
@@ -569,8 +569,9 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
         [userId, replacement.credentialId]
       )
     ).toHaveLength(1);
-    // The account has no address: the new passkey's notice is its security
-    // log's entry alone (ADR-020 §3).
+    // The account has no address, so nothing is mailed: its events record
+    // the rebind, as its webauthn_create step passed (the security log's
+    // own `credential_added` entry comes with passkey management, #686).
     expect(await passkeysBound()).toBe(boundBefore + 1);
 
     // The new passkey proves the account: its assertion signs in.
