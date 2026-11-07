@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { applyBrand, BrandError } from './brand';
+import { applyBrand, BRAND_FONTS, BrandError } from './brand';
+import { contrastRatio, oklchToRgb, parseHex } from './color';
 import { themeCss } from './theme-css';
 
 function issues(input: unknown): readonly string[] {
@@ -33,11 +34,20 @@ describe('applyBrand', () => {
     expect(blockOf(css, ':root,')).toMatch(/--primary-hover: #1a45be;/);
   });
 
-  it('uses the primary for links where it reads on the page, and the text colour where not', () => {
+  it('uses the primary for links where it reads on the page, and a lighter shade where not', () => {
     const css = applyBrand({ primary: '#1d4ed8' });
     // #1d4ed8 is 6.7:1 on white, and 2.6:1 on the dark page.
     expect(blockOf(css, ':root,')).toContain('--primary-text: #1d4ed8;');
-    expect(blockOf(css, "[data-theme='dark']")).not.toContain('--primary-text: #1d4ed8;');
+    const dark = /--primary-text: (#[0-9a-f]{6});/.exec(blockOf(css, "[data-theme='dark']"))?.[1];
+    expect(dark).toBeDefined();
+    expect(dark).not.toBe('#1d4ed8');
+    const rgb = parseHex(dark ?? '');
+    if (!rgb) throw new Error('no dark link colour');
+    // Bluer than red: the link keeps the brand's hue, not the text colour.
+    expect(rgb.b).toBeGreaterThan(rgb.r);
+    expect(
+      contrastRatio(rgb, oklchToRgb({ l: 0.113, c: 0.004, h: 260, alpha: 1 }))
+    ).toBeGreaterThanOrEqual(4.5);
   });
 
   it('refuses a primary its text cannot be read on', () => {
@@ -100,9 +110,41 @@ describe('applyBrand', () => {
     ]);
   });
 
-  it('refuses settings that are not an object, and a darkMode that is not a boolean', () => {
+  it('refuses settings that are not a plain object, and a darkMode that is not a boolean', () => {
     expect(issues('dark')).toEqual(['the brand settings must be an object']);
+    expect(issues(null)).toEqual(['the brand settings must be an object']);
+    expect(issues(new Map([['primary', '#1d4ed8']]))).toEqual([
+      'the brand settings must be an object',
+    ]);
     expect(issues({ darkMode: 'no' })).toEqual(['brand.darkMode must be true or false']);
+    expect(issues({ darkMode: null })).toEqual(['brand.darkMode must be true or false']);
+  });
+
+  it('refuses a deep or cyclic value without walking it', () => {
+    let deep: Record<string, unknown> = {};
+    const top = deep;
+    for (let i = 0; i < 50_000; i++) {
+      const next = {};
+      deep['a'] = next;
+      deep = next;
+    }
+    expect(issues({ primary: { light: top } })).toEqual([
+      'brand.primary.light must be a colour written #rrggbb',
+    ]);
+    const cyclic: Record<string, unknown> = {};
+    cyclic['light'] = cyclic;
+    expect(issues({ accent: cyclic })).toEqual([
+      'brand.accent.light must be a colour written #rrggbb',
+    ]);
+  });
+
+  it('refuses an object that inherits its settings', () => {
+    const inherited = Object.create({ primary: 'url(x)' }) as Record<string, unknown>;
+    expect(issues(inherited)).toEqual(['the brand settings must be an object']);
+  });
+
+  it('keeps its font list frozen', () => {
+    expect(Object.isFrozen(BRAND_FONTS)).toBe(true);
   });
 
   it('leaves out the dark set with darkMode: false', () => {

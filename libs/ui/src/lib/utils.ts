@@ -10,6 +10,7 @@ const twMerge = extendTailwindMerge({
     theme: {
       radius: ['control', 'surface'],
       ease: ['standard'],
+      'font-weight': ['regular'],
     },
   },
 });

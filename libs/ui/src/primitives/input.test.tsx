@@ -9,7 +9,7 @@ describe('Input', () => {
     const html = renderToString(<Input />);
     expect(html).toContain('rounded-control');
     expect(html).toContain('border');
-    expect(html).toContain('focus-visible:ring-ring');
+    expect(html).toContain('focus-visible:border-ring');
   });
 
   it('merges className with defaults', () => {

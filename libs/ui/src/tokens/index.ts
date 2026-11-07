@@ -7,7 +7,6 @@ export {
   type BrandFont,
 } from './brand';
 export { contrastRatio, oklchToRgb, parseHex } from './color';
-export { tailwindThemeCss, themeCss, type ThemeOverrides } from './theme-css';
 export {
   COLOR_TOKENS,
   type ColorMode,

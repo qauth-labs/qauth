@@ -15,7 +15,8 @@ export const buttonVariants = cva(
   [
     'rounded-control inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 border border-transparent font-medium whitespace-nowrap select-none',
     'ease-standard transition-colors duration-(--duration-fast)',
-    'focus-visible:ring-ring focus-visible:ring-offset-background outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+    // No outline-none: base.css draws the focus ring as an outline from the focus tokens, which,
+    // unlike a box-shadow ring, still shows in forced-colors (high contrast) mode.
     'disabled:pointer-events-none disabled:opacity-50',
     "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   ],

@@ -19,9 +19,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           'rounded-control border-input text-foreground flex h-9 w-full min-w-0 border bg-transparent px-3 py-1 text-base md:text-sm',
           'transition-colors duration-(--duration-fast) ease-standard',
           'placeholder:text-muted-foreground',
-          'focus-visible:border-ring focus-visible:ring-ring outline-none focus-visible:ring-1',
+          // The focus ring is base.css's outline (focus tokens), kept in forced-colors mode.
+          'focus-visible:border-ring',
           'disabled:bg-muted disabled:cursor-not-allowed disabled:opacity-50',
-          'aria-invalid:border-destructive aria-invalid:focus-visible:ring-destructive',
+          'aria-invalid:border-destructive aria-invalid:focus-visible:outline-destructive',
           'file:text-foreground file:border-0 file:bg-transparent file:text-sm file:font-medium',
           className
         )}

@@ -47,6 +47,28 @@ describe('the token file', () => {
   });
 });
 
+describe('reading the token file', () => {
+  it('refuses a colour component that is not a finite number', () => {
+    const broken = structuredClone(tokenFile) as unknown as {
+      color: { text: { body: { $extensions: { mode: { dark: { components: unknown[] } } } } } };
+    };
+    broken.color.text.body.$extensions.mode.dark.components = [0.75, 0.008, 'none'];
+    expect(() => readTokens(broken)).toThrow(/finite numbers/);
+  });
+
+  it('refuses a light mode that differs from $value', () => {
+    const broken = structuredClone(tokenFile) as typeof tokenFile;
+    broken.color.text.body.$extensions.mode.light.components = [0.5, 0.013, 58];
+    expect(() => readTokens(broken)).toThrow(/must equal \$value/);
+  });
+
+  it('refuses a contrast rule against a translucent background', () => {
+    const broken = structuredClone(tokenFile) as typeof tokenFile;
+    broken.color.text.body.$extensions['dev.qauth.ui'].contrast[0].on.push('{color.line.border}');
+    expect(() => contrastFailures(readTokens(broken).colors)).toThrow(/translucent/);
+  });
+});
+
 describe('contrast', () => {
   it('meets every declared floor in light and dark', () => {
     const failures = contrastFailures(COLOR_TOKENS).map(
@@ -59,7 +81,9 @@ describe('contrast', () => {
   it('fails when one pair is lowered below AA', () => {
     const lowered = structuredClone(tokenFile) as typeof tokenFile;
     // Muted text at L 0.7 is about 2.6:1 on white.
-    lowered.color.text['muted-foreground'].$value.components = [0.7, 0.013, 58.071];
+    const muted = lowered.color.text['muted-foreground'];
+    muted.$value.components = [0.7, 0.013, 58.071];
+    muted.$extensions.mode.light.components = [0.7, 0.013, 58.071];
     const failures = contrastFailures(readTokens(lowered).colors);
     expect(failures.length).toBeGreaterThan(0);
     expect(
@@ -69,7 +93,7 @@ describe('contrast', () => {
 
   it('fails in dark mode alone when only the dark value is lowered', () => {
     const lowered = structuredClone(tokenFile) as typeof tokenFile;
-    lowered.color.brand.highlight.$extensions['dev.qauth.ui'].dark.components = [0.3, 0.15, 195];
+    lowered.color.brand.highlight.$extensions.mode.dark.components = [0.3, 0.15, 195];
     const failures = contrastFailures(readTokens(lowered).colors);
     expect(failures.map((f) => `${f.mode} ${f.foreground}`)).toContain(
       'dark color.brand.highlight'

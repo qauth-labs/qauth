@@ -40,15 +40,25 @@ A Tailwind v4 app imports the design system right after Tailwind:
 That brings the fonts, the theme, the Tailwind theme, the base rules, the `dark:` variant, and an
 `@source` for the library's components, so the app needs no `@source` line for them.
 
-A page with no Tailwind (the auth server's `/ui` pages) links `theme.css`, `base.css` and
-`fonts.css` and styles its own elements with the variables: `var(--background)`,
-`var(--muted-foreground)`, `var(--font-sans)`, `var(--radius-control)`.
+An app that serves a realm's brand stylesheet imports `fonts.css`, `tailwind.css` and `base.css`
+instead of `styles.css`, and links the output of `applyBrand` where `theme.css` would be.
+
+A page with no Tailwind (the auth server's `/ui` pages) uses `theme.css` and `base.css` as they
+are, and styles its own elements with the variables: `var(--background)`,
+`var(--muted-foreground)`, `var(--font-sans)`, `var(--radius-control)`. `fonts.css` imports the
+`@fontsource` packages by name, so it needs a bundler; a page served without one ships the woff2
+files and its own `@font-face` rules.
 
 ### Light and dark
 
 The theme follows the system's `prefers-color-scheme`. `data-theme="light"` or
 `data-theme="dark"` on the root element overrides it, and on any other element fixes that subtree
 to one mode. `color-scheme` follows, so form controls and scrollbars match.
+
+The token utilities (`bg-card`, `text-foreground`) follow the nearest `data-theme`. The `dark:`
+variant is decided from the root down, so inside a `data-theme="light"` subtree of a dark page it
+still fires; prefer the token utilities. A realm with dark mode off puts `data-theme="light"` on
+`<html>`, so both stay light.
 
 ## Tokens
 
@@ -69,6 +79,12 @@ to one mode. `color-scheme` follows, so form controls and scrollbars match.
 Colour names follow the design system's (shadcn's) names, so the website and these apps share
 them. `accent` is the hover and selected fill; the brand
 accent is `highlight`.
+
+**Modes.** Each colour's `$value` is its light value, and `$extensions.mode` holds `light` and
+`dark`: the form [Terrazzo](https://terrazzo.app/) reads, so a Terrazzo build (delurio's kit for
+`libs/ui`, #561) compiles the same file. A test parses the file with `@terrazzo/parser` and checks
+it sees both modes. `libs/ui` generates its own CSS: `applyBrand` builds a realm's stylesheet at
+run time with the same code that builds `theme.css`, so the two cannot drift.
 
 **Contrast.** Each text colour declares, under `$extensions["dev.qauth.ui"].contrast`, the
 backgrounds it is drawn on and its floor: 4.5:1 for text, 3:1 for a control's edge and the focus
@@ -103,8 +119,8 @@ try {
 
 `applyBrand` refuses any value that contains `url(`, `;`, `{` or `}`, a colour not written
 `#rrggbb`, a font outside the list, and a setting it does not know. Links and text buttons use
-the primary colour where it reaches 4.5:1 on the page in that mode, and the text colour where it
-does not. The result is plain CSS text: serve it as a stylesheet, in place of `theme.css`, never
+the primary colour where it reaches 4.5:1 on the page in that mode, and the nearest lighter (dark
+mode) or darker (light mode) shade of it that does where it does not. The result is plain CSS text: serve it as a stylesheet, in place of `theme.css`, never
 beside it.
 
 ## Installation
@@ -203,7 +219,6 @@ import { FormField, Input } from '@qauth-labs/ui';
 | `FormFieldProps`                                                    | type      | Props for `FormField`                             |
 | `buttonVariants`                                                    | function  | The button's classes, for a link styled as one    |
 | `applyBrand`, `BrandError`, `BRAND_FONTS`                           | function  | A realm's brand stylesheet; see Brand settings    |
-| `themeCss`, `tailwindThemeCss`                                      | function  | The generators of the two theme files             |
 | `COLOR_TOKENS`, `STATIC_TOKENS`, `contrastFailures`                 | data      | The tokens, flattened, and the contrast check     |
 
 ## Development

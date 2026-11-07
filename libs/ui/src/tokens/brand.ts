@@ -19,14 +19,15 @@ import {
 
 /**
  * The fonts a brand may pick. Each is self-hosted by `libs/ui` or is the system's own, so a brand
- * never loads a font from elsewhere. Adding one means shipping its files first.
+ * never loads a font from elsewhere. Adding one means shipping its files first. Frozen: the stack
+ * reaches the stylesheet as written.
  */
-export const BRAND_FONTS = {
+export const BRAND_FONTS = Object.freeze({
   /** The design system's pair: DM Sans for text, Instrument Serif for headings. */
   qauth: null,
   /** The operating system's interface font, for text and headings. */
   system: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-} as const;
+} as const);
 
 export type BrandFont = keyof typeof BRAND_FONTS;
 
@@ -61,29 +62,39 @@ const KEYS = new Set(['primary', 'accent', 'font', 'darkMode']);
 /** The hover fill: the primary darkened, so the text on it keeps at least its contrast. */
 const HOVER_SHADE = 0.88;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+const WHITE: Rgb = { r: 1, g: 1, b: 1, alpha: 1 };
+const BLACK: Rgb = { r: 0, g: 0, b: 0, alpha: 1 };
+
+/** A plain JSON-like object: not an array, a Map, a Date or a class instance. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
-function forbiddenIn(value: unknown, path: string, issues: string[]): void {
-  if (typeof value === 'string') {
-    const lower = value.toLowerCase();
-    for (const fragment of FORBIDDEN) {
-      if (lower.includes(fragment)) issues.push(`${path} contains "${fragment}"`);
-    }
-  } else if (isRecord(value)) {
-    for (const [key, child] of Object.entries(value)) forbiddenIn(child, `${path}.${key}`, issues);
+function forbiddenIn(value: string, path: string, issues: string[]): void {
+  const lower = value.toLowerCase();
+  for (const fragment of FORBIDDEN) {
+    if (lower.includes(fragment)) issues.push(`${path} contains "${fragment}"`);
   }
 }
 
-/** Reads a brand colour into one sRGB value per mode, or records why it cannot. */
+/**
+ * Reads a brand colour into one sRGB value per mode, or records why it cannot. Only the two shapes
+ * a colour may have are looked at, so a deep or cyclic value is refused, never walked.
+ */
 function readColor(
   value: unknown,
   path: string,
   issues: string[]
 ): Record<ColorMode, Rgb> | undefined {
   const hex = (v: unknown, at: string): Rgb | undefined => {
-    const rgb = typeof v === 'string' ? parseHex(v) : null;
+    if (typeof v !== 'string') {
+      issues.push(`${at} must be a colour written #rrggbb`);
+      return undefined;
+    }
+    forbiddenIn(v, at, issues);
+    const rgb = parseHex(v);
     if (!rgb) issues.push(`${at} must be a colour written #rrggbb`);
     return rgb ?? undefined;
   };
@@ -91,12 +102,12 @@ function readColor(
     const rgb = hex(value, path);
     return rgb && { light: rgb, dark: rgb };
   }
-  if (isRecord(value)) {
+  if (isPlainObject(value)) {
     for (const key of Object.keys(value)) {
       if (key !== 'light' && key !== 'dark') issues.push(`${path}.${key} is not a mode`);
     }
     const light = hex(value['light'], `${path}.light`);
-    const dark = value['dark'] === undefined ? light : hex(value['dark'], `${path}.dark`);
+    const dark = Object.hasOwn(value, 'dark') ? hex(value['dark'], `${path}.dark`) : light;
     return light && dark && { light, dark };
   }
   issues.push(`${path} must be a colour written #rrggbb, or { light, dark }`);
@@ -109,6 +120,37 @@ function token(cssVar: string): ColorToken {
   return found;
 }
 
+function byPath(path: string): ColorToken | undefined {
+  return COLOR_TOKENS.find((t) => t.path === path);
+}
+
+function mix(from: Rgb, to: Rgb, amount: number): Rgb {
+  const at = (a: number, b: number) => a + (b - a) * amount;
+  return { r: at(from.r, to.r), g: at(from.g, to.g), b: at(from.b, to.b), alpha: 1 };
+}
+
+/**
+ * The brand colour as link text in a mode: the colour itself where it reaches the floors of
+ * `primary-text`, otherwise the nearest shade of it, toward white on a dark page and toward black
+ * on a light one, that does. Links keep the brand's hue rather than turning into body text.
+ */
+function linkShade(color: Rgb, mode: ColorMode): Rgb {
+  const rules = token('--primary-text').contrast;
+  const passes = (c: Rgb) =>
+    rules.every((rule) =>
+      rule.on.every((path) => {
+        const bg = byPath(path);
+        return bg !== undefined && contrastRatio(c, oklchToRgb(bg[mode])) >= rule.min;
+      })
+    );
+  const toward = mode === 'dark' ? WHITE : BLACK;
+  for (let step = 0; step <= 50; step++) {
+    const shade = mix(color, toward, step / 50);
+    if (passes(shade)) return shade;
+  }
+  return toward;
+}
+
 function shade({ r, g, b }: Rgb, factor: number): Rgb {
   return { r: r * factor, g: g * factor, b: b * factor, alpha: 1 };
 }
@@ -117,7 +159,8 @@ function shade({ r, g, b }: Rgb, factor: number): Rgb {
  * Validates a realm's brand settings and returns the theme stylesheet with them applied.
  *
  * It refuses, with a {@link BrandError} listing every problem:
- * - a setting other than the four above, or a value of the wrong type;
+ * - settings that are not a plain object, a setting other than the four above, or a value of the
+ *   wrong type (`null` included);
  * - any value containing `url(`, `;`, `{` or `}`;
  * - a colour not written `#rrggbb`;
  * - a font outside {@link BRAND_FONTS};
@@ -125,33 +168,33 @@ function shade({ r, g, b }: Rgb, factor: number): Rgb {
  *   any mode the stylesheet will have.
  *
  * Links and text buttons use the primary colour where it reaches 4.5:1 on the page in that mode,
- * and the text colour where it does not.
+ * and the nearest shade of it that does where it does not.
  */
 export function applyBrand(input: unknown): string {
   const issues: string[] = [];
-  const brand = input ?? {};
-  if (!isRecord(brand)) throw new BrandError(['the brand settings must be an object']);
+  const brand = input === undefined ? {} : input;
+  if (!isPlainObject(brand)) throw new BrandError(['the brand settings must be an object']);
 
   for (const key of Object.keys(brand)) {
     if (!KEYS.has(key)) issues.push(`brand.${key} is not a brand setting`);
   }
-  forbiddenIn(brand, 'brand', issues);
 
-  const darkMode = brand['darkMode'] ?? true;
+  const darkMode = Object.hasOwn(brand, 'darkMode') ? brand['darkMode'] : true;
   if (typeof darkMode !== 'boolean') issues.push('brand.darkMode must be true or false');
 
-  const font = brand['font'];
-  if (font !== undefined && !(typeof font === 'string' && Object.hasOwn(BRAND_FONTS, font))) {
-    issues.push(`brand.font must be one of: ${Object.keys(BRAND_FONTS).join(', ')}`);
+  const font = Object.hasOwn(brand, 'font') ? brand['font'] : undefined;
+  if (font !== undefined) {
+    if (typeof font === 'string') forbiddenIn(font, 'brand.font', issues);
+    if (!(typeof font === 'string' && Object.hasOwn(BRAND_FONTS, font))) {
+      issues.push(`brand.font must be one of: ${Object.keys(BRAND_FONTS).join(', ')}`);
+    }
   }
 
-  const primary =
-    brand['primary'] === undefined
-      ? undefined
-      : readColor(brand['primary'], 'brand.primary', issues);
-  const accent =
-    brand['accent'] === undefined ? undefined : readColor(brand['accent'], 'brand.accent', issues);
-  if (issues.length > 0) throw new BrandError(issues);
+  const color = (key: 'primary' | 'accent') =>
+    Object.hasOwn(brand, key) ? readColor(brand[key], `brand.${key}`, issues) : undefined;
+  const primary = color('primary');
+  const accent = color('accent');
+  if (issues.length > 0) throw new BrandError([...new Set(issues)]);
 
   const modes: ColorMode[] = darkMode === false ? ['light'] : ['light', 'dark'];
   const values: Record<ColorMode, Map<string, Rgb>> = { light: new Map(), dark: new Map() };
@@ -160,13 +203,7 @@ export function applyBrand(input: unknown): string {
     if (primary) {
       set.set('--primary', primary[mode]);
       set.set('--primary-hover', shade(primary[mode], HOVER_SHADE));
-      const onPage = token('--primary-text').contrast.every((rule) =>
-        rule.on.every((bgPath) => {
-          const bg = COLOR_TOKENS.find((t) => t.path === bgPath);
-          return bg && contrastRatio(primary[mode], oklchToRgb(bg[mode])) >= rule.min;
-        })
-      );
-      set.set('--primary-text', onPage ? primary[mode] : oklchToRgb(token('--foreground')[mode]));
+      set.set('--primary-text', linkShade(primary[mode], mode));
     }
     if (accent) set.set('--highlight', accent[mode]);
   }
@@ -176,13 +213,13 @@ export function applyBrand(input: unknown): string {
     COLOR_TOKENS,
     modes,
     (t, mode) => values[mode].get(t.cssVar) ?? oklchToRgb(t[mode])
-  ).filter((f) => {
-    const fg = COLOR_TOKENS.find((t) => t.path === f.foreground);
-    const bg = COLOR_TOKENS.find((t) => t.path === f.background);
-    return changed.has(fg?.cssVar ?? '') || changed.has(bg?.cssVar ?? '');
-  });
+  ).filter(
+    (f) =>
+      changed.has(byPath(f.foreground)?.cssVar ?? '') ||
+      changed.has(byPath(f.background)?.cssVar ?? '')
+  );
   for (const f of failures) {
-    const name = (path: string) => COLOR_TOKENS.find((t) => t.path === path)?.cssVar.slice(2);
+    const name = (path: string) => byPath(path)?.cssVar.slice(2);
     const setting = name(f.foreground) === 'highlight' ? 'brand.accent' : 'brand.primary';
     issues.push(
       `${setting}: ${name(f.foreground)} on ${name(f.background)} is ${f.ratio.toFixed(2)}:1 in ${f.mode} mode, below ${f.min}:1`

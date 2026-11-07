@@ -58,7 +58,13 @@ function toOklch(value: unknown, path: string): Oklch {
     );
   }
   const [l, c, h] = v.components;
-  return { l, c, h, alpha: v.alpha ?? 1 };
+  const alpha = v.alpha ?? 1;
+  // A DTCG "none" component or a string would turn into NaN, and NaN passes every comparison
+  // the contrast check makes, so only finite numbers are taken.
+  if (![l, c, h, alpha].every((n) => typeof n === 'number' && Number.isFinite(n))) {
+    throw new Error(`Token ${path}: colour components and alpha must be finite numbers`);
+  }
+  return { l, c, h, alpha };
 }
 
 /** Walks the token tree and calls `visit` on every token (a node with `$value`). */
@@ -85,23 +91,30 @@ function colorTokens(file: Record<string, unknown>): ColorToken[] {
   walk(file, [], undefined, (path, type, token) => {
     if (type !== 'color') return;
     const dotted = path.join('.');
-    const ext = isRecord(token['$extensions']) ? token['$extensions'][EXT] : undefined;
-    if (!isRecord(ext) || !('dark' in ext)) {
-      throw new Error(`Colour token ${dotted} has no dark value under $extensions["${EXT}"].dark`);
+    const ext = isRecord(token['$extensions']) ? token['$extensions'] : {};
+    // Modes in the form Terrazzo reads: `$extensions.mode.{light,dark}`, light equal to `$value`.
+    const mode = ext['mode'];
+    if (!isRecord(mode) || !('dark' in mode)) {
+      throw new Error(`Colour token ${dotted} has no dark value under $extensions.mode.dark`);
     }
-    const contrast = Array.isArray(ext['contrast'])
-      ? (ext['contrast'] as { min: number; on: string[] }[]).map((rule) => ({
-          min: rule.min,
-          on: rule.on.map((ref) => ref.replace(/^\{|\}$/g, '')),
-        }))
-      : [];
+    if (JSON.stringify(mode['light']) !== JSON.stringify(token['$value'])) {
+      throw new Error(`Colour token ${dotted}: $extensions.mode.light must equal $value`);
+    }
+    const own = ext[EXT];
+    const contrast =
+      isRecord(own) && Array.isArray(own['contrast'])
+        ? (own['contrast'] as { min: number; on: string[] }[]).map((rule) => ({
+            min: rule.min,
+            on: rule.on.map((ref) => ref.replace(/^\{|\}$/g, '')),
+          }))
+        : [];
     out.push({
       path: dotted,
       // Colours keep the design system's short names (`--card`, `--muted-foreground`), which the
       // qauth.dev website uses too.
       cssVar: `--${path[path.length - 1]}`,
       light: toOklch(token['$value'], dotted),
-      dark: toOklch(ext['dark'], dotted),
+      dark: toOklch(mode['dark'], dotted),
       contrast,
     });
   });
@@ -227,8 +240,13 @@ export function contrastFailures(
           const bg = byPath.get(bgPath);
           if (!bg)
             throw new Error(`Token ${fg.path}: contrast background ${bgPath} does not exist`);
-          const ratio = contrastRatio(valueOf(fg, mode), valueOf(bg, mode));
-          if (ratio < rule.min) {
+          const background = valueOf(bg, mode);
+          if (background.alpha < 1) {
+            // A see-through background's contrast depends on what lies under it.
+            throw new Error(`Token ${fg.path}: contrast background ${bgPath} is translucent`);
+          }
+          const ratio = contrastRatio(valueOf(fg, mode), background);
+          if (!(ratio >= rule.min)) {
             failures.push({ mode, foreground: fg.path, background: bgPath, ratio, min: rule.min });
           }
         }

@@ -4,28 +4,10 @@
  *   @import 'tailwindcss';
  *   @import '@qauth-labs/ui/styles.css';
  *
- * An app that serves a realm's brand stylesheet (applyBrand) imports fonts.css,
- * tailwind-theme.css and base.css instead, and links the brand stylesheet in place of theme.css.
+ * An app that serves a realm's brand stylesheet (applyBrand) imports fonts.css, tailwind.css and
+ * base.css instead, and links the brand stylesheet in place of theme.css.
  */
 @import './fonts.css';
 @import './theme.css';
-@import './tailwind-theme.css';
+@import './tailwind.css';
 @import './base.css';
-
-/* Tailwind scans the library's components, so an app needs no @source line for them. */
-@source '../';
-
-/*
- * `dark:` follows the same rule as the tokens: the system's preference unless the root says
- * data-theme="light", or data-theme="dark" on the root or an ancestor.
- */
-@custom-variant dark {
-  @media (prefers-color-scheme: dark) {
-    &:where(:root:not([data-theme='light']), :root:not([data-theme='light']) *) {
-      @slot;
-    }
-  }
-  &:where([data-theme='dark'], [data-theme='dark'] *) {
-    @slot;
-  }
-}
