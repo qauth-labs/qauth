@@ -623,6 +623,7 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
         userId: input.userId,
         authTime: input.authTime,
         amr: [...(input.amr ?? [])],
+        recoveryCodeUsed: input.recoveryCodeUsed === true,
         assuranceLevel: input.assuranceLevel ?? null,
         ipAddress: input.ipAddress ?? null,
         userAgent: input.userAgent ?? null,

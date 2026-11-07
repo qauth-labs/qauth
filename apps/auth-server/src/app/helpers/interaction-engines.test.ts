@@ -65,6 +65,32 @@ describe('decisionOf: a registration (#640)', () => {
     });
   });
 
+  it('says the session took a recovery code when the sign-in did, which no amr value says (#663)', () => {
+    const result: RoundResult = {
+      kind: 'complete',
+      transaction: null,
+      signIn: {
+        subject: 'user-1',
+        identifier: 'a@example.com',
+        amr: ['pwd'],
+        authTime: 1,
+        recoveryCode: true,
+      },
+    };
+
+    expect(decisionOf(reply, result, RECEIVED_AT)).toEqual({
+      kind: 'authenticated',
+      signIn: {
+        userId: 'user-1',
+        identifier: 'a@example.com',
+        amr: ['pwd'],
+        authTime: 1,
+        issuedAt: RECEIVED_AT,
+        recoveryCodeUsed: true,
+      },
+    });
+  });
+
   it('ends the interaction as an expired one when registration closed since it started', () => {
     const result: RoundResult = {
       kind: 'refused',

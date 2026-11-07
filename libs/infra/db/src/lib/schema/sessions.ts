@@ -1,6 +1,7 @@
 import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   foreignKey,
   index,
@@ -90,6 +91,15 @@ export const sessions = pgTable(
      * `["pwd"]` or `["hwk", "user"]`. A JSON array.
      */
     amr: jsonb('amr').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
+    /**
+     * Whether the sign-in took a recovery code in place of a lost factor
+     * (ADR-017 Decision 8, #663). A code adds no `amr` value, so the account
+     * API's fresh-authentication guard reads it here, through the access
+     * token's `sid`, to let the session rebind the factor it lost and nothing
+     * else. `false` for every other sign-in, and for a row an older release
+     * wrote.
+     */
+    recoveryCodeUsed: boolean('recovery_code_used').notNull().default(false),
     /**
      * The eIDAS level of assurance the authentication established:
      * `'substantial'` or `'high'`. NULL when nothing above `low` was

@@ -192,7 +192,14 @@ describe('a recovery code in place of a lost factor', () => {
     expect(done).toEqual({
       kind: 'complete',
       transaction: null,
-      signIn: { subject: USER, identifier: IDENTIFIER, amr: ['pwd'], authTime: passwordTime },
+      // The sign-in says it took a code, which no `amr` value does (#663).
+      signIn: {
+        subject: USER,
+        identifier: IDENTIFIER,
+        amr: ['pwd'],
+        authTime: passwordTime,
+        recoveryCode: true,
+      },
     });
     expect(built.codes.usedNotices).toEqual([{ realmId: REALM, userId: USER }]);
     expect(ctx.records.at(-1)).toEqual({ outcome: 'passed', step: 'recovery_code', userId: USER });

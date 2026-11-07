@@ -55,6 +55,13 @@ export interface BrowserSignIn {
    * sign-in): the tokens then carry no `amr`.
    */
   amr?: readonly string[];
+  /**
+   * The sign-in took a recovery code in place of a lost factor (#663; ADR-017
+   * Decision 8). The session row records it, and the account API's
+   * fresh-authentication guard reads it through the access token's `sid` to
+   * let the session rebind a factor. Absent, `false`.
+   */
+  recoveryCodeUsed?: boolean;
 }
 
 /**
@@ -84,6 +91,7 @@ export async function createBrowserSession(
     userId: signIn.userId,
     authTime: signIn.authTime ?? Date.now(),
     amr: signIn.amr ?? [],
+    recoveryCodeUsed: signIn.recoveryCodeUsed === true,
     assuranceLevel: signIn.assuranceLevel ?? null,
     ipAddress: origin?.ip ?? null,
     userAgent: origin?.userAgent ?? null,

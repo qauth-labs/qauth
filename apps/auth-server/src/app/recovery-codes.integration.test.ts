@@ -421,13 +421,20 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
     });
     expect(done.statusCode, done.body).toBe(303);
     // The sign-in proved the password alone: no value for the code, and
-    // never mfa.
+    // never mfa. The session it starts says it took a code (#663), where the
+    // account API's fresh-authentication guard reads it.
     expect(decided.mock.results.map((result) => result.value)).toEqual([
       {
         kind: 'authenticated',
-        signIn: expect.objectContaining({ userId, amr: ['pwd'] }),
+        signIn: expect.objectContaining({ userId, amr: ['pwd'], recoveryCodeUsed: true }),
       },
     ]);
+    expect(
+      await query<{ recovery_code_used: boolean; amr: string[] }>(
+        'SELECT recovery_code_used, amr FROM sessions WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
+        [userId]
+      )
+    ).toEqual([{ recovery_code_used: true, amr: ['pwd'] }]);
     const tokens = await exchange(await codeOf(signIn, done), signIn.verifier);
     expect(tokens.statusCode, tokens.body).toBe(200);
     expect(decodeJwtClaims((tokens.json() as { id_token: string }).id_token)['sub']).toBe(userId);

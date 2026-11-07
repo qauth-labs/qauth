@@ -90,6 +90,9 @@ function endedRecord(session: BrowserSession, reason: SessionRevokedReason): Ses
     userId: session.userId,
     authTime: session.authTime,
     amr: [...session.amr],
+    // The fake keeps no recovery-code mark: the account API reads it from
+    // the sessions row, not through the service (#663).
+    recoveryCodeUsed: false,
     assuranceLevel: session.assuranceLevel,
     ipAddress: null,
     userAgent: null,

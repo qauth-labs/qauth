@@ -205,6 +205,13 @@ export interface SignedIn {
   readonly amr: readonly AmrValue[];
   /** When the last authenticator succeeded, in epoch milliseconds. */
   readonly authTime: number;
+  /**
+   * The sign-in took a recovery code in place of a lost factor (#649, #663;
+   * ADR-017 Decision 8). A code adds no `amr` value, so this is the one place
+   * the transport learns it: it records it on the browser session, and the
+   * account API lets such a session rebind a factor. Absent otherwise.
+   */
+  readonly recoveryCode?: true;
   readonly registered?: undefined;
   readonly recovered?: undefined;
 }

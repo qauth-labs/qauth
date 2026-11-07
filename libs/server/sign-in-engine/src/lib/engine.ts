@@ -4044,6 +4044,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     if (amr === undefined || authTime === undefined) {
       throw new Error('sign-in engine: complete without a factor');
     }
+    // A recovery code adds no `amr` value (ADR-017 Decision 8), so the sign-in
+    // says it took one: the transport records it on the session, where the
+    // account API's fresh-authentication guard finds it through the token's
+    // `sid` (#663).
+    const tookCode = state.transaction.verified.some((step) => step.step === 'recovery_code');
     return Object.freeze({
       kind: 'complete',
       transaction: null,
@@ -4052,6 +4057,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         ...(identifier === undefined ? {} : { identifier }),
         amr,
         authTime,
+        ...(tookCode ? { recoveryCode: true as const } : {}),
       }),
     });
   }
