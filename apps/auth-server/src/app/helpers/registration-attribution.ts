@@ -111,7 +111,7 @@ export async function resolveRegistrationDeveloperId(
   // the developer's clients creates none. Refused with 403 `access_denied`. A
   // portal token of the release before #933 names no scope and passes for
   // this release, as on `POST /api/clients`. REMOVE IN THE NEXT RELEASE.
-  if (request.jwtPayload !== undefined && !isPortalTokenBeforeScopes(request.jwtPayload)) {
+  if (request.jwtPayload === undefined || !isPortalTokenBeforeScopes(request.jwtPayload)) {
     assertGrantedScopes(request.jwtPayload, [API_FAMILY_SCOPES.developer.write]);
   }
   return sub;
