@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fresh authentication with the strongest factor for account changes**
+  ([#663], ADR-017 Decision 8, ADR-019 Decision 7, ADR-020 §3). One guard
+  stands in front of every account API operation (`/account/v1-rc.0`) and
+  applies the rules the contract gives it. An operation that changes a
+  credential, an identifier, the contact address or a linked account, or
+  deletes the account, needs a sign-in at most 5 minutes old (`auth_time`)
+  whose `amr` holds the account's strongest bound factor: `pop` with a
+  passkey, else `otp` with an authenticator app, else `pwd`. Otherwise it
+  answers 401 `insufficient_user_authentication` with the RFC 9470 §3
+  challenge, `Bearer error="insufficient_user_authentication",
+  max_age="300"` for a sign-in too old or `max_age="0"` for one without the
+  factor (the `DPoP` scheme for a DPoP-bound token), and `max_age` in the
+  problem document. An act-chain token (RFC 8693 `act`) is refused with 403
+  `delegated_token_refused` on those operations, before any challenge. A
+  sign-in that used a recovery code in place of a lost factor passes only
+  on the rebind operations (removing a passkey or the authenticator app,
+  binding a new one): the browser session records it (new column
+  `sessions.recovery_code_used`, migration 0067), and the account API's
+  access token from the code exchange names that session in a new `sid`
+  claim, which no other access token carries. A failed read of the
+  account's factors or of the session refuses the call with 503. Every
+  refusal is recorded as the new `request.account_operation_refused` event,
+  which the security log leaves out. The two account operations served
+  today, `account.consents.list` and `account.consents.delete`, run behind
+  the guard with the contract's rules (neither asks for fresh
+  authentication) and now publish `x-qauth-fresh-authentication` and
+  `x-qauth-act-chain`. The new guide `integrate/account-api-backend` tells a
+  backend for frontend how to answer the challenge.
 - **Sign-up with a passkey alone, and `WEBAUTHN_ENABLED` switched on**
   ([#655], ADR-017 Decision 8 and phase F2b, ADR-018 §3;
   `graphs/flows/core/passkey-sign-up`). `WEBAUTHN_ENABLED=true` now boots:
@@ -3324,6 +3352,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#653]: https://github.com/qauth-labs/qauth/issues/653
 [#655]: https://github.com/qauth-labs/qauth/issues/655
 [#662]: https://github.com/qauth-labs/qauth/issues/662
+[#663]: https://github.com/qauth-labs/qauth/issues/663
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689
