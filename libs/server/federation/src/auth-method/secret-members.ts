@@ -342,7 +342,9 @@ function walkDocument(document: SchemaDocument, inputStrings?: ReadonlySet<strin
             );
           }
         } else if (
-          between.some((member) => branchWalk.members.has(member) && !branchWalk.objects.has(member))
+          between.some(
+            (member) => branchWalk.members.has(member) && !branchWalk.objects.has(member)
+          )
         ) {
           found.problems.push(
             `a branch of the union at ${at} holds a member that is not an object on the way to the secret ${secret}`

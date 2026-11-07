@@ -348,10 +348,7 @@ describe('authMethodSecretPaths (#600)', () => {
           ]),
         }),
       ],
-      [
-        'a union of objects inside a list',
-        z.object({ keys: z.array(clientAuthentication) }),
-      ],
+      ['a union of objects inside a list', z.object({ keys: z.array(clientAuthentication) })],
       [
         'a branch that marks a member inside a record',
         z.object({
