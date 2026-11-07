@@ -5128,6 +5128,68 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     );
   });
 
+  describe('a family scope from a refresh token (#933)', () => {
+    const ACCOUNT = 'urn:qauth:aud:account:v1-rc.0';
+
+    it('carries an account scope forward in a family bound to no key', async () => {
+      const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...confidentialClient,
+        scopes: [...confidentialClient.scopes, 'qauth:account:read'],
+        audience: [ACCOUNT],
+      });
+      (
+        fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+      ).mockResolvedValue({
+        ...storedToken,
+        scopes: ['read:foo', 'qauth:account:read'],
+        resource: [ACCOUNT],
+        cnfJkt: null,
+      });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      const result = await ctx.handler(refreshRequest(), createReply());
+
+      expect(result).toMatchObject({ scope: 'read:foo qauth:account:read' });
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
+        expect.objectContaining({ aud: ACCOUNT, scope: 'read:foo qauth:account:read' })
+      );
+      // Kept on the rotated token, so the next refresh issues it again.
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ cnfJkt: null, scopes: ['read:foo', 'qauth:account:read'] }),
+        expect.anything()
+      );
+      // No admin scope was asked for, so no grant is read.
+      expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+    });
+
+    it('refuses a family that holds only a family scope its client no longer lists the audience of', async () => {
+      const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...confidentialClient,
+        scopes: [...confidentialClient.scopes, 'qauth:account:read'],
+        audience: ['https://api.example.com'],
+      });
+      (
+        fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+      ).mockResolvedValue({
+        ...storedToken,
+        scopes: ['qauth:account:read'],
+        resource: ['https://api.example.com'],
+      });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await expect(ctx.handler(refreshRequest(), createReply())).rejects.toThrow(InvalidScopeError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        expect.objectContaining({ error: 'invalid_scope', reason: 'reserved_scope_not_issued' }),
+      ]);
+    });
+  });
+
   describe('an admin token from a refresh token (#520)', () => {
     /** The thumbprint the stub DPoP verifier gives every proof. */
     const KEY = 'k'.repeat(43);
@@ -7429,6 +7491,19 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     await expect(invoke(fastify, ctx, mintRequest())).rejects.toThrow(InvalidScopeError);
     expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
       expect.objectContaining({ error: 'invalid_scope', reason: 'admin_scope_without_grant' }),
+    ]);
+  });
+
+  it('names a refused assertion that would carry only family scopes for what was withheld (#933)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      subjectScope: 'qauth:account:read',
+      scopes: ['qauth:account:read'],
+      audience: ['urn:qauth:aud:account:v1-rc.0'],
+    });
+    await expect(invoke(fastify, ctx, mintRequest())).rejects.toThrow(InvalidScopeError);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_scope', reason: 'reserved_scope_not_issued' }),
     ]);
   });
 

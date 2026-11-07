@@ -2565,7 +2565,11 @@ async function mintIdJagForExchange(args: {
     );
   }
   if (issuance.scopes.length === 0 && issuance.withheld.length > 0) {
-    await emitFailure('invalid_scope', 'admin_scope_without_grant');
+    // Named for what was withheld, as `issuableScopes` names it (#933).
+    const reason = issuance.withheld.some((scope) => isAdminScope(scope))
+      ? 'admin_scope_without_grant'
+      : 'reserved_scope_not_issued';
+    await emitFailure('invalid_scope', reason);
     throw new InvalidScopeError(`${issuance.withheld.join(' ')} not issued in an assertion`);
   }
   const issuedScopes = issuance.scopes;
