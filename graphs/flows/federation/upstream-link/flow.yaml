@@ -410,16 +410,17 @@ states:
 
   linked:
     type: final
-    title: Link the identity, and send the authorization code to the client
+    title: Link the identity, and go on with the authorization request
     description: >-
       user.signed_in and user.upstream_linked are recorded; the account's next upstream sign-in through the provider
-      signs it in.
+      signs it in. The authorization request goes on as after any sign-in: the code, or first the consent's interaction
+      for a client the person has not consented to.
     redirect: success
     carries: [code, state, iss]
     response:
       status: 303
       headers:
-        Location: redirect_uri with code, state when the request had one, and iss
+        Location: "redirect_uri with code, state when the request had one, and iss; or the consent's ceremony page"
         Set-Cookie: '__Host-qauth_session, and __Host-qauth_flow without the finished interaction'
         Cache-Control: no-store
 
@@ -504,6 +505,9 @@ states:
   provider_error.declined:
     type: final
     title: Show the provider-error page for a cancel at the provider
+    description: >-
+      The link the request asked for is never made: the way back is the interaction's first step, and a sign-in from
+      there finishes as any other, with no identity to attach.
     redirect: never
     response:
       status: 200
