@@ -225,7 +225,7 @@ const CALLS: readonly RealmScopedCall[] = [
       createRealmAuthMethodPluginsRepository(db).save(
         REALM_ID,
         'corp',
-        { enabled: true, config: {}, secrets: {} },
+        { enabled: true, config: {}, secrets: {}, binding: null },
         3
       ),
   ],

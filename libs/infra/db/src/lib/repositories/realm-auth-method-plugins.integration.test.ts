@@ -5,8 +5,8 @@
  * The rules under test live in the DDL and in the conditional writes: one row
  * per realm and plugin, the CHECKs on the stored forms (a secret that is not
  * a data-at-rest ciphertext is refused, so none is stored in the clear), the
- * cascade with the realm, and a write that names a version the row is not at
- * writing nothing.
+ * cascade with the realm, a write that names a version the row is not at
+ * writing nothing, and the package and type each write records (#949).
  *
  * Requires Docker; self-skips without it, same as the sibling suites.
  */
@@ -22,6 +22,9 @@ import {
 
 /** A ciphertext in the signer's form, `v1.<kid>.<iv>.<ciphertext>`. */
 const CIPHERTEXT = 'v1.kid-1.aXY.Y2lwaGVydGV4dA';
+
+/** The plugin the tests write the state for (#949). */
+const BINDING = { package: '@example/qauth-plugin-corp-sso', type: 'corp_sso' } as const;
 
 describe('realm AuthMethod plugin state (real Postgres, #600)', () => {
   let ctx: IntegrationDb | undefined;
@@ -67,7 +70,12 @@ describe('realm AuthMethod plugin state (real Postgres, #600)', () => {
     const created = await repo.save(
       realmId,
       'corp',
-      { enabled: false, config: { clientId: 'qauth' }, secrets: { clientSecret: CIPHERTEXT } },
+      {
+        enabled: false,
+        config: { clientId: 'qauth' },
+        secrets: { clientSecret: CIPHERTEXT },
+        binding: BINDING,
+      },
       null
     );
     expect(created).toMatchObject({
@@ -76,38 +84,127 @@ describe('realm AuthMethod plugin state (real Postgres, #600)', () => {
       enabled: false,
       config: { clientId: 'qauth' },
       secrets: { clientSecret: CIPHERTEXT },
+      pluginPackage: BINDING.package,
+      pluginType: BINDING.type,
       version: 1,
     });
 
     // A second create finds the row and writes nothing.
     expect(
-      await repo.save(realmId, 'corp', { enabled: true, config: {}, secrets: {} }, null)
+      await repo.save(
+        realmId,
+        'corp',
+        { enabled: true, config: {}, secrets: {}, binding: BINDING },
+        null
+      )
     ).toBeUndefined();
     // A write over another version writes nothing either.
     expect(
-      await repo.save(realmId, 'corp', { enabled: true, config: {}, secrets: {} }, 2)
+      await repo.save(
+        realmId,
+        'corp',
+        { enabled: true, config: {}, secrets: {}, binding: BINDING },
+        2
+      )
     ).toBeUndefined();
     expect((await repo.find(realmId, 'corp'))?.enabled).toBe(false);
 
     const enabled = await repo.save(
       realmId,
       'corp',
-      { enabled: true, config: { clientId: 'qauth' }, secrets: { clientSecret: CIPHERTEXT } },
+      {
+        enabled: true,
+        config: { clientId: 'qauth' },
+        secrets: { clientSecret: CIPHERTEXT },
+        binding: BINDING,
+      },
       1
     );
     expect(enabled).toMatchObject({ enabled: true, version: 2 });
     expect(await repo.listByRealm(realmId)).toEqual([enabled]);
   });
 
+  // #949: the row records the plugin each write names, and a write that
+  // names none leaves the row with neither, as a row written before the
+  // columns existed reads.
+  it('records the package and the type each write names, or neither', async () => {
+    const realmId = await realm('alpha');
+    await repo.save(
+      realmId,
+      'corp',
+      { enabled: true, config: {}, secrets: {}, binding: BINDING },
+      null
+    );
+
+    const other = { package: '@example/another-corp-sso', type: 'corp_sso_v2' };
+    const rebound = await repo.save(
+      realmId,
+      'corp',
+      { enabled: false, config: {}, secrets: {}, binding: other },
+      1
+    );
+    expect(rebound).toMatchObject({ pluginPackage: other.package, pluginType: other.type });
+
+    const cleared = await repo.save(
+      realmId,
+      'corp',
+      { enabled: false, config: {}, secrets: {}, binding: null },
+      2
+    );
+    expect(cleared).toMatchObject({ pluginPackage: null, pluginType: null, version: 3 });
+
+    // A release before #949 names neither column: both stay NULL.
+    const legacy = await realm('beta');
+    await database().pool.query(
+      `INSERT INTO realm_auth_method_plugins (realm_id, plugin_id, enabled) VALUES ($1, 'corp', true)`,
+      [legacy]
+    );
+    expect(await repo.find(legacy, 'corp')).toMatchObject({
+      enabled: true,
+      pluginPackage: null,
+      pluginType: null,
+    });
+  });
+
+  it.each([
+    [
+      'a package without a type',
+      `'@example/corp'`,
+      'NULL',
+      'realm_auth_method_plugins_binding_pair',
+    ],
+    ['a type without a package', 'NULL', `'corp_sso'`, 'realm_auth_method_plugins_binding_pair'],
+    ['an empty package', `''`, `'corp_sso'`, 'realm_auth_method_plugins_plugin_package_form'],
+    [
+      'a type outside the contract rule',
+      `'@example/corp'`,
+      `'Corp-SSO'`,
+      'realm_auth_method_plugins_plugin_type_form',
+    ],
+  ])('refuses a binding with %s', async (_case, pluginPackage, pluginType, constraint) => {
+    const realmId = await realm('alpha');
+    await expect(
+      database().pool.query(
+        `INSERT INTO realm_auth_method_plugins (realm_id, plugin_id, plugin_package, plugin_type) VALUES ($1, 'corp', ${pluginPackage}, ${pluginType})`,
+        [realmId]
+      )
+    ).rejects.toMatchObject({ code: '23514', constraint });
+  });
+
   it("keeps each realm's state apart", async () => {
     const alpha = await realm('alpha');
     const beta = await realm('beta');
-    await repo.save(alpha, 'corp', { enabled: true, config: {}, secrets: {} }, null);
+    await repo.save(
+      alpha,
+      'corp',
+      { enabled: true, config: {}, secrets: {}, binding: BINDING },
+      null
+    );
 
     expect(await repo.find(beta, 'corp')).toBeUndefined();
     expect(await repo.listByRealm(beta)).toEqual([]);
     expect(
-      await repo.save(beta, 'corp', { enabled: true, config: {}, secrets: {} }, 1)
+      await repo.save(beta, 'corp', { enabled: true, config: {}, secrets: {}, binding: BINDING }, 1)
     ).toBeUndefined();
   });
 
@@ -170,7 +267,12 @@ describe('realm AuthMethod plugin state (real Postgres, #600)', () => {
 
   it('deletes the rows of a deleted realm', async () => {
     const realmId = await realm('alpha');
-    await repo.save(realmId, 'corp', { enabled: true, config: {}, secrets: {} }, null);
+    await repo.save(
+      realmId,
+      'corp',
+      { enabled: true, config: {}, secrets: {}, binding: BINDING },
+      null
+    );
     await database().pool.query('DELETE FROM realms WHERE id = $1', [realmId]);
     const { rows } = await database().pool.query(
       'SELECT count(*)::int AS count FROM realm_auth_method_plugins WHERE realm_id = $1',

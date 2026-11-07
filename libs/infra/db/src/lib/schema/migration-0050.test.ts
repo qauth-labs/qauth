@@ -66,14 +66,16 @@ describe('migration 0050 (realm_auth_method_plugins)', () => {
     expect(table.primaryKeys.map((key) => key.columns.map((column) => column.name))).toEqual([
       ['realm_id', 'plugin_id'],
     ]);
-    expect(table.checks.map((check) => check.name).sort()).toEqual([
+    // The CHECKs of this migration; 0069 adds those of the plugin binding (#949).
+    const own = [
       'realm_auth_method_plugins_config_object',
       'realm_auth_method_plugins_plugin_id_form',
       'realm_auth_method_plugins_secrets_ciphertext',
       'realm_auth_method_plugins_secrets_object',
       'realm_auth_method_plugins_version_positive',
-    ]);
-    for (const name of table.checks.map((check) => check.name)) {
+    ];
+    expect(table.checks.map((check) => check.name)).toEqual(expect.arrayContaining(own));
+    for (const name of own) {
       expect(statements[0]).toContain(`CONSTRAINT "${name}" CHECK (`);
     }
     // No backslash in the jsonpath: its string escapes differ from a regex's.
