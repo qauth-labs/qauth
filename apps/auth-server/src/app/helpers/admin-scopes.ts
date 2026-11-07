@@ -74,6 +74,16 @@ export function permissionClassOfScope(scope: string): PermissionClass | undefin
 }
 
 /**
+ * Whether `scope` is one of the three admin scopes, exactly. The account and
+ * developer APIs' scopes (`API_FAMILY_SCOPES`, #933) sit in the same `qauth:`
+ * namespace and are not admin scopes: they need no admin grant and no DPoP
+ * binding.
+ */
+export function isAdminScope(scope: string): boolean {
+  return CLASS_OF_SCOPE.has(scope);
+}
+
+/**
  * A token's scopes as a set. Takes the space-delimited `scope` claim
  * (RFC 6749 §3.3, RFC 9068 §2.2.3) or a list that was already split. A string
  * is never read as a list of characters.

@@ -2,7 +2,10 @@ import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
+import { API_FAMILY_SCOPES } from '../api-conventions/families';
+import { assertGrantedScopes } from './family-token';
 import { assertManagementToken } from './management-token';
+import { isPortalTokenBeforeScopes } from './oauth-client';
 import { requestRealm } from './request-realm';
 
 /**
@@ -43,8 +46,8 @@ import { requestRealm } from './request-realm';
  * SECURITY. This is strictly additive. The token goes through the same
  * verification `requireJwt` uses — this server's issuer pinned (RFC 9700
  * mix-up defence), signature checked, revocation honoured — and must be the
- * developer-portal management token (`assertManagementToken`), the same one
- * `POST /api/clients` requires. A developer can
+ * developer-portal management token (`assertManagementToken`) with the
+ * developer write scope, the token `POST /api/clients` requires. A developer can
  * only ever attribute a client to themselves, because the owner is taken from
  * the token's own `sub`. It grants no capability that authenticating to
  * `POST /api/clients` would not already grant.
@@ -103,6 +106,13 @@ export async function resolveRegistrationDeveloperId(
     throw new JWTInvalidError(
       'A user access token is required to attribute a dynamically registered client'
     );
+  }
+  // With the same developer write scope (#933): a token that may only read
+  // the developer's clients creates none. Refused with 403 `access_denied`. A
+  // portal token of the release before #933 names no scope and passes for
+  // this release, as on `POST /api/clients`. REMOVE IN THE NEXT RELEASE.
+  if (request.jwtPayload === undefined || !isPortalTokenBeforeScopes(request.jwtPayload)) {
+    assertGrantedScopes(request.jwtPayload, [API_FAMILY_SCOPES.developer.write]);
   }
   return sub;
 }

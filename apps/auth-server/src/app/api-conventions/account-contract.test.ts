@@ -10,7 +10,7 @@ import {
 } from '@qauth-labs/shared-interaction-contract/src/testing/schema-validator';
 import { describe, expect, it } from 'vitest';
 
-import { API_FAMILY_AUDIENCES, API_FAMILY_PREFIXES } from './families';
+import { API_FAMILY_AUDIENCES, API_FAMILY_PREFIXES, API_FAMILY_SCOPES } from './families';
 import { checkApiConventions } from './openapi-conventions';
 import { PROBLEM_CODES, PROBLEM_TYPE_BASE } from './problem';
 
@@ -22,7 +22,7 @@ import { PROBLEM_CODES, PROBLEM_TYPE_BASE } from './problem';
  *
  * - the document is a valid OpenAPI 3.1 document and passes the API
  *   conventions check (#506);
- * - its prefix, audience and problem codes are the server's;
+ * - its prefix, audience, scopes and problem codes are the server's;
  * - every account operation the server serves is the contract's;
  * - the security log's kinds match the event registry both ways;
  * - its copy of the Interaction API's schema builders equals the original.
@@ -55,9 +55,10 @@ describe('the account API contract document', () => {
     expect(report.checkedOperations).toBe(account.ACCOUNT_OPERATIONS.length);
   });
 
-  it('uses the prefix and the audience of the account family', () => {
+  it('uses the prefix, the audience and the scopes of the account family', () => {
     expect(account.ACCOUNT_API_PREFIX).toBe(API_FAMILY_PREFIXES.account);
     expect(account.ACCOUNT_API_AUDIENCE).toBe(API_FAMILY_AUDIENCES.account);
+    expect(account.ACCOUNT_API_SCOPES).toEqual(API_FAMILY_SCOPES.account);
   });
 
   it('sends only codes the server publishes, with the same status, type and title', () => {

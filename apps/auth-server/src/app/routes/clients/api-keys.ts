@@ -35,8 +35,9 @@ import {
  *   DELETE /api/clients/:clientId/api-keys/:keyId    — revoke a key
  *
  * Auth model (identical to the client-management API): every endpoint requires
- * the developer-portal management token via `createRequireManagementJwt`;
- * ownership is scoped by `oauth_clients.developer_id`. A client owned by
+ * the developer-portal management token via `createRequireManagementJwt`,
+ * with `qauth:developer:read` to list and `qauth:developer:write` to mint or
+ * revoke (#933); ownership is scoped by `oauth_clients.developer_id`. A client owned by
  * another developer (or a non-UUID subject, e.g. a client_credentials token)
  * is reported as 404, never 403, so existence is never leaked.
  */
@@ -66,13 +67,15 @@ function toApiKeyResponse(row: ApiKeyRow) {
  * encapsulated context. Called from `routes/clients/index.ts`.
  */
 export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<void> {
-  const requireManagementJwt = createRequireManagementJwt(fastify);
+  // Each route needs the developer scope of the operation it aliases (#933).
+  const requireManagementRead = createRequireManagementJwt(fastify, 'read');
+  const requireManagementWrite = createRequireManagementJwt(fastify, 'write');
 
   // ── POST /api/clients/:clientId/api-keys — mint a key (env-gated) ─────────
   fastify.withTypeProvider<ZodTypeProvider>().post(
     '/:clientId/api-keys',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementWrite,
       schema: {
         description:
           "Mint a static developer API key for one of the developer's OAuth clients. ENVIRONMENT-GATED (ADR-008 §6): permitted only while the client resolves to a development environment; a staging/production (or unset-environment) client is refused with 403 and must use the OAuth client_credentials grant. The plaintext key is returned in THIS response only and never again. Returns 404 if the client does not exist or is owned by another developer. (Issue #97.)",
@@ -120,14 +123,14 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/:clientId/api-keys',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementRead,
       schema: {
         description:
           "List the static API keys for one of the developer's OAuth clients. Returns masked fields only (prefix + last4) — never the key or its hash. Includes revoked keys (with revokedAt set). Returns 404 if the client does not exist or is owned by another developer. (Issue #97.)",
         tags: ['API Keys'],
         'x-qauth-stability': 'stable',
         deprecated: true,
-        'x-qauth-errors': [400, 401, 404],
+        'x-qauth-errors': [400, 401, 403, 404],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 200: listApiKeysResponseSchema },
@@ -149,14 +152,14 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
   fastify.withTypeProvider<ZodTypeProvider>().delete(
     '/:clientId/api-keys/:keyId',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementWrite,
       schema: {
         description:
           "Revoke one static API key for one of the developer's OAuth clients. Idempotent soft-delete: the row is retained with revokedAt set, and a revoked key never authenticates again. Returns 404 if the client or key does not exist or is owned by another developer. (Issue #97.)",
         tags: ['API Keys'],
         'x-qauth-stability': 'stable',
         deprecated: true,
-        'x-qauth-errors': [400, 401, 404],
+        'x-qauth-errors': [400, 401, 403, 404],
         security: [{ bearerAuth: [] }],
         params: keyParamsSchema,
         response: { 200: apiKeySchema },

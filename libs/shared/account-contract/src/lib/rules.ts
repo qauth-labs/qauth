@@ -1,6 +1,7 @@
 import {
   ACCOUNT_API_AUDIENCE,
   ACCOUNT_API_PREFIX,
+  ACCOUNT_API_SCOPES,
   FRESH_AUTHENTICATION_MAX_AGE_SECONDS,
 } from './identifiers';
 import { SECURITY_LOG_DEFAULT_RETENTION_DAYS } from './security-log';
@@ -17,7 +18,7 @@ const MAX_AGE = FRESH_AUTHENTICATION_MAX_AGE_SECONDS;
 export const TOKEN_RULES: readonly string[] = [
   `The callers are backends, such as the account console’s, that hold a person’s access token whose only audience is \`${ACCOUNT_API_AUDIENCE}\`, sent as a Bearer token or, while the server’s DPoP support is on, a DPoP-bound one. No cookie authenticates a call, and the server sends no CORS headers. Each operation names the audience in \`x-qauth-audience\`.`,
   'The token’s subject is an enabled user of the request’s realm, and every operation acts on that user’s own account only. A resource of another account answers `not_found`, as one that does not exist.',
-  'Each operation names the permission it will need in `x-qauth-permission` and its class in `x-qauth-class`. No scope grants them yet: until the account family defines its scopes, the audience alone admits a token, and a token that lacks a scope an operation requires will get 403 `forbidden`.',
+  `Each operation names the permission it needs in \`x-qauth-permission\` and its class in \`x-qauth-class\`. The token needs the account scope of that class: \`${ACCOUNT_API_SCOPES.read}\` for a \`read\` operation, \`${ACCOUNT_API_SCOPES.write}\` for a \`write\` one. The two are independent, so a caller that reads and writes asks for both. A token without it gets 403 \`forbidden\` with \`WWW-Authenticate: Bearer realm="OAuth", error="insufficient_scope", scope="<the scope>"\`, or, for a request in the \`DPoP\` scheme, \`WWW-Authenticate: DPoP error="insufficient_scope", scope="<the scope>", algs="<the proof algorithms>"\`, before any other rule of the operation. QAuth issues these scopes only to a client whose audience an operator set to \`${ACCOUNT_API_AUDIENCE}\`.`,
 ];
 
 /** The fresh-authentication challenge (ADR-017 Decision 8, RFC 9470 §3). */

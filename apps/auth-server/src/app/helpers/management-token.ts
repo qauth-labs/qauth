@@ -2,9 +2,14 @@ import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
-import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
+import {
+  API_FAMILY_AUDIENCES,
+  API_FAMILY_SCOPES,
+  type FamilyOperationClass,
+} from '../api-conventions/families';
 import { accessTokenIssuedAt, accountCredentialRefusal } from './account-validity';
-import { getOrCreateSystemClient } from './oauth-client';
+import { assertGrantedScopes } from './family-token';
+import { getOrCreateSystemClient, isPortalTokenBeforeScopes } from './oauth-client';
 import { type RealmRow, requestRealm } from './request-realm';
 import { inactiveSubjectError } from './token-subject';
 
@@ -69,6 +74,12 @@ const uuidSubjectSchema = z.uuid();
  * their refresh tokens and sessions. REMOVE IN THE NEXT RELEASE: by then every
  * such token has expired (ADR-018 §5, expand then contract).
  *
+ * It checks no scope: the caller that acts on the developer's clients or
+ * consents checks the developer scope it needs after it (#933), the
+ * `/api/*` routes through `createRequireManagementJwt` and a dynamic
+ * registration's attribution itself. `/auth/logout`, which only ends access,
+ * needs none.
+ *
  * Throws `JWTInvalidError` (401) on any mismatch, as RFC 6750 §3.1 prescribes
  * for a token that is not valid for the resource.
  */
@@ -124,13 +135,32 @@ export async function assertManagementToken(
 /**
  * Build the preHandler for developer-management routes: the shared
  * `requireJwt` verification (signature, `typ`, issuer, revocation) followed by
- * `assertManagementToken` against the request's realm.
+ * `assertManagementToken` against the request's realm, then the developer
+ * scope of `operationClass` (#933): `qauth:developer:read` for a route that
+ * lists or reads, `qauth:developer:write` for one that creates, changes,
+ * deletes or revokes. These are the deprecated `/api/*` aliases of the
+ * developer API's operations, so each needs what the operation it aliases
+ * needs, and a token without it gets the same 403 `forbidden` with an
+ * `insufficient_scope` challenge. A portal token of the release before #933
+ * (`isPortalTokenBeforeScopes`) passes for this release.
  */
 export function createRequireManagementJwt(
-  fastify: FastifyInstance
+  fastify: FastifyInstance,
+  operationClass: FamilyOperationClass
 ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
+  const scopes = API_FAMILY_SCOPES.developer;
+  if (!Object.hasOwn(scopes, operationClass)) {
+    throw new Error(
+      `createRequireManagementJwt: ${String(operationClass)} is no class of an operation of the developer API`
+    );
+  }
+  const requiredScopes = Object.freeze([scopes[operationClass]]);
   return async function requireManagementJwt(request, reply) {
     await fastify.requireJwt(request, reply);
     await assertManagementToken(fastify, requestRealm(request), request.jwtPayload);
+    // As the developer API does, a portal token of the release before #933,
+    // which names no scope, keeps working. REMOVE IN THE NEXT RELEASE.
+    if (request.jwtPayload !== undefined && isPortalTokenBeforeScopes(request.jwtPayload)) return;
+    assertGrantedScopes(request.jwtPayload, requiredScopes);
   };
 }

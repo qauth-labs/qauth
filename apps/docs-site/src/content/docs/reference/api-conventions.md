@@ -36,13 +36,18 @@ is not limited to the families: every route that is not an OAuth protocol endpoi
 - The admin API's scopes are `qauth:admin:read`, `qauth:admin:write` and `qauth:admin:security`,
   in QAuth's reserved `qauth:` scope namespace, intersected with the caller's admin roles. The
   [admin permissions](/reference/admin-permissions/) page lists them with every permission and the
-  built-in roles. The account and developer families define no scopes here: their guards check the
-  token's audience, and that its subject is an active user or client of the request's realm
-  ([Family tokens](#family-tokens)). A route that needs a scope adds it in its own change. Until
-  then a token with the developer audience reaches the whole developer API for its subject, reads
-  and writes alike, and one with the account audience the whole account API. Only an operator can
-  give a client either audience (`urn:qauth:aud:` is reserved, below), so a client that lists the
-  developer audience is trusted as the developer portal is.
+  built-in roles.
+- The account and developer APIs have one scope per operation class, in the same namespace:
+  `qauth:account:read` and `qauth:account:write`, `qauth:developer:read` and
+  `qauth:developer:write` (#933). An operation needs its family's scope of its `x-qauth-class`, so
+  a developer token with only the read scope lists and reads clients, API keys and consents, and
+  gets 403 on create, update, delete, secret regeneration, API keys and consent revocation. The two
+  scopes are independent, as the admin scopes are: the write scope does not reach a read. No role
+  is intersected with them, since the family's operations act on the token's own user, its account
+  or the clients it owns ([Family tokens](#family-tokens)). Only an operator can give a client a
+  family audience (`urn:qauth:aud:` is reserved, below), and the token endpoint issues a family's
+  scopes only to such a client ([Issuing a family audience](#issuing-a-family-audience)). The
+  developer portal's token carries both developer scopes.
 
 ### Family tokens
 
@@ -70,7 +75,10 @@ Every family route is guarded by `requireFamilyToken(family, options)` in
   and is active in the realm of the request (ADR-019 Decision 1). A `client_credentials` token,
   whose `sub` is its own `client_id`, must name a client of that realm that is enabled and not
   suspended; any other token must name a user of that realm who is enabled;
-- it carries every scope the route lists.
+- it carries every scope the route lists. An account or developer route lists its family's scope
+  of its class (`familyOperation`, and `accountOperation` on the account API, which also applies
+  the contract's rules), so the scope the guard checks and the `x-qauth-class` and
+  `x-qauth-permission` the document shows are one value.
 
 A family audience reads the same in every realm. Tokens are signed per realm (#491): a token
 verifies only with the keys of the request's realm and, under the default issuer rule, only when
@@ -360,9 +368,19 @@ of `approvals.approve`.
   when the client lists the admin audience and the account holds a live admin grant whose role has
   a permission of that scope's class. Otherwise the token is issued without it, and the response's
   `scope` says so (RFC 6749 §3.3); when nothing is left of the scopes asked for, the request is
-  refused with `invalid_scope`. No other scope of the reserved `qauth:` namespace is ever issued.
-  Grants are read at every issuance, so the next refresh after a revocation no longer carries what
-  the grant gave.
+  refused with `invalid_scope`. Grants are read at every issuance, so the next refresh after a
+  revocation no longer carries what the grant gave.
+- A scope of the account or developer API (`qauth:account:read`, `qauth:developer:write`, ...) is
+  issued only when the client lists that family's audience, and the token names a user. No grant
+  is read and no DPoP proof is needed. It is withheld, as above, from a client that does not list
+  the audience, from a `client_credentials` token, from an ID-JAG and from a token of the
+  jwt-bearer grant. A delegated token of token exchange keeps one its subject token carried when
+  the agent's own client lists the family's audience and the scope in its `scopes`, and withholds
+  it otherwise: the account API refuses an act-chain token per operation, and the developer API
+  refuses every one. The client asks for the scope like any
+  other, so it must also hold it in its `scopes`, which only an operator writes: the developer API
+  and dynamic registration refuse or drop a `qauth:` scope.
+- No other scope of the reserved `qauth:` namespace is ever issued.
 - Both are issued only with a DPoP proof (RFC 9449 §5, #520), and the token is bound to its key.
   Without one an admin scope is withheld, as above, and a request for the admin audience, or for
   nothing but admin scopes the grants would give, is refused with `invalid_dpop_proof`, the code
@@ -392,11 +410,26 @@ of `approvals.approve`.
   a `cimd_clients` entry, the one place it would be stored. The rule is `isReservedAudience` in
   `@qauth-labs/shared-validation`.
 - The developer portal's token, which `/auth/login` mints for the system client, carries the
-  developer audience since #524. The system client lists it from its creation, and one created
-  before is given it the next time a node boots or reads it. The deprecated `/api/clients` and
-  `/api/consents`, and `/auth/logout` (`assertManagementToken`), accept a system-client token with
-  exactly that audience, and no longer one whose audience is the system client's id. Expand, then
-  contract (ADR-018 §5): #509 made every node accept the audience before #524 minted it.
+  developer audience since #524, and both developer scopes since #933. The system client lists the
+  audience from its creation, and one created before is given it the next time a node boots or
+  reads it. The deprecated `/api/clients` and `/api/consents`, and `/auth/logout`
+  (`assertManagementToken`), accept a system-client token with exactly that audience, and no longer
+  one whose audience is the system client's id. Expand, then contract (ADR-018 §5): #509 made every
+  node accept the audience before #524 minted it.
+- Each deprecated `/api/clients` and `/api/consents` route needs the developer scope of the
+  operation it aliases, as that operation does (#933): `qauth:developer:read` to list or read,
+  `qauth:developer:write` to create, change, delete, regenerate a secret, mint or revoke an API key,
+  or revoke a consent. So does `POST /oauth/register` to attribute the client it registers to the
+  developer whose token it carries: `qauth:developer:write`, or 403 `access_denied`. `/auth/logout`,
+  which only ends access, needs none.
+- For the release of #933 only, the developer API, those routes and that attribution take a
+  system-client token that names no scope at all, the portal token a node of the previous release
+  mints, as carrying both developer scopes (`isPortalTokenBeforeScopes`). A developer whose portal
+  session began before the upgrade, or on a node the rolling upgrade has not reached, keeps working.
+  The next release removes it: expand, then contract (ADR-018 §5). The portal's refresh token
+  carries no scope, as the system client's row lists none; once that grace is gone a token
+  refreshed from it reaches no developer operation, and the portal, which never refreshes, signs
+  its developer in again.
 
 ### Served routes
 
@@ -590,18 +623,20 @@ answers by design in `x-qauth-errors`, and the document adds 421, 429 and 500, w
 of a realm may answer (`/health` only 429), each referencing `Problem`, or `OAuthError` on an OAuth
 protocol endpoint.
 
-| Extension            | Values                             | Meaning                                                                                                                                                                                                                                                              |
-| -------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API it is the strictest class among the operation's permissions, and each permission needs its own class's scope: `qauth:admin:read`, `qauth:admin:write` or `qauth:admin:security`. `security` is used on the admin API only. |
-| `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both.                                                            |
-| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations. The tags form a closed list, on [Security operations](/reference/security-operations/).                              |
-| `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                      |
-| `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                       |
+| Extension            | Values                             | Meaning                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API it is the strictest class among the operation's permissions, and each permission needs its own class's scope: `qauth:admin:read`, `qauth:admin:write` or `qauth:admin:security`. On the account and developer APIs the operation needs its family's scope of its class, such as `qauth:developer:write`. `security` is used on the admin API only. |
+| `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both.                                                                                                                                                                                    |
+| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations. The tags form a closed list, on [Security operations](/reference/security-operations/).                                                                                                                                                      |
+| `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                                                                                                                                              |
+| `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                                                                                                                                               |
 
-Only the admin API enforces `x-qauth-permission` today. On the developer and account APIs it
-names the permission an operation will need (`clients.read`, `clients.write`, `consents.read`,
-...), and nothing checks it yet: a token the family's guard accepts passes every operation of the
-family.
+On the developer and account APIs the scope an operation needs is its family's scope of its
+`x-qauth-class`, `read` or `write` (#933): `clients.read`, `clients.apiKeys.read` and
+`consents.read` need `qauth:developer:read`; `clients.write`, `clients.apiKeys.write` and
+`consents.write` need `qauth:developer:write`; the account API's `profile.read` needs
+`qauth:account:read` and its `password.write` `qauth:account:write`. A token without the scope gets
+403 `forbidden` with an `insufficient_scope` challenge that names it.
 
 On the admin API every id in `x-qauth-permission` is a permission of the
 [admin catalog](/reference/admin-permissions/), and not a retired one, and `x-qauth-class` is the

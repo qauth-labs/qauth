@@ -12,7 +12,7 @@ import {
   revokeDeveloperApiKey,
 } from '../../helpers/developer-api-keys';
 import { requireDeveloperId, resolveOwnedClient } from '../../helpers/developer-clients';
-import { requireFamilyToken } from '../../helpers/family-token';
+import { familyOperation } from '../../helpers/family-token';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import {
   createDeveloperApiKeyRequestSchema,
@@ -51,13 +51,23 @@ function toDeveloperApiKey(row: ApiKeyRow) {
 }
 
 export function registerDeveloperApiKeyRoutes(fastify: FastifyInstance): void {
-  const guard = requireFamilyToken('developer', { subjects: ['user'] });
+  // Each operation needs the developer scope of its class (#933).
+  const readKeys = familyOperation(
+    'developer',
+    { operationClass: 'read', permission: 'clients.apiKeys.read' },
+    { subjects: ['user'] }
+  );
+  const writeKeys = familyOperation(
+    'developer',
+    { operationClass: 'write', permission: 'clients.apiKeys.write' },
+    { subjects: ['user'] }
+  );
   const typed = fastify.withTypeProvider<ZodTypeProvider>();
 
   typed.get(
     '/clients/:clientId/api-keys',
     {
-      preValidation: guard,
+      preValidation: readKeys.guard,
       schema: {
         operationId: 'developer.clients.apiKeys.list',
         description:
@@ -65,9 +75,8 @@ export function registerDeveloperApiKeyRoutes(fastify: FastifyInstance): void {
         tags: TAGS,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'read',
-        'x-qauth-permission': 'clients.apiKeys.read',
-        'x-qauth-errors': [400, 401, 404],
+        ...readKeys.schema,
+        'x-qauth-errors': [400, 401, 403, 404],
         params: clientParamsSchema,
         querystring: pageQuerySchema,
         response: { 200: pageSchema(developerApiKeySchema) },
@@ -101,7 +110,7 @@ export function registerDeveloperApiKeyRoutes(fastify: FastifyInstance): void {
   typed.post(
     '/clients/:clientId/api-keys',
     {
-      preValidation: guard,
+      preValidation: writeKeys.guard,
       schema: {
         operationId: 'developer.clients.apiKeys.create',
         description:
@@ -109,8 +118,7 @@ export function registerDeveloperApiKeyRoutes(fastify: FastifyInstance): void {
         tags: TAGS,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'write',
-        'x-qauth-permission': 'clients.apiKeys.write',
+        ...writeKeys.schema,
         'x-qauth-errors': [400, 401, 403, 404],
         params: clientParamsSchema,
         body: createDeveloperApiKeyRequestSchema,
@@ -144,7 +152,7 @@ export function registerDeveloperApiKeyRoutes(fastify: FastifyInstance): void {
   typed.delete(
     '/clients/:clientId/api-keys/:keyId',
     {
-      preValidation: guard,
+      preValidation: writeKeys.guard,
       schema: {
         operationId: 'developer.clients.apiKeys.delete',
         description:
@@ -152,9 +160,8 @@ export function registerDeveloperApiKeyRoutes(fastify: FastifyInstance): void {
         tags: TAGS,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
-        'x-qauth-class': 'write',
-        'x-qauth-permission': 'clients.apiKeys.write',
-        'x-qauth-errors': [400, 401, 404],
+        ...writeKeys.schema,
+        'x-qauth-errors': [400, 401, 403, 404],
         params: keyParamsSchema,
         response: { 200: developerApiKeySchema },
       },

@@ -96,6 +96,8 @@ describe('the account API’s fresh-authentication guard (#663, real containers)
             const operation = contract.operationNamed(id);
             const guarded = accountOperation({
               operationId: operation.id,
+              operationClass: operation.class,
+              permission: operation.permission,
               freshAuthentication: operation.freshAuthentication,
               actChain: operation.actChain,
             });
@@ -182,7 +184,14 @@ describe('the account API’s fresh-authentication guard (#663, real containers)
   ): Promise<string> {
     return app().jwtUtils.signAccessToken(
       { id: realmId },
-      { sub: userId, clientId: 'account-console', aud: ACCOUNT_AUDIENCE, ...claims }
+      {
+        sub: userId,
+        clientId: 'account-console',
+        aud: ACCOUNT_AUDIENCE,
+        // Both account scopes (#933), so every probed operation's scope passes.
+        scope: 'qauth:account:read qauth:account:write',
+        ...claims,
+      }
     );
   }
 

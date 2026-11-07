@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';
-import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
+import { API_FAMILY_AUDIENCES, API_FAMILY_SCOPES } from '../api-conventions/families';
 
 /** The `client_id` of the system client, the same in every realm. */
 export function systemClientId(): string {
@@ -23,6 +23,43 @@ export function systemClientId(): string {
  * audience.
  */
 export const SYSTEM_CLIENT_AUDIENCE: readonly string[] = [API_FAMILY_AUDIENCES.developer];
+
+/**
+ * The scopes of the developer portal's token (#933): both developer API
+ * scopes, so the portal reads and changes its developer's clients, their API
+ * keys and consents as before. `/auth/login` puts them on the access token it
+ * mints for the system client, beside {@link SYSTEM_CLIENT_AUDIENCE}. They
+ * are not stored on the system client's row or on the refresh token that
+ * sign-in returns, which the portal never redeems: a token refreshed from it
+ * carries no scope, so once {@link isPortalTokenBeforeScopes} is removed it
+ * reaches no developer operation, and the developer signs in again, as when
+ * the portal's token expires.
+ */
+export const SYSTEM_CLIENT_SCOPES: readonly string[] = Object.freeze([
+  API_FAMILY_SCOPES.developer.read,
+  API_FAMILY_SCOPES.developer.write,
+]);
+
+/**
+ * Whether `claims` are a developer-portal token of the release before #933:
+ * the system client's, with no `scope` claim at all. The developer API and
+ * its deprecated `/api/*` aliases take one as carrying both developer scopes,
+ * as that release's portal token had every developer permission. Without it,
+ * a developer whose portal session began on a node of the previous release,
+ * before the upgrade or on a node the rolling upgrade has not reached, would
+ * get 403 on every developer operation until the session ends. A token that
+ * names any scope gets nothing from it. The caller has already checked the
+ * rest of the token: its audience, its subject and that it acts for no one.
+ *
+ * REMOVE IN THE NEXT RELEASE: by then every node mints the scopes and every
+ * such token has expired (expand, then contract: ADR-018 §5).
+ */
+export function isPortalTokenBeforeScopes(claims: {
+  readonly clientId?: string;
+  readonly scope?: string;
+}): boolean {
+  return claims.clientId === systemClientId() && claims.scope === undefined;
+}
 
 /** Whether a stored `audience` is exactly {@link SYSTEM_CLIENT_AUDIENCE}. */
 export function hasSystemClientAudience(audience: readonly string[] | null | undefined): boolean {

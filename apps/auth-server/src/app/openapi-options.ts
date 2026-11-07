@@ -19,7 +19,9 @@ export type OperationStability = 'stable' | 'experimental';
  * (ADR-019 Decision 7, #506). On the admin API it is the strictest class among
  * the operation's permissions (`x-qauth-permission`), and each permission
  * needs its own class's scope: `qauth:admin:read`, `qauth:admin:write` or
- * `qauth:admin:security`. `security` is used on the admin API only.
+ * `qauth:admin:security`. On the account and developer APIs the operation
+ * needs its family's scope of its class (`API_FAMILY_SCOPES`, #933), such as
+ * `qauth:developer:write`. `security` is used on the admin API only.
  */
 export type OperationClass = 'read' | 'write' | 'security';
 
@@ -259,18 +261,18 @@ export const openapiOptions: SwaggerPlugin.FastifyDynamicSwaggerOptions = {
     },
     servers: [{ url: '/', description: 'Default' }],
     // What a family token reaches, said where a client reads the operations:
-    // the families check the audience and the subject, no scope (yet), so an
-    // operation's `x-qauth-permission` outside the admin API is not enforced.
+    // the audience, the subject and the scope of the operation's class
+    // (`API_FAMILY_SCOPES`, #933), which the family guard checks.
     tags: [
       {
         name: 'Developer API',
         description:
-          "The developer API, `/developer/v1-rc.0`. A token whose only audience is `urn:qauth:aud:developer:v1-rc.0` reaches every operation here for its subject, reads and writes alike: the family checks the audience and the subject, and no scope. Only an operator can give a client that audience. An operation's `x-qauth-permission` (`clients.read`, `clients.write`, ...) names the permission it will need and is not enforced yet.",
+          "The developer API, `/developer/v1-rc.0`. A token reaches an operation here for its subject when its only audience is `urn:qauth:aud:developer:v1-rc.0` and it carries the developer scope of the operation's `x-qauth-class`: `qauth:developer:read` for a `read` operation, `qauth:developer:write` for a `write` one. The two are independent. A token without the scope gets 403 `forbidden` with an `insufficient_scope` challenge naming it. The operation's `x-qauth-permission` (`clients.read`, `clients.write`, ...) is a permission of that class. Only an operator can give a client the audience, and the scopes are issued only to such a client; the developer portal's token carries both.",
       },
       {
         name: 'Account API',
         description:
-          "The account API, `/account/v1-rc.0`. A token whose only audience is `urn:qauth:aud:account:v1-rc.0` reaches every operation here for its subject: the family checks the audience and the subject, and no scope. An operation's `x-qauth-permission` (`consents.read`, `consents.write`) names the permission it will need and is not enforced yet.",
+          "The account API, `/account/v1-rc.0`. A token reaches an operation here for its subject when its only audience is `urn:qauth:aud:account:v1-rc.0` and it carries the account scope of the operation's `x-qauth-class`: `qauth:account:read` for a `read` operation, `qauth:account:write` for a `write` one. The two are independent. A token without the scope gets 403 `forbidden` with an `insufficient_scope` challenge naming it. The operation's `x-qauth-permission` (`consents.read`, `consents.write`) is a permission of that class. Only an operator can give a client the audience, and the scopes are issued only to such a client.",
       },
     ],
     components: {

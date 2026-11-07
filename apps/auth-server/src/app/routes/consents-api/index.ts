@@ -31,7 +31,9 @@ import { requestRealm } from '../../helpers/request-realm';
  * These endpoints take the same credential the portal already holds for
  * `/api/clients` — a developer Bearer access token — so the portal reaches them
  * the way it reaches everything else: from a TanStack Start server function,
- * with the token never leaving the server.
+ * with the token never leaving the server. As the developer API's consent
+ * operations they alias, listing needs `qauth:developer:read` and revoking
+ * `qauth:developer:write` (#933).
  *
  * NO CSRF TOKEN, DELIBERATELY. `/consents` requires one because a cookie is
  * ambient authority a cross-site page can make the browser attach. A Bearer
@@ -74,21 +76,25 @@ function requireUserId(request: FastifyRequest): string {
 }
 
 export default async function (fastify: FastifyInstance) {
-  const requireManagementJwt = createRequireManagementJwt(fastify);
+  // Each route needs the developer scope of the operation it aliases (#933).
+  const requireManagementRead = createRequireManagementJwt(fastify, 'read');
+  const requireManagementWrite = createRequireManagementJwt(fastify, 'write');
   // Deprecated since #524: every response says so (RFC 9745).
   sendDeprecationHeaders(fastify);
 
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementRead,
       schema: {
         description:
           'List the active OAuth consents belonging to the authenticated user. Requires a developer Bearer access token. Drives the developer portal revocation screen (issue #366).',
         tags: ['Consents'],
         'x-qauth-stability': 'stable',
         deprecated: true,
-        'x-qauth-errors': [401],
+        'x-qauth-errors': [401, 403],
+        // A Bearer route: a 401 or 403 carries the RFC 6750 challenge (#933).
+        security: [{ bearerAuth: [] }],
         response: { 200: listResponseSchema },
       },
       config: { surface: 'api' },
@@ -109,14 +115,15 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().delete(
     '/:id',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementWrite,
       schema: {
         description:
           "Revoke one of the authenticated user's OAuth consents. Returns 404 if the consent does not exist or belongs to another user, so the API never reveals that another user's consent id exists. Requires a developer Bearer access token.",
         tags: ['Consents'],
         'x-qauth-stability': 'stable',
         deprecated: true,
-        'x-qauth-errors': [400, 401, 404],
+        'x-qauth-errors': [400, 401, 403, 404],
+        security: [{ bearerAuth: [] }],
         params: z.object({ id: z.string().uuid() }),
         response: { 204: z.null() },
       },

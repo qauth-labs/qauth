@@ -229,8 +229,9 @@ address is at most 254 characters.
 }
 ```
 
-The access token is issued to the system client, and its `aud` is the developer
-API's audience, `urn:qauth:aud:developer:v1-rc.0` (#524): it reaches the
+The access token is issued to the system client, its `aud` is the developer
+API's audience, `urn:qauth:aud:developer:v1-rc.0` (#524), and its `scope` is
+`qauth:developer:read qauth:developer:write` (#933): it reaches the
 [Developer API](#developer-api-developer-family-v1-rc0), the deprecated
 `/api/clients/` and `/api/consents/`, userinfo and `POST /auth/logout`. A token
 minted before #524, whose `aud` was the system client's id, is refused there, so
@@ -805,9 +806,17 @@ problem documents.
 
 **Authentication.** `Authorization: Bearer <access_token>` (or `DPoP` while DPoP is on), where the
 token's only audience is `urn:qauth:aud:developer:v1-rc.0`, it carries no `act` claim, and its subject
-is an enabled user of the realm. The token [`POST /auth/login`](#post-authlogin) mints for the
-developer portal is one. A token for another family, or with no family audience, is refused with
+is an enabled user of the realm. A token for another family, or with no family audience, is refused with
 `401` `invalid_access_token`, before the request is validated.
+
+**Scopes.** A list or a read needs `qauth:developer:read`; a create, update, delete, secret
+regeneration, API key mint or revocation, and consent revocation needs `qauth:developer:write`
+(#933). The two are independent. A token without the scope an operation needs is refused with `403`
+`forbidden` and `WWW-Authenticate: Bearer realm="OAuth", error="insufficient_scope", scope="…"`,
+before the request is validated. The token [`POST /auth/login`](#post-authlogin) mints for the
+developer portal carries both. Another client gets them only when an operator lists the developer
+audience in its `audience` and the scopes in its `scopes`
+([API conventions](/reference/api-conventions/#issuing-a-family-audience)).
 
 **Ownership.** Every route reads only the caller's own clients. A client that does not exist, that
 another developer owns, or that belongs to another realm is `404` `not_found`, never `403`.
@@ -849,7 +858,7 @@ List the caller's clients, newest first.
 
 `scopes` is a list, as the client stores it. `environment`, `staticApiKeysAllowed` and `suspended`
 are read-only. Errors: `400` (`validation_error` for a `limit` above 200, `invalid_cursor` for a cursor
-this list did not issue), `401`.
+this list did not issue), `401`, `403`.
 
 ### `POST /developer/v1-rc.0/clients`
 
@@ -860,14 +869,14 @@ response type, and a public client (`none`, PKCE).
 
 **`201 Created`**, with `ETag` and `Location`: the client, and `client_secret` for a confidential
 client, in this answer only. Errors: `400` (`validation_error`, `invalid_redirect_uri`,
-`invalid_client_metadata` for a scope the realm does not allow), `401`, `403` (the per-developer
+`invalid_client_metadata` for a scope the realm does not allow), `401`, `403` (the scope, or the per-developer
 client limit), `429`.
 
 ### `GET /developer/v1-rc.0/clients/{clientId}`
 
 One client, with its `ETag`. `{clientId}` is the client's `id`, not its `client_id`. The `ETag` covers
 every member but `lastUsedAt`, which changes whenever the client is used and no update writes.
-Errors: `400`, `401`, `404`.
+Errors: `400`, `401`, `403`, `404`.
 
 ### `PATCH /developer/v1-rc.0/clients/{clientId}`
 
@@ -883,36 +892,36 @@ The merged client must pass the rules a create checks, and a refusal answers as 
 (grant and response types that do not fit, a scope the realm does not allow).
 
 **`200 OK`**: the client and its new `ETag`. Errors: `400` (`validation_error`, also for a member the
-patch may not name, such as `client_id`; the create rules above), `401`, `404`, `412` (`precondition_failed`: the client
+patch may not name, such as `client_id`; the create rules above), `401`, `403`, `404`, `412` (`precondition_failed`: the client
 changed since that `ETag`; read it again), `415` (a body that is not a merge patch), `422`
 (`unprocessable_content`: `client_name` set to `null`), `428` (`precondition_required`: no
 `If-Match`).
 
 ### `DELETE /developer/v1-rc.0/clients/{clientId}`
 
-Delete a client. **`204 No Content`**. Errors: `400`, `401`, `404`.
+Delete a client. **`204 No Content`**. Errors: `400`, `401`, `403`, `404`.
 
 ### `POST /developer/v1-rc.0/clients/{clientId}/regenerate-secret`
 
 Issue a new `client_secret` for a confidential client; the old one stops working at once.
 **`200 OK`**: the client and `client_secret`, in this answer only. Errors: `400` (a public client has
-no secret), `401`, `404`, `429`.
+no secret), `401`, `403`, `404`, `429`.
 
 ### `GET /developer/v1-rc.0/clients/{clientId}/api-keys`
 
 A client's static API keys, newest first, masked (`prefix`, `last4`), revoked ones included
 (`revokedAt` set). `clientId` in each key is the client's `id`. **Query**: `limit`, `cursor`.
-**`200 OK`**: `{ "items": [...], "nextCursor": ... }`. Errors: `400`, `401`, `404`.
+**`200 OK`**: `{ "items": [...], "nextCursor": ... }`. Errors: `400`, `401`, `403`, `404`.
 
 ### `POST /developer/v1-rc.0/clients/{clientId}/api-keys`
 
 Mint a key: `{ "name": "ci" }`. Only while the client's effective environment is `development`
 (ADR-008 §6). **`201 Created`**: the key's fields and the plaintext `key`, in this answer only.
-Errors: `400`, `401`, `403` (not a development client: use `client_credentials`), `404`, `429`.
+Errors: `400`, `401`, `403` (the scope, or not a development client: use `client_credentials`), `404`, `429`.
 
 ### `DELETE /developer/v1-rc.0/clients/{clientId}/api-keys/{keyId}`
 
-Revoke a key, idempotently: **`200 OK`** with the key, `revokedAt` set. Errors: `400`, `401`, `404`.
+Revoke a key, idempotently: **`200 OK`** with the key, `revokedAt` set. Errors: `400`, `401`, `403`, `404`.
 
 ### `GET /developer/v1-rc.0/consents`
 
@@ -937,12 +946,12 @@ account console takes them over.
 }
 ```
 
-Errors: `400`, `401`.
+Errors: `400`, `401`, `403`.
 
 ### `DELETE /developer/v1-rc.0/consents/{consentId}`
 
 Revoke one of the caller's consents, with the refresh tokens and the unredeemed authorization codes
-the caller holds for that client. **`204 No Content`**. Errors: `400`, `401`, `404` (a consent of
+the caller holds for that client. **`204 No Content`**. Errors: `400`, `401`, `403`, `404` (a consent of
 another user is the same `404` as one that does not exist).
 
 ---
@@ -951,17 +960,19 @@ another user is the same `404` as one that does not exist).
 
 An end user's own account (#524), for the account console's backend. A token whose only audience
 is `urn:qauth:aud:account:v1-rc.0`, sent as a Bearer or DPoP token; a token for the developer API is
-refused here with `401`, and the reverse. The conventions are those of the developer API above.
+refused here with `401`, and the reverse. A read needs `qauth:account:read` and a change
+`qauth:account:write` (#933), or `403` `forbidden` with the `insufficient_scope` challenge. The
+conventions are those of the developer API above.
 
 ### `GET /account/v1-rc.0/consents`
 
 The user's active consents, in the order and representation of
-`GET /developer/v1-rc.0/consents`. Errors: `400`, `401`.
+`GET /developer/v1-rc.0/consents`. Errors: `400`, `401`, `403`.
 
 ### `DELETE /account/v1-rc.0/consents/{consentId}`
 
 Revoke one of the user's consents, as `DELETE /developer/v1-rc.0/consents/{consentId}` does.
-**`204 No Content`**. Errors: `400`, `401`, `404`.
+**`204 No Content`**. Errors: `400`, `401`, `403`, `404`.
 
 ---
 
@@ -1035,7 +1046,8 @@ the account API. The shapes below stay as they are until the path is removed.
 The same consent management, **Bearer-authed** — the credential the developer
 portal and any other API client actually holds. Same auth model as
 [`/api/clients/`](#client-management-apiclients): `Authorization: Bearer
-<access_token>`, scoped strictly to the token subject.
+<access_token>`, scoped strictly to the token subject, with `qauth:developer:read`
+to list and `qauth:developer:write` to revoke (#933).
 
 **No CSRF token.** A Bearer token is not ambient authority a cross-site page can
 make the browser attach, so there is nothing for one to add. The cookie-authed
@@ -1086,7 +1098,9 @@ Deprecated since #524, with the same `Deprecation` header: use the
 [Developer API](#developer-api-developer-family-v1-rc0), which serves the same clients and API keys
 in the API conventions' representation. These routes accept only the developer portal's token, whose
 audience is `urn:qauth:aud:developer:v1-rc.0` since #524. The shapes below stay as they are until
-the paths are removed.
+the paths are removed. Each route needs the developer scope of the operation it aliases (#933):
+`qauth:developer:read` for a `GET`, `qauth:developer:write` for any other method, or `403`
+`forbidden` with the `insufficient_scope` challenge. The portal's token carries both.
 :::
 
 Developer-portal API for managing a developer's own OAuth clients. **JSON**,
@@ -1114,7 +1128,9 @@ curl -s -X POST https://auth.example.com/oauth/register \
 
 The client is then owned by that token's subject and behaves like any client
 created through `POST /api/clients/`, including the per-developer limit on the
-number of clients (`MAX_CLIENTS_PER_DEVELOPER`, `403` once reached). A token
+number of clients (`MAX_CLIENTS_PER_DEVELOPER`, `403` once reached). The token
+needs `qauth:developer:write`, as `POST /api/clients/` does (#933), or the
+registration answers `403` `access_denied`. A token
 that does not verify is rejected
 rather than silently ignored — otherwise you would get an unowned client while
 believing you owned it, which is the failure this note exists to prevent.

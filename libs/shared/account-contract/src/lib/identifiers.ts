@@ -25,6 +25,20 @@ export const ACCOUNT_API_PREFIX = `/account/${ACCOUNT_API_VERSION}`;
 export const ACCOUNT_API_AUDIENCE = `urn:qauth:aud:account:${ACCOUNT_API_VERSION}`;
 
 /**
+ * The scopes of the account API (#933), one per operation class: an operation
+ * whose `x-qauth-class` is `read` needs `qauth:account:read`, one whose class
+ * is `write` needs `qauth:account:write`. The two are independent: the write
+ * scope does not reach a read. They sit in QAuth's reserved `qauth:` scope
+ * namespace and carry no version: the audience does. The auth server's table
+ * (`API_FAMILY_SCOPES` in `apps/auth-server/src/app/api-conventions/families.ts`)
+ * holds the same values; a test there keeps them equal.
+ */
+export const ACCOUNT_API_SCOPES = Object.freeze({
+  read: 'qauth:account:read',
+  write: 'qauth:account:write',
+} as const);
+
+/**
  * How old a sign-in may be, in seconds, for an operation that needs fresh
  * authentication (ADR-017 Decision 8: "at most 5 minutes old").
  */

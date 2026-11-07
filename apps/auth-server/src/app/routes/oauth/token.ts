@@ -21,11 +21,12 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { API_FAMILY_AUDIENCES } from '../../api-conventions/families';
+import { API_FAMILY_AUDIENCES, familyScopeOf } from '../../api-conventions/families';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { accessTokenIssuedAt, accountCredentialRefusal } from '../../helpers/account-validity';
 import { resolveAcrClaims } from '../../helpers/acr-claims';
 import { adminIssuance } from '../../helpers/admin-issuance';
+import { isAdminScope } from '../../helpers/admin-scopes';
 import { actDepth, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
 import {
   authenticateClientRequest,
@@ -596,7 +597,8 @@ function isPublicClient(client: OAuthClientLike): boolean {
 
 /**
  * Whether an access token with these scopes and audience is an admin token:
- * one that names the admin API's audience or carries an admin scope.
+ * one that names the admin API's audience or carries an admin scope. A scope
+ * of the account or developer API (#933) does not make one.
  */
 function isAdminToken(issued: {
   readonly scopes: readonly string[];
@@ -604,7 +606,7 @@ function isAdminToken(issued: {
 }): boolean {
   return (
     [issued.aud].flat().includes(API_FAMILY_AUDIENCES.admin) ||
-    issued.scopes.some((scope) => isReservedQauthScope(scope))
+    issued.scopes.some((scope) => isAdminScope(scope))
   );
 }
 
@@ -881,7 +883,9 @@ async function assertReservedAudiencesListed(
  *
  * - A `qauth:` scope is withheld unless it is an admin scope, the client lists
  *   the admin API's audience, and the account holds a live admin grant with a
- *   permission of its class. The token is issued without it (RFC 6749 §3.3).
+ *   permission of its class; or it is a scope of the account or developer API
+ *   (#933), the client lists that family's audience, and the token names a
+ *   user (`namesUser`). The token is issued without it (RFC 6749 §3.3).
  *   When that leaves no scope of the ones asked for, the request is refused,
  *   `invalid_scope`: a response with no `scope` would read as the scope asked
  *   for.
@@ -899,7 +903,13 @@ async function assertReservedAudiencesListed(
  */
 async function issuableScopes(
   ctx: HandlerContext<{ grant_type: string }>,
-  issuance: { userId: string | null; scopes: readonly string[]; aud: string | readonly string[] },
+  issuance: {
+    userId: string | null;
+    scopes: readonly string[];
+    aud: string | readonly string[];
+    /** Whether the token names a user, for the family scopes (#933); see `adminIssuance`. */
+    namesUser?: boolean;
+  },
   /** The user a refusal's event names; the grant's user even when it is decided for none. */
   eventUserId: string | null = issuance.userId,
   /**
@@ -946,7 +956,13 @@ async function issuableScopes(
       : new InvalidScopeError('admin scopes are issued only in a DPoP-bound token');
   }
   if (decision.scopes.length === 0 && decision.withheld.length > 0) {
-    await emitRequestFailed(ctx, 'invalid_scope', 'admin_scope_without_grant', eventUserId);
+    // Named for what was withheld: an admin scope the grants do not give, or
+    // only other `qauth:` scopes, such as a family scope for a client that
+    // does not list the family's audience (#933).
+    const reason = decision.withheld.some((scope) => isAdminScope(scope))
+      ? 'admin_scope_without_grant'
+      : 'reserved_scope_not_issued';
+    await emitRequestFailed(ctx, 'invalid_scope', reason, eventUserId);
     throw new InvalidScopeError(`${decision.withheld.join(' ')} not issued to this account`);
   }
   return decision.scopes;
@@ -1801,10 +1817,14 @@ async function handleRefreshToken(
   // An unbound family carries no admin scope forward: it never refreshes an
   // admin token, and a public client's rotated token is bound below to the
   // key this request proves, so a kept admin scope would be issued from the
-  // next rotation on, against the rule above.
+  // next rotation on, against the rule above. A scope of the account or
+  // developer API (#933) needs no binding, so it is carried forward like any
+  // other; every other `qauth:` scope, never issued, is dropped.
   const familyScopes = familyBound
     ? grantedScopes
-    : grantedScopes.filter((scope) => !isReservedQauthScope(scope));
+    : grantedScopes.filter(
+        (scope) => !isReservedQauthScope(scope) || familyScopeOf(scope) !== undefined
+      );
 
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
@@ -2275,9 +2295,30 @@ async function handleTokenExchange(
   // account, as the jwt-bearer grant decides them, whatever grants the user
   // holds and whatever the subject token carried.
   await assertReservedAudiencesListed(ctx, aud, user.id);
+  // A family scope the subject token carried still reaches the delegated
+  // token (#933): it names the user, and the agent's client must list the
+  // family's audience. The account API refuses an act-chain token per
+  // operation; the developer API refuses every one.
+  //
+  // The agent's own registration must also list the scope, as every other
+  // grant issues one only to a client whose `scopes` list it
+  // (`validateScopes`): the operator who gave the agent the family's audience
+  // also says which of its scopes the agent may act with. One it does not list
+  // is withheld, and when nothing else is left the exchange is refused. This
+  // is the rule of QAuth's reserved scopes, not GATE 4d, which ADR-014 brings
+  // to this branch for every scope behind `AUTHORITY_TREE_ENABLED`.
+  const registeredScopes = new Set(client.scopes);
+  const unregistered = grantedScopes.filter(
+    (scope) => familyScopeOf(scope) !== undefined && !registeredScopes.has(scope)
+  );
+  const delegable = grantedScopes.filter((scope) => !unregistered.includes(scope));
+  if (delegable.length === 0 && unregistered.length > 0) {
+    await emitRequestFailed(ctx, 'invalid_scope', 'reserved_scope_not_issued', user.id);
+    throw new InvalidScopeError(`${unregistered.join(' ')} not issued to this agent`);
+  }
   const issuedScopes = await issuableScopes(
     ctx,
-    { userId: null, scopes: grantedScopes, aud },
+    { userId: null, namesUser: true, scopes: delegable, aud },
     user.id
   );
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
@@ -2541,7 +2582,11 @@ async function mintIdJagForExchange(args: {
     );
   }
   if (issuance.scopes.length === 0 && issuance.withheld.length > 0) {
-    await emitFailure('invalid_scope', 'admin_scope_without_grant');
+    // Named for what was withheld, as `issuableScopes` names it (#933).
+    const reason = issuance.withheld.some((scope) => isAdminScope(scope))
+      ? 'admin_scope_without_grant'
+      : 'reserved_scope_not_issued';
+    await emitFailure('invalid_scope', reason);
     throw new InvalidScopeError(`${issuance.withheld.join(' ')} not issued in an assertion`);
   }
   const issuedScopes = issuance.scopes;

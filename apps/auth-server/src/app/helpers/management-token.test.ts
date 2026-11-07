@@ -1,4 +1,4 @@
-import { JWTInvalidError } from '@qauth-labs/shared-errors';
+import { ForbiddenError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,7 +14,8 @@ const systemClient = {
   audience: [DEVELOPER_AUDIENCE] as unknown,
 };
 
-vi.mock('./oauth-client', () => ({
+vi.mock('./oauth-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./oauth-client')>()),
   getOrCreateSystemClient: vi.fn(async () => systemClient),
 }));
 
@@ -29,9 +30,18 @@ const OTHER_REALM_ID = '0190e3c4-0000-7000-8000-00000000000b';
 const users = { findById: vi.fn() };
 const fastify = { repositories: { users } } as unknown as FastifyInstance;
 
-/** The claims `/auth/login` puts on the developer-portal token since #524. */
+/**
+ * The claims `/auth/login` puts on the developer-portal token: the developer
+ * audience since #524, both developer scopes since #933.
+ */
 function portalClaims(overrides: Record<string, unknown> = {}) {
-  return { sub: USER_ID, clientId: 'system', aud: DEVELOPER_AUDIENCE, ...overrides };
+  return {
+    sub: USER_ID,
+    clientId: 'system',
+    aud: DEVELOPER_AUDIENCE,
+    scope: 'qauth:developer:read qauth:developer:write',
+    ...overrides,
+  };
 }
 
 /**
@@ -309,10 +319,10 @@ describe('createRequireManagementJwt', () => {
     const requireJwt = vi.fn(async (request: FastifyRequest) => {
       request.jwtPayload = portalClaims({ clientId: 'third-party-app' }) as never;
     });
-    const guard = createRequireManagementJwt({
-      requireJwt,
-      repositories: { users },
-    } as unknown as FastifyInstance);
+    const guard = createRequireManagementJwt(
+      { requireJwt, repositories: { users } } as unknown as FastifyInstance,
+      'read'
+    );
     const request = { headers: {}, realm: REALM } as unknown as FastifyRequest;
     const reply = {} as FastifyReply;
 
@@ -324,7 +334,7 @@ describe('createRequireManagementJwt', () => {
     const requireJwt = vi.fn(async () => {
       throw new JWTInvalidError('bad signature');
     });
-    const guard = createRequireManagementJwt({ requireJwt } as unknown as FastifyInstance);
+    const guard = createRequireManagementJwt({ requireJwt } as unknown as FastifyInstance, 'write');
 
     await expect(
       guard({ headers: {}, realm: REALM } as unknown as FastifyRequest, {} as FastifyReply)
@@ -335,14 +345,73 @@ describe('createRequireManagementJwt', () => {
     const requireJwt = vi.fn(async (request: FastifyRequest) => {
       request.jwtPayload = portalClaims() as never;
     });
-    const guard = createRequireManagementJwt({
-      requireJwt,
-      repositories: { users },
-    } as unknown as FastifyInstance);
+    const guard = createRequireManagementJwt(
+      { requireJwt, repositories: { users } } as unknown as FastifyInstance,
+      'read'
+    );
 
     await expect(
       guard({ headers: {}, realm: REALM } as unknown as FastifyRequest, {} as FastifyReply)
     ).resolves.toBeUndefined();
+  });
+
+  /** The guard of `operationClass`, over a token with `claims`. */
+  function guardOver(operationClass: 'read' | 'write', claims: Record<string, unknown>) {
+    const requireJwt = vi.fn(async (request: FastifyRequest) => {
+      request.jwtPayload = claims as never;
+    });
+    const guard = createRequireManagementJwt(
+      { requireJwt, repositories: { users } } as unknown as FastifyInstance,
+      operationClass
+    );
+    return guard({ headers: {}, realm: REALM } as unknown as FastifyRequest, {} as FastifyReply);
+  }
+
+  /** The 403 `guardOver` ended in, or `undefined` if it passed. */
+  async function forbidden(promise: Promise<unknown>): Promise<ForbiddenError | undefined> {
+    const error = await promise.then(
+      () => undefined,
+      (e: unknown) => e
+    );
+    if (error !== undefined) expect(error).toBeInstanceOf(ForbiddenError);
+    return error as ForbiddenError | undefined;
+  }
+
+  it('needs the developer scope of the operation the route aliases (#933)', async () => {
+    const read = 'qauth:developer:read';
+    const write = 'qauth:developer:write';
+    expect(await forbidden(guardOver('read', portalClaims({ scope: read })))).toBeUndefined();
+    expect(await forbidden(guardOver('write', portalClaims({ scope: write })))).toBeUndefined();
+    // Each scope reaches its own class only, and nothing else stands in for it.
+    for (const [operationClass, scope, needed] of [
+      ['write', read, write],
+      ['read', write, read],
+      ['write', 'openid profile', write],
+      ['read', '', read],
+      ['write', `${write}x`, write],
+      ['read', 'QAuth:developer:read', read],
+    ] as const) {
+      const refused = await forbidden(guardOver(operationClass, portalClaims({ scope })));
+      expect(refused?.requiredScope, `${operationClass} with "${scope}"`).toBe(needed);
+    }
+  });
+
+  it('takes a portal token of the release before #933, which names no scope, for this release', async () => {
+    // REMOVE IN THE NEXT RELEASE, with `isPortalTokenBeforeScopes`.
+    const before = portalClaims();
+    delete (before as { scope?: string }).scope;
+    expect(await forbidden(guardOver('read', before))).toBeUndefined();
+    expect(await forbidden(guardOver('write', before))).toBeUndefined();
+    // Still the management token: another client's token is refused first.
+    await expect(guardOver('write', { ...before, clientId: 'third-party-app' })).rejects.toThrow(
+      JWTInvalidError
+    );
+  });
+
+  it('refuses at registration a class that is no developer operation class', () => {
+    expect(() => createRequireManagementJwt({} as FastifyInstance, 'security' as never)).toThrow(
+      /no class of an operation of the developer API/
+    );
   });
 
   it('refuses a token of another realm’s user at the request realm, as an unknown user (#489)', async () => {
@@ -350,10 +419,10 @@ describe('createRequireManagementJwt', () => {
     const requireJwt = vi.fn(async (request: FastifyRequest) => {
       request.jwtPayload = portalClaims() as never;
     });
-    const guard = createRequireManagementJwt({
-      requireJwt,
-      repositories: { users },
-    } as unknown as FastifyInstance);
+    const guard = createRequireManagementJwt(
+      { requireJwt, repositories: { users } } as unknown as FastifyInstance,
+      'read'
+    );
 
     expect(
       await refusal(

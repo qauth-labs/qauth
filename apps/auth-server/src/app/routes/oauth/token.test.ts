@@ -5128,6 +5128,68 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     );
   });
 
+  describe('a family scope from a refresh token (#933)', () => {
+    const ACCOUNT = 'urn:qauth:aud:account:v1-rc.0';
+
+    it('carries an account scope forward in a family bound to no key', async () => {
+      const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...confidentialClient,
+        scopes: [...confidentialClient.scopes, 'qauth:account:read'],
+        audience: [ACCOUNT],
+      });
+      (
+        fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+      ).mockResolvedValue({
+        ...storedToken,
+        scopes: ['read:foo', 'qauth:account:read'],
+        resource: [ACCOUNT],
+        cnfJkt: null,
+      });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      const result = await ctx.handler(refreshRequest(), createReply());
+
+      expect(result).toMatchObject({ scope: 'read:foo qauth:account:read' });
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
+        expect.objectContaining({ aud: ACCOUNT, scope: 'read:foo qauth:account:read' })
+      );
+      // Kept on the rotated token, so the next refresh issues it again.
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ cnfJkt: null, scopes: ['read:foo', 'qauth:account:read'] }),
+        expect.anything()
+      );
+      // No admin scope was asked for, so no grant is read.
+      expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+    });
+
+    it('refuses a family that holds only a family scope its client no longer lists the audience of', async () => {
+      const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...confidentialClient,
+        scopes: [...confidentialClient.scopes, 'qauth:account:read'],
+        audience: ['https://api.example.com'],
+      });
+      (
+        fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+      ).mockResolvedValue({
+        ...storedToken,
+        scopes: ['qauth:account:read'],
+        resource: ['https://api.example.com'],
+      });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await expect(ctx.handler(refreshRequest(), createReply())).rejects.toThrow(InvalidScopeError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        expect.objectContaining({ error: 'invalid_scope', reason: 'reserved_scope_not_issued' }),
+      ]);
+    });
+  });
+
   describe('an admin token from a refresh token (#520)', () => {
     /** The thumbprint the stub DPoP verifier gives every proof. */
     const KEY = 'k'.repeat(43);
@@ -5956,6 +6018,98 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
         IN_REQUEST_REALM,
         expect.objectContaining({ aud: ACCOUNT_AUDIENCE })
       );
+    });
+
+    describe('with an account scope the subject token carried (#933)', () => {
+      const SCOPE = 'read:docs qauth:account:write';
+
+      it('keeps it for an agent that lists the audience and the scope', async () => {
+        const { fastify, ctx, client } = setupExchangeStub({
+          subjectAud: ACCOUNT_AUDIENCE,
+          subjectScope: SCOPE,
+        });
+        client.audience = [ACCOUNT_AUDIENCE] as never;
+        client.scopes = ['read:docs', 'qauth:account:write'];
+
+        const result = (await invoke(
+          fastify,
+          ctx,
+          exchangeRequest({ audience: [ACCOUNT_AUDIENCE] })
+        )) as Record<string, unknown>;
+
+        expect(result['scope']).toBe(SCOPE);
+        expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+          IN_REQUEST_REALM,
+          expect.objectContaining({
+            aud: ACCOUNT_AUDIENCE,
+            scope: SCOPE,
+            act: { sub: AGENT_CLIENT_ID },
+          })
+        );
+        // A family scope reads no admin grant.
+        expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+      });
+
+      it('withholds it from an agent whose registration does not list the scope', async () => {
+        const { fastify, ctx, client } = setupExchangeStub({
+          subjectAud: ACCOUNT_AUDIENCE,
+          subjectScope: SCOPE,
+        });
+        client.audience = [ACCOUNT_AUDIENCE] as never;
+        client.scopes = ['read:docs', 'qauth:account:read'];
+
+        const result = (await invoke(
+          fastify,
+          ctx,
+          exchangeRequest({ audience: [ACCOUNT_AUDIENCE] })
+        )) as Record<string, unknown>;
+
+        expect(result['scope']).toBe('read:docs');
+        expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+          IN_REQUEST_REALM,
+          expect.objectContaining({ scope: 'read:docs' })
+        );
+      });
+
+      it('refuses the exchange when it is all the agent would get', async () => {
+        const { fastify, ctx, client } = setupExchangeStub({
+          subjectAud: ACCOUNT_AUDIENCE,
+          subjectScope: SCOPE,
+        });
+        client.audience = [ACCOUNT_AUDIENCE] as never;
+        client.scopes = ['read:docs'];
+
+        await expect(
+          invoke(
+            fastify,
+            ctx,
+            exchangeRequest({ audience: [ACCOUNT_AUDIENCE], scope: 'qauth:account:write' })
+          )
+        ).rejects.toThrow(InvalidScopeError);
+        expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+        expect(emitUserEventMock).toHaveBeenCalledWith(
+          expect.anything(),
+          TOKEN_REQUEST_FAILED,
+          expect.objectContaining({ error: 'invalid_scope', reason: 'reserved_scope_not_issued' }),
+          expect.anything()
+        );
+      });
+
+      it('withholds it from an agent that lists the scope but not the audience', async () => {
+        const { fastify, ctx, client } = setupExchangeStub({
+          subjectAud: ['https://api.example.com', ACCOUNT_AUDIENCE],
+          subjectScope: SCOPE,
+        });
+        client.scopes = ['read:docs', 'qauth:account:write'];
+
+        const result = (await invoke(
+          fastify,
+          ctx,
+          exchangeRequest({ audience: ['https://api.example.com'] })
+        )) as Record<string, unknown>;
+
+        expect(result['scope']).toBe('read:docs');
+      });
     });
   });
 
@@ -7429,6 +7583,19 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     await expect(invoke(fastify, ctx, mintRequest())).rejects.toThrow(InvalidScopeError);
     expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
       expect.objectContaining({ error: 'invalid_scope', reason: 'admin_scope_without_grant' }),
+    ]);
+  });
+
+  it('names a refused assertion that would carry only family scopes for what was withheld (#933)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      subjectScope: 'qauth:account:read',
+      scopes: ['qauth:account:read'],
+      audience: ['urn:qauth:aud:account:v1-rc.0'],
+    });
+    await expect(invoke(fastify, ctx, mintRequest())).rejects.toThrow(InvalidScopeError);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_scope', reason: 'reserved_scope_not_issued' }),
     ]);
   });
 

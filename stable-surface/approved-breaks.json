@@ -76,6 +76,28 @@
       },
       "ref": "#500",
       "release": "v0.2.0"
+    },
+    {
+      "surface": "openapi",
+      "change": {
+        "rule": "api-security-added",
+        "operation": "GET /api/consents/",
+        "fingerprint": "f13c0a86901d",
+        "text": "the endpoint scheme security `bearerAuth` was added to the API"
+      },
+      "ref": "#933",
+      "release": "v0.2.0"
+    },
+    {
+      "surface": "openapi",
+      "change": {
+        "rule": "api-security-added",
+        "operation": "DELETE /api/consents/{id}",
+        "fingerprint": "20bbeae87acc",
+        "text": "the endpoint scheme security `bearerAuth` was added to the API"
+      },
+      "ref": "#933",
+      "release": "v0.2.0"
     }
   ]
 }

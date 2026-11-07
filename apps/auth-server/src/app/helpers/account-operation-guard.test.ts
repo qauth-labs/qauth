@@ -32,6 +32,8 @@ function rulesOf(id: string): AccountOperationRules {
   const operation = contract.operationNamed(id);
   return {
     operationId: operation.id,
+    operationClass: operation.class,
+    permission: operation.permission,
     freshAuthentication: operation.freshAuthentication,
     actChain: operation.actChain,
   };
@@ -153,6 +155,8 @@ describe('the account operation guard (#663)', () => {
       for (const operation of contract.ACCOUNT_OPERATIONS) {
         expect(accountOperation(rulesOf(operation.id)).schema).toEqual({
           operationId: operation.id,
+          'x-qauth-class': operation.class,
+          'x-qauth-permission': operation.permission,
           'x-qauth-fresh-authentication': operation.freshAuthentication,
           'x-qauth-act-chain': operation.actChain,
         });
@@ -169,6 +173,9 @@ describe('the account operation guard (#663)', () => {
           freshAuthentication: 'sometimes' as never,
         })
       ).toThrow(/rule the contract does not define/);
+      expect(() =>
+        accountOperation({ ...rulesOf('account.profile.get'), operationClass: 'security' as never })
+      ).toThrow(/no class of an operation of the account API/);
     });
   });
 

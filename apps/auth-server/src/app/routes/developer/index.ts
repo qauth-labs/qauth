@@ -16,8 +16,11 @@ import { registerDeveloperConsentRoutes } from './consents';
  *
  * Every route is guarded by `requireFamilyToken('developer')` (#509): a token
  * whose only audience is `urn:qauth:aud:developer:v1-rc.0`, with no `act`
- * claim, whose subject is an enabled user of the request's realm (#869). The
- * developer portal's `/auth/login` token is one since #524. The guard runs
+ * claim, whose subject is an enabled user of the request's realm (#869), and
+ * which carries the developer scope of the operation's class (#933,
+ * `familyOperation`): `qauth:developer:read` for a list or a read,
+ * `qauth:developer:write` for the rest, or 403 `forbidden`. The developer
+ * portal's `/auth/login` token is one since #524, with both scopes. The guard runs
  * as the route's first `preValidation` hook, before the params, the query and
  * the body are validated, so a caller without such a token learns nothing of
  * a route's schemas. It does not run before anything: Fastify parses the body
