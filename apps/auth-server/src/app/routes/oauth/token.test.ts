@@ -7461,9 +7461,9 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
       ]);
 
       // The `jti` was not burned: the same assertion, now with its proof, is redeemed.
-      await expect(invoke(fastify, ctx, withProof(bearerRequest(assertion)))).resolves.toMatchObject(
-        { token_type: 'DPoP' }
-      );
+      await expect(
+        invoke(fastify, ctx, withProof(bearerRequest(assertion)))
+      ).resolves.toMatchObject({ token_type: 'DPoP' });
     });
 
     it('refuses it with a proof under another key with the bare invalid_grant', async () => {

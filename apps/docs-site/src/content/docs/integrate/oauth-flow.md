@@ -682,6 +682,21 @@ curl -s -X POST http://localhost:3000/oauth/token \
   -d assertion=eyJ… | jq
 ```
 
+**An assertion bound to a DPoP key.** The IdP may bind the ID-JAG to the
+client's DPoP key with a `cnf` claim, `{"cnf": {"jkt": "<thumbprint>"}}`
+(`-04` §9.8.1). QAuth then redeems it only with a `DPoP` proof under that key,
+which needs `DPOP_ENABLED=true`, and the access token it issues is bound to the
+same key (`cnf.jkt` in the token, `token_type: DPoP`). Without a proof the
+answer is `invalid_grant` with the description "proof of possession is required
+for this assertion"; the assertion is not spent, so send it again with a proof.
+A proof under another key, a server with DPoP off, and a `cnf` that names any
+confirmation method but `jkt` are refused with the bare `invalid_grant`. The
+grant type stays `jwt-bearer`: `-06` names
+`urn:ietf:params:oauth:grant-type:jwt-dpop` for a bound ID-JAG, and QAuth
+follows `-04`, the revision the EMA extension names. An assertion without `cnf`
+works as before: a proof binds the token to its key, and without one the token
+is a Bearer token.
+
 **Rotating the IdP's signing key.** QAuth caches the issuer's discovery document
 and JWKS for `ID_JAG_JWKS_CACHE_TTL`. An assertion whose `kid` is not in the
 cached set makes QAuth fetch both again, but at most once per issuer per
@@ -730,7 +745,10 @@ Every rejection returns a bare `invalid_grant` (RFC 6749 §5.2). The specific
 reason is recorded as the event's `reason` code and in the server log, and never sent
 on the wire: a caller learning which
 check failed would learn whether an issuer is allowlisted, whether a `jti` was
-already burned, and whether a `kid` exists — all oracles.
+already burned, and whether a `kid` exists — all oracles. The one exception is a
+DPoP-bound assertion sent without a proof, which says a proof is required: only
+the authenticated client the assertion names gets that far, after every other
+check passed.
 
 ### Minting an ID-JAG (QAuth as the enterprise IdP)
 
