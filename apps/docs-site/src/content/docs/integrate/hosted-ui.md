@@ -107,7 +107,9 @@ text, never anything the client declared:
 
 The second line is the end of the agent's refresh-token family. Without a
 limit each refresh moves the family's end forward, until the user revokes the
-consent under `/consents`. With one, the family ends no later than its start
+consent under `/consents`, except for a browser-based agent (a public client
+with an `https` redirect URI), whose family ends when its first refresh token
+expires. With one, the family ends no later than its start
 plus the limit and the end of the browser session behind the code, and that
 session ends the limit after the sign-in
 ([Refresh Token](/integrate/oauth-flow/#refresh-token-rotation)). Three things

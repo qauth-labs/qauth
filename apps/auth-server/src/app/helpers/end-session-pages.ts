@@ -2,13 +2,15 @@ import type { ClientDisplay } from '@qauth-labs/shared-interaction-client';
 import type { FastifyReply } from 'fastify';
 
 import { html, render, safe, type SafeHtml } from './html';
+import { uiStylesheetLink } from './ui-assets';
 
 /**
  * The pages of RP-initiated logout (#675, `graphs/flows/core/logout`): what
  * the end-session route and its status page show in the browser.
  *
- * Server-rendered like `/ui/login`: no script, one inline `<style>` carrying
- * the per-request CSP nonce, and nothing loaded from anywhere else. The
+ * Server-rendered like `/ui/login`: no script, the `/ui` pages' stylesheet
+ * (#472) and one inline `<style>` carrying the per-request CSP nonce, and
+ * nothing loaded from another origin. The
  * confirm form posts its answer to the Interaction API and works without
  * JavaScript; it is drawn here only while `INTERACTION_UI_ENABLED` is off,
  * when no ceremony app draws the `logout_confirm` step.
@@ -151,62 +153,15 @@ export function endSessionPage(page: EndSessionPage, cspNonce: string): string {
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
           <title>${title} — QAuth</title>
+          ${uiStylesheetLink()}
           <style nonce="${cspNonce}">
-            body {
-              font-family:
-                system-ui,
-                -apple-system,
-                Segoe UI,
-                Roboto,
-                sans-serif;
-              background: #f6f7f9;
-              color: #1a1a1a;
-              margin: 0;
-              min-height: 100vh;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-            }
-            .card {
-              background: #fff;
-              padding: 32px;
-              border-radius: 12px;
-              box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
-              width: 100%;
-              max-width: 420px;
-            }
-            h1 {
-              margin: 0 0 16px;
-              font-size: 20px;
-            }
             p {
-              margin: 0 0 8px;
-              font-size: 14px;
-              line-height: 1.5;
-              color: #374151;
               overflow-wrap: anywhere;
             }
             .reference {
-              margin-top: 16px;
-              font-size: 12px;
-              color: #6b7280;
-            }
-            button {
-              display: block;
-              margin-top: 12px;
-              width: 100%;
-              padding: 10px;
-              border: 0;
-              border-radius: 6px;
-              background: #2a5bd7;
-              color: #fff;
-              font-weight: 600;
-              font-size: 14px;
-              cursor: pointer;
-            }
-            button.secondary {
-              background: #eef1f6;
-              color: #1a1a1a;
+              margin-top: 1rem;
+              font-size: var(--text-xs);
+              color: var(--muted-foreground);
             }
           </style>
         </head>

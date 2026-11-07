@@ -172,6 +172,14 @@
 >   outside its own (`aud`, `iat`, `exp`, `jti`, `events`, `sub`, `sid`).
 > - What the delivery role can still do with the token key, if it is compromised, is sign logout
 >   tokens for any client and session of its realm: a forged sign-out, never a sign-in.
+>
+> **Amended 2026-11-07** with the refresh-token rule of RFC 10017 (OAuth 2.0 for Browser-Based
+> Applications, BCP) §6.3.2.3, which OAuth 2.1 `-17` §9.3.2 imports (#928, milestone v0.2 by the
+> maintainer's decision). Decision 3 let a refresh family slide whenever its realm sets no
+> `ssoMaxLifespan`, and the rule forbids a rotated token of a browser-based application to
+> outlive the family's first token.
+>
+> - Decision 3: a browser-based client's refresh family never slides, whatever the realm sets.
 
 ## Context
 
@@ -321,6 +329,23 @@ Lifetime and sign-out everywhere, decided 2026-10-09 (maintainer):
 
 - When a realm sets `ssoMaxLifespan`, that limit also caps the realm's refresh-token families.
   Today the `realms` table has the column, but no code reads it.
+- A browser-based client's refresh family never slides, whatever the realm sets. Added
+  2026-11-07 (#928) for RFC 10017 §6.3.2.3 and OAuth 2.1 `-17` §9.3.2: a rotated refresh token of
+  a browser-based application must not outlive the family's first token.
+  - A browser-based client is a public client (`token_endpoint_auth_method` `none`) with a
+    redirect URI that is not a native app's, in practice an `https` one. A public client whose
+    every redirect URI is an `http` loopback one (RFC 8252 §7.3) or a private-use scheme one
+    (§7.1) is a native app. A client with both kinds is browser-based.
+  - Each rotated token of a browser-based client expires no later than the token it replaces, so
+    no token of the family expires after the first one. The family then lasts the realm's refresh
+    lifetime from its start at most, and a shorter `ssoMaxLifespan` or browser session still ends
+    it sooner. A realm that raises its refresh lifetime later does not lengthen a live family.
+  - Confidential clients and native apps keep the sliding expiry, as above.
+  - A native app that calls back on a claimed `https` URI (RFC 8252 §7.2) is treated as
+    browser-based: the server cannot tell that URI from a web page's.
+  - Requiring a family maximum (`ssoMaxLifespan`) for such clients instead was not chosen. A
+    maximum longer than the first token's lifetime would still let the family outlive it, which
+    the rule forbids.
 - "Sign out everywhere" revokes the user's session rows in Postgres and clears them from the
   cache. It also sends back-channel logout (Decision 4).
 

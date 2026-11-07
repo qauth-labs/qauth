@@ -156,6 +156,8 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   // authenticator app".
   'GET /ui/totp/:interactionId',
   'GET /ui/totp-setup/:interactionId',
+  // The server-rendered pages' stylesheet and fonts (#472).
+  'GET /assets/ui/:file',
 ];
 
 /**

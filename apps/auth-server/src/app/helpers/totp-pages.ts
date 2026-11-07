@@ -19,7 +19,10 @@ import { walletPageStyles } from './wallet-ui';
  * code in a URL; the route sends both with `Cache-Control: no-store`.
  */
 
-/** The page's chrome: the shared `/ui` styles under the request's CSP nonce. */
+/**
+ * The page's chrome: the shared `/ui` stylesheet (#472), and the page's own
+ * rules under the request's CSP nonce.
+ */
 function page(opts: {
   readonly cspNonce: string;
   readonly title: string;
@@ -37,13 +40,8 @@ function page(opts: {
           ${walletPageStyles(opts.cspNonce)}
           <style nonce="${opts.cspNonce}">
             .secret {
-              font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-              font-size: 1.05rem;
+              font-size: var(--text-base);
               letter-spacing: 0.05em;
-              word-break: break-all;
-            }
-            details {
-              margin-top: 1.5rem;
             }
           </style>
         </head>

@@ -207,7 +207,9 @@ deployment until the signer service ships. Route browser paths
 (`/oauth/authorize`, `/ui/*`, `/consents`, `/auth/link/wallet`, and
 `GET /auth/verify`, the email verification page) to the `web` nodes and every
 other path to the others at the reverse proxy. `POST /auth/verify` is the
-API's and stays on `api`: route `/auth/verify` by method.
+API's and stays on `api`: route `/auth/verify` by method. The pages' stylesheet
+and fonts, under `/assets/ui/`, are `api`'s too, like the discovery documents:
+they are not browser paths, and the pages on the `web` nodes link them.
 
 The `web` and `api` roles read the session cookie (`api` for `/auth/logout`),
 with the realm's cookie key from the signer (#493). Only the browser-facing

@@ -42,7 +42,7 @@ export const TOKEN_KEYS = defineKeys([
     owner: 'tokens',
     default: '604800',
     since: '0.1.0',
-    docs: "The lifetime, in seconds, at most 7776000 (90 days), of a new or rotated refresh token, that seeds `tokens.refreshTokenLifespanSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
+    docs: "The lifetime, in seconds, at most 7776000 (90 days), of a new or rotated refresh token, that seeds `tokens.refreshTokenLifespanSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again); a rotated token gets the lifetime from the refresh, except a browser-based client's (a public client with an `https` redirect URI), which expires no later than the token it replaces, so the client's family ends with its first token (RFC 10017 §6.3.2.3), while confidential clients and native apps, whose every redirect URI is a loopback or private-use scheme one, keep the lifetime from each refresh.",
   },
   {
     name: 'SIGNING_ALGORITHM_MODE',

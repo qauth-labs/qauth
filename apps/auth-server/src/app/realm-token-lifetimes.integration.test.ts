@@ -57,7 +57,10 @@ const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 const MACHINE_ID = 'lifetime-machine';
 const MACHINE_SECRET = 'secret-of-the-lifetime-machine-0123456789';
 const NATIVE_ID = 'lifetime-native-app';
-const REDIRECT_URI = 'https://client.example.com/callback';
+// A native app's private-use scheme: a browser-based client's rotated refresh
+// token never outlives the token it replaces (#928), so a rotation would not
+// show the realm's lifetime counted from the refresh.
+const REDIRECT_URI = 'com.example.lifetime:/callback';
 const SCOPES = ['openid', 'email'];
 
 interface IssuedToken {

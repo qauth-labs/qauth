@@ -36,6 +36,7 @@ import {
   verifyLoginCsrfCookie,
 } from '../../helpers/session-cookie';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { uiStylesheetLink } from '../../helpers/ui-assets';
 import { upstreamProviderCatalog } from '../../helpers/upstream-providers';
 import { emitUserEvent } from '../../helpers/user-events';
 import { walletLoginOfferedIn } from '../../helpers/wallet-login-request';
@@ -60,7 +61,7 @@ const LADDER_UNAVAILABLE_RETRY_SECONDS = 5;
 /** The sign-in page's HTML: the form, an optional refusal and the wallet link. */
 function loginPage(opts: {
   returnTo: string;
-  /** Per-request CSP nonce (issue #113) stamped onto the inline <style> tag. */
+  /** Per-request CSP nonce (issue #113) stamped onto the page's own inline <style>. */
   cspNonce: string;
   /** Signed double-submit CSRF token; mirrored in the __Host- login cookie. */
   csrfToken: string;
@@ -92,105 +93,40 @@ function loginPage(opts: {
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
           <title>Sign in — QAuth</title>
+          ${uiStylesheetLink()}
           <style nonce="${cspNonce}">
-            body {
-              font-family:
-                system-ui,
-                -apple-system,
-                Segoe UI,
-                Roboto,
-                sans-serif;
-              background: #f6f7f9;
-              color: #1a1a1a;
-              margin: 0;
-              min-height: 100vh;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-            }
             .card {
-              background: #fff;
-              padding: 32px;
-              border-radius: 12px;
-              box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
-              width: 100%;
-              max-width: 380px;
+              max-width: 23.75rem;
             }
             h1 {
-              margin: 0 0 24px;
-              font-size: 20px;
-            }
-            label {
-              display: block;
-              margin-top: 16px;
-              font-size: 13px;
-              font-weight: 600;
-            }
-            input[type='email'],
-            input[type='password'] {
-              display: block;
-              width: 100%;
-              padding: 10px 12px;
-              margin-top: 6px;
-              border: 1px solid #d8dbe0;
-              border-radius: 6px;
-              font-size: 14px;
-              box-sizing: border-box;
-            }
-            button {
-              margin-top: 24px;
-              width: 100%;
-              padding: 10px;
-              border: 0;
-              border-radius: 6px;
-              background: #2a5bd7;
-              color: #fff;
-              font-weight: 600;
-              font-size: 14px;
-              cursor: pointer;
-            }
-            .error {
-              background: #fdecea;
-              color: #a1261b;
-              padding: 10px 12px;
-              border-radius: 6px;
-              font-size: 13px;
-              margin-bottom: 16px;
+              margin-bottom: 1.5rem;
             }
             .divider {
-              margin: 24px 0 16px;
-              border-top: 1px solid #e5e7eb;
-              text-align: center;
-              font-size: 12px;
-              color: #6b7280;
+              display: flex;
+              align-items: center;
+              gap: 0.75rem;
+              margin: 1.5rem 0 1rem;
+              font-size: var(--text-xs);
+              color: var(--muted-foreground);
             }
-            .divider span {
-              position: relative;
-              top: -9px;
-              background: #fff;
-              padding: 0 8px;
+            .divider::before,
+            .divider::after {
+              content: '';
+              flex: 1;
+              border-top: 1px solid var(--border);
             }
             .providers {
               list-style: none;
-              margin: 0 0 12px;
+              margin: 0;
               padding: 0;
             }
-            .providers li + li {
-              margin-top: 8px;
+            .providers li + li,
+            .providers + .alt-action {
+              margin-top: 0.5rem;
             }
-            .alt-action {
-              display: block;
-              width: 100%;
-              padding: 10px;
-              border: 1px solid #2a5bd7;
-              border-radius: 6px;
-              background: #fff;
-              color: #2a5bd7;
-              font-weight: 600;
-              font-size: 14px;
-              text-align: center;
-              text-decoration: none;
-              box-sizing: border-box;
+            .providers .alt-action,
+            .divider + .alt-action {
+              margin-top: 0;
             }
           </style>
         </head>

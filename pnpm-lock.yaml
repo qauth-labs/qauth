@@ -556,6 +556,9 @@ importers:
       '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../libs/shared/validation
+      '@qauth-labs/ui':
+        specifier: workspace:*
+        version: link:../../libs/ui
       fastify:
         specifier: 'catalog:'
         version: 5.12.7
