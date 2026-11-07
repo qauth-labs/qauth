@@ -57,7 +57,11 @@ import { registerApiKeyRoutes } from './api-keys';
  * (signature, issuer, revocation) and then `assertManagementToken`, which
  * rejects a token issued to any other client, bound to any other audience, or
  * carrying an `act` claim. Both throw `JWTInvalidError` (HTTP 401), so
- * unauthenticated callers never reach a handler.
+ * unauthenticated callers never reach a handler. Then the token needs the
+ * developer scope of the operation each route aliases (#933):
+ * `qauth:developer:read` to list or read, `qauth:developer:write` to create,
+ * change, delete or regenerate a secret; without it, 403 `forbidden` with an
+ * `insufficient_scope` challenge.
  *
  * `request.jwtPayload.sub` is the developer's `users.id`. A client that exists
  * but is owned by another developer is reported as **404** (not 403) so the
@@ -116,21 +120,23 @@ function toClientResponse(client: OAuthClientRow, policy: EnvironmentPolicy) {
 const clientIdParamsSchema = z.object({ id: z.uuid() });
 
 export default async function (fastify: FastifyInstance) {
-  const requireManagementJwt = createRequireManagementJwt(fastify);
+  // Each route needs the developer scope of the operation it aliases (#933).
+  const requireManagementRead = createRequireManagementJwt(fastify, 'read');
+  const requireManagementWrite = createRequireManagementJwt(fastify, 'write');
   // Deprecated since #524: every response says so (RFC 9745).
   sendDeprecationHeaders(fastify);
 
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementRead,
       schema: {
         description:
           'List the OAuth clients owned by the authenticated developer. Scoped by oauth_clients.developer_id. Requires a developer Bearer access token. Never returns the client secret. (Phase 2.2, issue #85.)',
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
         deprecated: true,
-        'x-qauth-errors': [401],
+        'x-qauth-errors': [401, 403],
         security: [{ bearerAuth: [] }],
         response: { 200: listClientsResponseSchema },
       },
@@ -173,7 +179,7 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
     '/',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementWrite,
       schema: {
         description:
           'Create an OAuth client owned by the authenticated developer. The server generates the client_id and (for confidential clients) a client_secret; the plaintext secret is returned in THIS response only and never again. Requires a developer Bearer access token. (Phase 2.2, issue #86.)',
@@ -223,14 +229,14 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/:id',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementRead,
       schema: {
         description:
           "Get one of the authenticated developer's OAuth clients by id. Returns 404 if the client does not exist or is owned by another developer (no existence enumeration). Never returns the client secret. (Phase 2.2, issue #87.)",
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
         deprecated: true,
-        'x-qauth-errors': [400, 401, 404],
+        'x-qauth-errors': [400, 401, 403, 404],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 200: clientSchema },
@@ -252,14 +258,14 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().patch(
     '/:id',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementWrite,
       schema: {
         description:
           "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled is the owner's switch and may be set either way; it does not lift an operator's suspension (the read-only suspended field), which only the operator can. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
         deprecated: true,
-        'x-qauth-errors': [400, 401, 404],
+        'x-qauth-errors': [400, 401, 403, 404],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         body: updateClientRequestSchema,
@@ -285,14 +291,14 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().delete(
     '/:id',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementWrite,
       schema: {
         description:
           "Delete one of the developer's OAuth clients. Returns 404 if the client does not exist or is owned by another developer. After deletion the client can no longer authenticate. (Phase 2.2, issue #89.)",
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
         deprecated: true,
-        'x-qauth-errors': [400, 401, 404],
+        'x-qauth-errors': [400, 401, 403, 404],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 204: z.null() },
@@ -314,14 +320,14 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
     '/:id/regenerate-secret',
     {
-      preHandler: requireManagementJwt,
+      preHandler: requireManagementWrite,
       schema: {
         description:
           "Issue a new client_secret for one of the developer's OAuth clients. The previous secret is invalidated immediately and the new plaintext secret is returned in THIS response only. Returns 404 if the client does not exist or is owned by another developer; 400 for a public client that has no secret. (Phase 2.2, issue #90.)",
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
         deprecated: true,
-        'x-qauth-errors': [400, 401, 404],
+        'x-qauth-errors': [400, 401, 403, 404],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 200: regenerateSecretResponseSchema },

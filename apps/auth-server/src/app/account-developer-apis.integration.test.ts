@@ -802,6 +802,93 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
     });
   });
 
+  describe('the family scopes on the deprecated routes (#933)', () => {
+    /** A portal (system-client) token of `userId`, with `scope` or none at all. */
+    async function portalToken(userId: string, scope?: string): Promise<string> {
+      return app().jwtUtils.signAccessToken(
+        { id: await realmId() },
+        {
+          sub: userId,
+          clientId: 'system',
+          aud: DEVELOPER_AUDIENCE,
+          ...(scope === undefined ? {} : { scope }),
+        }
+      );
+    }
+
+    it('hold a portal token to the scope of the operation each route aliases', async () => {
+      const dev = await developer();
+      const created = await oldClient(dev.token);
+      const consentId = await consentTo(dev.userId, created['id'] as string);
+      const readOnly = await portalToken(dev.userId, DEVELOPER_READ);
+
+      expect((await call('GET', '/api/clients', readOnly)).statusCode).toBe(200);
+      expect((await call('GET', `/api/clients/${created['id']}`, readOnly)).statusCode).toBe(200);
+      expect((await call('GET', '/api/consents', readOnly)).statusCode).toBe(200);
+      const writes = [
+        await call('POST', '/api/clients', readOnly, {
+          payload: {
+            name: 'Refused',
+            redirectUris: ['https://app.example.com/cb'],
+            scopes: ['openid'],
+            tokenEndpointAuthMethod: 'client_secret_post',
+          },
+        }),
+        await call('POST', `/api/clients/${created['id']}/regenerate-secret`, readOnly),
+        await call('DELETE', `/api/consents/${consentId}`, readOnly),
+        await call('DELETE', `/api/clients/${created['id']}`, readOnly),
+      ];
+      for (const response of writes) {
+        expect(response.statusCode, response.body).toBe(403);
+        expect(response.headers['www-authenticate']).toBe(
+          `Bearer realm="OAuth", error="insufficient_scope", scope="${DEVELOPER_WRITE}"`
+        );
+      }
+      // Nothing changed: the client and the consent are still there.
+      expect((await call('GET', `/api/clients/${created['id']}`, dev.token)).statusCode).toBe(200);
+      const consents = await call('GET', '/api/consents', dev.token);
+      expect(JSON.stringify(consents.json())).toContain(consentId);
+
+      // The write scope alone does not read.
+      const writeOnly = await portalToken(dev.userId, DEVELOPER_WRITE);
+      const read = await call('GET', '/api/clients', writeOnly);
+      expect(read.statusCode).toBe(403);
+      expect(read.headers['www-authenticate']).toBe(
+        `Bearer realm="OAuth", error="insufficient_scope", scope="${DEVELOPER_READ}"`
+      );
+    });
+
+    it('attribute a dynamic registration only with the developer write scope', async () => {
+      const dev = await developer();
+      const register = (token: string) =>
+        call('POST', '/oauth/register', token, {
+          payload: { client_name: 'Attributed', redirect_uris: ['https://dcr.example.com/cb'] },
+        });
+
+      const refused = await register(await portalToken(dev.userId, DEVELOPER_READ));
+      expect(refused.statusCode, refused.body).toBe(403);
+      expect(refused.json()).toMatchObject({ error: 'access_denied' });
+
+      const attributed = await register(dev.token);
+      expect(attributed.statusCode, attributed.body).toBe(201);
+      const { rows } = await app().dbPool.query<{ developer_id: string | null }>(
+        `SELECT developer_id FROM oauth_clients WHERE client_id = $1`,
+        [attributed.json<{ client_id: string }>().client_id]
+      );
+      expect(rows).toEqual([{ developer_id: dev.userId }]);
+    });
+
+    // REMOVE IN THE NEXT RELEASE, with `isPortalTokenBeforeScopes`.
+    it('take a portal token of the release before, which names no scope, for this release', async () => {
+      const dev = await developer();
+      const before = await portalToken(dev.userId);
+      const created = await oldClient(before);
+      expect((await call('GET', `${DEVELOPER}/clients`, before)).statusCode).toBe(200);
+      const deleted = await call('DELETE', `/api/clients/${created['id']}`, before);
+      expect(deleted.statusCode, deleted.body).toBe(204);
+    });
+  });
+
   describe('the family guards', () => {
     it('refuse an account token on the developer API and a developer token on the account API', async () => {
       const dev = await developer();

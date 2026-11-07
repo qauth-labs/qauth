@@ -253,6 +253,33 @@ describe('the scopes of the developer and account APIs (#933)', () => {
     }
   );
 
+  it('takes a developer-portal token of the release before #933, which names no scope, for this release', async () => {
+    // REMOVE IN THE NEXT RELEASE, with `isPortalTokenBeforeScopes`: a node of
+    // the previous release mints the portal's token without the scopes.
+    const portal = (family: ScopedApiFamily, scope?: string) =>
+      app.jwtUtils.signAccessToken(REALM, {
+        sub: USER_ID,
+        clientId: 'system',
+        aud: API_FAMILY_AUDIENCES[family],
+        ...(scope === undefined ? {} : { scope }),
+      });
+    const before = await portal('developer');
+    for (const operation of operations.filter((operation) => operation.family === 'developer')) {
+      const response = await call(operation, before);
+      expect([401, 403], `${operation.operationId}: ${response.body}`).not.toContain(
+        response.statusCode
+      );
+    }
+    // A portal token that names a scope is held to it, and the account API
+    // takes no token without its scope.
+    const [write] = operationsOf('developer', 'write');
+    const [account] = operationsOf('account', 'read');
+    if (write === undefined || account === undefined) throw new Error('no operation');
+    const readOnly = await portal('developer', API_FAMILY_SCOPES.developer.read);
+    expect((await call(write, readOnly)).statusCode).toBe(403);
+    expect((await call(account, await portal('account'))).statusCode).toBe(403);
+  });
+
   it("never takes one family's scope for another's", async () => {
     const account = operationsOf('account', 'read')[0];
     const developer = operationsOf('developer', 'read')[0];

@@ -1,10 +1,12 @@
-import { JWTInvalidError } from '@qauth-labs/shared-errors';
+import { ForbiddenError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The management-token check has its own tests (management-token.test.ts);
 // here it is a seam, so these tests keep exercising attribution alone.
 vi.mock('./management-token', () => ({ assertManagementToken: vi.fn(async () => undefined) }));
+// The system client's id is read from the env (`systemClientId`): `system`.
+vi.mock('../../config/env', () => ({ env: {} }));
 
 import { testRealm } from '../../testing/request-realm';
 import { assertManagementToken } from './management-token';
@@ -21,6 +23,8 @@ import { resolveRegistrationDeveloperId } from './registration-attribution';
  */
 
 const DEVELOPER_ID = '11111111-1111-4111-8111-111111111111';
+/** The claims of the developer portal's token since #933, beside `sub`. */
+const PORTAL = { clientId: 'system', scope: 'qauth:developer:read qauth:developer:write' };
 /** The realm the realm resolver (#486) decorated the request with. */
 const REALM = testRealm({ id: 'realm-attribution' });
 
@@ -56,7 +60,7 @@ describe('resolveRegistrationDeveloperId', () => {
 
   it('attributes to the token subject when a developer token is presented', async () => {
     const fastify = makeFastify((request) => {
-      (request as { jwtPayload?: unknown }).jwtPayload = { sub: DEVELOPER_ID };
+      (request as { jwtPayload?: unknown }).jwtPayload = { sub: DEVELOPER_ID, ...PORTAL };
     });
 
     await expect(
@@ -69,7 +73,7 @@ describe('resolveRegistrationDeveloperId', () => {
     // `requireJwt`. Re-implementing verification here would let the two drift,
     // and this path would be the one nobody remembers to update.
     const fastify = makeFastify((request) => {
-      (request as { jwtPayload?: unknown }).jwtPayload = { sub: DEVELOPER_ID };
+      (request as { jwtPayload?: unknown }).jwtPayload = { sub: DEVELOPER_ID, ...PORTAL };
     });
     const request = makeRequest('Bearer dev.token');
 
@@ -136,6 +140,41 @@ describe('resolveRegistrationDeveloperId', () => {
       sub: DEVELOPER_ID,
       clientId: 'third-party-app',
     });
+  });
+
+  it('needs the developer write scope, as POST /api/clients does (#933)', async () => {
+    for (const scope of ['qauth:developer:read', 'openid', 'qauth:developer:writer']) {
+      const fastify = makeFastify((request) => {
+        (request as { jwtPayload?: unknown }).jwtPayload = { sub: DEVELOPER_ID, ...PORTAL, scope };
+      });
+      const refused = await resolveRegistrationDeveloperId(
+        fastify,
+        makeRequest('Bearer read-only.token')
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(refused, scope).toBeInstanceOf(ForbiddenError);
+      expect((refused as ForbiddenError).requiredScope, scope).toBe('qauth:developer:write');
+    }
+  });
+
+  it('takes a portal token of the release before #933, which names no scope, for this release', async () => {
+    // REMOVE IN THE NEXT RELEASE, with `isPortalTokenBeforeScopes`.
+    const before = makeFastify((request) => {
+      (request as { jwtPayload?: unknown }).jwtPayload = { sub: DEVELOPER_ID, clientId: 'system' };
+    });
+    await expect(
+      resolveRegistrationDeveloperId(before, makeRequest('Bearer before.token'))
+    ).resolves.toBe(DEVELOPER_ID);
+    // Only the system client's: another client's token without a scope is
+    // refused, if the management-token check ever let one through.
+    const other = makeFastify((request) => {
+      (request as { jwtPayload?: unknown }).jwtPayload = { sub: DEVELOPER_ID, clientId: 'app' };
+    });
+    await expect(
+      resolveRegistrationDeveloperId(other, makeRequest('Bearer other.token'))
+    ).rejects.toThrow(ForbiddenError);
   });
 
   it('checks the management token only after requireJwt verified it', async () => {

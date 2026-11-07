@@ -16,9 +16,14 @@ vi.mock('../../../config/env', () => ({
 
 // The management-token guard has its own tests (helpers/management-token.test.ts).
 // Here it is a seam: every route must be registered behind exactly this guard.
-const { managementGuard } = vi.hoisted(() => ({ managementGuard: vi.fn() }));
+// One guard per class: a route that reads gets the read guard, one that
+// writes the write guard (#933).
+const { managementGuards } = vi.hoisted(() => ({
+  managementGuards: { read: vi.fn(), write: vi.fn() },
+}));
 vi.mock('../../helpers/management-token', () => ({
-  createRequireManagementJwt: () => managementGuard,
+  createRequireManagementJwt: (_fastify: unknown, operationClass: 'read' | 'write') =>
+    managementGuards[operationClass],
 }));
 
 vi.mock('../../helpers/user-events', async (importOriginal) => {
@@ -145,7 +150,7 @@ describe('/api/consents', () => {
     expect(ctx.routes).toHaveLength(2);
     for (const route of ctx.routes) {
       expect(route.preHandler, `${route.method} ${route.url} is unauthenticated`).toBe(
-        managementGuard
+        route.method === 'GET' ? managementGuards.read : managementGuards.write
       );
     }
   });

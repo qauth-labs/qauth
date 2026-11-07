@@ -28,9 +28,14 @@ vi.mock('../../../config/env', () => ({
 
 // The management-token guard has its own tests (helpers/management-token.test.ts).
 // Here it is a seam: every route must be registered behind exactly this guard.
-const { managementGuard } = vi.hoisted(() => ({ managementGuard: vi.fn() }));
+// One guard per class: a route that reads gets the read guard, one that
+// writes the write guard (#933).
+const { managementGuards } = vi.hoisted(() => ({
+  managementGuards: { read: vi.fn(), write: vi.fn() },
+}));
 vi.mock('../../helpers/management-token', () => ({
-  createRequireManagementJwt: () => managementGuard,
+  createRequireManagementJwt: (_fastify: unknown, operationClass: 'read' | 'write') =>
+    managementGuards[operationClass],
 }));
 
 vi.mock('../../helpers/user-events', async (importOriginal) => {
@@ -223,7 +228,7 @@ describe('GET /api/clients route', () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
     expect(ctx.handler).toBeDefined();
-    expect(ctx.options?.preHandler).toBe(managementGuard);
+    expect(ctx.options?.preHandler).toBe(managementGuards.read);
   });
 
   it('puts EVERY client-management route behind the management-token guard', async () => {
@@ -233,7 +238,9 @@ describe('GET /api/clients route', () => {
     await clientsRoute(fastify);
     expect(ctx.routes.size).toBeGreaterThan(0);
     for (const [key, registered] of ctx.routes) {
-      expect(registered.options.preHandler, key).toBe(managementGuard);
+      // A read needs the developer read scope, every other route the write one.
+      const expected = key.startsWith('GET ') ? managementGuards.read : managementGuards.write;
+      expect(registered.options.preHandler, key).toBe(expected);
     }
   });
 
@@ -379,7 +386,7 @@ describe('POST /api/clients (create) — #86', () => {
   it('requires a developer Bearer access token', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
-    expect(route(ctx, 'POST /').options.preHandler).toBe(managementGuard);
+    expect(route(ctx, 'POST /').options.preHandler).toBe(managementGuards.write);
   });
 
   it('generates client_id + secret, hashes the secret, persists, and returns the plaintext once', async () => {

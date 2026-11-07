@@ -12,6 +12,7 @@ import {
 } from '../api-conventions/families';
 import { accessTokenIssuedAt, accountCredentialRefusal } from './account-validity';
 import { isClientUsable } from './client-status';
+import { isPortalTokenBeforeScopes } from './oauth-client';
 import { realmIssuer } from './realm-url';
 import { requestRealm } from './request-realm';
 import { inactiveSubjectError } from './token-subject';
@@ -251,17 +252,39 @@ export function requireFamilyToken(
     assertFamilyClaims(family, claims);
     await assertSubjectOfRealm(request, claims as JWTPayload & { sub: string }, subjects);
 
-    if (requiredScopes.length > 0) {
-      const granted = new Set((claims.scope ?? '').split(/\s+/).filter((s) => s.length > 0));
-      if (!requiredScopes.every((scope) => granted.has(scope))) {
-        throw new ForbiddenError('The access token lacks a scope this operation needs', {
-          requiredScope: requiredScopes,
-        });
-      }
+    // The developer portal's token of the release before #933 carries no
+    // scope; it keeps working for this release. REMOVE IN THE NEXT RELEASE.
+    if (!(family === 'developer' && isPortalTokenBeforeScopes(claims))) {
+      assertGrantedScopes(claims, requiredScopes);
     }
 
     request.jwtPayload = claims;
   };
+}
+
+/**
+ * Refuse a verified token whose `scope` lacks one of `requiredScopes`: 403
+ * `forbidden`, whose `insufficient_scope` challenge names them (RFC 6750 §3.1).
+ * The claim is split on whitespace, as the token endpoint joins it, and each
+ * scope matched exactly, as a scope is case-sensitive (RFC 6749 §3.3). With
+ * no required scope, nothing is checked.
+ *
+ * The family guard runs it after its own checks, and so do the deprecated
+ * `/api/*` aliases of the developer operations (`createRequireManagementJwt`)
+ * and a dynamic registration that attributes its client to a developer
+ * (#933), so the three read a token's scopes alike.
+ */
+export function assertGrantedScopes(
+  claims: Pick<JWTPayload, 'scope'> | undefined,
+  requiredScopes: readonly string[]
+): void {
+  if (requiredScopes.length === 0) return;
+  const granted = new Set((claims?.scope ?? '').split(/\s+/).filter((s) => s.length > 0));
+  if (!requiredScopes.every((scope) => granted.has(scope))) {
+    throw new ForbiddenError('The access token lacks a scope this operation needs', {
+      requiredScope: [...requiredScopes],
+    });
+  }
 }
 
 /** What one account or developer operation needs, as its schema states it (#933). */
