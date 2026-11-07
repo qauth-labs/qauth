@@ -393,7 +393,7 @@ describe('the account operation guard (#663)', () => {
       expect(response.json()).toMatchObject({ code: 'service_unavailable' });
       expect(JSON.stringify(response.json())).not.toContain('connection terminated');
       expect(harness.events.map((event) => event.data)).toEqual([
-        { operation: 'account.passkeys.delete', reason: 'lookup_failed', requiredFactor: 'pop' },
+        { operation: 'account.passkeys.delete', reason: 'lookup_failed' },
       ]);
       await harness.app.close();
     });

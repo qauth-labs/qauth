@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/request.account_operation_refused.v1-rc.0.json",
   "title": "urn:qauth:event:request.account_operation_refused:v1-rc.0",
-  "description": "The request.account_operation_refused event, v1-rc.0. An account API call was refused before its operation ran: the token was an act-chain token the operation does not take, or the sign-in behind it was too old or lacked the account’s strongest bound factor (ADR-017 Decision 8).",
+  "description": "The request.account_operation_refused event, v1-rc.0. An account API call was refused before its operation ran: the token was an act-chain token the operation does not take, the sign-in behind it was too old or lacked the account’s strongest bound factor (ADR-017 Decision 8), or what the guard decides on could not be read.",
   "type": "object",
   "properties": {
     "id": {
@@ -163,7 +163,7 @@
           ]
         },
         "requiredFactor": {
-          "description": "With `strongest_factor_missing`: the RFC 8176 `amr` value the sign-in needed, the account’s strongest bound factor. The set may grow in a minor release.",
+          "description": "With `strongest_factor_missing` only: the RFC 8176 `amr` value the sign-in needed, the account’s strongest bound factor. The set may grow in a minor release.",
           "type": "string",
           "x-extensible-enum": [
             "pop",
@@ -172,7 +172,7 @@
           ]
         },
         "maxAge": {
-          "description": "The `max_age` of the step-up challenge the call was answered with, in seconds.",
+          "description": "With `authentication_too_old` and `strongest_factor_missing` only: the `max_age` of the step-up challenge the call was answered with, in seconds.",
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991

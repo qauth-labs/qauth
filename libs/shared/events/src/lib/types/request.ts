@@ -64,7 +64,7 @@ export const requestAccountOperationRefused = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'An account API call was refused before its operation ran: the token was an act-chain token the operation does not take, or the sign-in behind it was too old or lacked the account’s strongest bound factor (ADR-017 Decision 8).',
+    'An account API call was refused before its operation ran: the token was an act-chain token the operation does not take, the sign-in behind it was too old or lacked the account’s strongest bound factor (ADR-017 Decision 8), or what the guard decides on could not be read.',
   category: 'user',
   severity: 'info',
   since: FIRST_RELEASE,
@@ -84,13 +84,15 @@ export const requestAccountOperationRefused = defineEventType({
     requiredFactor: extensibleEnum(ACCOUNT_FACTORS)
       .optional()
       .describe(
-        'With `strongest_factor_missing`: the RFC 8176 `amr` value the sign-in needed, the account’s strongest bound factor. The set may grow in a minor release.'
+        'With `strongest_factor_missing` only: the RFC 8176 `amr` value the sign-in needed, the account’s strongest bound factor. The set may grow in a minor release.'
       ),
     maxAge: z
       .int()
       .min(0)
       .optional()
-      .describe('The `max_age` of the step-up challenge the call was answered with, in seconds.'),
+      .describe(
+        'With `authentication_too_old` and `strongest_factor_missing` only: the `max_age` of the step-up challenge the call was answered with, in seconds.'
+      ),
   }),
 });
 

@@ -271,7 +271,7 @@ export async function checkAccountOperation(
         request,
         claims,
         rules,
-        { reason: 'lookup_failed', requiredFactor },
+        { reason: 'lookup_failed' },
         lookupFailed(request, 'session', cause)
       );
     }
