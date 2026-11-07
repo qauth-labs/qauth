@@ -12,7 +12,6 @@ import {
 } from '../api-conventions/families';
 import { accessTokenIssuedAt, accountCredentialRefusal } from './account-validity';
 import { isClientUsable } from './client-status';
-import { isPortalTokenBeforeScopes } from './oauth-client';
 import { realmIssuer } from './realm-url';
 import { requestRealm } from './request-realm';
 import { inactiveSubjectError } from './token-subject';
@@ -254,12 +253,27 @@ export function requireFamilyToken(
 
     // The developer portal's token of the release before #933 carries no
     // scope; it keeps working for this release. REMOVE IN THE NEXT RELEASE.
-    if (!(family === 'developer' && isPortalTokenBeforeScopes(claims))) {
+    if (!(family === 'developer' && (await portalTokenBeforeScopes(claims)))) {
       assertGrantedScopes(claims, requiredScopes);
     }
 
     request.jwtPayload = claims;
   };
+}
+
+/**
+ * Whether `claims` are the developer portal's token of the release before
+ * #933, which names no scope (`isPortalTokenBeforeScopes`). REMOVE IN THE NEXT
+ * RELEASE.
+ *
+ * `oauth-client` reads the validated environment, which this module does not
+ * load otherwise (every family's guard imports it, the admin API's too), so it
+ * is imported here, on the one path that needs it: a token with no `scope`.
+ */
+async function portalTokenBeforeScopes(claims: JWTPayload): Promise<boolean> {
+  if (claims.scope !== undefined) return false;
+  const { isPortalTokenBeforeScopes } = await import('./oauth-client');
+  return isPortalTokenBeforeScopes(claims);
 }
 
 /**
