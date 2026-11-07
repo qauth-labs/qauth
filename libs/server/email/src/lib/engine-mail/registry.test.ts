@@ -44,6 +44,8 @@ const EVERY_MAIL: readonly EngineMail[] = [
   { template: 'totp_added' },
   { template: 'second_factor_disabled' },
   { template: 'second_factor_failed' },
+  { template: 'upstream_linked', providerName: 'Example Corp' },
+  { template: 'upstream_unlinked', providerName: 'Example Corp' },
 ];
 
 /** Every `href` and `src` of the HTML, and every URL the plain text spells out. */
@@ -176,6 +178,39 @@ describe('the engine mail registry (#637)', () => {
     expect(engineMailCarriesCode({ template: 'passkey_added' })).toBe(false);
     expect(isSwitchedOffByRealm('passkey_added', new Set(ENGINE_MAIL_NAMES))).toBe(false);
   });
+
+  it.each([
+    ['upstream_linked', 'An account was linked to your account', 'An account at Example Corp'],
+    [
+      'upstream_unlinked',
+      'An account was unlinked from your account',
+      'The Example Corp account linked',
+    ],
+  ] as const)(
+    'sends the upstream account notice %s, with no link and no switch (#670)',
+    async (template, subject, says) => {
+      const rendered = await renderEngineMail(
+        { template, providerName: 'Example Corp' },
+        { baseUrl: BASE_URL, brand: DEFAULT_MAIL_BRAND }
+      );
+      expect(rendered.subject).toBe(subject);
+      expect(rendered.text.replace(/\s+/g, ' ')).toContain(says);
+      expect(engineMailCarriesCode({ template, providerName: 'Example Corp' })).toBe(false);
+      expect(isSwitchedOffByRealm(template, new Set(ENGINE_MAIL_NAMES))).toBe(false);
+    }
+  );
+
+  it.each(['', ' ', 'x'.repeat(65), 'Corp\nInc'])(
+    'refuses an upstream notice whose provider name %j is not one line of display text',
+    async (providerName) => {
+      await expect(
+        renderEngineMail(
+          { template: 'upstream_linked', providerName },
+          { baseUrl: BASE_URL, brand: DEFAULT_MAIL_BRAND }
+        )
+      ).rejects.toThrow(/provider name/);
+    }
+  );
 
   it.each([
     [
