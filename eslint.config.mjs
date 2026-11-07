@@ -108,7 +108,16 @@ function dependencyChecksConfigs() {
       // components (only the .test.tsx files import it directly); `tailwindcss`
       // is the styling contract behind every utility class the components emit.
       // Neither has an import site in shipped source, by design.
-      ignoredDependencies: ['react-dom', 'tailwindcss'],
+      // The three @fontsource packages are the design system's self-hosted
+      // fonts: src/styles/fonts.css imports them, and the rule reads only
+      // JS and TS imports, never CSS @import.
+      ignoredDependencies: [
+        'react-dom',
+        'tailwindcss',
+        '@fontsource-variable/dm-sans',
+        '@fontsource-variable/jetbrains-mono',
+        '@fontsource/instrument-serif',
+      ],
     },
     {
       files: ['apps/docs-site/package.json'],

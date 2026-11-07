@@ -1,0 +1,63 @@
+/*
+ * The design system's base rules: the page's colours and fonts, headings in the display face, the
+ * focus ring, and line breaking. Plain CSS in the `base` layer, so a Tailwind app and a plain
+ * stylesheet (the auth server's /ui pages) share it; a utility class always wins over it.
+ */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+
+  html {
+    font-family: var(--font-sans);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Page and section headings use the display serif, which has one weight. */
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    font-weight: var(--font-weight-regular);
+  }
+
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+  }
+
+  /* Every focusable element shows the ring; a component that draws its own sets outline: none. */
+  :focus-visible {
+    outline: var(--focus-ring-width) solid var(--ring);
+    outline-offset: var(--focus-ring-offset);
+  }
+
+  /* Even lines in headings, and no lone word on the last line of a paragraph. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    text-wrap: balance;
+  }
+
+  p,
+  li,
+  dd,
+  figcaption,
+  blockquote,
+  td,
+  th {
+    text-wrap: pretty;
+  }
+}

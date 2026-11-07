@@ -7,15 +7,15 @@ import { Input } from './input';
 describe('Input', () => {
   it('renders with default classes', () => {
     const html = renderToString(<Input />);
-    expect(html).toContain('rounded-md');
+    expect(html).toContain('rounded-control');
     expect(html).toContain('border');
-    expect(html).toContain('focus:ring-blue-500');
+    expect(html).toContain('focus-visible:border-ring');
   });
 
   it('merges className with defaults', () => {
     const html = renderToString(<Input className="custom-class" />);
     expect(html).toContain('custom-class');
-    expect(html).toContain('rounded-md');
+    expect(html).toContain('rounded-control');
   });
 
   it('renders without error when ref is provided', () => {
@@ -25,15 +25,16 @@ describe('Input', () => {
     expect(html).toContain('<input');
   });
 
-  it('adds error styling class when aria-invalid is true', () => {
+  // The error styling is keyed to the attribute (`aria-invalid:`), so the attribute is the state.
+  it('carries aria-invalid, which turns on the error styling', () => {
     const html = renderToString(<Input aria-invalid="true" />);
-    expect(html).toContain('border-red-500');
+    expect(html).toContain('aria-invalid:border-destructive');
     expect(html).toContain('aria-invalid="true"');
   });
 
-  it('does not add error styling class when aria-invalid is not set', () => {
+  it('renders no aria-invalid when it is not set', () => {
     const html = renderToString(<Input />);
-    expect(html).not.toContain('border-red-500');
+    expect(html).not.toContain('aria-invalid=');
   });
 
   it('passes through standard input attributes', () => {

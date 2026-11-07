@@ -40,7 +40,7 @@ describe('FormField', () => {
       </FormField>
     );
     expect(html).toContain('Email is required');
-    expect(html).toContain('text-red-600');
+    expect(html).toContain('text-destructive');
   });
 
   it('shows helperText when no error is provided', () => {
@@ -50,7 +50,7 @@ describe('FormField', () => {
       </FormField>
     );
     expect(html).toContain('We will never share your email');
-    expect(html).toContain('text-gray-500');
+    expect(html).toContain('text-muted-foreground');
   });
 
   it('shows error instead of helperText when both are provided', () => {
@@ -74,7 +74,6 @@ describe('FormField', () => {
         <Input id="email" />
       </FormField>
     );
-    expect(html).not.toContain('text-red-600');
-    expect(html).not.toContain('text-gray-500');
+    expect(html).not.toContain('<p');
   });
 });

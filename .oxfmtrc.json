@@ -52,6 +52,10 @@
     // library's README (libs/shared/interaction-contract/README.md) records
     // their source and digests.
     "libs/shared/interaction-contract/src/lib/oas/",
+    // Generated from libs/ui/src/tokens/tokens.json by the ui test's file
+    // snapshots (#472, `pnpm nx test ui -u`); the test compares them byte for byte.
+    "libs/ui/src/styles/theme.css",
+    "libs/ui/src/styles/tailwind-theme.css",
     // Prettier had no TOML printer, so these files were never formatted.
     // Oxfmt has one; left out so the switch formats the same set of files.
     "*.toml"

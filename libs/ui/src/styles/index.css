@@ -1,0 +1,13 @@
+/*
+ * The QAuth design system for a Tailwind v4 app. Import it right after Tailwind:
+ *
+ *   @import 'tailwindcss';
+ *   @import '@qauth-labs/ui/styles.css';
+ *
+ * An app that serves a realm's brand stylesheet (applyBrand) imports fonts.css, tailwind.css and
+ * base.css instead, and links the brand stylesheet in place of theme.css.
+ */
+@import './fonts.css';
+@import './theme.css';
+@import './tailwind.css';
+@import './base.css';

@@ -4,6 +4,11 @@ import { cn } from '../lib/utils';
 
 export type InputProps = InputHTMLAttributes<HTMLInputElement>;
 
+/**
+ * A text field. Its edge is the `input` colour, 3:1 against the page as WCAG 1.4.11 asks of a
+ * control's boundary. `aria-invalid="true"` turns the edge and the focus ring to the error colour.
+ * The text is 16px on a phone, so the browser does not zoom in on focus.
+ */
 export const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ className, 'aria-invalid': ariaInvalid, ...props }, ref) => {
     return (
@@ -11,11 +16,14 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
         ref={ref}
         aria-invalid={ariaInvalid}
         className={cn(
-          'flex h-9 w-full rounded-md border border-gray-300 bg-white px-3 py-1 text-sm shadow-sm transition-colors',
-          'placeholder:text-gray-400',
-          'focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none',
-          'disabled:cursor-not-allowed disabled:opacity-50',
-          ariaInvalid === 'true' && 'border-red-500 focus:ring-red-500',
+          'rounded-control border-input text-foreground flex h-9 w-full min-w-0 border bg-transparent px-3 py-1 text-base md:text-sm',
+          'transition-colors duration-(--duration-fast) ease-standard',
+          'placeholder:text-muted-foreground',
+          // The focus ring is base.css's outline (focus tokens), kept in forced-colors mode.
+          'focus-visible:border-ring',
+          'disabled:bg-muted disabled:cursor-not-allowed disabled:opacity-50',
+          'aria-invalid:border-destructive aria-invalid:focus-visible:outline-destructive',
+          'file:text-foreground file:border-0 file:bg-transparent file:text-sm file:font-medium',
           className
         )}
         {...props}

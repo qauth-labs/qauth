@@ -1,26 +1,127 @@
 # @qauth-labs/ui
 
-Shared React UI primitives for QAuth front-ends (the developer portal and other
-in-repo apps). A small set of unstyled-by-convention, Tailwind-styled building
-blocks with consistent props and `className` overrides.
+QAuth's design system for its own front-ends: the developer portal now, the ceremony app, the
+account console and the admin console next (ADR-020).
 
 ## Overview
 
-`@qauth-labs/ui` provides headless-ish React primitives styled with Tailwind CSS:
+`@qauth-labs/ui` is QAuth's design system: the design tokens, the theme stylesheets built from
+them, and the React primitives styled with them.
 
-- **Button** — variant/size-aware button
-- **Card** family — `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`
-- **Input** — text input with `aria-invalid` error styling
-- **Label** — form label
-- **FormField** — label + control + error/helper-text wrapper
+- **Tokens** — `src/tokens/tokens.json`, in the
+  [Design Tokens Community Group](https://www.designtokens.org/) format (2025.10). Colours for
+  light and dark, the fonts and type scale, spacing, radius, the focus ring and motion. It is the
+  one source of every value; nothing else holds a colour or a size of its own.
+- **Stylesheets** — `theme.css` (the tokens as CSS custom properties) and `tailwind-theme.css`
+  (the Tailwind v4 theme on top of them) are generated from the tokens. `base.css` sets the page's
+  colours and fonts, and `fonts.css` loads the self-hosted fonts.
+- **Brand settings** — `applyBrand(brand)` checks a realm's brand settings and returns the theme
+  stylesheet with them applied.
+- **Primitives** — `Button`, the `Card` family, `Input`, `Label` and `FormField`.
 
-All components forward standard DOM props and accept a `className` that is merged
-with the component's base styles (via `clsx` + `tailwind-merge`), so callers can
-override or extend styling without fighting specificity. `Card*`, `Input`, and
-`Label` forward refs.
+The visual language is the qauth.dev website's: square corners, flat surfaces with hairline
+edges, DM Sans for text, Instrument Serif for page and section headings, JetBrains Mono for code.
+The interactive components that come next (#556) are built on React Aria Components
+([ADR-020 §6](../../docs/adr/020-ui-surfaces-and-acceptance-criteria.md)) with these tokens.
 
-> **Peer requirements:** React and a Tailwind CSS build are expected in the
-> consuming app (the component class names assume Tailwind is processing them).
+All components forward standard DOM props and accept a `className` that is merged with the
+component's base styles (via `clsx` + `tailwind-merge`), so callers can override or extend
+styling without fighting specificity. `Card*`, `Input`, and `Label` forward refs.
+
+## Using it in an app
+
+A Tailwind v4 app imports the design system right after Tailwind:
+
+```css
+@import 'tailwindcss';
+@import '@qauth-labs/ui/styles.css';
+```
+
+That brings the fonts, the theme, the Tailwind theme, the base rules, the `dark:` variant, and an
+`@source` for the library's components, so the app needs no `@source` line for them.
+
+An app that serves a realm's brand stylesheet imports `fonts.css`, `tailwind.css` and `base.css`
+instead of `styles.css`, and links the output of `applyBrand` where `theme.css` would be.
+
+A page with no Tailwind (the auth server's `/ui` pages) uses `theme.css` and `base.css` as they
+are, and styles its own elements with the variables: `var(--background)`,
+`var(--muted-foreground)`, `var(--font-sans)`, `var(--radius-control)`. `fonts.css` imports the
+`@fontsource` packages by name, so it needs a bundler; a page served without one ships the woff2
+files and its own `@font-face` rules.
+
+### Light and dark
+
+The theme follows the system's `prefers-color-scheme`. `data-theme="light"` or
+`data-theme="dark"` on the root element overrides it, and on any other element fixes that subtree
+to one mode. `color-scheme` follows, so form controls and scrollbars match.
+
+The token utilities (`bg-card`, `text-foreground`) follow the nearest `data-theme`. The `dark:`
+variant is decided from the root down, so inside a `data-theme="light"` subtree of a dark page it
+still fires; prefer the token utilities. A realm with dark mode off puts `data-theme="light"` on
+`<html>`, so both stay light.
+
+## Tokens
+
+| Group            | CSS variables                                                                                | Tailwind                                      |
+| ---------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `color.surface`  | `--background`, `--card`, `--popover`, `--muted`, `--secondary`, `--accent`, `--*-surface`   | `bg-background`, `bg-card`, …                 |
+| `color.text`     | `--foreground`, `--body`, `--muted-foreground`, `--primary-text`, `--*-foreground`           | `text-foreground`, `text-body`, …             |
+| `color.primary`  | `--primary`, `--primary-hover`, `--primary-foreground`                                       | `bg-primary`, `text-primary-foreground`       |
+| `color.brand`    | `--highlight` (the brand accent)                                                             | `text-highlight`                              |
+| `color.feedback` | `--destructive`, `--success`                                                                 | `text-destructive`, `bg-success-surface`      |
+| `color.line`     | `--border`, `--input`, `--ring`                                                              | `border-border`, `border-input`, `ring-ring`  |
+| `font.*`         | `--font-sans`, `--font-display`, `--font-mono`, `--font-weight-*`, `--text-*`, `--leading-*` | `font-display`, `text-sm`, `leading-snug`     |
+| `space.unit`     | `--spacing`                                                                                  | `p-4`, `gap-2`, …                             |
+| `radius.*`       | `--radius-control`, `--radius-surface`, `--radius-full` (control and surface are 0: square)  | `rounded-control`, `rounded-surface`          |
+| `focus.*`        | `--focus-ring-width`, `--focus-ring-offset`                                                  | —                                             |
+| `motion.*`       | `--duration-fast`, `--duration-normal` (0ms under reduced motion), `--ease-standard`         | `duration-(--duration-fast)`, `ease-standard` |
+
+Colour names follow the design system's (shadcn's) names, so the website and these apps share
+them. `accent` is the hover and selected fill; the brand
+accent is `highlight`.
+
+**Modes.** Each colour's `$value` is its light value, and `$extensions.mode` holds `light` and
+`dark`: the form [Terrazzo](https://terrazzo.app/) reads, so a Terrazzo build (delurio's kit for
+`libs/ui`, #561) compiles the same file. A test parses the file with `@terrazzo/parser` and checks
+it sees both modes. `libs/ui` generates its own CSS: `applyBrand` builds a realm's stylesheet at
+run time with the same code that builds `theme.css`, so the two cannot drift.
+
+**Contrast.** Each text colour declares, under `$extensions["dev.qauth.ui"].contrast`, the
+backgrounds it is drawn on and its floor: 4.5:1 for text, 3:1 for a control's edge and the focus
+ring (WCAG 2.2, 1.4.3 and 1.4.11). A test checks every pair in light and dark.
+
+**Changing a token.** Edit `tokens.json`, then run `pnpm nx test ui -u` to regenerate
+`theme.css` and `tailwind-theme.css`. CI fails when the checked-in files differ from the tokens.
+
+## Brand settings
+
+Only four inputs may change a token:
+
+| Setting    | Value                           | Checked                                                                                   |
+| ---------- | ------------------------------- | ----------------------------------------------------------------------------------------- |
+| `primary`  | `#rrggbb`, or `{ light, dark }` | its text (`primary-foreground`) reaches 4.5:1 on it, and on its hover shade, in each mode |
+| `accent`   | `#rrggbb`, or `{ light, dark }` | it reaches 4.5:1 as text on the page, cards and muted fills, in each mode                 |
+| `font`     | `'qauth'` or `'system'`         | one of the self-hosted or system fonts in `BRAND_FONTS`; it sets text and headings        |
+| `darkMode` | `true` (default) or `false`     | `false` leaves the dark set out, so the pages stay light whatever the system prefers      |
+
+The logo, per-locale strings and links are data, not tokens.
+
+```ts
+import { applyBrand, BrandError } from '@qauth-labs/ui';
+
+try {
+  const css = applyBrand({ primary: '#1d4ed8', darkMode: false });
+  // Serve `css` in place of theme.css.
+} catch (error) {
+  if (error instanceof BrandError) console.log(error.issues); // every problem at once
+}
+```
+
+`applyBrand` refuses any value that contains `url(`, `;`, `{` or `}`, a colour not written
+`#rrggbb`, a font outside the list, and a setting it does not know. Links and text buttons use
+the primary colour where it reaches 4.5:1 on the page in that mode, and the nearest lighter (dark
+mode) or darker (light mode) shade of it that does where it does not. The result is plain CSS text: serve it as a stylesheet, in place of `theme.css`, never
+beside it.
 
 ## Installation
 
@@ -46,7 +147,7 @@ import { Button } from '@qauth-labs/ui';
 
 `ButtonProps` extends `React.ButtonHTMLAttributes<HTMLButtonElement>` and adds:
 
-- `variant?: 'default' | 'outline' | 'ghost' | 'link'` (default `'default'`)
+- `variant?: 'default' | 'secondary' | 'outline' | 'ghost' | 'destructive' | 'link'` (default `'default'`)
 - `size?: 'default' | 'sm' | 'lg'` (default `'default'`)
 
 ### Card
@@ -116,6 +217,9 @@ import { FormField, Input } from '@qauth-labs/ui';
 | `LabelProps`                                                        | type      | `= LabelHTMLAttributes<HTMLLabelElement>`         |
 | `FormField`                                                         | component | Label + control + error/helper wrapper            |
 | `FormFieldProps`                                                    | type      | Props for `FormField`                             |
+| `buttonVariants`                                                    | function  | The button's classes, for a link styled as one    |
+| `applyBrand`, `BrandError`, `BRAND_FONTS`                           | function  | A realm's brand stylesheet; see Brand settings    |
+| `COLOR_TOKENS`, `STATIC_TOKENS`, `contrastFailures`                 | data      | The tokens, flattened, and the contrast check     |
 
 ## Development
 
@@ -124,6 +228,9 @@ import { FormField, Input } from '@qauth-labs/ui';
 ```bash
 pnpm nx test ui
 ```
+
+`pnpm nx test ui -u` regenerates `src/styles/theme.css` and `src/styles/tailwind-theme.css` from
+the tokens.
 
 ## License
 

@@ -3,28 +3,45 @@ import { cva } from 'class-variance-authority';
 import { cn } from '../lib/utils';
 
 export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: 'default' | 'outline' | 'ghost' | 'link';
+  variant?: 'default' | 'secondary' | 'outline' | 'ghost' | 'destructive' | 'link';
   size?: 'default' | 'sm' | 'lg';
 };
 
-const buttonVariants = cva(
-  'rounded-md bg-blue-500 p-2 text-sm text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50',
+/**
+ * The design system's button: square, flat, with the focus ring outside the edge. Every variant's
+ * text meets 4.5:1 on its fill in light and dark (see the contrast rules in `tokens.json`).
+ */
+export const buttonVariants = cva(
+  [
+    'rounded-control inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 border border-transparent font-medium whitespace-nowrap select-none',
+    'ease-standard transition-colors duration-(--duration-fast)',
+    // No outline-none: base.css draws the focus ring as an outline from the focus tokens, which,
+    // unlike a box-shadow ring, still shows in forced-colors (high contrast) mode.
+    'disabled:pointer-events-none disabled:opacity-50',
+    "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  ],
   {
     variants: {
       variant: {
-        default: 'bg-blue-500 hover:bg-blue-600',
-        outline: 'border border-gray-300 bg-white text-gray-800 hover:bg-gray-100',
-        ghost: 'bg-transparent text-gray-800 hover:bg-gray-100',
-        link: 'p-0 text-blue-500 hover:underline',
+        default: 'bg-primary text-primary-foreground hover:bg-primary-hover',
+        secondary: 'bg-secondary text-secondary-foreground hover:bg-accent',
+        outline: 'border-input bg-background text-foreground hover:bg-muted',
+        ghost: 'text-foreground hover:bg-accent hover:text-accent-foreground',
+        destructive:
+          'bg-destructive-surface text-destructive border-destructive/30 hover:border-destructive',
+        link: 'text-primary-text underline-offset-4 hover:underline',
       },
       size: {
-        default: 'p-2',
-        sm: 'p-1',
-        lg: 'p-3',
+        default: 'h-9 px-4 text-sm',
+        sm: 'h-8 px-3 text-xs',
+        lg: 'h-10 px-5 text-sm',
       },
     },
+    // A link-styled button keeps the text's own height and no side padding, at any size.
+    compoundVariants: [{ variant: 'link', className: 'h-auto px-0' }],
     defaultVariants: {
       variant: 'default',
+      size: 'default',
     },
   }
 );
