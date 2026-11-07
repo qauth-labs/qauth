@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { defineConfig, parse } from '@terrazzo/parser';
 import { describe, expect, it } from 'vitest';
 
-import { COLOR_TOKENS, oklchCss } from './tokens';
+import { COLOR_TOKENS, oklchCss } from './read-tokens';
 
 /**
  * The token file is also Terrazzo's input: delurio's kit for libs/ui (#561) compiles it with

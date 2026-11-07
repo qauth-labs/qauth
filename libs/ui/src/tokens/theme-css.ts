@@ -4,7 +4,7 @@
  * (`styles/tailwind-theme.css`). Both files are this module's output, checked in, and compared
  * with it by a test, so they cannot drift from `tokens.json`.
  */
-import { COLOR_TOKENS, type ColorMode, oklchCss, STATIC_TOKENS } from './tokens';
+import { COLOR_TOKENS, type ColorMode, oklchCss, STATIC_TOKENS } from './read-tokens';
 
 const HEADER = (what: string) =>
   `/* ${what} Generated from libs/ui/src/tokens/tokens.json: do not edit by hand. Change the tokens, then run \`pnpm nx test ui -u\`. */\n`;
