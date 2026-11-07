@@ -59,6 +59,10 @@ import { SESSION_COOKIE } from '../testing/session-cookie-value';
  *   alone, whatever the MFA policy; one without signs in through it alone;
  * - an account holding the same email gets no match: a new account is
  *   created, the other is untouched;
+ * - with the Interaction API, an unknown identity first asks, at the
+ *   `upstream_link` step, whether it starts a new account (#670): these
+ *   tests answer "create"; `upstream-link.integration.test.ts` covers the
+ *   link to an existing account;
  * - with sign-up off an unknown identity creates nothing;
  * - the provider's verified switch off leaves the account and its address
  *   unverified, whatever the provider said;
@@ -108,6 +112,7 @@ const ERROR_TITLE = 'We could not sign you in';
 const IDENTIFIER = stepUrn('identifier');
 const UPSTREAM = stepUrn('upstream');
 const EMAIL_CODE = stepUrn('email_code');
+const UPSTREAM_LINK = stepUrn('upstream_link');
 const SIGN_IN_FAILED = 'urn:qauth:event:user.sign_in_failed:v1-rc.0';
 const REGISTERED = 'urn:qauth:event:user.registered:v1-rc.0';
 const SIGNED_IN = 'urn:qauth:event:user.signed_in:v1-rc.0';
@@ -829,20 +834,60 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
       expect(response.statusCode, response.body).toBe(200);
       return response.json() as {
         step: string;
+        csrf: string;
         alternatives: string[];
         params: Record<string, unknown>;
       };
     }
 
+    /**
+     * An unknown identity's callback (#670): the ceremony page asks whether it
+     * starts a new account; the browser holding `jar` answers "create" as a
+     * plain form post. The answer's `303` goes on to the next step or the code.
+     */
+    async function createAtChoice(
+      app: FastifyInstance,
+      jar: CookieJar,
+      callback: LightMyRequestResponse,
+      name = 'Corp',
+      type = TYPE
+    ): Promise<LightMyRequestResponse> {
+      expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
+      const id = ceremonyIdOf(callback.headers['location']);
+      const step = await stepOf(app, id);
+      expect(step.step).toBe(UPSTREAM_LINK);
+      expect(step.params[UPSTREAM_LINK]).toEqual({
+        provider: { provider: type, name },
+        create: true,
+      });
+      const response = await app.inject({
+        method: 'POST',
+        url: `${INTERACTION_API_PREFIX}/${id}/answer`,
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          origin: ORIGIN,
+          'sec-fetch-site': 'same-origin',
+          cookie: jar.header() ?? '',
+        },
+        payload: new URLSearchParams({
+          type: UPSTREAM_LINK,
+          csrf: step.csrf,
+          decision: 'create',
+        }).toString(),
+      });
+      jar.absorb(response.headers['set-cookie']);
+      expect(response.statusCode, withServerLog(response.body)).toBe(303);
+      return response;
+    }
+
     describe('an account with no passkey', () => {
-      it('signs in through the provider alone: the callback sends the code to the client', async () => {
+      it('signs in through the provider alone: the new account gets the code', async () => {
         const app = server.app();
         const jar = new CookieJar();
 
-        const callback = await signInAtProvider(app, jar);
+        const created = await createAtChoice(app, jar, await signInAtProvider(app, jar));
 
-        expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
-        codeAt(callback.headers['location']);
+        codeAt(created.headers['location']);
         expect(jar.get(SESSION_COOKIE)).toBeDefined();
         const { userId } = await credentialOf(app, server.realmId());
         expect(await subjectsOf(app, SIGNED_IN)).toEqual([userId]);
@@ -858,8 +903,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
       it('never completes through the provider alone, MFA off: no session and no code', async () => {
         const app = server.app();
         const first = new CookieJar();
-        const created = await signInAtProvider(app, first);
-        expect(created.statusCode, created.body).toBe(303);
+        const created = await createAtChoice(app, first, await signInAtProvider(app, first));
         codeAt(created.headers['location']);
         const { userId } = await credentialOf(app, server.realmId());
         await addPasskey(app, server.realmId(), userId);
@@ -884,7 +928,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         });
         const jar = new CookieJar();
 
-        const callback = await signInAtProvider(app, jar);
+        const created = await createAtChoice(app, jar, await signInAtProvider(app, jar));
 
         const credential = await credentialOf(app, server.realmId());
         expect(credential.credentialData).toEqual({
@@ -897,8 +941,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
           { key: 'name', value: 'Ada Lovelace', verified: false },
         ]);
         // The address QAuth has not verified: the ceremony page asks for an emailed code.
-        expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
-        const id = ceremonyIdOf(callback.headers['location']);
+        const id = ceremonyIdOf(created.headers['location']);
         expect((await stepOf(app, id)).step).toBe(EMAIL_CODE);
         expect(await codes(app)).toBe(0);
       });
@@ -919,9 +962,14 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         expect(JSON.stringify(step)).not.toContain(HIDDEN_TYPE);
 
         const routed = new CookieJar();
-        const callback = await signInAtProvider(app, routed, PERSON, HIDDEN_TYPE);
-        expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
-        codeAt(callback.headers['location']);
+        const created = await createAtChoice(
+          app,
+          routed,
+          await signInAtProvider(app, routed, PERSON, HIDDEN_TYPE),
+          'Partner',
+          HIDDEN_TYPE
+        );
+        codeAt(created.headers['location']);
         expect(await credentialsOf(app, HIDDEN_TYPE)).toBe(1);
       });
     });

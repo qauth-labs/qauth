@@ -73,7 +73,8 @@ const INTERACTION_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
  * of the alternatives. The optional `carriedSession` (#964) joined version 2
  * without a new version: a record without it reads as before, and a server
  * from before it reads a record that holds it as absent, as any record it
- * cannot parse. The optional `client` (#629) joined version 2 the same way.
+ * cannot parse. The optional `client` (#629) joined version 2 the same way,
+ * and so did an authorization record's optional `upstreamLink` (#670).
  */
 export const INTERACTION_RECORD_VERSION = 2;
 
@@ -231,6 +232,70 @@ export const carriedSessionSchema = z.strictObject({
 
 export type CarriedSession = z.infer<typeof carriedSessionSchema>;
 
+/** An upstream provider's type, the AuthMethod `type` (`oidc_corp`). */
+const upstreamProviderTypeSchema = z.string().regex(/^[a-z][a-z0-9_]{0,62}$/);
+
+/** The identity a provider proved, which the link attaches. */
+const linkedIdentityFields = {
+  /** The provider's type. */
+  provider: upstreamProviderTypeSchema,
+  /** Its display name, for the screens: the provider entry's. */
+  name: z.string().min(1).max(64),
+  /** The provider's subject. */
+  externalSub: z.string().min(1).max(255),
+  /** The issuer that named the subject. */
+  iss: z.string().min(1).max(2048),
+};
+
+/**
+ * What the provider said of the person, kept while they choose: a new
+ * account starts with these attributes; a link keeps none. Bounded by the
+ * AuthMethod contract's key pattern and value length, and as a whole by
+ * {@link UPSTREAM_LINK_ATTRIBUTES_MAX_BYTES}.
+ */
+const keptAttributeSchema = z.strictObject({
+  attrKey: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+  attrValue: z.string().min(1).max(8192),
+  verified: z.boolean(),
+  /** When the attribute must be checked again, in epoch milliseconds. */
+  expiresAt: z.int().nonnegative().optional(),
+});
+
+/** The most a `choosing` link keeps of the provider's attributes, as JSON. */
+export const UPSTREAM_LINK_ATTRIBUTES_MAX_BYTES = 16 * 1024;
+
+export type KeptUpstreamAttribute = z.infer<typeof keptAttributeSchema>;
+
+/**
+ * An upstream identity on its way to an existing account (#670; ADR-020 §3):
+ *
+ * - `requested`: the authorization request asked to link an account of
+ *   `provider` (`qauth_link`), before the provider proved one;
+ * - `choosing`: the provider proved an identity no account holds, and the
+ *   `upstream_link` step asks whether it starts a new account or joins an
+ *   existing one;
+ * - `signing_in`: the person signs in to the existing account in this
+ *   interaction. The identity attaches once that sign-in finishes the
+ *   interaction (`routes/interaction-api.ts`).
+ *
+ * The identity is the provider's own word, from its callback in this
+ * browser; only the server writes it.
+ */
+export const upstreamLinkSchema = z.discriminatedUnion('state', [
+  z.strictObject({ state: z.literal('requested'), provider: upstreamProviderTypeSchema }),
+  z.strictObject({
+    state: z.literal('choosing'),
+    ...linkedIdentityFields,
+    /** Whether the step offered a new account: the realm allowed sign-up when it was shown. */
+    create: z.boolean(),
+    /** The provider's attributes, for a new account; none when it is not offered. */
+    attributes: z.array(keptAttributeSchema).max(32),
+  }),
+  z.strictObject({ state: z.literal('signing_in'), ...linkedIdentityFields }),
+]);
+
+export type UpstreamLink = z.infer<typeof upstreamLinkSchema>;
+
 /** The validated authorization request an interaction is for (ADR-019 Decision 6, #628). */
 export type InteractionRequest = z.infer<typeof authorizeQuerySchema>;
 
@@ -284,6 +349,8 @@ const authorizationRecordSchema = z.strictObject({
   ...recordFields,
   purpose: z.literal('authorization'),
   request: authorizeQuerySchema,
+  /** An upstream identity on its way to an existing account (#670), while there is one. */
+  upstreamLink: upstreamLinkSchema.optional(),
 });
 
 /**

@@ -140,6 +140,9 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   // Connect providers.
   'GET /ui/upstream/:type',
   'GET /ui/upstream/:type/start',
+  // The upstream account link (#670): the choice page and the refusal page.
+  'GET /ui/upstream-link-refused',
+  'GET /ui/upstream-link/:interactionId',
   'GET /upstream/:type/callback',
   'POST /upstream/:type/callback',
   // The recovery codes' pages (#649): "use a recovery code" and "save your

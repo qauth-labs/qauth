@@ -1,3 +1,4 @@
+import { ceremonyPagePath } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -5,24 +6,34 @@ import { z } from 'zod';
 import { env } from '../../../config/env';
 import { accountPoliciesOf } from '../../helpers/account-policies';
 import { createBackgroundTasks } from '../../helpers/background-tasks';
-import { answerInteraction, type InteractionAnswerResult } from '../../helpers/interaction';
+import {
+  answerInteraction,
+  type InteractionAnswerResult,
+  readInteractionStep,
+} from '../../helpers/interaction';
 import { createInteractionEngines, decisionOf } from '../../helpers/interaction-engines';
 import { InteractionExpiredError } from '../../helpers/interaction-expired';
+import { isInteractionId } from '../../helpers/interaction-record';
 import {
   normalizeInternalAuthorizeUrl,
   peekPendingAuthorization,
   RESUME_PATH_PREFIX,
 } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import { buildRealmUrl } from '../../helpers/realm-url';
+import { recoveryPageExpired } from '../../helpers/recovery-code-pages';
 import { requestRealm } from '../../helpers/request-realm';
 import { roundEnvironment } from '../../helpers/round-limits';
+import { sendUpstreamPage, upstreamLinkChoicePage } from '../../helpers/upstream-pages';
 import { upstreamProviderCatalog } from '../../helpers/upstream-providers';
 import {
   auditUpstreamRefusal,
   authorizeUrlOf,
   ceremonyPageUrlOf,
   sendUpstreamErrorPage,
+  sendUpstreamLinkRefusedPage,
   sendUpstreamWaitingPage,
+  UPSTREAM_LINK_STEP,
   upstreamRoundContext,
   type UpstreamSignInMode,
   UpstreamSignInRefusal,
@@ -46,8 +57,17 @@ import {
  *   provider (the engine records it, the flow keeps its transaction bound
  *   to the flow cookie) and the waiting page sends the browser on.
  *
- * Neither changes anything unless the request's realm has the provider on
- * (hidden or not). Both are rate-limited as the authorization endpoint is.
+ * - `GET /ui/upstream-link/<interaction id>` (#670): the `upstream_link`
+ *   step's page, "I already have an account" or a new account, for an
+ *   identity no account holds. Its form posts to the Interaction API's
+ *   answer endpoint, which checks the origin, the flow cookie and the CSRF
+ *   value. An interaction at another step goes to its ceremony page.
+ * - `GET /ui/upstream-link-refused?provider=<type>&reason=<reason>` (#670):
+ *   the page of a link the finish refused; it shows the reason and changes
+ *   nothing.
+ *
+ * None changes anything unless the request's realm has the provider on
+ * (hidden or not). All are rate-limited as the authorization endpoint is.
  */
 export default async function (fastify: FastifyInstance) {
   const catalog = upstreamProviderCatalog(fastify);
@@ -156,6 +176,17 @@ export default async function (fastify: FastifyInstance) {
             if (state.purpose !== 'authorization') {
               throw new UpstreamSignInRefusal('transaction_mismatch');
             }
+            // A link the request asked for (#670) starts only the provider it
+            // named, before the provider proved anyone, in an interaction.
+            const link = state.upstreamLink;
+            if (
+              link !== undefined &&
+              (link.state !== 'requested' ||
+                link.provider !== provider.method.type ||
+                mode !== 'interaction')
+            ) {
+              throw new UpstreamSignInRefusal('transaction_mismatch');
+            }
             const back =
               mode === 'interaction'
                 ? ceremonyPageUrlOf(realm, interactionId)
@@ -204,6 +235,84 @@ export default async function (fastify: FastifyInstance) {
         return sendUpstreamErrorPage(request, reply, wayBack);
       }
       return sendUpstreamWaitingPage(reply, started, wayBack);
+    }
+  );
+
+  const linkPageParams = z.object({ interactionId: z.string().max(64) });
+  const choiceParamsSchema = z.object({
+    provider: z.object({ name: z.string().min(1).max(64) }),
+    create: z.boolean(),
+  });
+
+  app.get(
+    '/upstream-link/:interactionId',
+    {
+      schema: {
+        description:
+          'The `upstream_link` step\'s page (#670): an upstream provider proved an identity no account holds; "I already have an account", which goes on to the sign-in to that account, or a new account when the realm allows one. The form posts to the Interaction API\'s answer endpoint. `Cache-Control: no-store`.',
+        tags: ['UI'],
+        'x-qauth-stability': 'stable',
+        'x-qauth-errors': [410],
+        params: linkPageParams,
+      },
+      config,
+    },
+    async (request, reply) => {
+      const id = request.params.interactionId;
+      const realm = requestRealm(request);
+      try {
+        if (!isInteractionId(id)) throw new InteractionExpiredError();
+        const view = await readInteractionStep(request, id);
+        if (view.step.name !== UPSTREAM_LINK_STEP) {
+          reply.header('Cache-Control', 'no-store');
+          return reply.redirect(buildRealmUrl(realm, ceremonyPagePath(id)), 303);
+        }
+        const params = choiceParamsSchema.parse(view.step.params);
+        return sendUpstreamPage(
+          reply,
+          upstreamLinkChoicePage({
+            cspNonce: reply.cspNonce.style,
+            providerName: params.provider.name,
+            create: params.create,
+            action: buildRealmUrl(realm, `/interaction/v1-rc.0/${id}/answer`),
+            type: UPSTREAM_LINK_STEP,
+            csrf: view.csrf,
+          })
+        );
+      } catch (error) {
+        if (!(error instanceof InteractionExpiredError)) throw error;
+        return sendUpstreamPage(
+          reply,
+          recoveryPageExpired({ cspNonce: reply.cspNonce.style }),
+          410
+        );
+      }
+    }
+  );
+
+  app.get(
+    '/upstream-link-refused',
+    {
+      schema: {
+        description:
+          'The page of an upstream link the finish refused (#670): the identity is already linked to another account, the account already has one of the provider, or the account cannot be linked. Nothing was changed, and nothing goes to the client. `Cache-Control: no-store`.',
+        tags: ['UI'],
+        'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
+        querystring: z.object({
+          provider: z.string().max(64),
+          reason: z.enum(['already_linked', 'provider_linked', 'account_unavailable']),
+        }),
+      },
+      config,
+    },
+    async (request, reply) => {
+      const provider = await catalog.find(requestRealm(request).id, request.query.provider);
+      return sendUpstreamLinkRefusedPage(
+        reply,
+        request.query.reason,
+        provider?.entry.name ?? 'sign-in provider'
+      );
     }
   );
 }

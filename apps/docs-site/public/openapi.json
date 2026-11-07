@@ -7197,6 +7197,16 @@
             "name": "qauth_upstream",
             "required": false,
             "description": "QAuth's direct-routing parameter: the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included. When the request needs a sign-in, the sign-in starts at that provider instead of the first sign-in step. A value that names no provider the realm has on is ignored, as it is when no sign-in is needed."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "qauth_link",
+            "required": false,
+            "description": "QAuth's link parameter (#670): the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included, whose account the person links to theirs. The request starts at that provider, then asks for a fresh sign-in to the existing account with its own factors, whatever session the browser has; the identity joins the account that sign-in proved. Honoured only for an operator-flagged first-party client while the interaction UI is on; any other value, or any other client's, is ignored."
           }
         ],
         "x-qauth-stability": "stable",
@@ -7343,6 +7353,11 @@
                   },
                   "qauth_upstream": {
                     "description": "QAuth's direct-routing parameter: the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included. When the request needs a sign-in, the sign-in starts at that provider instead of the first sign-in step. A value that names no provider the realm has on is ignored, as it is when no sign-in is needed.",
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "qauth_link": {
+                    "description": "QAuth's link parameter (#670): the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included, whose account the person links to theirs. The request starts at that provider, then asks for a fresh sign-in to the existing account with its own factors, whatever session the browser has; the identity joins the account that sign-in proved. Honoured only for an operator-flagged first-party client while the interaction UI is on; any other value, or any other client's, is ignored.",
                     "type": "string",
                     "maxLength": 64
                   }
@@ -15021,6 +15036,16 @@
             "name": "qauth_upstream",
             "required": false,
             "description": "QAuth's direct-routing parameter: the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included. When the request needs a sign-in, the sign-in starts at that provider instead of the first sign-in step. A value that names no provider the realm has on is ignored, as it is when no sign-in is needed."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "qauth_link",
+            "required": false,
+            "description": "QAuth's link parameter (#670): the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included, whose account the person links to theirs. The request starts at that provider, then asks for a fresh sign-in to the existing account with its own factors, whatever session the browser has; the identity joins the account that sign-in proved. Honoured only for an operator-flagged first-party client while the interaction UI is on; any other value, or any other client's, is ignored."
           }
         ],
         "x-qauth-stability": "stable",
@@ -15955,6 +15980,149 @@
             },
             "in": "path",
             "name": "type",
+            "required": true
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/upstream-link/{interactionId}": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "The `upstream_link` step's page (#670): an upstream provider proved an identity no account holds; \"I already have an account\", which goes on to the sign-in to that account, or a new account when the realm allows one. The form posts to the Interaction API's answer endpoint. `Cache-Control: no-store`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "path",
+            "name": "interactionId",
+            "required": true
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "410": {
+            "description": "Gone",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/upstream-link-refused": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "The page of an upstream link the finish refused (#670): the identity is already linked to another account, the account already has one of the provider, or the account cannot be linked. Nothing was changed, and nothing goes to the client. `Cache-Control: no-store`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "provider",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "already_linked",
+                "provider_linked",
+                "account_unavailable"
+              ]
+            },
+            "in": "query",
+            "name": "reason",
             "required": true
           }
         ],

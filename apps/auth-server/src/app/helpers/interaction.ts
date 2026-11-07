@@ -49,6 +49,7 @@ import {
   SELECT_ACCOUNT_STEP,
   takeInteractionTurn,
   TOTP_SETUP_STEP,
+  type UpstreamLink,
   writeInteractionState,
 } from './interaction-record';
 import { requestRealm } from './request-realm';
@@ -162,6 +163,12 @@ export interface InteractionView {
    * the browser holding the flow cookie must carry. It names the revision.
    */
   readonly csrf: string;
+  /**
+   * The upstream provider whose identity this sign-in links (#670), while
+   * the person signs in to their existing account to link it: the screens
+   * say so. Its name only, never the identity.
+   */
+  readonly upstreamLink?: { readonly provider: string; readonly name: string };
 }
 
 /** The current step's personal data, for the browser holding the flow cookie. */
@@ -192,6 +199,8 @@ export type InteractionState =
   | (InteractionStateFields & {
       readonly purpose: 'authorization';
       readonly request: InteractionRequest;
+      /** An upstream identity on its way to an existing account (#670), while there is one. */
+      readonly upstreamLink?: UpstreamLink;
     })
   | (InteractionStateFields & {
       readonly purpose: 'logout';
@@ -234,6 +243,11 @@ export type InteractionDecision =
       readonly amr?: readonly string[];
       /** The sign-in engine's transaction to keep; absent keeps the stored one. */
       readonly signInTransaction?: SignInTransaction | null;
+      /**
+       * The upstream link to keep (#670): absent keeps the stored one, `null`
+       * ends it. Only an authorization interaction holds one.
+       */
+      readonly upstreamLink?: UpstreamLink | null;
     }
   /**
    * The answer proved who the user is: a new browser session (a new `sid`)
@@ -247,6 +261,8 @@ export type InteractionDecision =
       readonly signIn: InteractionSignIn;
       readonly step?: InteractionStep;
       readonly personal?: InteractionPersonalData;
+      /** The upstream link to keep (#670), as at `step`. */
+      readonly upstreamLink?: UpstreamLink | null;
     }
   /** The interaction is done: the caller completes or denies the request. */
   | { readonly kind: 'finished' }
@@ -287,6 +303,12 @@ export type InteractionFinished =
       readonly transaction: InteractionTransaction;
       /** What the next interaction of the same request starts from (#628). */
       readonly continuation: InteractionContinuation;
+      /**
+       * The upstream link the interaction held when it finished (#670): the
+       * caller attaches a `signing_in` one to the account this interaction's
+       * sign-in proved.
+       */
+      readonly upstreamLink?: UpstreamLink;
     }
   | {
       readonly kind: 'finished';
@@ -401,6 +423,9 @@ function viewOf(record: InteractionRecord): InteractionView {
     deadline: interactionDeadline(record),
     revision: record.revision,
     csrf: interactionCsrf(record),
+    ...(record.purpose === 'authorization' && record.upstreamLink?.state === 'signing_in'
+      ? { upstreamLink: { provider: record.upstreamLink.provider, name: record.upstreamLink.name } }
+      : {}),
   };
 }
 
@@ -560,6 +585,11 @@ export interface StartInteractionInput {
    * with the first answer.
    */
   readonly signInTransaction?: SignInTransaction;
+  /**
+   * The upstream link the request asks for (#670): `requested`, for an
+   * authorization request with `qauth_link`. Absent for any other.
+   */
+  readonly upstreamLink?: UpstreamLink;
 }
 
 /** What {@link startInteraction} returns. */
@@ -594,6 +624,9 @@ async function createInteraction(
   input: CreateInteractionInput
 ): Promise<StartedInteraction> {
   const step = interactionStepSchema.parse(input.step);
+  if (input.upstreamLink !== undefined && input.target.purpose !== 'authorization') {
+    throw new Error('only an authorization interaction holds an upstream link');
+  }
   const id = mintInteractionId();
   const secret = mintFlowSecret();
   const now = Date.now();
@@ -602,6 +635,7 @@ async function createInteraction(
     ref: randomUUID(),
     realmId: requestRealm(request).id,
     ...input.target,
+    ...(input.upstreamLink === undefined ? {} : { upstreamLink: input.upstreamLink }),
     step,
     personal: input.personal ?? {},
     transaction: input.transaction ?? { amr: [] },
@@ -999,7 +1033,12 @@ function stateOf(taken: AnswerableInteractionRecord): InteractionState {
     ...(taken.client === undefined ? {} : { client: taken.client as unknown as ClientDisplay }),
   };
   if (taken.purpose === 'authorization') {
-    return { ...fields, purpose: 'authorization', request: taken.request };
+    return {
+      ...fields,
+      purpose: 'authorization',
+      request: taken.request,
+      ...(taken.upstreamLink === undefined ? {} : { upstreamLink: taken.upstreamLink }),
+    };
   }
   return {
     ...fields,
@@ -1013,7 +1052,8 @@ function stateOf(taken: AnswerableInteractionRecord): InteractionState {
 function finishedOf(
   taken: AnswerableInteractionRecord,
   transaction: InteractionTransaction,
-  continuation: InteractionContinuation
+  continuation: InteractionContinuation,
+  upstreamLink?: UpstreamLink
 ): InteractionFinished {
   if (taken.purpose === 'authorization') {
     return {
@@ -1022,6 +1062,7 @@ function finishedOf(
       request: taken.request,
       transaction,
       continuation,
+      ...(upstreamLink === undefined ? {} : { upstreamLink }),
     };
   }
   return {
@@ -1070,7 +1111,12 @@ async function settleAnswer(
     const secrets = nextFlowSecrets(bound.secrets, { remove: bound.secret });
     setFlowCookie(reply, secrets, env.INTERACTION_TTL);
     await answered('finished', taken);
-    return finishedOf(taken, taken.transaction, { secrets, expiresAt: taken.expiresAt });
+    return finishedOf(
+      taken,
+      taken.transaction,
+      { secrets, expiresAt: taken.expiresAt },
+      heldLinkOf(taken)
+    );
   }
 
   if (decision.kind === 'registered') {
@@ -1105,7 +1151,7 @@ async function settleAnswer(
 
   if (decision.kind === 'step') {
     const next: InteractionRecord = {
-      ...taken,
+      ...withUpstreamLink(taken, decision.upstreamLink),
       step: interactionStepSchema.parse(decision.step),
       personal: decision.personal ?? {},
       transaction: { ...taken.transaction, amr: withAmr(taken.transaction.amr, decision.amr) },
@@ -1171,11 +1217,16 @@ async function settleAnswer(
     setFlowCookie(reply, secrets, env.INTERACTION_TTL);
     await answered('finished', { ...taken, transaction: proved });
     await endReplacedSession(request, taken, session.sid);
-    return finishedOf(taken, proved, { secrets, expiresAt: taken.expiresAt });
+    return finishedOf(
+      taken,
+      proved,
+      { secrets, expiresAt: taken.expiresAt },
+      heldLinkOf(withUpstreamLink(taken, decision.upstreamLink))
+    );
   }
   const secret = mintFlowSecret();
   const next: InteractionRecord = {
-    ...taken,
+    ...withUpstreamLink(taken, decision.upstreamLink),
     step,
     personal: decision.personal ?? {},
     transaction: proved,
@@ -1199,6 +1250,31 @@ async function settleAnswer(
   await answered('authenticated', next);
   await endReplacedSession(request, taken, session.sid);
   return { kind: 'step', view: viewOf(next) };
+}
+
+/** The upstream link an authorization record holds, if any (#670). */
+function heldLinkOf(record: AnswerableInteractionRecord): UpstreamLink | undefined {
+  return record.purpose === 'authorization' ? record.upstreamLink : undefined;
+}
+
+/**
+ * `taken` with the upstream link a decision keeps (#670): `undefined` keeps
+ * the stored one, `null` ends it, a link replaces it. Only an authorization
+ * interaction holds one; a link for another is an engine bug, thrown before
+ * anything is written.
+ */
+function withUpstreamLink(
+  taken: AnswerableInteractionRecord,
+  link: UpstreamLink | null | undefined
+): AnswerableInteractionRecord {
+  if (link === undefined) return taken;
+  if (taken.purpose !== 'authorization') {
+    throw new Error('only an authorization interaction holds an upstream link');
+  }
+  if (link !== null) return { ...taken, upstreamLink: link };
+  const rest = { ...taken };
+  delete rest.upstreamLink;
+  return rest;
 }
 
 /**
