@@ -264,7 +264,23 @@ const keptAttributeSchema = z.strictObject({
 /** The most a `choosing` link keeps of the provider's attributes, as JSON. */
 export const UPSTREAM_LINK_ATTRIBUTES_MAX_BYTES = 16 * 1024;
 
+/** The attributes a `choosing` link keeps: at most 32. */
+const keptAttributesSchema = z.array(keptAttributeSchema).max(32);
+
 export type KeptUpstreamAttribute = z.infer<typeof keptAttributeSchema>;
+
+/**
+ * Whether a `choosing` link can keep `attributes` for a new account (#670):
+ * they fit its schema and its byte budget. The AuthMethod contract allows
+ * more (an empty value, any number of attributes), so a provider's answer
+ * that does not fit offers no new account rather than failing the write.
+ */
+export function keepsUpstreamAttributes(attributes: readonly KeptUpstreamAttribute[]): boolean {
+  return (
+    keptAttributesSchema.safeParse(attributes).success &&
+    Buffer.byteLength(JSON.stringify(attributes), 'utf8') <= UPSTREAM_LINK_ATTRIBUTES_MAX_BYTES
+  );
+}
 
 /**
  * An upstream identity on its way to an existing account (#670; ADR-020 §3):
@@ -289,7 +305,7 @@ export const upstreamLinkSchema = z.discriminatedUnion('state', [
     /** Whether the step offered a new account: the realm allowed sign-up when it was shown. */
     create: z.boolean(),
     /** The provider's attributes, for a new account; none when it is not offered. */
-    attributes: z.array(keptAttributeSchema).max(32),
+    attributes: keptAttributesSchema,
   }),
   z.strictObject({ state: z.literal('signing_in'), ...linkedIdentityFields }),
 ]);

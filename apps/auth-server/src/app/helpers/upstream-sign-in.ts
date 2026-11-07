@@ -48,8 +48,8 @@ import {
   eventClientIdOf,
   type InteractionRequest,
   type InteractionStep,
+  keepsUpstreamAttributes,
   type KeptUpstreamAttribute,
-  UPSTREAM_LINK_ATTRIBUTES_MAX_BYTES,
   type UpstreamLink,
 } from './interaction-record';
 import { ladderEndUserIp } from './password-attempts';
@@ -960,8 +960,7 @@ export function upstreamRouteHost(
             // in to next. Nothing is matched, by an email or anything else.
             const create =
               newAccountRefusal(fastify, realm, provider, attributes, 'interaction') === null &&
-              Buffer.byteLength(JSON.stringify(attributes), 'utf8') <=
-                UPSTREAM_LINK_ATTRIBUTES_MAX_BYTES;
+              keepsUpstreamAttributes(attributes);
             return {
               kind: 'step',
               step: upstreamLinkStep(provider.entry, create),
