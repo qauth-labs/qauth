@@ -1,5 +1,6 @@
 import type { BrowserSession } from '@qauth-labs/fastify-plugin-sessions';
 import { ceremonyPagePath } from '@qauth-labs/shared-interaction-contract';
+import { resolveFirstPartyProfile } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -66,12 +67,14 @@ function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
 }
 
 /**
- * The authorization request without its routing parameter (`qauth_upstream`,
- * #639): the interaction holds the request it routes, never the route.
+ * The authorization request without its routing parameters (`qauth_upstream`,
+ * #639, and `qauth_link`, #670): the interaction holds the request it routes,
+ * never the route.
  */
 function withoutUpstreamRoute(query: AuthorizeQuery): AuthorizeQuery {
   const held = { ...query };
   delete held.qauth_upstream;
+  delete held.qauth_link;
   return held;
 }
 
@@ -161,11 +164,23 @@ export default async function (fastify: FastifyInstance) {
     // `prompt=create` (#640): a registration, whatever session the browser has.
     if (query.prompt === 'create') return startRegistration(request, reply, target, query);
 
+    // `qauth_link` (#670): the person links an upstream account to theirs,
+    // which takes a fresh sign-in to the account whatever session the
+    // browser has (NIST SP 800-63C-4 §5.4): the request is decided as one
+    // with no session, so it signs in.
+    const linkTo = await linkedProviderOf(target, query);
+
     // User authentication: the browser session cookie. The legacy Bearer
     // path is retired (#524), so an `Authorization` header counts for
     // nothing: without a session the user signs in first.
     const browserSession = await resolveBrowserSession(fastify, request, reply);
-    const outcome = await decideAuthorization(fastify, request, target, query, browserSession);
+    const outcome = await decideAuthorization(
+      fastify,
+      request,
+      target,
+      query,
+      linkTo === undefined ? browserSession : null
+    );
 
     switch (outcome.kind) {
       case 'code':
@@ -176,6 +191,11 @@ export default async function (fastify: FastifyInstance) {
         return sendAuthorizationError(reply, target.client, query.redirect_uri, outcome.params);
       case 'sign_in':
       case 'consent':
+        if (outcome.kind === 'sign_in' && linkTo !== undefined) {
+          return startUpstream(request, reply, target, query, outcome, browserSession, linkTo, {
+            link: true,
+          });
+        }
         if (outcome.kind === 'sign_in' && query.qauth_upstream !== undefined) {
           // The request routes to an upstream provider (#639): one the realm
           // has on, hidden or not, starts at once; any other value is ignored.
@@ -192,6 +212,22 @@ export default async function (fastify: FastifyInstance) {
   };
 
   /**
+   * The provider `qauth_link` names (#670), when the request may link one:
+   * the interaction UI is on, where the sign-in to the existing account runs
+   * in the same interaction; the client is an operator-flagged first-party
+   * one (ADR-017 Decision 2), as the account console is; and the realm has
+   * the provider on, hidden or not. Otherwise the parameter is ignored.
+   */
+  const linkedProviderOf = async (
+    target: AuthorizationTarget,
+    query: AuthorizeQuery
+  ): Promise<RealmUpstreamProviderOf | undefined> => {
+    if (query.qauth_link === undefined || env.INTERACTION_UI_ENABLED !== true) return undefined;
+    if (resolveFirstPartyProfile(target.client) === null) return undefined;
+    return upstreamProviders.find(target.realm.id, query.qauth_link);
+  };
+
+  /**
    * The routing parameter (`qauth_upstream`, #639) named a provider the realm
    * has on: start an interaction for the request, as a ceremony does, and
    * send the browser to the route that starts the provider in it
@@ -199,6 +235,8 @@ export default async function (fastify: FastifyInstance) {
    * sign-in UI the deployment runs, the provider's leg runs in an
    * interaction bound to the flow cookie. The interaction holds the request
    * without the routing parameter, so a way back to the first step shows it.
+   * For `qauth_link` (#670) the interaction holds a `requested` link of the
+   * provider, which its callback turns into the sign-in to the account.
    */
   const startUpstream = async (
     request: FastifyRequest,
@@ -207,7 +245,8 @@ export default async function (fastify: FastifyInstance) {
     query: AuthorizeQuery,
     outcome: Extract<AuthorizationOutcome, { kind: 'sign_in' }>,
     browserSession: BrowserSession | null,
-    routed: RealmUpstreamProviderOf
+    routed: RealmUpstreamProviderOf,
+    options: { readonly link?: boolean } = {}
   ) => {
     const held = withoutUpstreamRoute(query);
     const start = await authorizationInteractionStart(
@@ -220,7 +259,13 @@ export default async function (fastify: FastifyInstance) {
     if ('error' in start) {
       return sendAuthorizationError(reply, target.client, query.redirect_uri, start.error);
     }
-    const started = await startInteraction(request, reply, { request: held, ...start });
+    const started = await startInteraction(request, reply, {
+      request: held,
+      ...start,
+      ...(options.link === true
+        ? { upstreamLink: { state: 'requested', provider: routed.entry.provider } }
+        : {}),
+    });
     const type = encodeURIComponent(routed.entry.provider);
     return reply.redirect(
       `/ui/upstream/${type}/start?interaction=${encodeURIComponent(started.id)}`,

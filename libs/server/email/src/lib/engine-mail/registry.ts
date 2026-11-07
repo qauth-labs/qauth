@@ -36,6 +36,12 @@ import {
   SEND_CEILING_SUBJECT,
   SendCeilingEmail,
 } from '../templates/engine/send-ceiling';
+import {
+  UPSTREAM_LINKED_SUBJECT,
+  UPSTREAM_UNLINKED_SUBJECT,
+  UpstreamLinkedEmail,
+  UpstreamUnlinkedEmail,
+} from '../templates/engine/upstream-account';
 import { renderEmail, renderEmailText } from '../templates/render';
 import type { MailBrand } from './brand';
 import { isMailBaseUrl, isMailPass, mailPassUrl } from './links';
@@ -110,7 +116,17 @@ export type EngineMail =
   | { readonly template: 'passkey_added' }
   | { readonly template: 'totp_added' }
   | { readonly template: 'second_factor_disabled' }
-  | { readonly template: 'second_factor_failed' };
+  | { readonly template: 'second_factor_failed' }
+  | {
+      readonly template: 'upstream_linked';
+      /** The upstream provider's name as the operator set it (#670): 1 to 64 characters. */
+      readonly providerName: string;
+    }
+  | {
+      readonly template: 'upstream_unlinked';
+      /** The upstream provider's name as the operator set it (#670): 1 to 64 characters. */
+      readonly providerName: string;
+    };
 
 /** The name of an engine mail template. */
 export type EngineMailName = EngineMail['template'];
@@ -181,6 +197,24 @@ function checkUnusedCodes(count: unknown): number {
     throw new EngineMailError('a set has 0 to 10 unused codes left');
   }
   return count;
+}
+
+/** The longest provider name a notice shows: the provider row's display-name bound. */
+const PROVIDER_NAME_MAX_LENGTH = 64;
+
+/** A provider's display name, as an operator set it: plain text, one line, bounded. */
+function checkProviderName(name: unknown): string {
+  if (
+    typeof name !== 'string' ||
+    name.trim().length === 0 ||
+    name.length > PROVIDER_NAME_MAX_LENGTH ||
+    /\p{C}/u.test(name)
+  ) {
+    throw new EngineMailError(
+      `a provider name is 1 to ${PROVIDER_NAME_MAX_LENGTH} characters of one line`
+    );
+  }
+  return name;
 }
 
 function checkPass(pass: unknown): string {
@@ -310,6 +344,30 @@ export const ENGINE_MAIL_TEMPLATES: {
     subject: () => SECOND_FACTOR_FAILED_SUBJECT,
     element: (_mail: MailOf<'second_factor_failed'>, { baseUrl, brand }: EngineMailContext) =>
       createElement(SecondFactorFailedEmail, { brand, baseUrl }),
+  }),
+  upstream_linked: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => UPSTREAM_LINKED_SUBJECT,
+    element: (mail: MailOf<'upstream_linked'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(UpstreamLinkedEmail, {
+        brand,
+        baseUrl,
+        providerName: checkProviderName(mail.providerName),
+      }),
+  }),
+  upstream_unlinked: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => UPSTREAM_UNLINKED_SUBJECT,
+    element: (mail: MailOf<'upstream_unlinked'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(UpstreamUnlinkedEmail, {
+        brand,
+        baseUrl,
+        providerName: checkProviderName(mail.providerName),
+      }),
   }),
   send_ceiling: Object.freeze({
     realmMaySwitchOff: false,

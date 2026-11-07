@@ -18,6 +18,7 @@ import {
   selectAccount,
   totp,
   upstream,
+  upstreamLink,
   webauthnGet,
 } from './sign-in';
 
@@ -44,6 +45,7 @@ export const STEP_LIST = Object.freeze([
   consent,
   selectAccount,
   upstream,
+  upstreamLink,
   deviceCode,
   deviceConfirm,
   logoutConfirm,

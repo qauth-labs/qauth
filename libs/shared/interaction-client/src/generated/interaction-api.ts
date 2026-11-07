@@ -32,6 +32,13 @@ export interface Interaction {
   uiLocales?: string[];
   /** When the interaction expires. */
   expiresAt: string;
+  /** The upstream identity this sign-in links, while the person signs in to their existing account to link it (#670): the screen says so ("Sign in to link Example Corp"). Present from the answer `link` to the `upstream_link` step, or from the provider’s callback when the authorization request asked for the link (`qauth_link`), until the interaction ends; absent on any other interaction. It names the provider only, never the identity or the account. */
+  upstreamLink?: {
+    /** The provider’s name: the AuthMethod `type`. */
+    provider: string;
+    /** The provider’s name as the operator set it, for the screen’s text. */
+    name: string;
+  };
 }
 
 /** A step name, `urn:qauth:ia:<name>:v1-rc.0`. A page shows its error page for a step it does not know. */
@@ -51,6 +58,7 @@ export type StepName =
   | 'urn:qauth:ia:consent:v1-rc.0'
   | 'urn:qauth:ia:select_account:v1-rc.0'
   | 'urn:qauth:ia:upstream:v1-rc.0'
+  | 'urn:qauth:ia:upstream_link:v1-rc.0'
   | 'urn:qauth:ia:device_code:v1-rc.0'
   | 'urn:qauth:ia:device_confirm:v1-rc.0'
   | 'urn:qauth:ia:logout_confirm:v1-rc.0'
@@ -84,6 +92,7 @@ export interface StepParams {
   'urn:qauth:ia:consent:v1-rc.0'?: ConsentParams;
   'urn:qauth:ia:select_account:v1-rc.0'?: SelectAccountParams;
   'urn:qauth:ia:upstream:v1-rc.0'?: UpstreamParams;
+  'urn:qauth:ia:upstream_link:v1-rc.0'?: UpstreamLinkParams;
   'urn:qauth:ia:device_code:v1-rc.0'?: DeviceCodeParams;
   'urn:qauth:ia:device_confirm:v1-rc.0'?: DeviceConfirmParams;
   'urn:qauth:ia:logout_confirm:v1-rc.0'?: LogoutConfirmParams;
@@ -106,6 +115,7 @@ export type AnswerRequest =
   | ConsentAnswer
   | SelectAccountAnswer
   | UpstreamAnswer
+  | UpstreamLinkAnswer
   | DeviceCodeAnswer
   | DeviceConfirmAnswer
   | LogoutConfirmAnswer;
@@ -157,6 +167,7 @@ export interface StepPersonalData {
   'urn:qauth:ia:consent:v1-rc.0'?: ConsentPersonalData;
   'urn:qauth:ia:select_account:v1-rc.0'?: SelectAccountPersonalData;
   'urn:qauth:ia:upstream:v1-rc.0'?: UpstreamPersonalData;
+  'urn:qauth:ia:upstream_link:v1-rc.0'?: UpstreamLinkPersonalData;
   'urn:qauth:ia:device_code:v1-rc.0'?: DeviceCodePersonalData;
   'urn:qauth:ia:device_confirm:v1-rc.0'?: DeviceConfirmPersonalData;
   'urn:qauth:ia:logout_confirm:v1-rc.0'?: LogoutConfirmPersonalData;
@@ -690,6 +701,28 @@ export interface UpstreamAnswer {
 }
 
 export type UpstreamPersonalData = Record<string, never>;
+
+export interface UpstreamLinkParams {
+  provider: {
+    /** The provider’s name: the AuthMethod `type`. */
+    provider: string;
+    /** The provider’s name as the operator set it, for the screen’s text. */
+    name: string;
+  };
+  /** Whether the person may start a new account with the identity: the realm allows sign-up, the new account can be verified (the provider vouches for its address, or gave one an emailed code verifies), and the provider’s claims fit what the interaction keeps. `false` offers the existing account only. */
+  create: boolean;
+}
+
+/** An answer to `urn:qauth:ia:upstream_link:v1-rc.0`. */
+export interface UpstreamLinkAnswer {
+  /** The step this request answers. */
+  type: 'urn:qauth:ia:upstream_link:v1-rc.0';
+  csrf: Csrf;
+  /** A new account with the identity, or the existing account the person signs in to next. */
+  decision: 'create' | 'link';
+}
+
+export type UpstreamLinkPersonalData = Record<string, never>;
 
 export interface DeviceCodeParams {
   /** How many characters the code has, without the dash. */

@@ -78,6 +78,11 @@ export interface InteractionEngines {
    * inside {@link forRequest}, after a fresh authentication.
    */
   readonly recoveryCodes: RepositoryRecoveryCodes;
+  /**
+   * The engine's mail of the process: the link of an upstream account
+   * (#670) tells the owner through it.
+   */
+  readonly mailer: EngineMailer;
 }
 
 /**
@@ -478,6 +483,7 @@ export function createInteractionEngines(
     sendCode: (request) => engineCodeSender(mailer, request),
     forRequest: (request, rounds) => roundRequests.run(request, rounds),
     recoveryCodes,
+    mailer,
   };
 }
 

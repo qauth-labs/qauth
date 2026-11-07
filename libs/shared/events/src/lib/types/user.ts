@@ -306,6 +306,82 @@ export const userEnabled = defineEventType({
   ssf: { event: RISC_ACCOUNT_ENABLED },
 });
 
+/**
+ * Account linking (#670; ADR-020 §3, NIST SP 800-63C-4 §5.4): an upstream
+ * identity joins an existing account only once the person signed in to that
+ * account with its own factors, in the interaction in which the provider
+ * proved the identity, and leaves it only through a fresh sign-in. Recorded
+ * in the transaction of the change.
+ */
+
+/** The upstream identity provider an identity is of: its AuthMethod `type`. */
+const upstreamProviderType = () =>
+  z
+    .string()
+    .min(1)
+    .max(63)
+    .regex(/^[a-z][a-z0-9_]{0,62}$/)
+    .describe('The upstream identity provider, by its type, such as `oidc_corp`.');
+
+export const userUpstreamLinked = defineEventType({
+  name: 'user.upstream_linked',
+  version: 1,
+  rc: 0,
+  description:
+    'A person linked an upstream identity to their account: the provider proved the identity, and the person then signed in to the account with its own factors and its MFA policy, in the same browser and the same interaction. The account can sign in through the provider from now on. The person is told by email.',
+  category: 'user',
+  severity: 'info',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    provider: upstreamProviderType(),
+    credentialId: recordId('The id of the account credential the identity was linked as.'),
+  }),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'CAEP 1.0 `credential-change` names its credential by a type it lists (a password, a FIDO key, a verifiable credential), and none is an identity at another provider; no type is agreed with receivers yet.',
+});
+
+export const userUpstreamUnlinked = defineEventType({
+  name: 'user.upstream_unlinked',
+  version: 1,
+  rc: 0,
+  description:
+    'A person removed an upstream identity from their account through the account API, after a fresh sign-in. The account no longer signs in through that provider; the attributes the provider gave stay. The person is told by email.',
+  category: 'user',
+  severity: 'warning',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    provider: upstreamProviderType(),
+    credentialId: recordId('The id of the account credential that was removed.'),
+  }),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'CAEP 1.0 `credential-change` names its credential by a type it lists (a password, a FIDO key, a verifiable credential), and none is an identity at another provider; no type is agreed with receivers yet.',
+});
+
+export const userUpstreamLinkFailed = defineEventType({
+  name: 'user.upstream_link_failed',
+  version: 1,
+  rc: 0,
+  description:
+    'An upstream identity could not be linked. `reason`: `already_linked`, another account holds the identity; `provider_linked`, the account already holds an identity of that provider; `account_unavailable`, the account signed in to is gone or disabled. Nothing was linked. The subject is the account the person signed in to, or the one that holds the identity when nobody has signed in yet.',
+  category: 'user',
+  severity: 'warning',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    provider: upstreamProviderType(),
+    reason: reason(),
+  }),
+  security: true,
+  ssf: 'none',
+  ssfNote: 'Nothing changed: no credential was created, changed or deleted.',
+});
+
 export const USER_EVENT_TYPES = [
   userSignedIn,
   userSignInFailed,
@@ -321,4 +397,7 @@ export const USER_EVENT_TYPES = [
   userRecoveryCodesFailed,
   userDisabled,
   userEnabled,
+  userUpstreamLinked,
+  userUpstreamUnlinked,
+  userUpstreamLinkFailed,
 ] as const;

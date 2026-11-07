@@ -140,12 +140,12 @@ export const SECURITY_LOG_KINDS = {
   },
   account_linked: {
     description: 'A wallet or an upstream account was linked to the account.',
-    sources: [registered('wallet.linked'), planned('user.upstream_linked', 670)],
+    sources: [registered('wallet.linked'), registered('user.upstream_linked')],
     reportable: false,
   },
   account_unlinked: {
     description: 'A wallet or an upstream account was unlinked from the account.',
-    sources: [planned('user.upstream_unlinked', 670)],
+    sources: [registered('user.upstream_unlinked')],
     reportable: false,
   },
   consent_granted: {
@@ -199,6 +199,7 @@ export const NOT_IN_SECURITY_LOG: Readonly<Record<string, string>> = {
   'userinfo.served': 'An app reading the person’s claims: no change.',
   'userinfo.request_failed': 'A refused userinfo request: no change.',
   'wallet.link_failed': 'A link that did not happen changes nothing on the account.',
+  'user.upstream_link_failed': 'A link that did not happen changes nothing on the account.',
   'interaction.created': 'A sign-in page opened; the sign-in itself is the entry.',
   'interaction.answered': 'One answer within a sign-in; the sign-in itself is the entry.',
   'interaction.cancelled': 'A sign-in the person abandoned changes nothing on the account.',

@@ -52,11 +52,17 @@ import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-ra
 import { buildRealmUrl, realmIssuer } from '../helpers/realm-url';
 import { type RealmRow, requestRealm } from '../helpers/request-realm';
 import { roundEnvironment } from '../helpers/round-limits';
+import { linkUpstreamIdentity } from '../helpers/upstream-links';
 import {
   type UpstreamProviderCatalog,
   upstreamProviderCatalog,
 } from '../helpers/upstream-providers';
-import { type UpstreamStarted, upstreamStarter } from '../helpers/upstream-sign-in';
+import {
+  decideUpstreamLinkChoice,
+  UPSTREAM_LINK_STEP,
+  type UpstreamStarted,
+  upstreamStarter,
+} from '../helpers/upstream-sign-in';
 import { emitUserEvent } from '../helpers/user-events';
 
 /**
@@ -83,7 +89,14 @@ import { emitUserEvent } from '../helpers/user-events';
  * finishes the interaction, and `finishConsent` decides it for the scope set
  * the step showed. An answer to the `logout_confirm` step of an RP-initiated
  * logout (#675) runs no round either: it finishes the interaction, and
- * `finishLogout` ends the session, or not, as the person decided.
+ * `finishLogout` ends the session, or not, as the person decided. An
+ * answer to the `upstream_link` step (#670) is decided by the host too
+ * (`decideUpstreamLinkChoice`): a new account, or the sign-in to the existing
+ * one, whose rounds offer no upstream provider and no reset. When that
+ * sign-in finishes the interaction, the identity the provider proved joins
+ * the account it signed in to (`linkUpstreamIdentity`) before the
+ * authorization request goes on; a refused link goes to its page, and
+ * nothing goes to the client.
  *
  * A JSON answer gets the next step view, or the final redirect, as JSON. A
  * form post gets `303 See Other` to the ceremony page of the interaction,
@@ -235,6 +248,8 @@ function stepRead(view: InteractionView) {
     ...interactionStepView(view.step),
     csrf: view.csrf,
     ...(view.client === undefined ? {} : { client: view.client }),
+    // The sign-in links an upstream account (#670): the screens say which.
+    ...(view.upstreamLink === undefined ? {} : { upstreamLink: view.upstreamLink }),
     brand: DEFAULT_BRAND,
     expiresAt: new Date(view.deadline).toISOString(),
   };
@@ -500,7 +515,10 @@ async function decideAnswer(
 ): Promise<InteractionDecision> {
   if (state.purpose === 'logout') return decideLogout(state, answer, answered.logout);
   if (state.step.name === CONSENT_STEP) return decideConsent(state, answer, answered.consent);
-  readAnswer(state.step, answer);
+  const read = readAnswer(state.step, answer);
+  // The sign-in to the account an upstream identity joins (#670): the
+  // person proves the account with its own factors, afresh.
+  const signingInToLink = state.upstreamLink?.state === 'signing_in';
   const realmId = requestRealm(request).id;
   // The engine counts by the client id as it is; an event carries it only
   // when the envelope's bound allows (a CIMD URL can be longer).
@@ -511,14 +529,19 @@ async function decideAnswer(
     requestRealm(request),
     state.request.client_id
   );
-  const context = (receivedAt: number): RoundContext => ({
+  const context = (
+    receivedAt: number,
+    { linking }: { readonly linking: boolean } = { linking: signingInToLink }
+  ): RoundContext => ({
     realm: { id: realmId },
     client: { id: state.request.client_id },
-    // `prompt=create` (#640): the engine's rounds are a registration's.
-    ...(state.request.prompt === 'create' ? { flow: 'register' as const } : {}),
+    // `prompt=create` (#640): the engine's rounds are a registration's; a
+    // sign-in to link an upstream account (#670) registers nobody.
+    ...(state.request.prompt === 'create' && !linking ? { flow: 'register' as const } : {}),
     // `prompt=login` and `max_age` ask for a fresh sign-in, which a password
-    // reset never is (#642; ADR-017 Decision 8): no reset is offered.
-    ...(state.request.prompt === 'login' || state.request.max_age !== undefined
+    // reset never is (#642; ADR-017 Decision 8): no reset is offered. A
+    // sign-in to link an upstream account (#670) is always a fresh one.
+    ...(state.request.prompt === 'login' || state.request.max_age !== undefined || linking
       ? { freshSignIn: true }
       : {}),
     receivedAt,
@@ -527,19 +550,24 @@ async function decideAnswer(
     sendCode,
     // A pick of an upstream provider (#639) starts it, bound to this
     // interaction once the round's state is written; the way back from the
-    // provider is this ceremony page.
-    startUpstream: upstreamStarter(
-      request.server,
-      request,
-      catalog,
-      {
-        interactionId: interactionIdOf(request),
-        revision: state.revision + 1,
-        mode: 'interaction',
-        wayBack: ceremonyPageUrl(request),
-      },
-      answered.upstream
-    ),
+    // provider is this ceremony page. A sign-in to link an upstream account
+    // (#670) offers none: the account's own factors prove it.
+    ...(linking
+      ? {}
+      : {
+          startUpstream: upstreamStarter(
+            request.server,
+            request,
+            catalog,
+            {
+              interactionId: interactionIdOf(request),
+              revision: state.revision + 1,
+              mode: 'interaction',
+              wayBack: ceremonyPageUrl(request),
+            },
+            answered.upstream
+          ),
+        }),
     audit: async (record) => {
       const event = signInAuditEvent(record);
       await emitUserEvent(request, event.type, event.data, {
@@ -550,6 +578,18 @@ async function decideAnswer(
       });
     },
   });
+  if (state.step.name === UPSTREAM_LINK_STEP) {
+    // The choice of #670: a new account, or the existing one.
+    return decideUpstreamLinkChoice(request.server, request, reply, {
+      engine,
+      catalog,
+      state,
+      decision: (read.answer as { decision: 'create' | 'link' }).decision,
+      receivedAt: answer.receivedAt,
+      context,
+      signedIn: () => answered.signedIn('upstream'),
+    });
+  }
   let result: RoundResult = await engine.advance(
     state.signInTransaction,
     {
@@ -790,6 +830,36 @@ export default async function (fastify: FastifyInstance) {
               { method: signedInMethod },
               { realmId: realm.id, userId, clientId: eventClientIdOf(result), actor: 'user' }
             );
+          }
+          const link = result.upstreamLink;
+          // A link the request asked for (`qauth_link`, #670) whose provider
+          // proved nobody yet holds no identity: the person came back from
+          // the provider, or never went, and signed in another way. Nothing
+          // is attached, and the sign-in finishes as any other.
+          if (link !== undefined && link.state !== 'requested') {
+            // The interaction holds an upstream identity (#670): only the
+            // sign-in to an existing account, just finished in this browser
+            // and this interaction, attaches it, to the account it proved.
+            if (link.state !== 'signing_in' || userId === undefined || registered === true) {
+              throw new Error('an interaction finished with a link it never signed in for');
+            }
+            const linked = await linkUpstreamIdentity(fastify, request, {
+              realm,
+              userId,
+              identity: { provider: link.provider, externalSub: link.externalSub, iss: link.iss },
+              providerName: link.name,
+              clientId: eventClientIdOf(result),
+              mailer: engines.mailer,
+            });
+            if (linked.kind === 'refused') {
+              const search = new URLSearchParams({
+                provider: link.provider,
+                reason: linked.reason,
+              });
+              return respond(request, reply, parsed.encoding, {
+                location: buildRealmUrl(realm, `/ui/upstream-link-refused?${search.toString()}`),
+              });
+            }
           }
           // The authorization request goes on (#628): the code, minted only
           // now that the interaction has ended, or the request's next

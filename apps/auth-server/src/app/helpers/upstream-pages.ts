@@ -19,9 +19,16 @@ import { walletPageStyles } from './wallet-ui';
  * - The error page: every other failure, with one text and the request's
  *   trace id, so support can find the log line without the page telling
  *   what failed.
+ * - The link choice (#670): the provider proved an identity no account
+ *   holds; a new account, when the realm allows one, or "I already have an
+ *   account", which goes on to the sign-in to that account. Both buttons
+ *   post the `upstream_link` step's answer to the Interaction API.
+ * - The link-refused page (#670): the identity was not linked, and why in
+ *   the person's terms. Nothing goes to the client.
  *
  * None of them shows anything the request carried but the provider's name,
- * as the operator set it, and the trace id.
+ * as the operator set it, and the trace id. None names an account, an
+ * address or anything else that could match the identity to one.
  */
 
 /** The page's chrome: the shared `/ui` styles under the request's CSP nonce. */
@@ -127,6 +134,83 @@ export function upstreamErrorPage(opts: {
           ? ''
           : html`<a class="alt-action" href="${wayBack}">Start signing in again</a>`
       }`,
+  });
+}
+
+/** The link choice's title. */
+export const UPSTREAM_LINK_CHOICE_TITLE = 'Is this your first time here?';
+
+/**
+ * The link choice (#670): the `upstream_link` step's form. "I already have
+ * an account" always; a new account only when the step offers one.
+ */
+export function upstreamLinkChoicePage(opts: {
+  readonly cspNonce: string;
+  readonly providerName: string;
+  /** Whether the step offers a new account. */
+  readonly create: boolean;
+  /** The Interaction API's answer endpoint of the interaction. */
+  readonly action: string;
+  /** The step's name, the answer's `type`. */
+  readonly type: string;
+  readonly csrf: string;
+}): string {
+  const { cspNonce, providerName, create, action, type, csrf } = opts;
+  return page({
+    cspNonce,
+    title: UPSTREAM_LINK_CHOICE_TITLE,
+    body: html`<h1>${UPSTREAM_LINK_CHOICE_TITLE}</h1>
+      <p>
+        ${providerName} signed you in, and no account here uses that ${providerName} account yet.
+      </p>
+      <form method="post" action="${action}">
+        <input type="hidden" name="type" value="${type}" />
+        <input type="hidden" name="csrf" value="${csrf}" />
+        <button type="submit" name="decision" value="link">I already have an account</button>
+        <p class="hint">
+          Sign in to it with its own password or passkey, and ${providerName} is linked to it.
+        </p>
+        ${
+          create
+            ? html`<button class="alt-action" type="submit" name="decision" value="create">
+                Create a new account
+              </button>`
+            : ''
+        }
+      </form>`,
+  });
+}
+
+/** Why a link was refused, as the refused page tells it. */
+export type UpstreamLinkRefusedReason =
+  | 'already_linked'
+  | 'provider_linked'
+  | 'account_unavailable';
+
+/** The link-refused page's title. */
+export const UPSTREAM_LINK_REFUSED_TITLE = 'The account was not linked';
+
+/** The link-refused page (#670): nothing was linked, and why. */
+export function upstreamLinkRefusedPage(opts: {
+  readonly cspNonce: string;
+  readonly providerName: string;
+  readonly reason: UpstreamLinkRefusedReason;
+}): string {
+  const { cspNonce, providerName, reason } = opts;
+  const why =
+    reason === 'already_linked'
+      ? html`This ${providerName} account is already linked to an account here. Sign in with
+        ${providerName} to use that account.`
+      : reason === 'provider_linked'
+        ? html`The account you signed in to already has a ${providerName} account linked. Unlink it
+          in your account settings first to link another.`
+        : html`The account you signed in to cannot be linked now.`;
+  return page({
+    cspNonce,
+    title: UPSTREAM_LINK_REFUSED_TITLE,
+    body: html`<h1>${UPSTREAM_LINK_REFUSED_TITLE}</h1>
+      <p role="alert">${why}</p>
+      <p class="hint">Nothing was changed. You can close this page and go back to the app.</p>`,
   });
 }
 

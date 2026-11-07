@@ -101,6 +101,11 @@ export const upstreamRouteParamSchema = z.string().max(64).optional().meta({
     "QAuth's direct-routing parameter: the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included. When the request needs a sign-in, the sign-in starts at that provider instead of the first sign-in step. A value that names no provider the realm has on is ignored, as it is when no sign-in is needed.",
 });
 
+export const upstreamLinkParamSchema = z.string().max(64).optional().meta({
+  description:
+    "QAuth's link parameter (#670): the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included, whose account the person links to theirs. The request starts at that provider, then asks for a fresh sign-in to the existing account with its own factors, whatever session the browser has; the identity joins the account that sign-in proved. Honoured only for an operator-flagged first-party client while the interaction UI is on; any other value, or any other client's, is ignored.",
+});
+
 /* -------------------------------------------------------------------------- */
 /*        Grant-type, token-type and client-assertion URNs (one place)        */
 /* -------------------------------------------------------------------------- */
@@ -332,6 +337,8 @@ export const authorizeQuerySchema = z.object({
   // QAuth's direct-routing parameter (#639): start the realm's upstream
   // provider of this type at once.
   qauth_upstream: upstreamRouteParamSchema,
+  // QAuth's link parameter (#670): link an account of this upstream provider.
+  qauth_link: upstreamLinkParamSchema,
 });
 
 export type AuthorizeQuery = z.infer<typeof authorizeQuerySchema>;

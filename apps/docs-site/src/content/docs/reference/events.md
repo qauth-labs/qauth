@@ -223,6 +223,9 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.recovery_codes_failed:v1-rc.0`](#userrecovery_codes_failed-v1-rc0)               | user     | critical | v0.2.0 |
 | [`urn:qauth:event:user.disabled:v1-rc.0`](#userdisabled-v1-rc0)                                         | admin    | warning  | v0.2.0 |
 | [`urn:qauth:event:user.enabled:v1-rc.0`](#userenabled-v1-rc0)                                           | admin    | info     | v0.2.0 |
+| [`urn:qauth:event:user.upstream_linked:v1-rc.0`](#userupstream_linked-v1-rc0)                           | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.upstream_unlinked:v1-rc.0`](#userupstream_unlinked-v1-rc0)                       | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.upstream_link_failed:v1-rc.0`](#userupstream_link_failed-v1-rc0)                 | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0 |
 | [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                           | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                   | user     | info     | v0.2.0 |
@@ -451,6 +454,51 @@ An operator enabled a disabled account again. The person signs in again: what wa
 - Security type · SSF: `https://schemas.openid.net/secevent/risc/event-type/account-enabled` ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
+
+### user.upstream_linked v1-rc.0
+
+A person linked an upstream identity to their account: the provider proved the identity, and the person then signed in to the account with its own factors and its MFA policy, in the same browser and the same interaction. The account can sign in through the provider from now on. The person is told by email.
+
+- Identifier: `urn:qauth:event:user.upstream_linked:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.upstream_linked.v1-rc.0.json](/schemas/events/user.upstream_linked.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+| Member         | Type   | Required | Meaning                                                           |
+| -------------- | ------ | -------- | ----------------------------------------------------------------- |
+| `provider`     | string | yes      | The upstream identity provider, by its type, such as `oidc_corp`. |
+| `credentialId` | UUID   | yes      | The id of the account credential the identity was linked as.      |
+
+### user.upstream_unlinked v1-rc.0
+
+A person removed an upstream identity from their account through the account API, after a fresh sign-in. The account no longer signs in through that provider; the attributes the provider gave stay. The person is told by email.
+
+- Identifier: `urn:qauth:event:user.upstream_unlinked:v1-rc.0`
+- Category: `user` · Severity: `warning` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.upstream_unlinked.v1-rc.0.json](/schemas/events/user.upstream_unlinked.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+| Member         | Type   | Required | Meaning                                                           |
+| -------------- | ------ | -------- | ----------------------------------------------------------------- |
+| `provider`     | string | yes      | The upstream identity provider, by its type, such as `oidc_corp`. |
+| `credentialId` | UUID   | yes      | The id of the account credential that was removed.                |
+
+### user.upstream_link_failed v1-rc.0
+
+An upstream identity could not be linked. `reason`: `already_linked`, another account holds the identity; `provider_linked`, the account already holds an identity of that provider; `account_unavailable`, the account signed in to is gone or disabled. Nothing was linked. The subject is the account the person signed in to, or the one that holds the identity when nobody has signed in yet.
+
+- Identifier: `urn:qauth:event:user.upstream_link_failed:v1-rc.0`
+- Category: `user` · Severity: `warning` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.upstream_link_failed.v1-rc.0.json](/schemas/events/user.upstream_link_failed.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+| Member     | Type   | Required | Meaning                                                                                         |
+| ---------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
+| `provider` | string | yes      | The upstream identity provider, by its type, such as `oidc_corp`.                               |
+| `reason`   | string | yes      | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release. |
 
 ### authorization.completed v1-rc.0
 

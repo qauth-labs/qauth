@@ -59,6 +59,11 @@ export const NOTICES = {
     description: 'The sign-in address or the contact address changed; sent to the old address.',
     mandatory: true,
   },
+  account_linked: {
+    description: 'An upstream account was linked, so the account can sign in through it.',
+    mandatory: true,
+  },
+  account_unlinked: { description: 'An upstream account was unlinked.', mandatory: true },
   account_deleted: { description: 'The account was deleted.', mandatory: true },
 } as const satisfies Record<string, Notice>;
 

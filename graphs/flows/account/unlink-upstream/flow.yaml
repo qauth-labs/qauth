@@ -1,0 +1,284 @@
+# Unlinking an upstream account through the account API (#670; ADR-020 Appendix "Linked accounts", ADR-019 Decision 7,
+# ADR-017 Decision 8): DELETE /account/v1-rc.0/linked-accounts/{linkedAccountId}, the account console's "unlink" of an
+# upstream identity linked to the account.
+#
+# - The operation changes the ways into the account: it needs a fresh sign-in (at most five minutes old) with the
+#   account's strongest bound factor, and refuses an act-chain token, as every such operation of the account API does
+#   (helpers/account-operation-guard.ts). An account whose only ways in are upstream identities holds no password, so
+#   its sign-in never carries the `pwd` the guard asks of it: such an account cannot unlink through this API.
+# - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the caller gets.
+schema: delurio-graph/0
+kind: flow
+id: account.unlink-upstream
+status: proposed
+domain: qauth
+title: Unlink an upstream account from the account
+summary: >-
+  The account API checks the token's sign-in, then, under the user's row lock, finds the linked account among the
+  account's own upstream identities and refuses to remove the last way to sign in: a password, a passkey, a wallet or
+  another upstream identity must remain; an authenticator app is a second factor, never a way in on its own. The delete
+  and user.upstream_unlinked commit together, and the owner is mailed at the account's password address.
+
+scope:
+  shows: the unlink, from the guarded request to the response
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "the account API's token guard, which answers a missing, invalid or foreign token and a missing scope before this
+      flow runs"
+    - "the admin's unlink (ADM-12)"
+    - 'the link: federation.upstream-link'
+    - 'the per-address and per-realm rate limits, which answer 429 before the flow runs'
+
+context:
+  token:
+    values: [own, delegated]
+    initial: any
+    say:
+      own: "the person's own token"
+      delegated: 'a token with an act chain (RFC 8693): an agent acting for the person'
+  signIn:
+    values: [fresh, stale]
+    initial: any
+    say:
+      fresh: "the token's sign-in (auth_time) is at most five minutes old"
+      stale: 'it is older, or the token does not say when it signed in'
+  factor:
+    values: [strongest, weaker]
+    initial: any
+    say:
+      strongest: "the sign-in's amr holds the account's strongest bound factor: a passkey, else TOTP, else the password"
+      weaker: 'it does not'
+  target:
+    values: [own, missing]
+    initial: any
+    say:
+      own: 'the id names an upstream identity of the account'
+      missing: "it names nothing, another account's identity, or a credential that is no upstream identity"
+  otherWayIn:
+    values: [remains, none]
+    initial: any
+    say:
+      remains: 'a password, a passkey, a wallet or another upstream identity remains'
+      none: 'nothing remains but, at most, an authenticator app'
+  unlinked: { values: [false, true], initial: false }
+
+guards:
+  delegated: "token == 'delegated'"
+  stale: "signIn == 'stale'"
+  weakerFactor: "factor == 'weaker'"
+  missingTarget: "target == 'missing'"
+  lastWayIn: "otherWayIn == 'none'"
+
+effects:
+  unlink: { set: { unlinked: true } }
+
+failures:
+  readingFactors: { from: UserCredential.findAllByUserId, unavailable: [temporarily_unavailable] }
+  unlinking: { from: upstreamLinkStore, server: [server_error] }
+
+main:
+  given:
+    token: own
+    signIn: fresh
+    factor: strongest
+    target: own
+    otherWayIn: remains
+  events: [UNLINK, DONE, DONE]
+
+initial: idle
+states:
+  idle:
+    title: Wait for an unlink request with a valid account API token
+    source: apps/auth-server/src/app/routes/account/linked-accounts.ts:110
+    on:
+      UNLINK:
+        target: checkingToken
+        say: 'DELETE /account/v1-rc.0/linked-accounts/{linkedAccountId}, past the token guard'
+        source: apps/auth-server/src/app/routes/account/linked-accounts.ts:111
+
+  checkingToken:
+    title: Refuse an act-chain token and a stale sign-in
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:244
+    always:
+      - guard: delegated
+        target: delegated_token_refused.act_chain
+        say: 'a token with an act chain'
+        source: apps/auth-server/src/app/helpers/account-operation-guard.ts:246
+      - guard: stale
+        target: insufficient_user_authentication.too_old
+        say: 'a sign-in older than five minutes'
+        source: apps/auth-server/src/app/helpers/account-operation-guard.ts:261
+      - target: readingFactors
+        say: 'a fresh sign-in'
+
+  readingFactors:
+    title: Read the account's bound factors
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:274
+    invoke: { action: UserCredential.findAllByUserId }
+    on:
+      DONE:
+        target: checkingFactor
+        say: "the account's credentials"
+      FAIL.unavailable:
+        target: temporarily_unavailable.factors
+        say: 'the database cannot answer'
+
+  checkingFactor:
+    title: Ask for the account's strongest factor
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:287
+    always:
+      - guard: weakerFactor
+        target: insufficient_user_authentication.strongest_factor
+        say: "the sign-in did not use the account's strongest factor"
+        source: apps/auth-server/src/app/helpers/account-operation-guard.ts:309
+      - target: unlinking
+        say: 'the guard lets the request through'
+
+  unlinking:
+    title: Unlink the identity under the account's row lock
+    description: >-
+      In one transaction: the user's row locked, the account's credentials read, the target found among its upstream
+      identities of the request's realm, the last-way-in check, then the delete and user.upstream_unlinked. The
+      attributes the provider gave when it created the account stay.
+    source: apps/auth-server/src/app/helpers/upstream-links.ts:225
+    invoke: { external: upstreamLinkStore }
+    on:
+      DONE:
+        target: decidingUnlink
+        say: 'the transaction answers: unlinked, or refused and rolled back'
+      FAIL.server:
+        target: server_error.store
+        say: 'the database fails; nothing is unlinked'
+
+  decidingUnlink:
+    title: Answer as the unlink's transaction did
+    source: apps/auth-server/src/app/routes/account/linked-accounts.ts:132
+    always:
+      - guard: missingTarget
+        target: not_found.linked_account
+        say: "no upstream identity of the account has that id: another account's reads the same"
+        source: apps/auth-server/src/app/helpers/upstream-links.ts:235
+      - guard: lastWayIn
+        target: last_credential
+        say: "the identity is the account's last way to sign in"
+        source: apps/auth-server/src/app/helpers/upstream-links.ts:236
+      - target: unlinked
+        effect: [unlink]
+        say: 'the identity is removed, and the owner is mailed'
+        source: apps/auth-server/src/app/helpers/upstream-links.ts:254
+
+  # Exits
+
+  unlinked:
+    type: final
+    title: Unlink the identity
+    description: >-
+      user.upstream_unlinked is recorded, which the security log shows as account_unlinked; the owner is mailed at the
+      account's password address after the answer. The provider no longer signs the account in.
+    response:
+      status: 204
+
+  delegated_token_refused.act_chain:
+    type: final
+    title: Refuse an act-chain token
+    description: request.account_operation_refused is recorded with the reason delegated_token.
+    response:
+      status: 403
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#delegated-token-refused
+        status: 403
+        code: delegated_token_refused
+        trace_id: the request id
+
+  insufficient_user_authentication.too_old:
+    type: final
+    title: Ask for a fresh sign-in
+    description: request.account_operation_refused is recorded with the reason authentication_too_old.
+    response:
+      status: 401
+      headers:
+        WWW-Authenticate: 'Bearer error="insufficient_user_authentication", max_age="300"'
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#insufficient-user-authentication
+        status: 401
+        code: insufficient_user_authentication
+        max_age: 300
+        trace_id: the request id
+
+  insufficient_user_authentication.strongest_factor:
+    type: final
+    title: Ask for a sign-in with the account's strongest factor
+    description: request.account_operation_refused is recorded with the reason strongest_factor_missing.
+    response:
+      status: 401
+      headers:
+        WWW-Authenticate: 'Bearer error="insufficient_user_authentication", max_age="0"'
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#insufficient-user-authentication
+        status: 401
+        code: insufficient_user_authentication
+        max_age: 0
+        trace_id: the request id
+
+  not_found.linked_account:
+    type: final
+    title: Answer an id that names no upstream identity of the account
+    response:
+      status: 404
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#not-found
+        status: 404
+        code: not_found
+        trace_id: the request id
+
+  last_credential:
+    type: final
+    title: Refuse to remove the account's last way to sign in
+    response:
+      status: 409
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#last-credential
+        status: 409
+        code: last_credential
+        trace_id: the request id
+
+  temporarily_unavailable.factors:
+    type: final
+    title: Answer a guard that cannot read the account's factors
+    response:
+      status: 503
+      headers:
+        Retry-After: the seconds to wait
+      body:
+        status: 503
+        code: temporarily_unavailable
+        trace_id: the request id
+
+  server_error.store:
+    type: final
+    title: Fail on a database error
+    response:
+      status: 500
+      body: the error handler's problem document, with the trace id
+
+assertions:
+  - id: no-unlink-on-a-stale-sign-in
+    never: 'unlinked and stale'
+    say: 'A sign-in older than five minutes never unlinks'
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:261
+  - id: no-unlink-by-an-agent
+    never: 'unlinked and delegated'
+    say: 'An act-chain token never unlinks'
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:246
+  - id: no-unlink-without-the-strongest-factor
+    never: 'unlinked and weakerFactor'
+    say: "Only a sign-in with the account's strongest factor unlinks"
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:287
+  - id: the-last-way-in-stays
+    never: 'unlinked and lastWayIn'
+    say: 'An unlink never leaves the account without a way to sign in'
+    source: apps/auth-server/src/app/helpers/upstream-links.ts:236
+  - id: only-the-accounts-own-identity
+    never: 'unlinked and missingTarget'
+    say: "An unlink removes only an upstream identity of the token's own account"
+    source: apps/auth-server/src/app/helpers/upstream-links.ts:235

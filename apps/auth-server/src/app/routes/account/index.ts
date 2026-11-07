@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import { registerAccountConsentRoutes } from './consents';
+import { registerAccountLinkedAccountRoutes } from './linked-accounts';
 
 /**
  * THE ACCOUNT API, `/account/v1-rc.0` (ADR-019 Decision 7, #524).
@@ -8,7 +9,8 @@ import { registerAccountConsentRoutes } from './consents';
  * An end user manages their own account. Its first routes are the consents:
  * the active grants the user gave, and their revocation, which replace the
  * cookie-authenticated `/consents` (a deprecated alias until the account
- * console, v0.3, moves).
+ * console, v0.3, moves); then the linked upstream accounts and their
+ * removal (#670).
  *
  * Every route is guarded by `requireFamilyToken('account')` (#509): a token
  * whose only audience is `urn:qauth:aud:account:v1-rc.0`, as the account
@@ -27,4 +29,5 @@ export const autoPrefix = '/account/v1-rc.0';
 
 export default async function (fastify: FastifyInstance) {
   registerAccountConsentRoutes(fastify);
+  registerAccountLinkedAccountRoutes(fastify);
 }

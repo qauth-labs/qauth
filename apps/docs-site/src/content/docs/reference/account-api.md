@@ -116,6 +116,15 @@ The address the account signs in with, and its contact address.
 | Start an address change (`account.addressChange.create`)    | `POST /address-change`         | Strongest factor     | Refused         | 202     | `disabled_by_realm`                              |
 | Confirm an address change (`account.addressChange.confirm`) | `POST /address-change/confirm` | Strongest factor     | Refused         | 200     | `invalid_code`, `not_found`, `disabled_by_realm` |
 
+### Linked accounts
+
+The upstream accounts the person can sign in through, and their removal.
+
+| Operation                                                         | Request                                     | Fresh authentication | Act-chain token | Success | Its own codes                  |
+| ----------------------------------------------------------------- | ------------------------------------------- | -------------------- | --------------- | ------- | ------------------------------ |
+| List the linked upstream accounts (`account.linkedAccounts.list`) | `GET /linked-accounts`                      | —                    | Accepted        | 200     | —                              |
+| Unlink an upstream account (`account.linkedAccounts.delete`)      | `DELETE /linked-accounts/{linkedAccountId}` | Strongest factor     | Refused         | 204     | `not_found`, `last_credential` |
+
 ### Connected apps
 
 The apps the person consented to, and their revocation.
@@ -161,8 +170,8 @@ An entry's `kind` is one of a closed list. Each kind is built from QAuth's event
 | `recovery_codes_failed`      | Recovery codes were tried and refused 100 times (ADR-017 Decision 7).                                                                                                                           | `user.recovery_codes_failed`                                                                                                                                                       | No               |
 | `send_ceiling_reached`       | Codes were requested for the account’s address past the per-address send ceiling, and a notice with a reset pass went to it (ADR-017 Decision 7).                                               | `user.send_ceiling_reached` (with #637)                                                                                                                                            | No               |
 | `identifier_changed`         | The address the account signs in with, or its contact address, changed.                                                                                                                         | `user.identifier_changed` (with #690)                                                                                                                                              | No               |
-| `account_linked`             | A wallet or an upstream account was linked to the account.                                                                                                                                      | `wallet.linked`, `user.upstream_linked` (with #670)                                                                                                                                | No               |
-| `account_unlinked`           | A wallet or an upstream account was unlinked from the account.                                                                                                                                  | `user.upstream_unlinked` (with #670)                                                                                                                                               | No               |
+| `account_linked`             | A wallet or an upstream account was linked to the account.                                                                                                                                      | `wallet.linked`, `user.upstream_linked`                                                                                                                                            | No               |
+| `account_unlinked`           | A wallet or an upstream account was unlinked from the account.                                                                                                                                  | `user.upstream_unlinked`                                                                                                                                                           | No               |
 | `consent_granted`            | The person let an app access the account.                                                                                                                                                       | `consent.granted`                                                                                                                                                                  | No               |
 | `consent_revoked`            | An app’s access to the account was withdrawn.                                                                                                                                                   | `consent.revoked`                                                                                                                                                                  | No               |
 
@@ -185,6 +194,8 @@ The security notices the account receives. A minor release may add one, such as 
 | `send_ceiling_reached`       | Codes were requested past the per-address send ceiling. It carries a reset pass.                           | Yes       |
 | `second_factor_failed`       | A wrong second factor followed a correct password.                                                         | Yes       |
 | `identifier_changed`         | The sign-in address or the contact address changed; sent to the old address.                               | Yes       |
+| `account_linked`             | An upstream account was linked, so the account can sign in through it.                                     | Yes       |
+| `account_unlinked`           | An upstream account was unlinked.                                                                          | Yes       |
 | `account_deleted`            | The account was deleted.                                                                                   | Yes       |
 
 ## Errors

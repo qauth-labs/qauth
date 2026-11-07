@@ -5,6 +5,7 @@ import { defineStep } from '../grammar';
 import {
   array,
   base64url,
+  closedEnum,
   constant,
   displayText,
   EMPTY_OBJECT,
@@ -29,7 +30,8 @@ import {
  * The sign-in steps: who is signing in, and the factors that prove it.
  * `identifier`, `password`, `captcha`, `webauthn_get` and `totp` are the
  * steps of ADR-017 Decision 3 and may be served by both transports;
- * `recovery_code`, `select_account` and `upstream` only by the Interaction API.
+ * `recovery_code`, `select_account`, `upstream` and `upstream_link` only by the
+ * Interaction API.
  */
 
 /** The identifier step's personal data: the request's `login_hint` as a prefill (#628). */
@@ -219,5 +221,33 @@ export const upstream = defineStep({
   personal: EMPTY_OBJECT,
   answer: object({ provider: upstreamProvider('The `provider` of the entry the person picked.') }),
   errors: ['provider_unavailable'],
+  amr: [],
+});
+
+export const upstreamLink = defineStep({
+  name: 'upstream_link',
+  transports: ['interaction'],
+  params: object({
+    provider: object({
+      provider: upstreamProvider('The provider’s name: the AuthMethod `type`.'),
+      name: displayText(
+        'realm',
+        64,
+        'The provider’s name as the operator set it, for the screen’s text.'
+      ),
+    }),
+    create: z.boolean().meta({
+      description:
+        'Whether the person may start a new account with the identity: the realm allows sign-up, the new account can be verified (the provider vouches for its address, or gave one an emailed code verifies), and the provider’s claims fit what the interaction keeps. `false` offers the existing account only.',
+    }),
+  }),
+  personal: EMPTY_OBJECT,
+  answer: object({
+    decision: closedEnum(
+      ['create', 'link'],
+      'A new account with the identity, or the existing account the person signs in to next.'
+    ),
+  }),
+  errors: [],
   amr: [],
 });

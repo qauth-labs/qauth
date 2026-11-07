@@ -146,6 +146,7 @@ http://localhost:3000/oauth/authorize
 | `login_hint`            | no          | At most 254 bytes in UTF-8; pre-fills an interaction's sign-in.           |
 | `prompt`                | no          | `none`, `login`, `consent`, or `create` to register. See below.           |
 | `qauth_upstream`        | no          | An upstream provider's type; starts the sign-in there. See below.         |
+| `qauth_link`            | no          | An upstream provider's type; links an account of it. See below.           |
 
 `redirect_uri` and each `resource` are absolute URIs of at most 2048
 characters, written in ASCII as RFC 3986 requires: an internationalised host in
@@ -163,6 +164,26 @@ names no provider the realm has on is ignored, as the parameter is when no
 sign-in is needed (a live session that satisfies the request, or
 `prompt=none`). At most 64 characters; QAuth-defined, so other authorization
 servers ignore it.
+
+#### Linking an upstream account
+
+`qauth_link=<type>` links an account of one of the realm's upstream identity
+providers to the person's QAuth account (#670), as the account console's
+"Link an account" does. The browser goes to that provider first, then the
+person signs in to their QAuth account again, with its own factors and its MFA
+policy, whatever session the browser already has: a session never links an
+account on its own (NIST SP 800-63C-4 §5.4). The identity joins the account
+that sign-in proved, and the request goes on to the consent or the code as
+after any sign-in. An identity another account already holds is refused on a
+QAuth page, as is a second identity of the same provider; nothing reaches your
+`redirect_uri` then.
+
+The parameter is honoured only for a client the operator flagged first-party
+(ADR-017 Decision 2), while the Interaction API is on (`INTERACTION_UI_ENABLED`),
+and only for a provider the realm has on, hidden or not; otherwise it is
+ignored. It takes precedence over `qauth_upstream`. At most 64 characters;
+QAuth-defined. The account API lists the linked accounts and unlinks one
+([`/account/v1-rc.0/linked-accounts`](/integrate/api-reference/#get-accountv1-rc0linked-accounts)).
 
 #### Registration: `prompt=create`
 
@@ -194,8 +215,8 @@ consent screen follows as for a sign-in, and the client gets its code.
 A registration is not a sign-in: QAuth starts no browser session, and the ID
 token carries no `auth_time` and no `amr`. A request for a dangerous scope asks
 the person to sign in first. A browser that is already signed in can still
-register a new account, and its session stays as it was. `qauth_upstream` is
-ignored with `prompt=create`.
+register a new account, and its session stays as it was. `qauth_upstream` and
+`qauth_link` are ignored with `prompt=create`.
 
 #### Password reset
 

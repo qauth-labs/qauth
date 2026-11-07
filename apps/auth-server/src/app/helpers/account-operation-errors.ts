@@ -51,3 +51,19 @@ export class DelegatedTokenRefusedError extends Error {
     this.name = 'DelegatedTokenRefusedError';
   }
 }
+
+/**
+ * A change the account API refuses because it would leave the account with
+ * no way to sign in (#670): `409`, the `last_credential` problem document,
+ * such as unlinking the only upstream account of an account that holds no
+ * other credential.
+ */
+export class LastCredentialError extends Error {
+  readonly statusCode = 409;
+  readonly code = 'LAST_CREDENTIAL';
+
+  constructor() {
+    super('The change would leave the account with no way to sign in.');
+    this.name = 'LastCredentialError';
+  }
+}

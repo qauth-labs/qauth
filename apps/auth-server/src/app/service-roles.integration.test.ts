@@ -86,10 +86,12 @@ const DEFAULT_ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
  */
 const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   'DELETE /account/v1-rc.0/consents/:consentId',
+  'DELETE /account/v1-rc.0/linked-accounts/:linkedAccountId',
   'DELETE /developer/v1-rc.0/clients/:clientId',
   'DELETE /developer/v1-rc.0/clients/:clientId/api-keys/:keyId',
   'DELETE /developer/v1-rc.0/consents/:consentId',
   'GET /account/v1-rc.0/consents',
+  'GET /account/v1-rc.0/linked-accounts',
   'GET /developer/v1-rc.0/clients',
   'GET /developer/v1-rc.0/clients/:clientId',
   'GET /developer/v1-rc.0/clients/:clientId/api-keys',
@@ -116,6 +118,9 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   // Connect providers.
   'GET /ui/upstream/:type',
   'GET /ui/upstream/:type/start',
+  // The upstream account link (#670): the choice page and the refusal page.
+  'GET /ui/upstream-link-refused',
+  'GET /ui/upstream-link/:interactionId',
   'GET /upstream/:type/callback',
   'POST /upstream/:type/callback',
   // The recovery-code pages (#649): "use a recovery code" and "save your

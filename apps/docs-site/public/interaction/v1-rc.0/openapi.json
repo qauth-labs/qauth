@@ -1063,6 +1063,71 @@
                       "expiresAt": "2026-10-26T10:00:00Z"
                     }
                   },
+                  "upstream_link": {
+                    "summary": "urn:qauth:ia:upstream_link:v1-rc.0",
+                    "value": {
+                      "step": "urn:qauth:ia:upstream_link:v1-rc.0",
+                      "alternatives": [],
+                      "params": {
+                        "urn:qauth:ia:upstream_link:v1-rc.0": {
+                          "provider": {
+                            "provider": "oidc_corp",
+                            "name": "Example Corp"
+                          },
+                          "create": true
+                        }
+                      },
+                      "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
+                      "client": {
+                        "kind": "cimd",
+                        "verifiedDomain": {
+                          "host": "app.example.com",
+                          "registrableDomain": "example.com",
+                          "sharedHosting": false
+                        },
+                        "redirect": {
+                          "target": "host",
+                          "host": "app.example.com"
+                        },
+                        "declaredName": "Example Notes",
+                        "newClient": false
+                      },
+                      "brand": {
+                        "logo": {
+                          "light": {
+                            "url": "/ui/assets/logo-3f9a1c2e.svg",
+                            "width": 160,
+                            "height": 40
+                          }
+                        },
+                        "colors": {
+                          "light": {
+                            "primary": "#1f5fbf"
+                          },
+                          "dark": {
+                            "primary": "#7aa7ef",
+                            "background": "#10141a"
+                          }
+                        },
+                        "font": "inter",
+                        "links": {
+                          "privacy": "https://example.com/privacy",
+                          "help": "https://example.com/help"
+                        },
+                        "strings": {
+                          "en": {
+                            "name": "Example",
+                            "title": "Sign in to Example"
+                          }
+                        },
+                        "darkMode": "enabled"
+                      },
+                      "uiLocales": [
+                        "en"
+                      ],
+                      "expiresAt": "2026-10-26T10:00:00Z"
+                    }
+                  },
                   "device_code": {
                     "summary": "urn:qauth:ia:device_code:v1-rc.0",
                     "value": {
@@ -1590,6 +1655,13 @@
                       "data": {}
                     }
                   },
+                  "upstream_link": {
+                    "summary": "urn:qauth:ia:upstream_link:v1-rc.0",
+                    "value": {
+                      "step": "urn:qauth:ia:upstream_link:v1-rc.0",
+                      "data": {}
+                    }
+                  },
                   "device_code": {
                     "summary": "urn:qauth:ia:device_code:v1-rc.0",
                     "value": {
@@ -1949,6 +2021,14 @@
                     "type": "urn:qauth:ia:upstream:v1-rc.0",
                     "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
                     "provider": "oidc_corp"
+                  }
+                },
+                "upstream_link": {
+                  "summary": "urn:qauth:ia:upstream_link:v1-rc.0",
+                  "value": {
+                    "type": "urn:qauth:ia:upstream_link:v1-rc.0",
+                    "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
+                    "decision": "link"
                   }
                 },
                 "device_code": {
@@ -2413,6 +2493,76 @@
                     "value": {
                       "result": "redirect",
                       "location": "https://idp.example.com/authorize?response_type=code&client_id=qauth&state=Qm9vbGVhbi1ub3QtYS1yZWFsLXN0YXRl"
+                    }
+                  },
+                  "upstream_link": {
+                    "summary": "urn:qauth:ia:upstream_link:v1-rc.0",
+                    "value": {
+                      "result": "step",
+                      "interaction": {
+                        "step": "urn:qauth:ia:identifier:v1-rc.0",
+                        "alternatives": [
+                          "urn:qauth:ia:webauthn_get:v1-rc.0"
+                        ],
+                        "params": {
+                          "urn:qauth:ia:identifier:v1-rc.0": {},
+                          "urn:qauth:ia:webauthn_get:v1-rc.0": {
+                            "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+                            "rpId": "auth.example.com",
+                            "timeout": 300000,
+                            "userVerification": "required"
+                          }
+                        },
+                        "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
+                        "client": {
+                          "kind": "cimd",
+                          "verifiedDomain": {
+                            "host": "app.example.com",
+                            "registrableDomain": "example.com",
+                            "sharedHosting": false
+                          },
+                          "redirect": {
+                            "target": "host",
+                            "host": "app.example.com"
+                          },
+                          "declaredName": "Example Notes",
+                          "newClient": false
+                        },
+                        "brand": {
+                          "logo": {
+                            "light": {
+                              "url": "/ui/assets/logo-3f9a1c2e.svg",
+                              "width": 160,
+                              "height": 40
+                            }
+                          },
+                          "colors": {
+                            "light": {
+                              "primary": "#1f5fbf"
+                            },
+                            "dark": {
+                              "primary": "#7aa7ef",
+                              "background": "#10141a"
+                            }
+                          },
+                          "font": "inter",
+                          "links": {
+                            "privacy": "https://example.com/privacy",
+                            "help": "https://example.com/help"
+                          },
+                          "strings": {
+                            "en": {
+                              "name": "Example",
+                              "title": "Sign in to Example"
+                            }
+                          },
+                          "darkMode": "enabled"
+                        },
+                        "uiLocales": [
+                          "en"
+                        ],
+                        "expiresAt": "2026-10-26T10:00:00Z"
+                      }
                     }
                   },
                   "device_code": {
@@ -3224,6 +3374,32 @@
             "maxLength": 30,
             "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$",
             "description": "When the interaction expires."
+          },
+          "upstreamLink": {
+            "type": "object",
+            "description": "The upstream identity this sign-in links, while the person signs in to their existing account to link it (#670): the screen says so (\"Sign in to link Example Corp\"). Present from the answer `link` to the `upstream_link` step, or from the provider’s callback when the authorization request asked for the link (`qauth_link`), until the interaction ends; absent on any other interaction. It names the provider only, never the identity or the account.",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 63,
+                "pattern": "^[a-z][a-z0-9_]{0,62}$",
+                "description": "The provider’s name: the AuthMethod `type`."
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+                "x-qauth-display": "realm",
+                "description": "The provider’s name as the operator set it, for the screen’s text."
+              }
+            },
+            "required": [
+              "provider",
+              "name"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -3591,6 +3767,28 @@
             "if": {
               "properties": {
                 "step": {
+                  "const": "urn:qauth:ia:upstream_link:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:upstream_link:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
                   "const": "urn:qauth:ia:device_code:v1-rc.0"
                 }
               },
@@ -3675,6 +3873,7 @@
           "urn:qauth:ia:consent:v1-rc.0",
           "urn:qauth:ia:select_account:v1-rc.0",
           "urn:qauth:ia:upstream:v1-rc.0",
+          "urn:qauth:ia:upstream_link:v1-rc.0",
           "urn:qauth:ia:device_code:v1-rc.0",
           "urn:qauth:ia:device_confirm:v1-rc.0",
           "urn:qauth:ia:logout_confirm:v1-rc.0"
@@ -3745,6 +3944,9 @@
           "urn:qauth:ia:upstream:v1-rc.0": {
             "$ref": "#/components/schemas/UpstreamParams"
           },
+          "urn:qauth:ia:upstream_link:v1-rc.0": {
+            "$ref": "#/components/schemas/UpstreamLinkParams"
+          },
           "urn:qauth:ia:device_code:v1-rc.0": {
             "$ref": "#/components/schemas/DeviceCodeParams"
           },
@@ -3805,6 +4007,9 @@
             "$ref": "#/components/schemas/UpstreamAnswer"
           },
           {
+            "$ref": "#/components/schemas/UpstreamLinkAnswer"
+          },
+          {
             "$ref": "#/components/schemas/DeviceCodeAnswer"
           },
           {
@@ -3832,6 +4037,7 @@
             "urn:qauth:ia:consent:v1-rc.0": "#/components/schemas/ConsentAnswer",
             "urn:qauth:ia:select_account:v1-rc.0": "#/components/schemas/SelectAccountAnswer",
             "urn:qauth:ia:upstream:v1-rc.0": "#/components/schemas/UpstreamAnswer",
+            "urn:qauth:ia:upstream_link:v1-rc.0": "#/components/schemas/UpstreamLinkAnswer",
             "urn:qauth:ia:device_code:v1-rc.0": "#/components/schemas/DeviceCodeAnswer",
             "urn:qauth:ia:device_confirm:v1-rc.0": "#/components/schemas/DeviceConfirmAnswer",
             "urn:qauth:ia:logout_confirm:v1-rc.0": "#/components/schemas/LogoutConfirmAnswer"
@@ -3979,6 +4185,9 @@
           },
           "urn:qauth:ia:upstream:v1-rc.0": {
             "$ref": "#/components/schemas/UpstreamPersonalData"
+          },
+          "urn:qauth:ia:upstream_link:v1-rc.0": {
+            "$ref": "#/components/schemas/UpstreamLinkPersonalData"
           },
           "urn:qauth:ia:device_code:v1-rc.0": {
             "$ref": "#/components/schemas/DeviceCodePersonalData"
@@ -6038,6 +6247,85 @@
         "additionalProperties": false
       },
       "UpstreamPersonalData": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "UpstreamLinkParams": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 63,
+                "pattern": "^[a-z][a-z0-9_]{0,62}$",
+                "description": "The provider’s name: the AuthMethod `type`."
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+                "x-qauth-display": "realm",
+                "description": "The provider’s name as the operator set it, for the screen’s text."
+              }
+            },
+            "required": [
+              "provider",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "create": {
+            "type": "boolean",
+            "description": "Whether the person may start a new account with the identity: the realm allows sign-up, the new account can be verified (the provider vouches for its address, or gave one an emailed code verifies), and the provider’s claims fit what the interaction keeps. `false` offers the existing account only."
+          }
+        },
+        "required": [
+          "provider",
+          "create"
+        ],
+        "additionalProperties": false,
+        "x-qauth-step": {
+          "name": "urn:qauth:ia:upstream_link:v1-rc.0",
+          "transports": [
+            "interaction"
+          ],
+          "errors": [],
+          "amr": []
+        }
+      },
+      "UpstreamLinkAnswer": {
+        "type": "object",
+        "description": "An answer to `urn:qauth:ia:upstream_link:v1-rc.0`.",
+        "properties": {
+          "type": {
+            "const": "urn:qauth:ia:upstream_link:v1-rc.0",
+            "description": "The step this request answers."
+          },
+          "csrf": {
+            "$ref": "#/components/schemas/Csrf"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "create",
+              "link"
+            ],
+            "description": "A new account with the identity, or the existing account the person signs in to next."
+          }
+        },
+        "required": [
+          "type",
+          "csrf",
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "UpstreamLinkPersonalData": {
         "type": "object",
         "properties": {},
         "additionalProperties": false

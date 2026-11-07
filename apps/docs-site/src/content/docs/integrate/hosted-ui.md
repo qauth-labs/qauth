@@ -212,6 +212,32 @@ email: such an account could never sign in. An account that holds a passkey is
 refused in both, since a passkey outranks an upstream sign-in and no passkey
 step is served yet (#651).
 
+### Linking an upstream account to an existing one
+
+With the Interaction API on, an identity no account holds does not create an
+account at once (#670). The interaction asks first, at its `upstream_link`
+step, which `GET /ui/upstream-link/{interactionId}` shows as a page: "I
+already have an account", or "Create a new account" when the realm allows
+sign-up. The page names the provider and nothing else: no address, no account
+and no hint, and QAuth never looks an account up by an email address.
+
+"I already have an account" goes on to a sign-in to that account in the same
+interaction, with its own factors and its MFA policy: the password or the
+passkey, then the second factor the account or the realm asks for. No upstream
+provider and no password reset is offered during it. Once that sign-in
+completes, the identity joins the account it proved, the owner gets an email
+notice, and the security log records the link; the authorization request goes
+on as after any sign-in. An identity another account took meanwhile, or an
+account that already has an identity of that provider, is refused: the browser
+goes to `GET /ui/upstream-link-refused`, which says why, and nothing reaches
+the client.
+
+A signed-in account links a provider through an authorization request with
+[`qauth_link=<type>`](/integrate/oauth-flow/#linking-an-upstream-account): the
+provider first, then the same fresh sign-in. The pages of the Interaction API
+off (`INTERACTION_UI_ENABLED`) offer no link, and create the account at once as
+before.
+
 ## `/ui/resume/{handle}`
 
 `GET /ui/resume/{handle}` is where a login round-trip lands after a

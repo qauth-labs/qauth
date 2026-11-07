@@ -1,6 +1,7 @@
 import {
   array,
   base64url,
+  closedEnum,
   closedObject,
   displayText,
   EMPTY_OBJECT,
@@ -21,7 +22,8 @@ import {
  * The sign-in steps: who is signing in, and the factors that prove it.
  * `identifier`, `password`, `captcha`, `webauthn_get` and `totp` are the
  * steps of ADR-017 Decision 3 and are served by both transports;
- * `recovery_code`, `select_account` and `upstream` only by the Interaction API.
+ * `recovery_code`, `select_account`, `upstream` and `upstream_link` only by the
+ * Interaction API.
  */
 
 /** The authorization response the examples end in. */
@@ -353,7 +355,7 @@ export const upstream = defineStep({
   transports: ['interaction'],
   summary: 'Offers sign-in through an upstream identity provider.',
   description:
-    'The person picks one of the realm’s upstream identity providers: generic OpenID Connect, or an AuthMethod plugin. It is offered beside the `identifier` step, before anyone is named, alike for every account (ADR-017 Decision 4). An answer names one provider of the list; the answer’s result is a redirect to the provider (`result: redirect`, or `303` to it for a form post). The provider sends the browser back to `/upstream/<provider>/callback` on the realm host, which checks the answer against the transaction kept server-side for this interaction and its flow cookie, signs in the account that holds that upstream identity, or creates one when the realm allows sign-up, and continues the interaction: the next step’s ceremony page, or the final redirect. A sign-in through a provider ranks with the password in the downgrade rule, below a passkey (ADR-017 Decision 4), and adds no `amr` value. A provider an operator hides is not listed here and stays reachable through the authorization request’s `qauth_upstream` parameter. Works without JavaScript: each provider is a button of a plain form post.',
+    'The person picks one of the realm’s upstream identity providers: generic OpenID Connect, or an AuthMethod plugin. It is offered beside the `identifier` step, before anyone is named, alike for every account (ADR-017 Decision 4). An answer names one provider of the list; the answer’s result is a redirect to the provider (`result: redirect`, or `303` to it for a form post). The provider sends the browser back to `/upstream/<provider>/callback` on the realm host, which checks the answer against the transaction kept server-side for this interaction and its flow cookie, signs in the account that holds that upstream identity, or, for an identity no account holds, asks at the `upstream_link` step whether it starts a new account or joins an existing one, and continues the interaction: the next step’s ceremony page, or the final redirect. A sign-in through a provider ranks with the password in the downgrade rule, below a passkey (ADR-017 Decision 4), and adds no `amr` value. A provider an operator hides is not listed here and stays reachable through the authorization request’s `qauth_upstream` parameter. Works without JavaScript: each provider is a button of a plain form post.',
   params: object(
     {
       providers: array(
@@ -394,5 +396,52 @@ export const upstream = defineStep({
       redirect:
         'https://idp.example.com/authorize?response_type=code&client_id=qauth&state=Qm9vbGVhbi1ub3QtYS1yZWFsLXN0YXRl',
     },
+  },
+});
+
+export const upstreamLink = defineStep({
+  name: 'upstream_link',
+  transports: ['interaction'],
+  summary:
+    'Asks whether an upstream identity QAuth does not know starts a new account or joins an existing one.',
+  description:
+    'Shown once an upstream identity provider proved an identity no account of the realm holds (#670; ADR-020 §3). The person picks a new account with that identity, which is offered only where the realm allows sign-up and the new account can be verified (`create`), or the account they already have, which they then sign in to in this interaction with its own factors and its MFA policy: the `identifier` step, and every step that account’s sign-in asks for. The identity joins that account only once that sign-in completes, in the same browser and the same interaction; no other way to sign in is offered meanwhile, neither another provider nor a password reset. Nothing on the step names the identity or the account: no address and no hint, and no account is ever found by an attribute such as an email address. Works without JavaScript: each choice is a button of a plain form post.',
+  params: object(
+    {
+      provider: object(
+        {
+          provider: upstreamProvider('The provider’s name: the AuthMethod `type`.'),
+          name: displayText(
+            'realm',
+            64,
+            'The provider’s name as the operator set it, for the screen’s text.'
+          ),
+        },
+        ['provider', 'name']
+      ),
+      create: {
+        type: 'boolean',
+        description:
+          'Whether the person may start a new account with the identity: the realm allows sign-up, the new account can be verified (the provider vouches for its address, or gave one an emailed code verifies), and the provider’s claims fit what the interaction keeps. `false` offers the existing account only.',
+      },
+    },
+    ['provider', 'create']
+  ),
+  personal: EMPTY_OBJECT,
+  answer: closedObject(
+    {
+      decision: closedEnum(
+        ['create', 'link'],
+        'A new account with the identity, or the existing account the person signs in to next.'
+      ),
+    },
+    ['decision']
+  ),
+  errors: [],
+  amr: [],
+  example: {
+    params: { provider: { provider: 'oidc_corp', name: 'Example Corp' }, create: true },
+    answer: { decision: 'link' },
+    next: { step: 'identifier' },
   },
 });

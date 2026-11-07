@@ -651,7 +651,9 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
       for (const { path, method, operation } of old) {
         expect(operation.deprecated, `${method} ${path}`).toBe(true);
       }
-      expect(replacements).toHaveLength(13);
+      // The 13 replacements, and the account API's linked accounts (#670),
+      // which replace nothing and are as undeprecated.
+      expect(replacements).toHaveLength(15);
       for (const { path, method, operation } of replacements) {
         expect(operation.deprecated, `${method} ${path}`).toBeUndefined();
       }

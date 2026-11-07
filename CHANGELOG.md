@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Linking an upstream account to an existing one** ([#670], ADR-020 §3).
+  On the Interaction API's ceremony page, the first upstream sign-in of an
+  identity no account holds now asks at the new `upstream_link` step: "I
+  already have an account", or a new account when the realm allows one. A
+  signed-in person links one from an operator-flagged first-party client
+  with `qauth_link=<type>` on the authorization request. Either way the
+  identity joins the account only after a fresh sign-in to it with its own
+  factors and its MFA policy, in the same browser and interaction; a session
+  is not enough, and nothing is matched by email. An identity another account
+  holds, or a second one of the same provider, is refused on its own page
+  (`/ui/upstream-link-refused`). The account API lists the linked accounts
+  (`GET /account/v1-rc.0/linked-accounts`) and unlinks one
+  (`DELETE /account/v1-rc.0/linked-accounts/{linkedAccountId}`) after a fresh
+  sign-in with the strongest factor, refusing the last way to sign in with
+  `409 last_credential`. A link and an unlink mail the owner and record
+  `user.upstream_linked` and `user.upstream_unlinked`, which the security
+  log shows; a refused link records `user.upstream_link_failed`. With the
+  server-rendered pages an unknown identity still creates its account at
+  once.
 - **Design tokens and theming in `libs/ui`** ([#472], ADR-020 §5). QAuth's
   own UIs now share the design system of the qauth.dev website: square corners,
   flat surfaces with hairline edges, DM Sans, Instrument Serif and JetBrains
@@ -3422,6 +3441,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#655]: https://github.com/qauth-labs/qauth/issues/655
 [#662]: https://github.com/qauth-labs/qauth/issues/662
 [#663]: https://github.com/qauth-labs/qauth/issues/663
+[#670]: https://github.com/qauth-labs/qauth/issues/670
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689

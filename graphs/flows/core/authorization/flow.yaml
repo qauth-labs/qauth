@@ -311,18 +311,18 @@ initial: idle
 states:
   idle:
     title: Wait for an authorization request
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:117
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:120
     on:
       AUTHORIZE:
         target: resolvingRealm
         say: 'GET /oauth/authorize arrives with its parameters in the query, or POST with them in a form'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:121
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:124
       REPLAY:
         target: interaction_expired.finished
         say: >-
           an answer, a cancel or a read names an interaction of this request that already finished, such as a
           replayed or a second form post
-        source: apps/auth-server/src/app/helpers/interaction.ts:299
+        source: apps/auth-server/src/app/helpers/interaction.ts:321
 
   resolvingRealm:
     title: Find the realm of the host
@@ -345,15 +345,15 @@ states:
       AUTHORIZE_RATE_LIMIT requests per AUTHORIZE_RATE_WINDOW seconds for each client address and realm, the lenient
       AUTHORIZE_RATE_LIMIT_LENIENT where the realm's ceiling permits a development environment (ADR-008 §5). Every
       request that starts an interaction writes a record and its events, so this limit bounds them too.
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:102
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:105
     always:
       - guard: rateLimited
         target: too_many_requests.authorize_limit
         say: 'the address has used up its requests'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:107
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:110
       - target: validatingParameters
         say: 'the address is under its limit'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:113
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:116
 
   validatingParameters:
     title: Check the parameters against the authorize schema
@@ -361,7 +361,7 @@ states:
       authorizeQuerySchema, for the query of a GET and the form of a POST alike: response_type code, client_id,
       redirect_uri, code_challenge and code_challenge_method S256 (PKCE), and the optional scope, state, nonce, prompt,
       max_age, resource, dpop_jkt and login_hint (at most 254 bytes in UTF-8, #628).
-    source: apps/auth-server/src/app/schemas/oauth.ts:277
+    source: apps/auth-server/src/app/schemas/oauth.ts:282
     always:
       - guard: inputInvalid
         target: invalid_request.schema
@@ -369,7 +369,7 @@ states:
         source: apps/auth-server/src/app/plugins/error-handler.ts:406
       - target: resolvingClient
         say: 'the parameters match the schema'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:121
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:124
 
   resolvingClient:
     title: Find the client
@@ -455,7 +455,7 @@ states:
         source: apps/auth-server/src/app/helpers/authorization-error.ts:104
       - target: checkingCreatePrompt
         say: 'dpop_jkt is absent, unread or well formed'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:159
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:162
 
   checkingCreatePrompt:
     title: Check a request for a registration
@@ -470,7 +470,7 @@ states:
       - guard: "create == 'absent' or silent"
         target: findingSession
         say: 'the request carries no prompt=create'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:164
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:173
       - guard: "create == 'withoutOpenid' and operatorClient"
         target: invalid_request.create_without_openid
         say: 'prompt=create without openid, for a client an operator provisioned'
@@ -509,7 +509,7 @@ states:
         source: apps/auth-server/src/app/helpers/session-cookie.ts:337
       - target: startingRegistration
         say: 'the registration is allowed'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:297
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:342
 
   startingRegistration:
     title: Start a registration interaction
@@ -517,18 +517,18 @@ states:
       As a sign-in interaction, at the identifier step alone, the request held without prompt=create's routing to an
       upstream provider (qauth_upstream): the engine's rounds are core.sign-up's. The request's login_hint fills in
       the address. A browser already signed in registers all the same; its session is carried, not ended.
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:299
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:344
     invoke: { external: interactionStore }
     on:
       DONE:
         target: atRegistrationCeremony
         effect: [openInteraction]
         say: 'the interaction is stored'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:303
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:348
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large
         say: 'the request is over 16 KiB, or the record over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:489
+        source: apps/auth-server/src/app/helpers/interaction.ts:514
       FAIL.server:
         target: server_error.interaction_store
         say: 'the interaction store fails'
@@ -543,7 +543,7 @@ states:
       and the code the endpoint mints carries no auth_time, no amr and no session. prompt=create is not carried past
       that finish. For an address an account holds, core.sign-up hands over to the sign-in, whose finish is a
       sign-in's.
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:303
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:348
     response:
       status: '302 from /oauth/authorize; 303 or 200 from the Interaction API when an interaction finished'
       headers:
@@ -561,18 +561,18 @@ states:
         target: takingFinish
         effect: [finishRegistration]
         say: 'the new password creates the account, which finishes the interaction'
-        source: apps/auth-server/src/app/helpers/interaction.ts:1023
+        source: apps/auth-server/src/app/helpers/interaction.ts:1063
       CANCEL:
         target: recheckingCancel
         say: 'the person cancels, with the CSRF value of the step they see; the interaction ends'
-        source: apps/auth-server/src/app/routes/interaction-api.ts:761
+        source: apps/auth-server/src/app/routes/interaction-api.ts:801
 
   findingSession:
     title: Find the browser session
     description: >-
       The signed __Host-qauth_session cookie (#150); an Authorization header counts for nothing (#524). A cookie that
       does not verify, or names an ended session, is cleared; a disabled user's session is ended.
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:136
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:139
     always:
       - guard: cookieMalformed
         target: server_error.malformed_cookie
@@ -698,7 +698,7 @@ states:
         - target: code_issued
           effect: [mintCode]
           say: 'the code is stored'
-          source: apps/auth-server/src/app/routes/oauth/authorize.ts:140
+          source: apps/auth-server/src/app/routes/oauth/authorize.ts:143
       FAIL.sessionEnded:
         - guard: silent and operatorClient
           target: login_required.session_ended
@@ -739,7 +739,7 @@ states:
     description: >-
       With the pages, the authorize URL is parked server-side and the browser goes to /ui/login. With interactions, an
       interaction starts at the identifier step; when an interaction just finished, the next one continues the request.
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:146
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:149
     always:
       - guard: finishing
         target: continuingToSignIn
@@ -748,10 +748,10 @@ states:
       - guard: pages
         target: parkingRequest
         say: 'INTERACTION_UI_ENABLED is off'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:207
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:245
       - target: startingSignIn
         say: 'INTERACTION_UI_ENABLED is on'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:148
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:151
 
   consentNeeded:
     title: Send the person to consent
@@ -760,16 +760,16 @@ states:
       to a consent interaction for the signed-in user, which lists the scopes, marks the dangerous ones and names the
       resources; a request the step cannot show is refused instead, with authorization.failed recorded, as the contract
       says ("A requested scope outside it never reaches this step: the request is refused first").
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:147
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:150
     always:
       - guard: pages and consentCause == 'withdrawn'
         target: consent_screen.consent_withdrawn
         say: 'INTERACTION_UI_ENABLED is off, and the consent was revoked under the request'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:214
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:253
       - guard: pages
         target: consent_screen.page
         say: 'INTERACTION_UI_ENABLED is off'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:214
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:253
       - guard: scopesUnshowable and finishing
         target: invalid_scope.consent_not_shown_after_sign_in
         say: 'the consent step cannot show the scopes, decided when the interaction finished'
@@ -800,7 +800,7 @@ states:
         source: apps/auth-server/src/app/helpers/authorization-interaction.ts:403
       - target: startingConsent
         say: 'the consent step can show the request'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:187
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:207
 
   # INTERACTION_UI_ENABLED off: the pages
 
@@ -844,18 +844,18 @@ states:
       answer for INTERACTION_UNANSWERED_TTL_MS at most and INTERACTION_TTL in all; interaction.created is recorded. The
       request's login_hint, when the step can show it, is the identifier field's prefill, in the step's personal data
       (read only by the browser that holds the flow cookie), never in its params.
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:187
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:207
     invoke: { external: interactionStore }
     on:
       DONE:
         target: atSignInCeremony
         effect: [openInteraction]
         say: 'the interaction is stored'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:188
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:208
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large
         say: 'the request is over 16 KiB, or the record over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:489
+        source: apps/auth-server/src/app/helpers/interaction.ts:514
       FAIL.server:
         target: server_error.interaction_store
         say: 'the interaction store fails'
@@ -866,18 +866,18 @@ states:
     description: >-
       As a sign-in interaction, at the consent step, for the signed-in user: the transaction holds the browser
       session's user, sid and sign-in time, and the finish needs that session live (#963).
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:187
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:207
     invoke: { external: interactionStore }
     on:
       DONE:
         target: atConsentCeremony
         effect: [openInteraction]
         say: 'the interaction is stored'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:188
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:208
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large
         say: 'the request is over 16 KiB, or the record over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:489
+        source: apps/auth-server/src/app/helpers/interaction.ts:514
       FAIL.server:
         target: server_error.interaction_store
         say: 'the interaction store fails'
@@ -890,7 +890,7 @@ states:
       2048-character state makes no longer a Location header. The ceremony page reads the step by the id and answers it
       through the Interaction API, from the realm origin, with the flow cookie and each step's CSRF value; the steps of
       the sign-in are core.sign-in's.
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:188
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:208
     response:
       status: '302 from /oauth/authorize; 303 or 200 from the Interaction API when an interaction finished'
       headers:
@@ -908,11 +908,11 @@ states:
         target: takingFinish
         effect: [finishInteraction]
         say: "the person's last answer, such as the right password, finishes the interaction"
-        source: apps/auth-server/src/app/routes/interaction-api.ts:696
+        source: apps/auth-server/src/app/routes/interaction-api.ts:736
       CANCEL:
         target: recheckingCancel
         say: 'the person cancels, with the CSRF value of the step they see; the interaction ends'
-        source: apps/auth-server/src/app/routes/interaction-api.ts:761
+        source: apps/auth-server/src/app/routes/interaction-api.ts:801
 
   atConsentCeremony:
     title: The person is asked for consent at the ceremony page
@@ -920,7 +920,7 @@ states:
       The consent step names the client as the server's records describe it (#593), lists the scopes (each marked when
       it is dangerous), the resources or else the client's audience, says so when the client is an AI agent, and offers
       "Remember this decision", checked by default. Its personal data is the identifier the user signed in with.
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:188
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:208
     response:
       status: 'as atSignInCeremony'
       headers:
@@ -931,11 +931,11 @@ states:
       ANSWER:
         target: consent_step.answered
         say: 'the person answers the consent step'
-        source: apps/auth-server/src/app/routes/interaction-api.ts:453
+        source: apps/auth-server/src/app/routes/interaction-api.ts:468
       CANCEL:
         target: recheckingCancel
         say: 'the person cancels, with the CSRF value of the step they see; the interaction ends'
-        source: apps/auth-server/src/app/routes/interaction-api.ts:761
+        source: apps/auth-server/src/app/routes/interaction-api.ts:801
 
   recheckingCancel:
     title: Check the request again before the cancel goes to the client
@@ -967,21 +967,21 @@ states:
       interaction's secret leaves the flow cookie. Only now is the request decided again: the code is never minted
       while the interaction can still be answered, and a finish the sweep beat issues none. For a sign-in, the answer
       also carries the new session cookie, and the user's last sign-in and user.signed_in are recorded.
-    source: apps/auth-server/src/app/helpers/interaction.ts:781
+    source: apps/auth-server/src/app/helpers/interaction.ts:815
     invoke: { external: interactionStore }
     on:
       DONE:
         target: recheckingRequest
         say: 'the interaction is over'
-        source: apps/auth-server/src/app/routes/interaction-api.ts:696
+        source: apps/auth-server/src/app/routes/interaction-api.ts:736
       FAIL.expired:
         target: interaction_expired.finished_late
         say: 'the expiry sweep claimed the interaction first'
-        source: apps/auth-server/src/app/helpers/interaction.ts:789
+        source: apps/auth-server/src/app/helpers/interaction.ts:823
       FAIL.sessionEnded:
         target: interaction_expired.session_ended
         say: 'the session the sign-in started has ended since, such as by a sign-out in another tab'
-        source: apps/auth-server/src/app/helpers/interaction.ts:785
+        source: apps/auth-server/src/app/helpers/interaction.ts:819
       FAIL.server:
         target: server_error.interaction_store_after_sign_in
         say: 'the interaction store fails; the turn is given back'
@@ -1028,7 +1028,7 @@ states:
     description: >-
       continueInteraction: as a new interaction, but within the finished one's absolute expiry (one request, one
       lifetime) and on the flow secrets the finish left.
-    source: apps/auth-server/src/app/helpers/interaction.ts:535
+    source: apps/auth-server/src/app/helpers/interaction.ts:560
     invoke: { external: interactionStore }
     on:
       DONE:
@@ -1039,7 +1039,7 @@ states:
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large_after_sign_in
         say: 'the record of the next interaction is over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:489
+        source: apps/auth-server/src/app/helpers/interaction.ts:514
       FAIL.server:
         target: server_error.interaction_store_after_sign_in
         say: 'the interaction store fails'
@@ -1048,7 +1048,7 @@ states:
   continuingToConsent:
     title: Continue the request in a consent interaction
     description: As continuingToSignIn, at the consent step, for the session the finished interaction holds.
-    source: apps/auth-server/src/app/helpers/interaction.ts:535
+    source: apps/auth-server/src/app/helpers/interaction.ts:560
     invoke: { external: interactionStore }
     on:
       DONE:
@@ -1059,7 +1059,7 @@ states:
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large_after_sign_in
         say: 'the record of the next interaction is over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:489
+        source: apps/auth-server/src/app/helpers/interaction.ts:514
       FAIL.server:
         target: server_error.interaction_store_after_sign_in
         say: 'the interaction store fails'
@@ -1072,7 +1072,7 @@ states:
     title: Send the authorization code to the client
     redirect: success
     carries: [code, state, iss]
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:140
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:143
     response:
       status: 302
       headers:
@@ -1083,7 +1083,7 @@ states:
     title: Send the authorization code to the client once the interaction finished
     redirect: success
     carries: [code, state, iss]
-    source: apps/auth-server/src/app/routes/interaction-api.ts:720
+    source: apps/auth-server/src/app/routes/interaction-api.ts:760
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1140,7 +1140,7 @@ states:
     type: final
     title: Send the signed-in user to the consent page
     redirect: never
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:214
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:253
     response:
       status: 302
       headers:
@@ -1150,7 +1150,7 @@ states:
     type: final
     title: Send the user whose consent was revoked under the request to the consent page
     redirect: never
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:214
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:253
     response:
       status: 302
       headers:
@@ -1177,7 +1177,7 @@ states:
     description: >-
       core.consent draws the answer (#629): the step grammar, the finish, the request checked again, deny or allow, and
       the code for exactly the scope set the step showed, or the error the client gets.
-    source: apps/auth-server/src/app/routes/interaction-api.ts:703
+    source: apps/auth-server/src/app/routes/interaction-api.ts:743
 
   interaction_expired.finished:
     type: final
@@ -1186,7 +1186,7 @@ states:
       The record is gone once the interaction finished, so a replayed answer issues no second code, and an id is never
       answered again.
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:299
+    source: apps/auth-server/src/app/helpers/interaction.ts:321
     response:
       status: 410
       headers:
@@ -1203,7 +1203,7 @@ states:
     title: Refuse a finish the expiry sweep beat
     description: The sweep reports the interaction expired; nothing is issued.
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:789
+    source: apps/auth-server/src/app/helpers/interaction.ts:823
     response:
       status: 410
       headers:
@@ -1220,7 +1220,7 @@ states:
     title: Refuse a finish whose session ended since
     description: Nothing is written; the turn is given back (#963).
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:785
+    source: apps/auth-server/src/app/helpers/interaction.ts:819
     response:
       status: 410
       headers:
@@ -1268,7 +1268,7 @@ states:
     type: final
     title: Refuse a next interaction too large to hold
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:489
+    source: apps/auth-server/src/app/helpers/interaction.ts:514
     response:
       status: 400
       headers:
@@ -1401,7 +1401,7 @@ states:
     title: Tell the client prompt=create needs the openid scope
     redirect: error
     code: invalid_request
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:290
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:335
     response:
       status: 302
       headers:
@@ -1422,7 +1422,7 @@ states:
     title: Tell the client the realm offers no sign-up
     redirect: error
     code: invalid_request
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:290
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:335
     response:
       status: 302
       headers:
@@ -1443,7 +1443,7 @@ states:
     title: Tell the client it may not register accounts
     redirect: error
     code: unauthorized_client
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:290
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:335
     response:
       status: 302
       headers:
@@ -1464,7 +1464,7 @@ states:
     title: Tell the client prompt=create takes no max_age
     redirect: error
     code: invalid_request
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:290
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:335
     response:
       status: 302
       headers:
@@ -1778,7 +1778,7 @@ states:
       and a record of 32 KiB.
     redirect: never
     code: invalid_request
-    source: apps/auth-server/src/app/helpers/interaction.ts:489
+    source: apps/auth-server/src/app/helpers/interaction.ts:514
     response:
       status: 400
       headers:
@@ -1806,7 +1806,7 @@ states:
     title: Refuse an address over the authorize limit
     redirect: never
     code: temporarily_unavailable
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:102
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:105
     response:
       status: 429
       headers:
@@ -1851,17 +1851,17 @@ assertions:
     say: >-
       An interaction is created only for a request whose client, redirect URI, PKCE parameters and dpop_jkt passed
       every check: a request that fails them never reaches the interaction store
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:127
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:130
   - id: pages-start-no-interaction
     never: 'interactionStarted and pages'
     say: 'With INTERACTION_UI_ENABLED off, no interaction is created: the request takes the pages it takes today'
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:148
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:151
   - id: interactions-park-nothing
     never: "state in ['parkingRequest', 'consent_screen.page', 'consent_screen.consent_withdrawn'] and not pages"
     say: >-
       With INTERACTION_UI_ENABLED on, no URL carries the authorization request: nothing is parked behind /ui/login,
       and no redirect to /ui/consent carries the parameters
-    source: apps/auth-server/src/app/routes/oauth/authorize.ts:148
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:151
   - id: prompt-none-shows-nothing
     never: >-
       silent and (interactionStarted or state in ['parkingRequest', 'consent_screen.page',
@@ -1873,7 +1873,7 @@ assertions:
     say: >-
       A code is minted only once the interaction has ended: never while it can still be answered, so a finish that the
       expiry sweep beat, or a replayed answer, issues none
-    source: apps/auth-server/src/app/helpers/interaction.ts:786
+    source: apps/auth-server/src/app/helpers/interaction.ts:820
   - id: no-code-without-consent
     never: 'codeMinted and consentMissing'
     say: 'A code is minted only under a stored or administrative consent that covers the request'
@@ -1903,7 +1903,7 @@ assertions:
   - id: a-finish-only-from-an-interaction
     never: "phase == 'finish' and not interactionStarted"
     say: 'The request is decided at a finish only for an interaction this request started'
-    source: apps/auth-server/src/app/routes/interaction-api.ts:720
+    source: apps/auth-server/src/app/routes/interaction-api.ts:760
   - id: registration-only-when-allowed
     never: "state in ['startingRegistration', 'atRegistrationCeremony'] and create != 'allowed'"
     say: >-

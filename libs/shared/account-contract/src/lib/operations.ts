@@ -19,6 +19,7 @@ export const ACCOUNT_TAGS = {
   'Security log':
     'The last 90 days of sign-ins, new devices and security changes, and "this wasn’t me".',
   Addresses: 'The address the account signs in with, and its contact address.',
+  'Linked accounts': 'The upstream accounts the person can sign in through, and their removal.',
   'Connected apps': 'The apps the person consented to, and their revocation.',
   Account: 'Deleting the account.',
   Notifications: 'The security notices the account receives.',
@@ -93,6 +94,7 @@ const SESSION_ID = '019a2b3c-5e6f-7a8b-9c0d-1e2f3a4b5c6d';
 const OTHER_SESSION_ID = '019a2a10-77b2-7c31-a4d5-e6f708192a3b';
 const ENTRY_ID = '019a3f0e-1b2c-7d3e-8f4a-5b6c7d8e9f01';
 const CONSENT_ID = '019a1e5d-2c3b-7a49-b8c7-d6e5f4a3b2c1';
+const LINKED_ACCOUNT_ID = '019a4c2d-3e4f-7a5b-8c6d-7e8f9a0b1c2d';
 const GROUP_ID = '0193d6a2-8f41-7b2c-9d3e-4f5a6b7c8d9e';
 const ETAG = '"5d41402abc4b2a76"';
 const NEXT_ETAG = '"7d793037a0760186"';
@@ -473,6 +475,62 @@ export const ACCOUNT_OPERATIONS: readonly AccountOperation[] = [
     success: { status: 200, schema: 'RecoveryCodeSet', description: 'The new set.' },
     codes: ['conflict'],
     example: { summary: 'A new set', response: RECOVERY_CODES },
+  },
+
+  // Linked accounts ----------------------------------------------------------
+  {
+    id: 'account.linkedAccounts.list',
+    method: 'get',
+    path: '/linked-accounts',
+    tag: 'Linked accounts',
+    summary: 'List the linked upstream accounts',
+    description:
+      'The upstream accounts linked to the account, newest first: the provider and when it was linked, never the identity’s subject at the provider. Linking one is not an account API operation: it runs on the realm host, as an authorization request with `qauth_link` that signs the person in to the account again in the same interaction (ADR-020 §1 and §3).',
+    class: 'read',
+    permission: 'linkedAccounts.read',
+    freshAuthentication: 'none',
+    actChain: 'accepted',
+    list: {},
+    success: {
+      status: 200,
+      schema: 'LinkedAccountPage',
+      description: 'A page of linked accounts.',
+    },
+    example: {
+      summary: 'The first page',
+      query: { limit: 20 },
+      response: {
+        items: [
+          {
+            id: LINKED_ACCOUNT_ID,
+            provider: 'oidc_corp',
+            providerName: 'Example Corp',
+            createdAt: '2026-10-12T14:03:27Z',
+          },
+        ],
+        nextCursor: null,
+      },
+    },
+  },
+  {
+    id: 'account.linkedAccounts.delete',
+    method: 'delete',
+    path: '/linked-accounts/{linkedAccountId}',
+    tag: 'Linked accounts',
+    summary: 'Unlink an upstream account',
+    description:
+      'Remove a linked upstream account: the account no longer signs in through its provider, and the attributes the provider gave stay. The last way the account can sign in is refused with `last_credential`. Needs a fresh sign-in with the strongest factor the account holds, as every change to the ways into the account does; an act-chain token is refused (ADR-019 Decision 7). The "account unlinked" notice goes out, and the security log records it.',
+    class: 'write',
+    permission: 'linkedAccounts.write',
+    freshAuthentication: 'strongest-factor',
+    actChain: 'refused',
+    pathParameters: { linkedAccountId: 'The linked account’s id.' },
+    success: NO_CONTENT('The upstream account was unlinked.'),
+    codes: ['not_found', 'last_credential'],
+    example: {
+      summary: 'Unlink an upstream account',
+      pathParams: { linkedAccountId: LINKED_ACCOUNT_ID },
+    },
   },
 
   // Sessions -----------------------------------------------------------------

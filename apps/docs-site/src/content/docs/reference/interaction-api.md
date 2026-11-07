@@ -71,6 +71,7 @@ Each step is named `urn:qauth:ia:<name>:v1-rc.0`. A step read names the current 
 | [`consent`](#consent)                 | Interaction API | `decision`, `remember`   | —                                     | —            | `identifier`                               |
 | [`select_account`](#select_account)   | Interaction API | `account`                | `account_unavailable`                 | —            | `accounts`                                 |
 | [`upstream`](#upstream)               | Interaction API | `provider`               | `provider_unavailable`                | —            | —                                          |
+| [`upstream_link`](#upstream_link)     | Interaction API | `decision`               | —                                     | —            | —                                          |
 | [`device_code`](#device_code)         | Interaction API | `user_code`              | `invalid_user_code`                   | —            | —                                          |
 | [`device_confirm`](#device_confirm)   | Interaction API | `decision`               | —                                     | —            | `location`, `network`, `user_agent`        |
 | [`logout_confirm`](#logout_confirm)   | Interaction API | `decision`               | —                                     | —            | `accounts`                                 |
@@ -207,10 +208,19 @@ The account chooser for `prompt=select_account`, when the browser holds sessions
 
 `urn:qauth:ia:upstream:v1-rc.0` — Offers sign-in through an upstream identity provider.
 
-The person picks one of the realm’s upstream identity providers: generic OpenID Connect, or an AuthMethod plugin. It is offered beside the `identifier` step, before anyone is named, alike for every account (ADR-017 Decision 4). An answer names one provider of the list; the answer’s result is a redirect to the provider (`result: redirect`, or `303` to it for a form post). The provider sends the browser back to `/upstream/<provider>/callback` on the realm host, which checks the answer against the transaction kept server-side for this interaction and its flow cookie, signs in the account that holds that upstream identity, or creates one when the realm allows sign-up, and continues the interaction: the next step’s ceremony page, or the final redirect. A sign-in through a provider ranks with the password in the downgrade rule, below a passkey (ADR-017 Decision 4), and adds no `amr` value. A provider an operator hides is not listed here and stays reachable through the authorization request’s `qauth_upstream` parameter. Works without JavaScript: each provider is a button of a plain form post.
+The person picks one of the realm’s upstream identity providers: generic OpenID Connect, or an AuthMethod plugin. It is offered beside the `identifier` step, before anyone is named, alike for every account (ADR-017 Decision 4). An answer names one provider of the list; the answer’s result is a redirect to the provider (`result: redirect`, or `303` to it for a form post). The provider sends the browser back to `/upstream/<provider>/callback` on the realm host, which checks the answer against the transaction kept server-side for this interaction and its flow cookie, signs in the account that holds that upstream identity, or, for an identity no account holds, asks at the `upstream_link` step whether it starts a new account or joins an existing one, and continues the interaction: the next step’s ceremony page, or the final redirect. A sign-in through a provider ranks with the password in the downgrade rule, below a passkey (ADR-017 Decision 4), and adds no `amr` value. A provider an operator hides is not listed here and stays reachable through the authorization request’s `qauth_upstream` parameter. Works without JavaScript: each provider is a button of a plain form post.
 
 - Params: `providers`
 - Schema: [steps/upstream.json](/interaction/v1-rc.0/steps/upstream.json)
+
+### upstream_link
+
+`urn:qauth:ia:upstream_link:v1-rc.0` — Asks whether an upstream identity QAuth does not know starts a new account or joins an existing one.
+
+Shown once an upstream identity provider proved an identity no account of the realm holds (#670; ADR-020 §3). The person picks a new account with that identity, which is offered only where the realm allows sign-up and the new account can be verified (`create`), or the account they already have, which they then sign in to in this interaction with its own factors and its MFA policy: the `identifier` step, and every step that account’s sign-in asks for. The identity joins that account only once that sign-in completes, in the same browser and the same interaction; no other way to sign in is offered meanwhile, neither another provider nor a password reset. Nothing on the step names the identity or the account: no address and no hint, and no account is ever found by an attribute such as an email address. Works without JavaScript: each choice is a button of a plain form post.
+
+- Params: `provider`, `create`
+- Schema: [steps/upstream_link.json](/interaction/v1-rc.0/steps/upstream_link.json)
 
 ### device_code
 

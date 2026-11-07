@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
 
 import { FLOW_COOKIE_NAME } from '@qauth-labs/shared-interaction-contract';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fixturePluginMethod } from '../../testing/auth-method-plugins';
 import { testRealm } from '../../testing/request-realm';
 import { flowBindingOf, mintFlowSecret } from './flow-cookie';
 import type { UpstreamProviderCatalog } from './upstream-providers';
-import { upstreamRouteHost } from './upstream-sign-in';
+import { lookUpAccount, upstreamRouteHost } from './upstream-sign-in';
 import { emitUserEvent } from './user-events';
 
 vi.mock('../../config/env', () => ({
@@ -237,5 +237,55 @@ describe('upstreamRouteHost (#639)', () => {
 
     expect(sent.status).toBe(200);
     expect(sent.body).toContain('Example Corp did not sign you in');
+  });
+});
+
+/**
+ * The callback's account lookup (#639, #670): the identity's account is found
+ * by the realm, the provider's type and its subject alone. The repositories
+ * here hold only those two reads, so a read of an address, an attribute or a
+ * password credential fails the test: nothing finds an account to sign in to,
+ * or to link to, by an email address.
+ */
+describe('lookUpAccount (#639, #670)', () => {
+  const REALM = testRealm({ id: 'realm-1' });
+  const SUBJECT = { externalSub: 'corp-user-1', iss: 'https://idp.example' };
+  const request = { log: { error: vi.fn() } } as unknown as FastifyRequest;
+
+  function server(credential: Record<string, unknown> | undefined) {
+    const findByRealmProviderSub = vi.fn(async () => credential);
+    const findById = vi.fn(async (_realmId: string, id: string) => ({ id, enabled: true }));
+    const fastify = {
+      repositories: { userCredentials: { findByRealmProviderSub }, users: { findById } },
+    } as unknown as FastifyInstance;
+    return { fastify, findByRealmProviderSub, findById };
+  }
+
+  it('reads the credential of the provider type and subject, and no other, for an unknown identity', async () => {
+    const { fastify, findByRealmProviderSub, findById } = server(undefined);
+
+    expect(await lookUpAccount(fastify, request, REALM, 'oidc_corp', SUBJECT)).toBeNull();
+
+    expect(findByRealmProviderSub.mock.calls).toEqual([[REALM.id, 'oidc_corp', 'corp-user-1']]);
+    expect(findById).not.toHaveBeenCalled();
+  });
+
+  it('answers the account that holds the identity under its issuer', async () => {
+    const { fastify, findByRealmProviderSub, findById } = server({
+      id: 'cred-1',
+      userId: 'user-1',
+      disabledAt: null,
+      credentialData: { kind: 'upstream', iss: SUBJECT.iss, verified: true },
+    });
+
+    expect(await lookUpAccount(fastify, request, REALM, 'oidc_corp', SUBJECT)).toEqual({
+      kind: 'account',
+      userId: 'user-1',
+      enabled: true,
+      verified: true,
+      created: false,
+    });
+    expect(findByRealmProviderSub.mock.calls).toEqual([[REALM.id, 'oidc_corp', 'corp-user-1']]);
+    expect(findById.mock.calls).toEqual([[REALM.id, 'user-1']]);
   });
 });
