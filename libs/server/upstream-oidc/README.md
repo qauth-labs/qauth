@@ -78,6 +78,47 @@ signer's policy lets the `api` role decrypt a context under it (besides a realm'
 the host opens a stored config as `api`, or as `local` in a single deployment. The `web` and
 `delivery` roles cannot decrypt it.
 
+## Preset plugins
+
+`createUpstreamOidcPresetMethod` builds a **preset plugin** (#951): an AuthMethod for one named
+provider (the first-party provider plugins of #671) that runs this client's code under its own
+`id`, `type` and config, so the plugin runtime (#600) loads it as any plugin, from the first-party
+list with `PLUGIN_API_ENABLED` off too. The generic client's `id` `oidc` and its `oidc_<alias>`
+types stay reserved for the realm's provider rows.
+
+```ts
+export const authMethod = createUpstreamOidcPresetMethod({
+  id: 'example-idp',
+  type: 'example_idp',
+  display: { name: 'Example IdP' },
+  origins: ['https://idp.example.com'],
+  configSchema: z.strictObject({
+    clientId: z.string().min(1).max(255),
+    clientSecret: z.string().min(1).max(1024).meta({ writeOnly: true }),
+  }),
+  upstreamConfig: (config) => ({
+    issuer: 'https://idp.example.com',
+    clientId: config.clientId,
+    clientAuthentication: { method: 'client_secret_basic', clientSecret: config.clientSecret },
+  }),
+});
+```
+
+- `upstreamConfig` turns the preset's parsed config into this client's config at every use. It
+  must pass the client secret on as the preset's `writeOnly` member holds it: a config whose
+  client secret is not the value of such a member is refused, since the runtime would store it in
+  the clear.
+- `origins` binds the secret to its destination. The runtime seals a plugin's secret under the
+  plugin's own context (`auth-method-plugin:<id>:<path>`), not under the issuer and token endpoint
+  as the stored config above does, so a preset names the `https` origins its provider answers on.
+  A config whose issuer or any endpoint set by hand is on none of them is refused where the host
+  parses it, at the admin API's configure and at every use: no config sends the secret to another
+  host.
+- Every call goes out as a `remote_document` destination unless the preset's own config names its
+  origin, so a preset never reaches a private address through the egress allowlist.
+- `src/testing/example-preset.ts` is a preset on the fake provider, its client secret inside a
+  discriminated union of client authentication methods; it passes the contract test kit.
+
 ## Registration check
 
 `checkUpstreamOidcProvider(egressClient, realmName, config)` runs discovery and the egress

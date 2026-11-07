@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Preset plugins on the generic upstream OpenID Connect client,
+  experimental** ([#951], ADR-019 Decisions 9 and 12). A preset is a plugin
+  for one named provider that runs the generic client's code (discovery, PKCE
+  with S256, the ID token and callback checks) under its own id, type and
+  config: `createUpstreamOidcPresetMethod` of
+  `@qauth-labs/server-upstream-oidc` builds its `authMethod`, so the plugin
+  loader takes it as any plugin, from the first-party list with
+  `PLUGIN_API_ENABLED` off too. Its client secret is a `writeOnly` member of
+  its own config, sealed under the plugin's context like any plugin secret;
+  a config whose client secret is not such a member's value is refused, as
+  it would be stored in the clear. The preset names the `https` origins its
+  provider answers on, and a config whose issuer or an endpoint set by hand
+  leaves them is refused at the configure and at every use, so a realm's
+  admin cannot send the stored secret to another host. The plugin runtime's
+  secret-member reader now takes a `writeOnly` mark inside a union of objects,
+  such as a discriminated union of client authentication methods, when every
+  branch with a member at that path marks it; the generic client's own
+  config reads as one secret member, `clientAuthentication.clientSecret`.
+
 - **Scopes for the account and developer APIs** ([#933], ADR-019 Decision 7).
   Each family has a read and a write scope in QAuth's reserved `qauth:`
   namespace: `qauth:developer:read` and `qauth:developer:write`,
@@ -3393,6 +3412,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#908]: https://github.com/qauth-labs/qauth/issues/908
 [#914]: https://github.com/qauth-labs/qauth/issues/914
 [#933]: https://github.com/qauth-labs/qauth/issues/933
+[#951]: https://github.com/qauth-labs/qauth/issues/951
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
 [#964]: https://github.com/qauth-labs/qauth/issues/964
