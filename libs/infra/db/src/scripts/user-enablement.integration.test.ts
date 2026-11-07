@@ -8,7 +8,7 @@
  *
  * Requires Docker; skips locally without it, fails on CI (requireDockerOrSkip).
  */
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -47,7 +47,10 @@ describe('setUserEnabled (real Postgres)', () => {
 
   async function seed(realmName: string, enabled = true) {
     const realm = await createRealmsRepository(db()).create({ name: realmName });
-    const user = await createUsersRepository(db()).create({ realmId: realm.id, enabled });
+    const user = await createUsersRepository(db()).create(
+      { realmId: realm.id, enabled },
+      testPrimaryCredential()
+    );
     return { realm, user };
   }
 

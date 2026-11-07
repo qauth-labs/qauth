@@ -308,7 +308,6 @@ export function createInteractionEngines(
     createRepositoryAccountRegistrations<EventTransaction>(
       {
         users: fastify.repositories.users,
-        userCredentials: fastify.repositories.userCredentials,
         userAttributes: fastify.repositories.userAttributes,
       },
       (work) => fastify.db.transaction(work),

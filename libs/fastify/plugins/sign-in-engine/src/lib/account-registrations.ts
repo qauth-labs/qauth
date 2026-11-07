@@ -13,19 +13,19 @@ import type { AccountRegistration, AccountRegistrations } from '@qauth-labs/serv
  */
 export interface AccountRegistrationRepositories<Tx> {
   readonly users: {
-    create(data: { readonly realmId: string }, tx?: Tx): Promise<{ readonly id: string }>;
-  };
-  readonly userCredentials: {
+    /**
+     * The account and the credential that creates it, its primary identity
+     * (ADR-015 Decision 8, #846), in one call.
+     */
     create(
-      data: {
-        readonly userId: string;
-        readonly realmId: string;
+      data: { readonly realmId: string },
+      primary: {
         readonly providerType: string;
         readonly externalSub: string;
         readonly credentialData: Record<string, unknown>;
       },
       tx?: Tx
-    ): Promise<unknown>;
+    ): Promise<{ readonly id: string }>;
   };
   readonly userAttributes: {
     upsertMany(
@@ -89,7 +89,8 @@ class AddressTaken extends Error {
  *
  * `create` hashes the password first, outside the transaction (Argon2id is
  * slow), then in one database transaction writes the `users` row, the
- * `password` credential whose `external_sub` is the address, holding the hash,
+ * `password` credential (its primary identity, #846) whose `external_sub` is
+ * the address, holding the hash,
  * `email_verified: true` and the normalisation marker, the verified `email`
  * attribute, and the account's event. The engine calls it only once the
  * transaction proved the mailbox, so the account is verified from its first
@@ -112,12 +113,11 @@ export function createRepositoryAccountRegistrations<Tx>(
       const passwordHash = await policy.hash(password);
       try {
         return await transaction(async (tx): Promise<AccountRegistration> => {
-          const user = await stores.users.create({ realmId }, tx);
-          await stores.userCredentials
+          // The password credential is the account's primary identity.
+          const user = await stores.users
             .create(
+              { realmId },
               {
-                userId: user.id,
-                realmId,
                 providerType: PASSWORD_PROVIDER_TYPE,
                 externalSub: identifier,
                 credentialData: {

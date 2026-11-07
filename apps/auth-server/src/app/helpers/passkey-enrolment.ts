@@ -112,32 +112,49 @@ async function writePasskey(
     readonly enrolment: WebAuthnEnrolment;
   }
 ): Promise<UserCredential> {
+  await lockRealmRpId(deps, tx, input);
+  return deps.userCredentials.create(
+    {
+      userId: input.userId,
+      realmId: input.realmId,
+      providerType: WEBAUTHN_PROVIDER_TYPE,
+      ...passkeyCredentialOf(input.enrolment),
+    },
+    tx
+  );
+}
+
+/** Steps 1 and 2 of {@link storePasskeyEnrolment}: lock the realm's RP ID and check the passkey's. */
+async function lockRealmRpId(
+  deps: Pick<PasskeyEnrolmentDependencies, 'realms'>,
+  tx: EnrolmentTransaction,
+  input: { readonly realmId: string; readonly enrolment: WebAuthnEnrolment }
+): Promise<void> {
   const lock = await deps.realms.lockRpIdForEnrolment(tx, input.realmId);
   if (lock.rpId !== input.enrolment.rpId) {
     throw new BadRequestError(
       "Passkey was created under another RP ID than the realm's; start the enrolment again"
     );
   }
-  return deps.userCredentials.create(
-    {
-      userId: input.userId,
-      realmId: input.realmId,
-      providerType: WEBAUTHN_PROVIDER_TYPE,
-      externalSub: input.enrolment.externalSub,
-      credentialData: { ...input.enrolment.credentialData },
-    },
-    tx
-  );
+}
+
+/** The `user_credentials` row's subject and data of a verified registration. */
+function passkeyCredentialOf(enrolment: WebAuthnEnrolment): {
+  readonly externalSub: string;
+  readonly credentialData: Record<string, unknown>;
+} {
+  return { externalSub: enrolment.externalSub, credentialData: { ...enrolment.credentialData } };
 }
 
 /**
  * Create an account whose primary identity is a passkey, with no address
  * (#655; ADR-017 Decision 8, question 30), from a verified registration: in
- * one transaction, the `users` row, the passkey as {@link storePasskeyEnrolment}
- * stores one (the realm's RP ID locked and checked, the `webauthn`
- * credential), and the caller's `recorded` write (the account's
- * `user.registered` event), so a refusal or a failure rolls back the user
- * with it. No email attribute and no password credential are written.
+ * one transaction, the realm's RP ID locked and checked as
+ * {@link storePasskeyEnrolment} does, the `users` row with the `webauthn`
+ * credential as its primary identity (ADR-015 Decision 8, #846), and the
+ * caller's `recorded` write (the account's `user.registered` event), so a
+ * refusal or a failure rolls back the user with it. No email attribute and
+ * no password credential are written.
  *
  * @returns the new account's user id
  * @throws BadRequestError when the passkey was created under another RP ID
@@ -155,12 +172,12 @@ export async function storePasskeyAccount(
   }
 ): Promise<string> {
   return deps.db.transaction(async (tx: EnrolmentTransaction) => {
-    const user = await deps.users.create({ realmId: input.realmId }, tx);
-    await writePasskey(deps, tx, {
-      realmId: input.realmId,
-      userId: user.id,
-      enrolment: input.enrolment,
-    });
+    await lockRealmRpId(deps, tx, input);
+    const user = await deps.users.create(
+      { realmId: input.realmId },
+      { providerType: WEBAUTHN_PROVIDER_TYPE, ...passkeyCredentialOf(input.enrolment) },
+      tx
+    );
     await input.recorded(tx, user.id);
     return user.id;
   });

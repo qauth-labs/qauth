@@ -15,7 +15,7 @@
  * Requires Docker; self-skips without it, same as the sibling suites.
  */
 import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-errors';
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -99,7 +99,7 @@ describe('admin roles and grants (real Postgres)', () => {
   }
 
   async function account(realmId: string): Promise<string> {
-    const row = await users.create({ realmId });
+    const row = await users.create({ realmId }, testPrimaryCredential());
     return row.id;
   }
 

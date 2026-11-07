@@ -237,14 +237,15 @@ describe('job runner on a real Postgres', () => {
     async function seed() {
       const { repositories } = database();
       const realm = await repositories.realms.create({ name: `realm-${hash().slice(0, 8)}` });
-      const user = await repositories.users.create({ realmId: realm.id });
-      const credential = await repositories.userCredentials.create({
-        userId: user.id,
-        realmId: realm.id,
-        providerType: 'password',
-        externalSub: 'user@example.com',
-        credentialData: { password_hash: 'argon2-hash', email_verified: false },
-      });
+      const user = await repositories.users.create(
+        { realmId: realm.id },
+        {
+          providerType: 'password',
+          externalSub: 'user@example.com',
+          credentialData: { password_hash: 'argon2-hash', email_verified: false },
+        }
+      );
+      const credential = user.primaryCredential;
       const client = await repositories.oauthClients.create({
         realmId: realm.id,
         clientId: 'purge-client',

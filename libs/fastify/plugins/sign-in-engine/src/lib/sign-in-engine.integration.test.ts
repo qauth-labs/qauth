@@ -67,14 +67,14 @@ describe('the sign-in engine over the server adapters (real Postgres)', () => {
     realmId = realm.id;
     const hash = await hasher.hashPassword(PASSWORD);
     const seed = async (identifier: string, enabled: boolean) => {
-      const user = await users.create({ realmId, enabled });
-      await userCredentials.create({
-        userId: user.id,
-        realmId,
-        providerType: 'password',
-        externalSub: identifier,
-        credentialData: buildPasswordCredentialData(hash, true, null),
-      });
+      const user = await users.create(
+        { realmId, enabled },
+        {
+          providerType: 'password',
+          externalSub: identifier,
+          credentialData: buildPasswordCredentialData(hash, true, null),
+        }
+      );
       return user.id;
     };
     disabledUserId = await seed('disabled@example.com', false);

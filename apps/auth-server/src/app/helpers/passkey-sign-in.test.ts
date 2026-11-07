@@ -617,8 +617,9 @@ describe('the server passkey accounts (#655)', () => {
   beforeEach(() => {
     writes = [];
     users = {
-      create: vi.fn(async (input: unknown, tx: string) => {
-        writes.push(`user ${JSON.stringify(input)} ${tx}`);
+      // The account and its primary credential in one call (#846).
+      create: vi.fn(async (input: unknown, primary: { providerType: string }, tx: string) => {
+        writes.push(`user ${JSON.stringify(input)} with ${primary.providerType} ${tx}`);
         return { id: 'new-user' };
       }),
     };
@@ -650,25 +651,24 @@ describe('the server passkey accounts (#655)', () => {
       { registered: registered as unknown as ServerPasskeyAccountOptions['registered'] }
     )({ realmId: REALM_ID, clientId: CLIENT_ID, registration });
 
-  it('writes the user, the passkey and the event in one transaction, with no address', async () => {
+  it('writes the user, the passkey as its primary identity and the event in one transaction, with no address', async () => {
     expect(await create()).toEqual({ kind: 'created', userId: 'new-user' });
 
     expect(writes).toEqual([
-      `user {"realmId":"${REALM_ID}"} tx`,
       'lock tx',
-      'credential webauthn tx',
+      `user {"realmId":"${REALM_ID}"} with webauthn tx`,
       'event tx',
     ]);
-    expect(credentials.create).toHaveBeenCalledWith(
+    expect(users.create).toHaveBeenCalledWith(
+      { realmId: REALM_ID },
       {
-        userId: 'new-user',
-        realmId: REALM_ID,
         providerType: 'webauthn',
         externalSub: ENROLMENT.externalSub,
         credentialData: ENROLMENT.credentialData,
       },
       'tx'
     );
+    expect(credentials.create).not.toHaveBeenCalled();
     expect(registered).toHaveBeenCalledWith(
       { realmId: REALM_ID, clientId: CLIENT_ID, userId: 'new-user' },
       'tx'
@@ -676,7 +676,7 @@ describe('the server passkey accounts (#655)', () => {
   });
 
   it('answers conflict for a credential id the realm holds by then', async () => {
-    credentials.create.mockRejectedValueOnce(new UniqueConstraintError('UserCredential'));
+    users.create.mockRejectedValueOnce(new UniqueConstraintError('UserCredential'));
 
     expect(await create()).toEqual({ kind: 'conflict' });
     expect(registered).not.toHaveBeenCalled();
@@ -686,7 +686,7 @@ describe('the server passkey accounts (#655)', () => {
     lockRpIdForEnrolment.mockResolvedValueOnce({ rpId: 'other.example.test' });
 
     expect(await create()).toEqual({ kind: 'conflict' });
-    expect(credentials.create).not.toHaveBeenCalled();
+    expect(users.create).not.toHaveBeenCalled();
     expect(registered).not.toHaveBeenCalled();
   });
 

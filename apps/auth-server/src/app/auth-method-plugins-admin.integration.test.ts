@@ -1,4 +1,4 @@
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, FastifyRequest, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -146,7 +146,9 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     scope = ALL_ADMIN_SCOPES
   ) {
     const operator = await operatorRealm();
-    const userId = (await app().repositories.users.create({ realmId: operator.id })).id;
+    const userId = (
+      await app().repositories.users.create({ realmId: operator.id }, testPrimaryCredential())
+    ).id;
     await app().repositories.adminGrants.create({
       userId,
       role: { kind: 'built-in', name: role },

@@ -1,4 +1,4 @@
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -115,6 +115,7 @@ async function fixtureAdminApi(options: { renderer: boolean } = { renderer: true
           const realmId = requestAdminCaller(request).targetRealm.id;
           const account = await request.server.repositories.users.create(
             { realmId },
+            testPrimaryCredential(),
             adminTransaction(request)
           );
           if (steer.failAfterChange) throw new Error('the fixture failed after its change');
@@ -267,7 +268,9 @@ describe('approvals for security operations (#512, real containers)', () => {
     scope = ALL_ADMIN_SCOPES
   ) {
     const operator = await operatorRealm();
-    const userId = (await app().repositories.users.create({ realmId: operator.id })).id;
+    const userId = (
+      await app().repositories.users.create({ realmId: operator.id }, testPrimaryCredential())
+    ).id;
     await app().repositories.adminGrants.create({
       userId,
       role: { kind: 'built-in', name: role },

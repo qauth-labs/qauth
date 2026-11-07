@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
 import Fastify, {
   type FastifyInstance,
   type FastifyRequest,
@@ -176,7 +176,11 @@ async function fixtureAdminApi() {
           const tx = adminTransaction(request);
           handlerTransactions.push(tx);
           const realmId = requestAdminCaller(request).targetRealm.id;
-          const account = await request.server.repositories.users.create({ realmId }, tx);
+          const account = await request.server.repositories.users.create(
+            { realmId },
+            testPrimaryCredential(),
+            tx
+          );
           recordAdminChange(request, {
             change: { before: null, after: { id: account.id, recoveryCode: 'never-stored' } },
             annotations: { recoveryCode: 'secret' },
@@ -190,7 +194,11 @@ async function fixtureAdminApi() {
         async (request) => {
           runs.push(fail.id);
           const realmId = requestAdminCaller(request).targetRealm.id;
-          await request.server.repositories.users.create({ realmId }, adminTransaction(request));
+          await request.server.repositories.users.create(
+            { realmId },
+            testPrimaryCredential(),
+            adminTransaction(request)
+          );
           throw new Error('the fixture handler failed after its change');
         }
       );
@@ -200,7 +208,11 @@ async function fixtureAdminApi() {
         async (request, reply) => {
           runs.push(send.id);
           const realmId = requestAdminCaller(request).targetRealm.id;
-          await request.server.repositories.users.create({ realmId }, adminTransaction(request));
+          await request.server.repositories.users.create(
+            { realmId },
+            testPrimaryCredential(),
+            adminTransaction(request)
+          );
           return reply.send({ sent: true });
         }
       );
@@ -214,6 +226,7 @@ async function fixtureAdminApi() {
           const realmId = requestAdminCaller(request).targetRealm.id;
           const account = await request.server.repositories.users.create(
             { realmId },
+            testPrimaryCredential(),
             adminTransaction(request)
           );
           return { id: account.id };
@@ -251,7 +264,11 @@ async function fixtureAdminApi() {
         async (request) => {
           runs.push(misanswer.id);
           const realmId = requestAdminCaller(request).targetRealm.id;
-          await request.server.repositories.users.create({ realmId }, adminTransaction(request));
+          await request.server.repositories.users.create(
+            { realmId },
+            testPrimaryCredential(),
+            adminTransaction(request)
+          );
           return { id: 'not-a-uuid' };
         }
       );
@@ -263,7 +280,11 @@ async function fixtureAdminApi() {
         const tx = adminTransaction(request);
         handlerTransactions.push(tx);
         const realmId = requestAdminCaller(request).targetRealm.id;
-        const account = await request.server.repositories.users.create({ realmId }, tx);
+        const account = await request.server.repositories.users.create(
+          { realmId },
+          testPrimaryCredential(),
+          tx
+        );
         return { id: account.id };
       };
       void scope.register(async (module) => {
@@ -287,7 +308,11 @@ async function fixtureAdminApi() {
         async (request) => {
           runs.push(rotate.id);
           const realmId = requestAdminCaller(request).targetRealm.id;
-          await request.server.repositories.users.create({ realmId }, adminTransaction(request));
+          await request.server.repositories.users.create(
+            { realmId },
+            testPrimaryCredential(),
+            adminTransaction(request)
+          );
           return { rotated: true };
         }
       );
@@ -405,7 +430,9 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
     scope = ALL_ADMIN_SCOPES
   ): Promise<{ userId: string; token: string }> {
     const operator = await defaultRealm();
-    const userId = (await app().repositories.users.create({ realmId: operator.id })).id;
+    const userId = (
+      await app().repositories.users.create({ realmId: operator.id }, testPrimaryCredential())
+    ).id;
     await app().repositories.adminGrants.create({
       userId,
       role: { kind: 'built-in', name: role },
@@ -842,7 +869,9 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
     it("serves a realm-local admin on its own realm, with its own realm's token, and nowhere else", async () => {
       const alpha = await signingTenant('alpha');
       const operator = await defaultRealm();
-      const userId = (await app().repositories.users.create({ realmId: alpha.id })).id;
+      const userId = (
+        await app().repositories.users.create({ realmId: alpha.id }, testPrimaryCredential())
+      ).id;
       await app().repositories.adminGrants.create({
         userId,
         role: { kind: 'built-in', name: 'viewer' },
@@ -868,7 +897,9 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
     it("refuses a token that names one realm's issuer but carries another realm's signature", async () => {
       const alpha = await signingTenant('alpha');
       const operator = await defaultRealm();
-      const ofAlpha = (await app().repositories.users.create({ realmId: alpha.id })).id;
+      const ofAlpha = (
+        await app().repositories.users.create({ realmId: alpha.id }, testPrimaryCredential())
+      ).id;
       await app().repositories.adminGrants.create({
         userId: ofAlpha,
         role: { kind: 'built-in', name: 'viewer' },
@@ -1213,7 +1244,9 @@ async function viewerOn(
     { name, issuer: `https://${name}.example.com`, enabled: true },
     `${name}.example.com`
   );
-  const userId = (await app.repositories.users.create({ realmId: operator.id })).id;
+  const userId = (
+    await app.repositories.users.create({ realmId: operator.id }, testPrimaryCredential())
+  ).id;
   await app.repositories.adminGrants.create({
     userId,
     role: { kind: 'built-in', name: 'viewer' },
@@ -1489,7 +1522,9 @@ describe('the admin listener closes with the server (#511, real containers)', ()
       { name: 'alpha', issuer: 'https://alpha.example.com', enabled: true },
       'alpha.example.com'
     );
-    const userId = (await app.repositories.users.create({ realmId: operator.id })).id;
+    const userId = (
+      await app.repositories.users.create({ realmId: operator.id }, testPrimaryCredential())
+    ).id;
     await app.repositories.adminGrants.create({
       userId,
       role: { kind: 'built-in', name: 'editor' },
