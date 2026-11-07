@@ -34,7 +34,7 @@ import {
   signInWithPassword,
 } from '../testing/e2e-harness';
 import { SIGNER_LISTENER, SIGNER_SERVICE } from '../testing/service-role-env';
-import { API_FAMILY_AUDIENCES } from './api-conventions/families';
+import { API_FAMILY_AUDIENCES, API_FAMILY_SCOPES } from './api-conventions/families';
 import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
 import { serverJobs } from './jobs';
 import { SERVICE_ROLE_NAMES, type ServiceRole } from './service-roles';
@@ -487,7 +487,13 @@ describe('each service role on a database user of its own (#498)', () => {
     ]);
     const account = await fixture.app.jwtUtils.signAccessToken(
       { id: realm.id },
-      { sub: userId, clientId: 'account-console', aud: API_FAMILY_AUDIENCES.account }
+      {
+        sub: userId,
+        clientId: 'account-console',
+        aud: API_FAMILY_AUDIENCES.account,
+        // Both account scopes (#933): the list reads, the withdrawal writes.
+        scope: `${API_FAMILY_SCOPES.account.read} ${API_FAMILY_SCOPES.account.write}`,
+      }
     );
     const consents = await call('GET', `${ACCOUNT}/consents`, account);
     expect(consents.statusCode, consents.body).toBe(200);

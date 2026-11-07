@@ -35,7 +35,10 @@ import {
  * - an update without `If-Match` (428) and with a stale one (412);
  * - another developer's client as 404, old paths and new;
  * - the system client of a fresh database, and of an older one at boot,
- *   with the developer audience; the token `/auth/login` mints carrying it;
+ *   with the developer audience; the token `/auth/login` mints carrying it
+ *   and both developer scopes (#933);
+ * - a developer-audience token with only the read scope refused on every
+ *   write operation and admitted on every read (#933);
  * - the developer portal's own server code (`auth-server-client.ts`) end to
  *   end against the listening server, on the new paths only.
  *
@@ -50,6 +53,10 @@ const DEVELOPER = '/developer/v1-rc.0';
 const ACCOUNT = '/account/v1-rc.0';
 const DEVELOPER_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
 const ACCOUNT_AUDIENCE = 'urn:qauth:aud:account:v1-rc.0';
+/** The scopes of the two families (#933). */
+const DEVELOPER_READ = 'qauth:developer:read';
+const DEVELOPER_WRITE = 'qauth:developer:write';
+const ACCOUNT_SCOPES = 'qauth:account:read qauth:account:write';
 /** RFC 9745: the date the old paths were deprecated, 2026-10-31T00:00:00Z. */
 const DEPRECATION = '@1793404800';
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..');
@@ -162,7 +169,7 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
   async function accountToken(userId: string): Promise<string> {
     return app().jwtUtils.signAccessToken(
       { id: await realmId() },
-      { sub: userId, clientId: 'account-console', aud: ACCOUNT_AUDIENCE }
+      { sub: userId, clientId: 'account-console', aud: ACCOUNT_AUDIENCE, scope: ACCOUNT_SCOPES }
     );
   }
 
@@ -258,6 +265,8 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
         aud: DEVELOPER_AUDIENCE,
         client_id: 'system',
         sub: dev.userId,
+        // Both developer scopes, so the portal reads and writes (#933).
+        scope: `${DEVELOPER_READ} ${DEVELOPER_WRITE}`,
       });
       // The developer family's guard admits it, and so does the deprecated
       // path's.
@@ -660,6 +669,7 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
           sub: dev.userId,
           clientId: 'agent-client',
           aud: ACCOUNT_AUDIENCE,
+          scope: 'qauth:account:write',
           act: { sub: 'agent-client' },
         }
       );
@@ -689,6 +699,106 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
         }
       );
       expect((await call('GET', `${DEVELOPER}/consents`, developerToken)).statusCode).toBe(401);
+    });
+  });
+
+  describe('the family scopes (#933)', () => {
+    /** A developer-audience token of `userId`, as an operator's client gets it. */
+    async function developerToken(userId: string, scope?: string): Promise<string> {
+      return app().jwtUtils.signAccessToken(
+        { id: await realmId() },
+        {
+          sub: userId,
+          clientId: 'operator-app',
+          aud: DEVELOPER_AUDIENCE,
+          ...(scope === undefined ? {} : { scope }),
+        }
+      );
+    }
+
+    it('refuse a token without the write scope on every write, and let it read', async () => {
+      const dev = await developer();
+      const created = await oldClient(dev.token);
+      const clientId = String(created['id']);
+      await allowApiKeys(clientId);
+      const keys = `${DEVELOPER}/clients/${clientId}/api-keys`;
+      const key = await call('POST', keys, dev.token, { payload: { name: 'a key' } });
+      expect(key.statusCode, key.body).toBe(201);
+      const consentId = await consentTo(dev.userId, clientId);
+      const etag = (await call('GET', `${DEVELOPER}/clients/${clientId}`, dev.token)).headers[
+        'etag'
+      ] as string;
+      const readOnly = await developerToken(dev.userId, `openid ${DEVELOPER_READ}`);
+
+      const writes = [
+        call('POST', `${DEVELOPER}/clients`, readOnly, { payload: { client_name: 'New' } }),
+        call('PATCH', `${DEVELOPER}/clients/${clientId}`, readOnly, {
+          headers: { 'content-type': 'application/merge-patch+json', 'if-match': etag },
+          payload: { client_name: 'Renamed' },
+        }),
+        call('POST', `${DEVELOPER}/clients/${clientId}/regenerate-secret`, readOnly),
+        call('POST', keys, readOnly, { payload: { name: 'another key' } }),
+        call('DELETE', `${keys}/${String(key.json().id)}`, readOnly),
+        call('DELETE', `${DEVELOPER}/consents/${consentId}`, readOnly),
+        call('DELETE', `${DEVELOPER}/clients/${clientId}`, readOnly),
+      ];
+      for (const response of await Promise.all(writes)) {
+        expect(response.statusCode, response.body).toBe(403);
+        expect(response.json()).toMatchObject({ code: 'forbidden' });
+        expect(response.headers['www-authenticate']).toBe(
+          `Bearer realm="OAuth", error="insufficient_scope", scope="${DEVELOPER_WRITE}"`
+        );
+      }
+
+      // Nothing changed: the client, its key and the consent are all there.
+      const reads = [
+        call('GET', `${DEVELOPER}/clients`, readOnly),
+        call('GET', `${DEVELOPER}/clients/${clientId}`, readOnly),
+        call('GET', keys, readOnly),
+        call('GET', `${DEVELOPER}/consents`, readOnly),
+      ];
+      const [list, one, keyList, consents] = await Promise.all(reads);
+      for (const response of [list, one, keyList, consents]) {
+        expect(response?.statusCode, response?.body).toBe(200);
+      }
+      expect(one?.json()).toMatchObject({ client_name: created['name'] });
+      expect(one?.headers['etag']).toBe(etag);
+      expect(keyList?.json().items.map((item: { revokedAt: unknown }) => item.revokedAt)).toEqual([
+        null,
+      ]);
+      expect(consents?.json().items.map((item: { id: string }) => item.id)).toEqual([consentId]);
+    });
+
+    it('refuse a token without the read scope on a read, and one with no scope on both', async () => {
+      const dev = await developer();
+      for (const scope of [undefined, DEVELOPER_WRITE]) {
+        const response = await call(
+          'GET',
+          `${DEVELOPER}/clients`,
+          await developerToken(dev.userId, scope)
+        );
+        expect(response.statusCode, response.body).toBe(403);
+        expect(response.headers['www-authenticate']).toBe(
+          `Bearer realm="OAuth", error="insufficient_scope", scope="${DEVELOPER_READ}"`
+        );
+      }
+      const none = await call(
+        'DELETE',
+        `${ACCOUNT}/consents/${'0'.repeat(8)}-0000-4000-8000-${'0'.repeat(12)}`,
+        await app().jwtUtils.signAccessToken(
+          { id: await realmId() },
+          {
+            sub: dev.userId,
+            clientId: 'account-console',
+            aud: ACCOUNT_AUDIENCE,
+            scope: 'qauth:account:read',
+          }
+        )
+      );
+      expect(none.statusCode, none.body).toBe(403);
+      expect(none.headers['www-authenticate']).toBe(
+        'Bearer realm="OAuth", error="insufficient_scope", scope="qauth:account:write"'
+      );
     });
   });
 
