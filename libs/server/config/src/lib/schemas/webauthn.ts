@@ -163,9 +163,11 @@ export const webauthnEnvSchema = z.object({
   /**
    * Turn passkeys on (ADR-017 phase F2b, complete with #655): passkey sign-in,
    * the enrolment offer after a password sign-in, and the registration of an
-   * account by passkey alone. Default off. The RP ID settings and the
-   * association files below do not depend on it: they are checked, and the
-   * files served, either way.
+   * account by passkey alone. Default off. Until the FiPA endpoint ships
+   * (#646), only the hosted pages (`INTERACTION_UI_ENABLED`) offer a passkey:
+   * on without them, the boot warns ({@link passkeyPostureWarnings}). The RP
+   * ID settings and the association files below do not depend on it: they
+   * are checked, and the files served, either way.
    */
   WEBAUTHN_ENABLED: strictBoolean(false),
 
@@ -201,3 +203,32 @@ export const webauthnEnvSchema = z.object({
 });
 
 export type WebAuthnEnv = z.infer<typeof webauthnEnvSchema>;
+
+/** A warning the boot logs about the passkey settings, naming its variable. */
+export interface PasskeyPostureWarning {
+  readonly variable: string;
+  readonly message: string;
+}
+
+/**
+ * What the boot warns about in the passkey settings (#655): `WEBAUTHN_ENABLED`
+ * on while `INTERACTION_UI_ENABLED` is off. Only the hosted pages offer a
+ * passkey until the FiPA endpoint ships (#646); the server-rendered pages ask
+ * for a password and refuse a right one of an account that holds a passkey.
+ * So nothing offers a passkey, and an account whose only credential is a
+ * passkey, registered while the hosted pages were on, cannot sign in. Not a
+ * refusal: the switch gates the FiPA endpoint's passkeys too (ADR-017
+ * Phasing), which need no hosted page.
+ */
+export function passkeyPostureWarnings(
+  env: Pick<WebAuthnEnv, 'WEBAUTHN_ENABLED'> & { readonly INTERACTION_UI_ENABLED: boolean }
+): PasskeyPostureWarning[] {
+  if (!env.WEBAUTHN_ENABLED || env.INTERACTION_UI_ENABLED) return [];
+  return [
+    {
+      variable: 'WEBAUTHN_ENABLED',
+      message:
+        'WEBAUTHN_ENABLED is on while INTERACTION_UI_ENABLED is off: only the hosted pages offer a passkey, so no page asks for one, and an account whose only credential is a passkey cannot sign in',
+    },
+  ];
+}

@@ -130,4 +130,10 @@ export {
   type TrustRegistryEnv,
   trustRegistryEnvSchema,
 } from './trust-registry';
-export { type AndroidAppFingerprints, type WebAuthnEnv, webauthnEnvSchema } from './webauthn';
+export {
+  type AndroidAppFingerprints,
+  type PasskeyPostureWarning,
+  passkeyPostureWarnings,
+  type WebAuthnEnv,
+  webauthnEnvSchema,
+} from './webauthn';

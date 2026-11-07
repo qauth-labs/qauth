@@ -15,7 +15,7 @@ export const PASSKEY_KEYS = defineKeys([
     owner: 'passkeys',
     default: 'false',
     since: '0.2.0',
-    docs: 'Turn passkeys on: passkey sign-in, the offer to add one after a password sign-in, and sign-up with a passkey alone (no email address) where the realm allows sign-up.',
+    docs: 'Turn passkeys on: passkey sign-in, the offer to add one after a password sign-in, and sign-up with a passkey alone (no email address) where the realm allows sign-up; only the hosted pages (`INTERACTION_UI_ENABLED`) offer a passkey, and while they are off the server warns at every boot.',
   },
   {
     name: 'WEBAUTHN_RP_ID',

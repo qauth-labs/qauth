@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { webauthnEnvSchema } from './webauthn';
+import { passkeyPostureWarnings, webauthnEnvSchema } from './webauthn';
 
 /**
  * The passkey settings (ADR-017 Decision 14, ADR-019 Decision 2, issue #467).
@@ -137,5 +137,27 @@ describe('webauthnEnvSchema', () => {
       expect(Object.getPrototypeOf(apps)).toBeNull();
       expect(Object.isFrozen(apps)).toBe(true);
     });
+  });
+});
+
+describe('passkeyPostureWarnings (#655)', () => {
+  it('warns of passkeys on while no hosted page offers them', () => {
+    const warnings = passkeyPostureWarnings({
+      WEBAUTHN_ENABLED: true,
+      INTERACTION_UI_ENABLED: false,
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.variable).toBe('WEBAUTHN_ENABLED');
+    expect(warnings[0]?.message).toContain('INTERACTION_UI_ENABLED is off');
+  });
+
+  it.each([
+    [false, false],
+    [false, true],
+    [true, true],
+  ])('says nothing with WEBAUTHN_ENABLED=%s and INTERACTION_UI_ENABLED=%s', (webauthn, ui) => {
+    expect(
+      passkeyPostureWarnings({ WEBAUTHN_ENABLED: webauthn, INTERACTION_UI_ENABLED: ui })
+    ).toEqual([]);
   });
 });

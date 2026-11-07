@@ -41,6 +41,7 @@ import {
 } from '@qauth-labs/fastify-plugin-signer';
 import { SSF_DELIVERY_KIND, ssfPlugin } from '@qauth-labs/fastify-plugin-ssf';
 import {
+  passkeyPostureWarnings,
   passwordPolicyWarnings,
   resolveStatusListTrustAnchorPems,
   resolveVerifierCertificateChainPems,
@@ -677,6 +678,10 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // only factor (#634, ADR-017 Decision 8): allowed down to 8, which the
   // environment schema enforces, and logged, since it seeds new realms.
   for (const warning of passwordPolicyWarnings(env)) {
+    fastify.log.warn({ variable: warning.variable }, warning.message);
+  }
+  // Passkeys on with no hosted page to offer them (#655): logged, not refused.
+  for (const warning of passkeyPostureWarnings(env)) {
     fastify.log.warn({ variable: warning.variable }, warning.message);
   }
   const plugins = pluginsFor(roles);
