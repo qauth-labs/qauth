@@ -76,7 +76,7 @@ Use `Fixes #N` for bug fixes, `Closes #N` for features.
 - **Labels**: `enhancement` (features), `bug` (fixes); add others as needed
   (e.g. `priority:high`, `auth`).
 - **Milestone**: new work goes on a release milestone of the 0.x → 1.0 path
-  (ADR-018 §2), whose titles carry a descriptive suffix — e.g. `v0.3 - Core and UIs
+  (ADR-018 §2), whose titles carry a descriptive suffix — e.g. `v0.4 - Core and UIs
   beta`. The older `MVP` and `T0`–`T6` milestones are finished history; never file new
   work against them. There has never been a `Phase N` milestone. Read the live list
   before setting one, because this file cannot stay ahead of it:

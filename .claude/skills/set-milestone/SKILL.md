@@ -22,7 +22,7 @@ gh api repos/{owner}/{repo}/milestones --jq '.[] | "\(.number): \(.title) (\(.st
 
 ```bash
 # Using gh issue edit (recommended)
-gh issue edit {issue_number} --milestone "v0.3 - Core and UIs beta"
+gh issue edit {issue_number} --milestone "v0.4 - Core and UIs beta"
 ```
 
 ## Remove Milestone
@@ -66,7 +66,7 @@ gh api repos/{owner}/{repo}/milestones/{milestone_number} \
 
 ```bash
 # Set milestone on multiple issues
-gh issue edit 1 2 3 4 5 --milestone "v0.3 - Core and UIs beta"
+gh issue edit 1 2 3 4 5 --milestone "v0.4 - Core and UIs beta"
 ```
 
 ## Project Milestones

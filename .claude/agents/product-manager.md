@@ -16,7 +16,7 @@ When invoked:
    - `AGENTS.md` (QAuth Project Guide) and the project skills — language, architecture, API design, security
 
 2. **Clarify scope** — the plan is the 0.x → 1.0 path in ADR-018 §2, tracked as milestones:
-   - **v0.2 — Foundations**, **v0.3 — Core and UIs beta**, **v0.4 — Authority Tree beta**, **v0.5 — Federation beta**, **v1.0-rc — Release candidate**, **v1.0 — Stable release**.
+   - **v0.2 — Foundations**, **v0.3 — Foundations, the rest** (what 0.2.0 leaves open), **v0.4 — Core and UIs beta**, **v0.5 — Authority Tree beta**, **v0.6 — Federation beta**, **v1.0-rc — Release candidate**, **v1.0 — Stable release**.
    - The older tracks (MVP, T0–T6) are finished history. Their milestones hold no open issues; never file new work under them. The "Phase N" numbering of the archived PRD is history too.
    - Map any new ask to the milestone whose area it belongs to, and to its ADR-018 section (stable in 1.0 §3, experimental in 1.0 §4, later §10).
    - Call out when a request is outside ADR-018's 1.0 scope (§10 "Later") and suggest deferring or scoping down.

@@ -9,7 +9,7 @@ import { registerAccountLinkedAccountRoutes } from './linked-accounts';
  * An end user manages their own account. Its first routes are the consents:
  * the active grants the user gave, and their revocation, which replace the
  * cookie-authenticated `/consents` (a deprecated alias until the account
- * console, v0.3, moves); then the linked upstream accounts and their
+ * console, v0.4, moves); then the linked upstream accounts and their
  * removal (#670).
  *
  * Every route is guarded by `requireFamilyToken('account')` (#509): a token

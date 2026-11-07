@@ -16,7 +16,7 @@ import { emitUserEvent } from '../../helpers/user-events';
  * Consent management JSON API (issue #150).
  *
  * DEPRECATED since #524, a deprecated alias kept working until the account
- * console (v0.3) moves to the account API's `/account/v1-rc.0/consents`,
+ * console (v0.4) moves to the account API's `/account/v1-rc.0/consents`,
  * which a Bearer or DPoP token from the console's backend reaches. Every
  * response carries the `Deprecation` header (RFC 9745).
  *

@@ -272,7 +272,7 @@ The cookie surface requires a per-session CSRF token echoed back as `X-CSRF-Toke
 cookie is ambient authority a cross-site page can make the browser attach. The developer API
 requires none: a Bearer token has to be put on the request by code that already holds it. The
 cookie surface is deprecated too: the account API's `/account/v1-rc.0/consents` replaces it once
-the account console ships (v0.3).
+the account console ships (v0.4).
 
 > **Historical note (fixed in #366).** This page used to be the portal's one exception to the
 > "server functions are the only callers of auth-server endpoints" rule — it called `fetch()`
