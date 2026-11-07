@@ -168,33 +168,33 @@ states:
 
   decidingOwner:
     title: Ask the proof of the primary identity's kind
-    source: libs/server/federation/src/providers/verified-owner.ts:113
+    source: libs/server/federation/src/providers/verified-owner.ts:115
     always:
       - guard: noPrimary
         target: access_denied.no_primary_identity
         say: 'the account has no primary credential'
-        source: libs/server/federation/src/providers/verified-owner.ts:113
+        source: libs/server/federation/src/providers/verified-owner.ts:115
       - guard: unconfirmedPassword
         target: access_denied.address_unverified
         say: 'a password account whose address was never confirmed, whatever REQUIRE_VERIFIED_ACCOUNT says'
-        source: libs/server/federation/src/providers/verified-owner.ts:126
+        source: libs/server/federation/src/providers/verified-owner.ts:128
       - guard: uncheckedPasskey
         target: access_denied.passkey_unverified
         say: 'a passkey whose registration says the UV flag was not set'
-        source: libs/server/federation/src/providers/verified-owner.ts:133
+        source: libs/server/federation/src/providers/verified-owner.ts:135
       - guard: unprovedType
         target: access_denied.unproved_type
         say: 'a type with no proof'
-        source: libs/server/federation/src/providers/verified-owner.ts:148
+        source: libs/server/federation/src/providers/verified-owner.ts:150
       - guard: upstreamIdentity
         target: readingProvider
         say: "an upstream identity: its provider's switch decides"
-        source: libs/server/federation/src/providers/verified-owner.ts:141
+        source: libs/server/federation/src/providers/verified-owner.ts:143
       - target: countingClients
         say:
           "a confirmed password, a passkey registered with user verification, or a wallet credential QAuth's verifier
           wrote: a verified owner"
-        source: libs/server/federation/src/providers/verified-owner.ts:138
+        source: libs/server/federation/src/providers/verified-owner.ts:140
 
   readingProvider:
     title: Read the realm's provider of the identity's type
@@ -210,12 +210,12 @@ states:
 
   decidingProvider:
     title: Count an upstream identity only while its provider vouches for it
-    source: libs/server/federation/src/providers/verified-owner.ts:145
+    source: libs/server/federation/src/providers/verified-owner.ts:147
     always:
       - guard: switchOff
         target: access_denied.upstream_unverified
         say: "the provider's verified switch is off, or the realm switched the provider off"
-        source: libs/server/federation/src/providers/verified-owner.ts:145
+        source: libs/server/federation/src/providers/verified-owner.ts:147
       - target: countingClients
         say: 'QAuth checked the sign-in that created the account, and the switch is on: a verified owner'
 
