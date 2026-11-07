@@ -7,15 +7,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './car
 describe('Card', () => {
   it('renders with default classes', () => {
     const html = renderToString(<Card />);
-    expect(html).toContain('rounded-lg');
+    expect(html).toContain('rounded-surface');
     expect(html).toContain('border');
-    expect(html).toContain('shadow-sm');
+    expect(html).toContain('bg-card');
   });
 
   it('merges className with defaults', () => {
     const html = renderToString(<Card className="custom-class" />);
     expect(html).toContain('custom-class');
-    expect(html).toContain('rounded-lg');
+    expect(html).toContain('rounded-surface');
   });
 
   it('renders without error when ref is provided', () => {
@@ -83,7 +83,7 @@ describe('CardDescription', () => {
   it('renders as p with default classes', () => {
     const html = renderToString(<CardDescription>Desc</CardDescription>);
     expect(html).toContain('<p');
-    expect(html).toContain('text-gray-500');
+    expect(html).toContain('text-muted-foreground');
     expect(html).toContain('Desc');
   });
 });

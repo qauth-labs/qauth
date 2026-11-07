@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Design tokens and theming in `libs/ui`** ([#472], ADR-020 §5). QAuth's
+  own UIs now share the design system of the qauth.dev website: square corners,
+  flat surfaces with hairline edges, DM Sans, Instrument Serif and JetBrains
+  Mono, self-hosted. The values live in one token file in the Design Tokens
+  Community Group format (`libs/ui/src/tokens/tokens.json`), and the CSS
+  custom properties and the Tailwind v4 theme are generated from it. The
+  theme follows the system's light or dark setting; `data-theme` on the root
+  overrides it. Every text colour declares the backgrounds it is drawn on, and
+  a test checks each pair against WCAG AA (4.5:1 for text, 3:1 for a field's
+  edge and the focus ring) in both modes. This raised the default button,
+  placeholder, muted text and field edges to AA. `applyBrand` checks a realm's
+  brand settings (primary and accent colours, a font from a fixed list, dark
+  mode on or off) and returns its theme stylesheet; it refuses a colour below
+  AA, a font outside the list, and any value containing `url(`, `;`, `{` or
+  `}`. The five primitives use the tokens, and the developer portal loads the
+  design system.
 - **Scopes for the account and developer APIs** ([#933], ADR-019 Decision 7).
   Each family has a read and a write scope in QAuth's reserved `qauth:`
   namespace: `qauth:developer:read` and `qauth:developer:write`,
@@ -3392,6 +3408,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#901]: https://github.com/qauth-labs/qauth/issues/901
 [#908]: https://github.com/qauth-labs/qauth/issues/908
 [#914]: https://github.com/qauth-labs/qauth/issues/914
+[#472]: https://github.com/qauth-labs/qauth/issues/472
 [#933]: https://github.com/qauth-labs/qauth/issues/933
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
