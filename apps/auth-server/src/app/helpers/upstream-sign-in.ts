@@ -519,12 +519,13 @@ function keptAttributesOf(attributes: readonly UserAttribute[]): KeptUpstreamAtt
 
 /**
  * The account that holds the provider's identity (#639): looked up by
- * `(realm, provider type, external sub)` alone, never by an attribute. A
- * known credential stands only under the issuer it was created with (OIDC
- * Core §5.7: a `sub` is unique only within its issuer). `null` when no
- * account holds it. Nothing is written.
+ * `(realm, provider type, external sub)` alone, never by an attribute such
+ * as an email address (#670). A known credential stands only under the
+ * issuer it was created with (OIDC Core §5.7: a `sub` is unique only within
+ * its issuer). `null` when no account holds it. Nothing is written.
+ * Exported for its unit test.
  */
-async function lookUpAccount(
+export async function lookUpAccount(
   fastify: FastifyInstance,
   request: FastifyRequest,
   realm: RealmRow,
