@@ -71,6 +71,7 @@ Each step is named `urn:qauth:ia:<name>:v1-rc.0`. A step read names the current 
 | [`consent`](#consent)                 | Interaction API | `decision`, `remember`   | —                                     | —            | `identifier`                               |
 | [`select_account`](#select_account)   | Interaction API | `account`                | `account_unavailable`                 | —            | `accounts`                                 |
 | [`upstream`](#upstream)               | Interaction API | `provider`               | `provider_unavailable`                | —            | —                                          |
+| [`upstream_link`](#upstream_link)     | Interaction API | `decision`               | —                                     | —            | —                                          |
 | [`device_code`](#device_code)         | Interaction API | `user_code`              | `invalid_user_code`                   | —            | —                                          |
 | [`device_confirm`](#device_confirm)   | Interaction API | `decision`               | —                                     | —            | `location`, `network`, `user_agent`        |
 | [`logout_confirm`](#logout_confirm)   | Interaction API | `decision`               | —                                     | —            | `accounts`                                 |
@@ -211,6 +212,15 @@ The person picks one of the realm’s upstream identity providers: generic OpenI
 
 - Params: `providers`
 - Schema: [steps/upstream.json](/interaction/v1-rc.0/steps/upstream.json)
+
+### upstream_link
+
+`urn:qauth:ia:upstream_link:v1-rc.0` — Asks whether an upstream identity QAuth does not know starts a new account or joins an existing one.
+
+Shown once an upstream identity provider proved an identity no account of the realm holds (#670; ADR-020 §3). The person picks a new account with that identity, which only a realm that allows sign-up offers (`create`), or the account they already have, which they then sign in to in this interaction with its own factors and its MFA policy: the `identifier` step, and every step that account’s sign-in asks for. The identity joins that account only once that sign-in completes, in the same browser and the same interaction; no other way to sign in is offered meanwhile, neither another provider nor a password reset. Nothing on the step names the identity or the account: no address and no hint, and no account is ever found by an attribute such as an email address. Works without JavaScript: each choice is a button of a plain form post.
+
+- Params: `provider`, `create`
+- Schema: [steps/upstream_link.json](/interaction/v1-rc.0/steps/upstream_link.json)
 
 ### device_code
 

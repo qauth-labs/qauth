@@ -1128,6 +1128,65 @@
       }
     },
     {
+      "id": "upstream-link",
+      "input": {
+        "step": {
+          "type": "urn:qauth:ia:upstream_link:v1-rc.0",
+          "params": {
+            "provider": {
+              "provider": "oidc_corp",
+              "name": "Example Corp"
+            },
+            "create": true
+          },
+          "answer": {
+            "decision": "link"
+          },
+          "personal": {},
+          "amr": []
+        },
+        "alternatives": [],
+        "fipa": {
+          "iss": "https://auth.example.com",
+          "auth_session": "YXV0aC1zZXNzaW9uLWhhbmRsZS1vZi0zMi1ieXRlcyE",
+          "interaction_types_supported": [
+            "urn:qauth:ia:identifier:v1-rc.0",
+            "urn:qauth:ia:password:v1-rc.0",
+            "urn:qauth:ia:email_code:v1-rc.0",
+            "urn:qauth:ia:new_password:v1-rc.0",
+            "urn:qauth:ia:password_reset:v1-rc.0",
+            "urn:qauth:ia:captcha:v1-rc.0",
+            "urn:qauth:ia:webauthn_get:v1-rc.0",
+            "urn:qauth:ia:webauthn_create:v1-rc.0",
+            "urn:qauth:ia:totp:v1-rc.0",
+            "urn:qauth:ia:upstream_link:v1-rc.0"
+          ]
+        }
+      },
+      "expected": {
+        "interaction": {
+          "step": "urn:qauth:ia:upstream_link:v1-rc.0",
+          "alternatives": [],
+          "params": {
+            "urn:qauth:ia:upstream_link:v1-rc.0": {
+              "provider": {
+                "provider": "oidc_corp",
+                "name": "Example Corp"
+              },
+              "create": true
+            }
+          }
+        },
+        "fipa": {
+          "status": 403,
+          "body": {
+            "error": "redirect_to_web",
+            "iss": "https://auth.example.com"
+          }
+        }
+      }
+    },
+    {
       "id": "device-code",
       "input": {
         "step": {

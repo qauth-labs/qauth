@@ -271,6 +271,24 @@ export const interactionSchema = object(
       items: localeTag,
     },
     expiresAt: dateTime('When the interaction expires.'),
+    upstreamLink: object(
+      {
+        provider: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 63,
+          pattern: '^[a-z][a-z0-9_]{0,62}$',
+          description: 'The provider’s name: the AuthMethod `type`.',
+        },
+        name: displayText(
+          'realm',
+          64,
+          'The provider’s name as the operator set it, for the screen’s text.'
+        ),
+      },
+      ['provider', 'name'],
+      'The upstream identity this sign-in links, while the person signs in to their existing account to link it (#670): the screen says so ("Sign in to link Example Corp"). Present from the answer `link` to the `upstream_link` step until the interaction ends; absent on any other interaction. It names the provider only, never the identity or the account.'
+    ),
   },
   ['step', 'alternatives', 'params', 'csrf', 'brand', 'expiresAt'],
   'An interaction as its current step shows it: the step, the alternatives and their params, a CSRF value for one answer, who the client is and the realm’s brand. No personal data. The step grammar’s part has the shape of the FiPA endpoint’s answer (ADR-017 Decision 3): `step` is its `interaction_type_required`, `step` and `alternatives` its `qauth_interaction_types_offered`, `params` its `qauth_interaction_params` and `error` its `qauth_interaction_error`.'

@@ -679,6 +679,15 @@
       "stability": "stable"
     },
     {
+      "name": "interaction-step-upstream-link-v1",
+      "description": "The urn:qauth:ia:upstream_link:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-020 §3, #670). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/upstream_link.json",
+      "stability": "stable"
+    },
+    {
       "name": "interaction-step-device-code-v1",
       "description": "The urn:qauth:ia:device_code:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
       "format": "json-schema",

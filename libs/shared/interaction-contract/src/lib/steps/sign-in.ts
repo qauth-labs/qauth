@@ -1,6 +1,7 @@
 import {
   array,
   base64url,
+  closedEnum,
   closedObject,
   displayText,
   EMPTY_OBJECT,
@@ -21,7 +22,8 @@ import {
  * The sign-in steps: who is signing in, and the factors that prove it.
  * `identifier`, `password`, `captcha`, `webauthn_get` and `totp` are the
  * steps of ADR-017 Decision 3 and are served by both transports;
- * `recovery_code`, `select_account` and `upstream` only by the Interaction API.
+ * `recovery_code`, `select_account`, `upstream` and `upstream_link` only by the
+ * Interaction API.
  */
 
 /** The authorization response the examples end in. */
@@ -394,5 +396,52 @@ export const upstream = defineStep({
       redirect:
         'https://idp.example.com/authorize?response_type=code&client_id=qauth&state=Qm9vbGVhbi1ub3QtYS1yZWFsLXN0YXRl',
     },
+  },
+});
+
+export const upstreamLink = defineStep({
+  name: 'upstream_link',
+  transports: ['interaction'],
+  summary:
+    'Asks whether an upstream identity QAuth does not know starts a new account or joins an existing one.',
+  description:
+    'Shown once an upstream identity provider proved an identity no account of the realm holds (#670; ADR-020 §3). The person picks a new account with that identity, which only a realm that allows sign-up offers (`create`), or the account they already have, which they then sign in to in this interaction with its own factors and its MFA policy: the `identifier` step, and every step that account’s sign-in asks for. The identity joins that account only once that sign-in completes, in the same browser and the same interaction; no other way to sign in is offered meanwhile, neither another provider nor a password reset. Nothing on the step names the identity or the account: no address and no hint, and no account is ever found by an attribute such as an email address. Works without JavaScript: each choice is a button of a plain form post.',
+  params: object(
+    {
+      provider: object(
+        {
+          provider: upstreamProvider('The provider’s name: the AuthMethod `type`.'),
+          name: displayText(
+            'realm',
+            64,
+            'The provider’s name as the operator set it, for the screen’s text.'
+          ),
+        },
+        ['provider', 'name']
+      ),
+      create: {
+        type: 'boolean',
+        description:
+          'Whether the person may start a new account with the identity: the realm allows sign-up. `false` offers the existing account only.',
+      },
+    },
+    ['provider', 'create']
+  ),
+  personal: EMPTY_OBJECT,
+  answer: closedObject(
+    {
+      decision: closedEnum(
+        ['create', 'link'],
+        'A new account with the identity, or the existing account the person signs in to next.'
+      ),
+    },
+    ['decision']
+  ),
+  errors: [],
+  amr: [],
+  example: {
+    params: { provider: { provider: 'oidc_corp', name: 'Example Corp' }, create: true },
+    answer: { decision: 'link' },
+    next: { step: 'identifier' },
   },
 });
