@@ -462,7 +462,11 @@ Key contract facts:
   then lists the accepted proof algorithms in `dpop_signing_alg_values_supported`.
   A resource server built on `@qauth-labs/resource-guard` refuses a bound token,
   because the SDK verifies no DPoP proof yet; a client that calls one sends no
-  proof, so its tokens stay unbound.
+  proof, so its tokens stay unbound. Three kinds of token are always bound, so
+  they cannot be used at such a resource server until the SDK verifies DPoP
+  proofs: the tokens of a client marked `dpop_bound_access_tokens`, a token
+  exchanged from a DPoP-bound subject token, and an access token issued for a
+  `cnf`-bound ID-JAG.
 - Dynamic Client Registration (`POST /oauth/register`) accepts the optional
   QAuth extension field `is_agent` (boolean, default `false`) marking the client
   as an AI agent; it is echoed back in the response. The flag is self-asserted

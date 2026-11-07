@@ -349,7 +349,11 @@ even if both trust the same QAuth instance.
 `cnf`, such as the DPoP-bound tokens QAuth issues with `DPOP_ENABLED=true`. It
 answers `401 invalid_token`, because this version verifies no DPoP proof, and it
 does not accept the `DPoP` authorization scheme. A client that calls it uses an
-unbound token: it sends no `DPoP` proof to the token endpoint.
+unbound token: it sends no `DPoP` proof to the token endpoint. The tokens of a
+client marked `dpop_bound_access_tokens`, a token exchanged from a DPoP-bound
+subject token, and an access token issued for a `cnf`-bound ID-JAG are always
+bound, so they cannot be used with `resource-guard` until it verifies DPoP
+proofs.
 
 ---
 

@@ -2267,14 +2267,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `401` and `WWW-Authenticate: Bearer error="invalid_token"`. JWT mode
   refuses any token whose payload carries `cnf`, DPoP-bound or
   certificate-bound (`x5t#S256`) alike; introspection mode refuses an answer
-  with `token_type: DPoP`, compared ignoring case, or with a `cnf` member. A
+  with a `cnf` member, or whose `token_type` is present and not `Bearer`,
+  compared ignoring case (`DPoP`, and any bound type another authorization
+  server names differently). A
   request under the `DPoP` authorization scheme still gets the bare `Bearer`
   challenge, as before, and the thrown `MissingTokenError` now says the scheme
   is not supported. An integration that sends a DPoP-bound token as Bearer to
   such a resource server stops working: its client sends no `DPoP` proof to
   the token endpoint, so its tokens stay unbound, and a public client whose
-  refresh token is already bound to a key authorizes again without one.
-  Verifying DPoP proofs in the SDK is planned as a feature of its own.
+  refresh token is already bound to a key authorizes again without one. Three
+  kinds of token are always bound, so they cannot be used at such a resource
+  server until the SDK verifies proofs: the tokens of a client marked
+  `dpop_bound_access_tokens`, a token exchanged from a DPoP-bound subject
+  token, and an access token issued for a `cnf`-bound ID-JAG. Verifying DPoP
+  proofs in the SDK is planned as a feature of its own.
 - **docs.qauth.dev and the developer portal use the design system** ([#472]).
   The portal's pages name the tokens of `libs/ui` instead of Tailwind's
   palette. The docs site maps Starlight's theme onto the same tokens and
