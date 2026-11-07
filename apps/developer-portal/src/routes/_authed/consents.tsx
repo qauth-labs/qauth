@@ -85,23 +85,31 @@ function ConsentsPage() {
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
       <div className="mb-8">
-        <h1 className="text-2xl font-semibold text-gray-900">Authorized applications</h1>
-        <p className="mt-2 text-sm text-gray-600">
+        <h1 className="text-foreground text-3xl leading-tight">Authorized applications</h1>
+        <p className="text-body mt-2 text-sm">
           These applications can access your account. Revoking a grant forces the app to ask for
           permission again next time it tries to sign you in.
         </p>
       </div>
 
-      {state.status === 'loading' ? <p className="text-sm text-gray-500">Loading…</p> : null}
+      {state.status === 'loading' ? (
+        <p className="text-muted-foreground text-sm">Loading…</p>
+      ) : null}
 
       {state.status === 'error' ? (
-        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p
+          role="alert"
+          className="rounded-control bg-destructive-surface text-destructive px-3 py-2 text-sm"
+        >
           {state.message}
         </p>
       ) : null}
 
       {revokeError ? (
-        <p role="alert" className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p
+          role="alert"
+          className="rounded-control bg-destructive-surface text-destructive mb-4 px-3 py-2 text-sm"
+        >
           {revokeError}
         </p>
       ) : null}
@@ -109,7 +117,7 @@ function ConsentsPage() {
       {state.status === 'ready' && state.consents.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
-            <p className="text-sm text-gray-600">You have not authorized any applications yet.</p>
+            <p className="text-body text-sm">You have not authorized any applications yet.</p>
           </CardContent>
         </Card>
       ) : null}
@@ -121,12 +129,12 @@ function ConsentsPage() {
               <Card>
                 <CardContent className="flex items-center justify-between gap-4 py-4">
                   <div className="min-w-0">
-                    <div className="font-medium text-gray-900">{consent.clientName}</div>
-                    <div className="mt-1 truncate text-sm text-gray-500">
+                    <div className="text-foreground font-medium">{consent.clientName}</div>
+                    <div className="text-muted-foreground mt-1 truncate text-sm">
                       <code>{consent.clientId}</code> · granted{' '}
                       {new Date(consent.grantedAt).toLocaleString()}
                     </div>
-                    <div className="mt-1 text-sm text-gray-500">
+                    <div className="text-muted-foreground mt-1 text-sm">
                       Scopes: {consent.scopes.length ? consent.scopes.join(', ') : '(none)'}
                     </div>
                   </div>

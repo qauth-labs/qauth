@@ -38,13 +38,13 @@ export function SecretReveal({ clientId, clientSecret, title, onDone }: SecretRe
       {clientSecret ? (
         <div
           role="alert"
-          className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+          className="rounded-control border-warning/40 bg-warning-surface text-warning border px-3 py-2 text-sm"
         >
           Copy this secret now. For your security, it will <strong>not</strong> be shown again. If
           you lose it you will have to regenerate it.
         </div>
       ) : (
-        <p className="text-sm text-gray-600">
+        <p className="text-body text-sm">
           This is a public client, so it has no secret. Use PKCE for the authorization code flow.
         </p>
       )}

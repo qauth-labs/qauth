@@ -115,7 +115,10 @@ export function ClientForm({
   return (
     <form onSubmit={handleSubmit} noValidate className="space-y-5">
       {shownError ? (
-        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p
+          role="alert"
+          className="rounded-control bg-destructive-surface text-destructive px-3 py-2 text-sm"
+        >
           {shownError}
         </p>
       ) : null}
@@ -144,7 +147,7 @@ export function ClientForm({
           rows={3}
           disabled={busy}
           defaultValue={(initial?.redirectUris ?? []).join('\n')}
-          className="flex w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none disabled:opacity-50"
+          className="rounded-control border-input bg-card focus-visible:border-ring focus-visible:ring-ring flex w-full border px-3 py-2 text-sm outline-none focus-visible:ring-1 disabled:opacity-50"
         />
       </FormField>
 
@@ -158,9 +161,9 @@ export function ClientForm({
       </FormField>
 
       <fieldset className="space-y-2" disabled={busy}>
-        <legend className="text-sm font-medium text-gray-700">Grant types</legend>
+        <legend className="text-body text-sm font-medium">Grant types</legend>
         {ALL_GRANTS.map((g) => (
-          <label key={g.value} className="flex items-center gap-2 text-sm text-gray-700">
+          <label key={g.value} className="text-body flex items-center gap-2 text-sm">
             <input
               type="checkbox"
               checked={grantTypes.includes(g.value)}
@@ -178,7 +181,7 @@ export function ClientForm({
           value={authMethod}
           disabled={busy}
           onChange={(e) => setAuthMethod(e.target.value as TokenEndpointAuthMethod)}
-          className="flex h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none disabled:opacity-50"
+          className="rounded-control border-input bg-card focus-visible:border-ring focus-visible:ring-ring flex h-9 w-full border px-3 text-sm outline-none focus-visible:ring-1 disabled:opacity-50"
         >
           {AUTH_METHODS.map((m) => (
             <option key={m.value} value={m.value}>
