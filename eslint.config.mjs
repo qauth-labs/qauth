@@ -124,7 +124,9 @@ function dependencyChecksConfigs() {
       // Astro loads it at config time, when `markdown.remarkPlugins` is set:
       // since 7.4 the unified Markdown pipeline is an optional peer that astro
       // resolves itself, so nothing in the site imports it.
-      ignoredDependencies: ['@astrojs/markdown-remark'],
+      // @qauth-labs/ui is the design system: astro.config.mjs names its stylesheets in
+      // Starlight's `customCss`, as strings the rule does not read as imports.
+      ignoredDependencies: ['@astrojs/markdown-remark', '@qauth-labs/ui'],
     },
   ];
 

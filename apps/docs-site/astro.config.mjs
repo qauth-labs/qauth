@@ -40,6 +40,11 @@ export default defineConfig({
     graphPages(),
     starlight({
       title: 'QAuth',
+      // QAuth's design system (libs/ui): the self-hosted fonts, the token variables for light and
+      // dark, and the mapping of Starlight's theme onto them.
+      customCss: ['@qauth-labs/ui/fonts.css', '@qauth-labs/ui/theme.css', './src/styles/qauth.css'],
+      // Code frames are square, like every other box of the design system.
+      expressiveCode: { styleOverrides: { borderRadius: '0px' } },
       // A page with `experimental: true` in its frontmatter gets the
       // "Experimental" banner (ADR-018 §5, #477).
       routeMiddleware: './src/experimental-banner.ts',

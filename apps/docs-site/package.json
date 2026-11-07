@@ -6,7 +6,8 @@
   "dependencies": {
     "astro": "catalog:",
     "@astrojs/starlight": "catalog:",
-    "@astrojs/markdown-remark": "catalog:"
+    "@astrojs/markdown-remark": "catalog:",
+    "@qauth-labs/ui": "workspace:*"
   },
   "devDependencies": {
     "@astrojs/check": "catalog:",
