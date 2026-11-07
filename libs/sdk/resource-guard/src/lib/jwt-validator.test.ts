@@ -301,3 +301,83 @@ describe('JwtValidator — RFC 9068 typ enforcement (#283)', () => {
     ).rejects.toThrow(/signature verification failed/);
   });
 });
+
+describe('JwtValidator — sender-constrained tokens (RFC 9449 §7.2)', () => {
+  // The SDK verifies no proof of possession, so a token bound to a key is
+  // refused whatever its confirmation method: accepting it as a plain bearer
+  // would let anyone who copied it use it.
+  const DPOP_CNF = { jkt: '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I' };
+  const CERT_CNF = { 'x5t#S256': 'bwcK0esc3ACC3DB2Y5_lESsXE8o9ltc05O89jdN-dg2' };
+  const ordinary = { sub: 'user-1', client_id: 'client-1', scope: 'mcp:read' };
+
+  it('accepts the same claims without cnf (pins the refusal below on cnf alone)', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const token = await signToken(privateKey, ordinary, { audience: RESOURCE });
+    await expect(validator(fetchImpl).validate(token)).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it('refuses a DPoP-bound token (cnf.jkt) presented without a proof', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const token = await signToken(
+      privateKey,
+      { ...ordinary, cnf: DPOP_CNF },
+      { audience: RESOURCE }
+    );
+    const rejection = validator(fetchImpl).validate(token);
+    await expect(rejection).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(rejection).rejects.toMatchObject({
+      reason: 'sender-constrained (DPoP-bound) token presented without a proof',
+      jwksUnavailable: false,
+    });
+  });
+
+  it('refuses a DPoP-bound access token with typ at+jwt, as QAuth mints it', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const token = await new SignJWT({ ...ordinary, cnf: DPOP_CNF })
+      .setProtectedHeader({ alg: 'EdDSA', typ: 'at+jwt', kid: 'test-key-1' })
+      .setIssuedAt()
+      .setIssuer(ISSUER)
+      .setAudience(RESOURCE)
+      .setExpirationTime('300s')
+      .sign(privateKey);
+    await expect(validator(fetchImpl).validate(token)).rejects.toThrow(/DPoP-bound/);
+  });
+
+  it('refuses a certificate-bound (mTLS, cnf.x5t#S256) token', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const token = await signToken(
+      privateKey,
+      { ...ordinary, cnf: CERT_CNF },
+      { audience: RESOURCE }
+    );
+    await expect(validator(fetchImpl).validate(token)).rejects.toMatchObject({
+      reason: 'sender-constrained token presented without a proof',
+    });
+  });
+
+  it.each([
+    ['an unknown confirmation method', { kid: 'key-1' }],
+    ['an empty cnf object', {}],
+    ['a null cnf', null],
+    ['an array cnf', []],
+    ['a nested cnf (jkt one level down)', { inner: { jkt: DPOP_CNF.jkt } }],
+  ])('fails closed on %s', async (_label, cnf) => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const token = await signToken(privateKey, { ...ordinary, cnf }, { audience: RESOURCE });
+    await expect(validator(fetchImpl).validate(token)).rejects.toThrow(
+      /sender-constrained token presented without a proof/
+    );
+  });
+
+  it('still reports a bad signature before it reads cnf', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const token = await signToken(
+      otherPrivateKey,
+      { ...ordinary, cnf: DPOP_CNF },
+      { audience: RESOURCE }
+    );
+    await expect(validator(fetchImpl).validate(token)).rejects.toMatchObject({
+      reason: 'signature verification failed',
+    });
+  });
+});

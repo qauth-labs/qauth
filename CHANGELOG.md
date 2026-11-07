@@ -2279,6 +2279,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (resource servers on `@qauth-labs/resource-guard`): a
+  sender-constrained token is refused** (RFC 9449 §7.2). A token bound to a
+  key, which QAuth issues with `DPOP_ENABLED=true` (`cnf.jkt` in the token,
+  `token_type: DPoP` and `cnf` in the introspection answer), was accepted as a
+  plain Bearer token, because neither validator read the binding: anyone who
+  copied such a token could use it at a resource server on the SDK until it
+  expired. The SDK verifies no proof of possession of any kind, so both
+  validators now refuse every sender-constrained token after verification,
+  with `401` and `WWW-Authenticate: Bearer error="invalid_token"`. JWT mode
+  refuses any token whose payload carries `cnf`, DPoP-bound or
+  certificate-bound (`x5t#S256`) alike; introspection mode refuses an answer
+  with a `cnf` member, or whose `token_type` is present and not `Bearer`,
+  compared ignoring case (`DPoP`, and any bound type another authorization
+  server names differently). A
+  request under the `DPoP` authorization scheme still gets the bare `Bearer`
+  challenge, as before, and the thrown `MissingTokenError` now says the scheme
+  is not supported. An integration that sends a DPoP-bound token as Bearer to
+  such a resource server stops working: its client sends no `DPoP` proof to
+  the token endpoint, so its tokens stay unbound, and a public client whose
+  refresh token is already bound to a key authorizes again without one. Three
+  kinds of token are always bound, so they cannot be used at such a resource
+  server until the SDK verifies proofs: the tokens of a client marked
+  `dpop_bound_access_tokens`, a token exchanged from a DPoP-bound subject
+  token, and an access token issued for a `cnf`-bound ID-JAG. Verifying DPoP
+  proofs in the SDK is planned as a feature of its own.
 - **docs.qauth.dev and the developer portal use the design system** ([#472]).
   The portal's pages name the tokens of `libs/ui` instead of Tailwind's
   palette. The docs site maps Starlight's theme onto the same tokens and

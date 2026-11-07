@@ -402,6 +402,8 @@ curl -s http://localhost:8088/mcp/memory \
 
 A resource server (e.g. one using [`resource-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/sdk/resource-guard/README.md))
 verifies the signature against the JWKS and checks `iss`, `exp`, `aud`, and scope.
+`resource-guard` refuses a DPoP-bound token (one carrying `cnf`), because it
+verifies no DPoP proof yet.
 
 ### Caching the JWKS
 

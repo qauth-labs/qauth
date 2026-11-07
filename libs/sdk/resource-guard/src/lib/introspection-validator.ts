@@ -7,7 +7,8 @@
  * and `client_secret_post`. We use Basic auth.
  *
  * QAuth contract (auth-server introspect route): returns
- * `{ active, sub, client_id, exp, iat, iss, aud, scope, token_type }` and
+ * `{ active, sub, client_id, exp, iat, iss, aud, scope, token_type }`, plus
+ * `cnf` with `token_type: DPoP` for a DPoP-bound token, and
  * `{ active: false }` for invalid / cross-audience tokens. The AS itself
  * already enforces audience-authoritative introspection; `resource-guard`
  * additionally re-checks `aud` locally so the no-passthrough guarantee does
@@ -17,6 +18,7 @@
 import type { FetchLike, IntrospectionClientCredentials, ValidatedToken } from '../types.js';
 import { IntrospectionError, InvalidTokenError } from './errors.js';
 import { parseScopes } from './scope.js';
+import { refuseNonBearerToken } from './sender-constraint.js';
 
 export interface IntrospectionValidatorOptions {
   /** Full URL of the AS introspection endpoint. */
@@ -39,7 +41,10 @@ interface IntrospectionResponse {
   iss?: string;
   aud?: string | string[];
   scope?: string;
-  token_type?: string;
+  /** Read as untrusted: another AS may send any JSON value here. */
+  token_type?: unknown;
+  /** Confirmation claim of a sender-constrained token (RFC 7800, RFC 9449 §6.2). */
+  cnf?: unknown;
 }
 
 function audienceList(aud: string | string[] | undefined): string[] {
@@ -76,7 +81,10 @@ export class IntrospectionValidator {
    *
    * @throws {InvalidTokenError} when the AS authoritatively says the *token* is
    * unusable — inactive (revoked/expired/unknown) or bound to a different
-   * audience. Maps to a 401 `invalid_token` Bearer challenge.
+   * audience — or reports it as anything but a plain bearer token (a
+   * `token_type` that is present and not `Bearer`, or a `cnf` member): a
+   * sender-constrained token needs a proof this SDK does not verify. Maps to a
+   * 401 `invalid_token` Bearer challenge.
    * @throws {IntrospectionError} when the *introspection call itself* fails for
    * a reason that is not the token's fault — the AS is unreachable, returns a
    * non-2xx (e.g. THIS RS's introspection credentials are misconfigured → 401
@@ -140,6 +148,14 @@ export class IntrospectionValidator {
     if (!auds.includes(this.audience)) {
       throw new InvalidTokenError('token audience does not match this resource');
     }
+
+    // RFC 9449 §6.2 / §7.2: QAuth reports a DPoP-bound token with
+    // `token_type: DPoP` and its `cnf`. Such a token needs a proof of
+    // possession, and this SDK verifies none, so it is refused rather than
+    // accepted as a plain bearer. Either signal alone is enough. `token_type`
+    // is an allow-list: absent or `Bearer` only, so a bound type another AS
+    // names differently is refused too.
+    refuseNonBearerToken(body.cnf, body.token_type);
 
     return {
       sub: body.sub,

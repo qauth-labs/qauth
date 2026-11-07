@@ -137,3 +137,121 @@ describe('IntrospectionValidator', () => {
     await expect(validator.validate('x')).rejects.toBeInstanceOf(InvalidTokenError);
   });
 });
+
+describe('IntrospectionValidator — sender-constrained tokens (RFC 9449 §6.2, §7.2)', () => {
+  // What QAuth's introspection endpoint answers for an active token; a
+  // DPoP-bound one adds `token_type: DPoP` and `cnf.jkt`. The SDK verifies no
+  // proof of possession, so either signal refuses the token.
+  const ACTIVE = {
+    active: true,
+    sub: 'user-1',
+    client_id: 'client-abc',
+    scope: 'mcp:read',
+    aud: RESOURCE,
+    iss: 'https://auth.example.com',
+    exp: 9999999999,
+    iat: 1,
+  };
+  const DPOP_CNF = { jkt: '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I' };
+
+  it('accepts an ordinary Bearer token', async () => {
+    const validator = makeValidator(fakeFetch({ body: { ...ACTIVE, token_type: 'Bearer' } }));
+    await expect(validator.validate('x')).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it('refuses a token reported as DPoP-bound, as QAuth reports one', async () => {
+    const validator = makeValidator(
+      fakeFetch({ body: { ...ACTIVE, token_type: 'DPoP', cnf: DPOP_CNF } })
+    );
+    const rejection = validator.validate('x');
+    await expect(rejection).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(rejection).rejects.toMatchObject({
+      reason: 'sender-constrained (DPoP-bound) token presented without a proof',
+    });
+  });
+
+  it.each(['DPoP', 'dpop', 'DPOP'])(
+    'refuses token_type %s even without cnf (case-insensitive, RFC 6749 §5.1)',
+    async (tokenType) => {
+      const validator = makeValidator(fakeFetch({ body: { ...ACTIVE, token_type: tokenType } }));
+      await expect(validator.validate('x')).rejects.toThrow(/DPoP-bound/);
+    }
+  );
+
+  it('refuses a token whose response carries cnf only', async () => {
+    const validator = makeValidator(fakeFetch({ body: { ...ACTIVE, cnf: DPOP_CNF } }));
+    await expect(validator.validate('x')).rejects.toThrow(/DPoP-bound/);
+  });
+
+  it('refuses a cnf beside token_type Bearer (the binding wins over the label)', async () => {
+    const validator = makeValidator(
+      fakeFetch({ body: { ...ACTIVE, token_type: 'Bearer', cnf: DPOP_CNF } })
+    );
+    await expect(validator.validate('x')).rejects.toBeInstanceOf(InvalidTokenError);
+  });
+
+  it('refuses a certificate-bound (mTLS, cnf.x5t#S256) token', async () => {
+    const validator = makeValidator(
+      fakeFetch({
+        body: {
+          ...ACTIVE,
+          token_type: 'Bearer',
+          cnf: { 'x5t#S256': 'bwcK0esc3ACC3DB2Y5_lESsXE8o9ltc05O89jdN-dg2' },
+        },
+      })
+    );
+    await expect(validator.validate('x')).rejects.toMatchObject({
+      reason: 'sender-constrained token presented without a proof',
+    });
+  });
+
+  // `token_type` is an allow-list: another AS may name a bound token type
+  // this SDK has never heard of, and a deny-list would accept it as Bearer.
+  it.each([
+    ['absent', undefined],
+    ['Bearer', 'Bearer'],
+    ['bearer', 'bearer'],
+    ['BEARER', 'BEARER'],
+  ])('accepts token_type %s', async (_label, tokenType) => {
+    const validator = makeValidator(
+      fakeFetch({
+        body: { ...ACTIVE, ...(tokenType === undefined ? {} : { token_type: tokenType }) },
+      })
+    );
+    await expect(validator.validate('x')).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it.each([
+    ['PoP', 'PoP'],
+    ['DPoP with a trailing space', 'DPoP '],
+    ['Bearer with a trailing space', 'Bearer '],
+    ['N_A', 'N_A'],
+    ['an empty string', ''],
+    ['an array', ['DPoP']],
+    ['an object', { type: 'Bearer' }],
+    ['null', null],
+    ['a number', 1],
+  ])('refuses token_type %s without cnf as not Bearer', async (_label, tokenType) => {
+    const validator = makeValidator(fakeFetch({ body: { ...ACTIVE, token_type: tokenType } }));
+    const rejection = validator.validate('x');
+    await expect(rejection).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(rejection).rejects.toMatchObject({ reason: 'token type is not Bearer' });
+  });
+
+  it.each([
+    ['a null cnf', null],
+    ['an empty cnf object', {}],
+  ])('fails closed on %s', async (_label, cnf) => {
+    const validator = makeValidator(fakeFetch({ body: { ...ACTIVE, token_type: 'Bearer', cnf } }));
+    await expect(validator.validate('x')).rejects.toMatchObject({
+      reason: 'sender-constrained token presented without a proof',
+    });
+  });
+
+  it('still answers an inactive bound token with "not active"', async () => {
+    const validator = makeValidator(
+      fakeFetch({ body: { active: false, token_type: 'DPoP', cnf: DPOP_CNF } })
+    );
+    await expect(validator.validate('x')).rejects.toThrow(/not active/);
+  });
+});

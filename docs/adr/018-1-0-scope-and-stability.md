@@ -52,6 +52,15 @@
 > - §3: a first-party plugin is one QAuth makes and releases, and it may live in its own
 >   repository. The GitHub provider plugin is the first example. Whether it joins the server's
 >   first-party list before 1.0 is decided when the plugin API leaves the experiment.
+>
+> **Amended 2026-11-07** with the maintainer's decision of that day on sender-constrained tokens at
+> resource servers.
+>
+> - §6: `@qauth-labs/resource-guard` does not verify DPoP proofs yet. "DPoP verification" in its
+>   row is a goal for the package, not something it does today. Until DPoP proof verification
+>   ships, as a feature of its own, the package refuses every sender-constrained token (one that
+>   carries `cnf`, DPoP-bound or certificate-bound) in both validation modes, because it verifies no
+>   proof of possession. It does not accept the `DPoP` authorization scheme either.
 
 ## Context
 
@@ -356,6 +365,9 @@ a minor release once four conditions hold:
 | `@qauth-labs/agent` and `qauth-broker` | Agents in an Authority Tree. Spawn exchange, narrowing, action events, approval waits                                                                                                     | Stable, because the Authority Tree is stable.       |
 | `@qauth-labs/admin`                    | Generated from the admin OpenAPI                                                                                                                                                          | Stable.                                             |
 
+- `resource-guard` does not verify DPoP proofs yet (amended 2026-11-07). Until it does, it refuses
+  every sender-constrained token and the `DPoP` scheme, instead of accepting a bound token as a
+  plain bearer token.
 - There is no browser token SDK. Browser apps use a BFF.
 - `qauth-broker` is a local process with a language-neutral protocol. It keeps DPoP keys away from
   the model, and it alone decides a new node's parent and type (ADR-014 §12).

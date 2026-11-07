@@ -19,7 +19,8 @@ Drop it into an MCP server and you get spec-correct OAuth in minutes:
   is filtered out of both advertisement surfaces — it concerns refresh-token
   issuance at the AS, not access to this resource
 - Bearer-token validation in two modes — local **JWT** verification against the
-  QAuth JWKS, or **RFC 7662** introspection
+  QAuth JWKS, or **RFC 7662** introspection. Sender-constrained (DPoP-bound or
+  certificate-bound) tokens are refused; see [Security model](#security-model)
 - **No token passthrough**: tokens not audience-bound to this resource
   (**RFC 8707**) are rejected, and the inbound token is never forwarded upstream
 - **Step-up** `403 insufficient_scope` scope challenges for incremental consent
@@ -212,6 +213,22 @@ try {
   never returns the raw token to a call site or forwards it to upstream APIs.
 - **Algorithm pinning.** JWT mode accepts `EdDSA` only by default, closing
   algorithm-confusion attacks.
+- **Sender-constrained tokens are refused.** A token bound to a key, DPoP-bound
+  (`cnf.jkt`, RFC 9449) or certificate-bound (`cnf["x5t#S256"]`, RFC 8705), is
+  refused with `401 invalid_token` in both modes, because this version verifies
+  no proof of possession. JWT mode refuses any token that carries `cnf`;
+  introspection mode refuses a response that carries `cnf` or whose
+  `token_type` is present and is not `Bearer` (compared ignoring case), so a
+  bound type another authorization server names differently is refused too. Accepting such a token as a plain bearer would let anyone who copied
+  it use it (RFC 9449 §7.2). The `DPoP` authorization scheme is not accepted
+  either: it gets the same bare `Bearer` challenge as a request without a token
+  (RFC 6750 §3.1), and the thrown `MissingTokenError` names the scheme. A
+  client that calls a resource server on this SDK must use unbound tokens: it
+  sends no `DPoP` proof to the token endpoint. With QAuth, three kinds of token
+  are always bound, so they cannot be used here until this SDK verifies DPoP
+  proofs: the tokens of a client marked `dpop_bound_access_tokens`, a token
+  exchanged from a DPoP-bound subject token, and an access token issued for a
+  `cnf`-bound ID-JAG. DPoP proof support is planned.
 - **Exact scope matching.** Scopes are compared exactly and case-sensitively
   (RFC 6749 §3.3) — no prefix or wildcard semantics. QAuth's scope vocabulary
   declares no scope hierarchy (no scope implies another), so the MCP 2026-07-28

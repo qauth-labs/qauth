@@ -404,3 +404,188 @@ describe('resource-guard Fastify plugin — operational introspection failure', 
     }
   });
 });
+
+describe('resource-guard Fastify plugin — sender-constrained tokens (RFC 9449 §7.2)', () => {
+  // The SDK verifies no proof of possession, so a bound token is refused with
+  // the ordinary invalid_token Bearer challenge. No `DPoP` challenge is sent:
+  // it would advertise support this version does not have.
+  const DPOP_CNF = { jkt: '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I' };
+  const DPOP_REASON = 'sender-constrained (DPoP-bound) token presented without a proof';
+  const OTHER_REASON = 'sender-constrained token presented without a proof';
+  const invalidTokenChallenge = (reason: string) =>
+    `Bearer error="invalid_token", error_description="${reason}", resource_metadata="${METADATA_URL}"`;
+
+  /** An app in introspection mode whose AS answers every introspection with `body`. */
+  async function buildIntrospectionApp(
+    body: Record<string, unknown>,
+    options: { introspectionLocalCheck?: boolean } = {}
+  ): Promise<FastifyInstance> {
+    const fetch = (async (input: string | URL) => {
+      const json = String(input) === `${ISSUER}/oauth/introspect` ? body : { keys: [publicJwk] };
+      return { ok: true, status: 200, json: async () => json, text: async () => '' };
+    }) as unknown as never;
+    const introspectionApp = Fastify();
+    await introspectionApp.register(resourceGuardPlugin, {
+      resource: RESOURCE,
+      authorizationServer: ISSUER,
+      requiredScopes: ['mcp:read'],
+      validationMode: 'introspection',
+      introspectionClient: { clientId: 'rs', clientSecret: 's' },
+      ...options,
+      fetch,
+    });
+    introspectionApp.get('/data', { preHandler: introspectionApp.requireBearer }, async (req) => ({
+      ok: true,
+      sub: req.tokenClaims?.sub,
+    }));
+    await introspectionApp.ready();
+    return introspectionApp;
+  }
+
+  /** An active introspection response with no `token_type`. */
+  const ACTIVE_UNTYPED = {
+    active: true,
+    sub: 'user-9',
+    client_id: 'c',
+    scope: 'mcp:read',
+    aud: RESOURCE,
+  };
+  const ACTIVE = { ...ACTIVE_UNTYPED, token_type: 'Bearer' };
+
+  describe('jwt mode', () => {
+    it('answers 401 invalid_token for a DPoP-bound token sent as Bearer', async () => {
+      app = await buildApp(['mcp:read']);
+      const token = await signToken({ sub: 'u', client_id: 'c', scope: 'mcp:read', cnf: DPOP_CNF });
+      const res = await app.inject({
+        method: 'GET',
+        url: '/data',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(401);
+      expect(res.headers['www-authenticate']).toBe(invalidTokenChallenge(DPOP_REASON));
+      expect(res.json()).toEqual({ error: 'invalid_token', error_description: DPOP_REASON });
+    });
+
+    it('answers 401 invalid_token for a certificate-bound (mTLS) token', async () => {
+      app = await buildApp(['mcp:read']);
+      const token = await signToken({
+        sub: 'u',
+        client_id: 'c',
+        scope: 'mcp:read',
+        cnf: { 'x5t#S256': 'bwcK0esc3ACC3DB2Y5_lESsXE8o9ltc05O89jdN-dg2' },
+      });
+      const res = await app.inject({
+        method: 'GET',
+        url: '/data',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(401);
+      expect(res.headers['www-authenticate']).toBe(invalidTokenChallenge(OTHER_REASON));
+    });
+
+    it('answers 401, not 403 or 200, on a requireScopes (step-up) route', async () => {
+      const guarded = await buildApp(['mcp:read']);
+      app = guarded;
+      const claims = { sub: 'u', client_id: 'c', scope: 'mcp:read mcp:admin' };
+      const post = async (token: string) =>
+        guarded.inject({
+          method: 'POST',
+          url: '/admin',
+          headers: { authorization: `Bearer ${token}` },
+        });
+
+      // The same claims unbound pass the step-up, so the 401 below is the binding.
+      expect((await post(await signToken(claims))).statusCode).toBe(200);
+
+      const res = await post(await signToken({ ...claims, cnf: DPOP_CNF }));
+      expect(res.statusCode).toBe(401);
+      expect(res.headers['www-authenticate']).toBe(invalidTokenChallenge(DPOP_REASON));
+    });
+
+    it('answers the DPoP scheme with the bare Bearer challenge, as for no token', async () => {
+      app = await buildApp(['mcp:read']);
+      const token = await signToken({ sub: 'u', client_id: 'c', scope: 'mcp:read', cnf: DPOP_CNF });
+      const res = await app.inject({
+        method: 'GET',
+        url: '/data',
+        headers: { authorization: `DPoP ${token}`, dpop: 'a.proof.jwt' },
+      });
+      expect(res.statusCode).toBe(401);
+      // RFC 6750 §3.1: an unsupported scheme gets no error code. The one
+      // challenge names Bearer only, which tells the client DPoP is not
+      // accepted here.
+      expect(res.headers['www-authenticate']).toBe(
+        `Bearer scope="mcp:read", resource_metadata="${METADATA_URL}"`
+      );
+      expect(res.json()).toEqual({});
+    });
+
+    it('still answers 200 for an ordinary token', async () => {
+      app = await buildApp(['mcp:read']);
+      const token = await signToken({ sub: 'user-9', client_id: 'c', scope: 'mcp:read' });
+      const res = await app.inject({
+        method: 'GET',
+        url: '/data',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, sub: 'user-9' });
+    });
+  });
+
+  describe('introspection mode', () => {
+    // The local check is off, as for an AS that issues opaque tokens: only
+    // the introspection response can tell the token is bound.
+    const opaque = { introspectionLocalCheck: false };
+    const call = (target: FastifyInstance) =>
+      target.inject({
+        method: 'GET',
+        url: '/data',
+        headers: { authorization: 'Bearer opaque-token' },
+      });
+
+    it('answers 401 invalid_token when the AS reports token_type DPoP', async () => {
+      app = await buildIntrospectionApp({ ...ACTIVE, token_type: 'DPoP', cnf: DPOP_CNF }, opaque);
+      const res = await call(app);
+      expect(res.statusCode).toBe(401);
+      expect(res.headers['www-authenticate']).toBe(invalidTokenChallenge(DPOP_REASON));
+      expect(res.json()).toEqual({ error: 'invalid_token', error_description: DPOP_REASON });
+    });
+
+    it('answers 401 invalid_token when the response carries cnf only', async () => {
+      app = await buildIntrospectionApp({ ...ACTIVE_UNTYPED, cnf: DPOP_CNF }, opaque);
+      const res = await call(app);
+      expect(res.statusCode).toBe(401);
+      expect(res.headers['www-authenticate']).toBe(invalidTokenChallenge(DPOP_REASON));
+    });
+
+    it('answers 401 invalid_token for an mTLS-style cnf', async () => {
+      app = await buildIntrospectionApp(
+        { ...ACTIVE, cnf: { 'x5t#S256': 'bwcK0esc3ACC3DB2Y5_lESsXE8o9ltc05O89jdN-dg2' } },
+        opaque
+      );
+      const res = await call(app);
+      expect(res.statusCode).toBe(401);
+      expect(res.headers['www-authenticate']).toBe(invalidTokenChallenge(OTHER_REASON));
+    });
+
+    it('still answers 200 for an ordinary token', async () => {
+      app = await buildIntrospectionApp(ACTIVE, opaque);
+      const res = await call(app);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, sub: 'user-9' });
+    });
+
+    it('answers 401 for a bound JWT with the default local check on', async () => {
+      app = await buildIntrospectionApp({ ...ACTIVE, token_type: 'DPoP', cnf: DPOP_CNF });
+      const token = await signToken({ sub: 'u', client_id: 'c', scope: 'mcp:read', cnf: DPOP_CNF });
+      const res = await app.inject({
+        method: 'GET',
+        url: '/data',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(401);
+      expect(res.headers['www-authenticate']).toBe(invalidTokenChallenge(DPOP_REASON));
+    });
+  });
+});
