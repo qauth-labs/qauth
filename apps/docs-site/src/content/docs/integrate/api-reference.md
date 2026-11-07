@@ -772,6 +772,8 @@ bounce.
 | `/ui/verify`                            | POST      | The form of the emailed verification link ([`GET /auth/verify`](#get-authverify))   |
 | `/ui/upstream/{type}`                   | GET       | A provider button of the login page: back to the request with `qauth_upstream`      |
 | `/ui/upstream/{type}/start`             | GET       | Start the routed upstream provider, then the waiting page that sends the browser on |
+| `/ui/upstream-link/{interactionId}`     | GET       | "I already have an account" or a new one: the `upstream_link` step's form (#670)    |
+| `/ui/upstream-link-refused`             | GET       | The page of a refused upstream link: why, and nothing sent to the client (#670)     |
 | `/ui/recovery-code/{interactionId}`     | GET       | "Use a recovery code": the `recovery_code` step's form (#649)                       |
 | `/ui/recovery-codes/{interactionId}`    | GET       | "Save your recovery codes": a new set, shown once, and its confirmation (#649)      |
 | `/ui/passkey/{interactionId}`           | GET       | "Sign in with a passkey": the `webauthn_get` step's ceremony (#651)                 |
@@ -973,6 +975,23 @@ The user's active consents, in the order and representation of
 
 Revoke one of the user's consents, as `DELETE /developer/v1-rc.0/consents/{consentId}` does.
 **`204 No Content`**. Errors: `400`, `401`, `403`, `404`.
+
+### `GET /account/v1-rc.0/linked-accounts`
+
+The upstream accounts linked to the user (#670), newest first, a page at a time: each with its
+`id`, its `provider` type, the provider's `providerName` while the realm has it on, and
+`createdAt`. Never the identity's subject at the provider. Linking one is no operation here: it is
+an authorization request with
+[`qauth_link`](/integrate/oauth-flow/#linking-an-upstream-account), which asks the person to sign
+in again. Errors: `400`, `401`, `403`.
+
+### `DELETE /account/v1-rc.0/linked-accounts/{linkedAccountId}`
+
+Unlink one of the user's upstream accounts: the account no longer signs in through that provider,
+and the owner gets an email notice. Needs a fresh sign-in with the account's strongest factor and
+refuses an act-chain token, as every change to the ways into the account does. The account's last
+way to sign in is `409` `last_credential`; one of another user is the same `404` as one that does
+not exist. **`204 No Content`**. Errors: `400`, `401`, `403`, `404`, `409`.
 
 ---
 
