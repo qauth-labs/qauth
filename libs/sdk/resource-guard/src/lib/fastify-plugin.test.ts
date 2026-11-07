@@ -483,6 +483,25 @@ describe('resource-guard Fastify plugin — sender-constrained tokens (RFC 9449 
       expect(res.headers['www-authenticate']).toBe(invalidTokenChallenge(OTHER_REASON));
     });
 
+    it('answers 401, not 403 or 200, on a requireScopes (step-up) route', async () => {
+      const guarded = await buildApp(['mcp:read']);
+      app = guarded;
+      const claims = { sub: 'u', client_id: 'c', scope: 'mcp:read mcp:admin' };
+      const post = async (token: string) =>
+        guarded.inject({
+          method: 'POST',
+          url: '/admin',
+          headers: { authorization: `Bearer ${token}` },
+        });
+
+      // The same claims unbound pass the step-up, so the 401 below is the binding.
+      expect((await post(await signToken(claims))).statusCode).toBe(200);
+
+      const res = await post(await signToken({ ...claims, cnf: DPOP_CNF }));
+      expect(res.statusCode).toBe(401);
+      expect(res.headers['www-authenticate']).toBe(invalidTokenChallenge(DPOP_REASON));
+    });
+
     it('answers the DPoP scheme with the bare Bearer challenge, as for no token', async () => {
       app = await buildApp(['mcp:read']);
       const token = await signToken({ sub: 'u', client_id: 'c', scope: 'mcp:read', cnf: DPOP_CNF });

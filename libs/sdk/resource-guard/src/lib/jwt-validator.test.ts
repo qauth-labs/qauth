@@ -359,6 +359,8 @@ describe('JwtValidator — sender-constrained tokens (RFC 9449 §7.2)', () => {
     ['an unknown confirmation method', { kid: 'key-1' }],
     ['an empty cnf object', {}],
     ['a null cnf', null],
+    ['an array cnf', []],
+    ['a nested cnf (jkt one level down)', { inner: { jkt: DPOP_CNF.jkt } }],
   ])('fails closed on %s', async (_label, cnf) => {
     const fetchImpl = jwksFetch({ keys: [publicJwk] });
     const token = await signToken(privateKey, { ...ordinary, cnf }, { audience: RESOURCE });
@@ -374,6 +376,8 @@ describe('JwtValidator — sender-constrained tokens (RFC 9449 §7.2)', () => {
       { ...ordinary, cnf: DPOP_CNF },
       { audience: RESOURCE }
     );
-    await expect(validator(fetchImpl).validate(token)).rejects.not.toThrow(/sender-constrained/);
+    await expect(validator(fetchImpl).validate(token)).rejects.toMatchObject({
+      reason: 'signature verification failed',
+    });
   });
 });
