@@ -20,9 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own config, sealed under the plugin's context like any plugin secret;
   a config whose client secret is not such a member's value is refused, as
   it would be stored in the clear. The preset names the `https` origins its
-  provider answers on, and a config whose issuer or an endpoint set by hand
-  leaves them is refused at the configure and at every use, so a realm's
-  admin cannot send the stored secret to another host. The plugin runtime's
+  provider answers on: a config whose issuer or an endpoint set by hand
+  leaves them is refused at the configure and at every use, and a discovery
+  document that names an endpoint off them is refused before any call to it,
+  so a realm's admin cannot send the stored secret to another host. Within
+  those origins the secret is not bound to a tenant, unlike the generic
+  client's. A config that carries a secret member's value anywhere but in the
+  client secret is refused too. The plugin runtime's
   secret-member reader now takes a `writeOnly` mark inside a union of objects,
   such as a discriminated union of client authentication methods, when every
   branch with a member at that path marks it; the generic client's own

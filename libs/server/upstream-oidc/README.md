@@ -108,12 +108,16 @@ export const authMethod = createUpstreamOidcPresetMethod({
   must pass the client secret on as the preset's `writeOnly` member holds it: a config whose
   client secret is not the value of such a member is refused, since the runtime would store it in
   the clear.
-- `origins` binds the secret to its destination. The runtime seals a plugin's secret under the
+- `origins` binds the secret to its provider. The runtime seals a plugin's secret under the
   plugin's own context (`auth-method-plugin:<id>:<path>`), not under the issuer and token endpoint
-  as the stored config above does, so a preset names the `https` origins its provider answers on.
-  A config whose issuer or any endpoint set by hand is on none of them is refused where the host
-  parses it, at the admin API's configure and at every use: no config sends the secret to another
-  host.
+  as the stored config above does, so a preset names the `https` origins its provider answers on,
+  every host its endpoints are on included. A config whose issuer or any endpoint set by hand is on
+  none of them is refused where the host parses it, at the admin API's configure and at every use,
+  and a discovery document that names an endpoint off them is refused before any call to it: no
+  config sends the secret to another host. Within the origins it is not bound to a tenant: a member
+  that shapes the issuer's path may change while the stored secret is kept.
+- A config whose provider config carries a secret member's value anywhere but in the client
+  secret (the client id, a scope, a URL) is refused: it would go out, and be logged, in the clear.
 - Every call goes out as a `remote_document` destination unless the preset's own config names its
   origin, so a preset never reaches a private address through the egress allowlist.
 - `src/testing/example-preset.ts` is a preset on the fake provider, its client secret inside a

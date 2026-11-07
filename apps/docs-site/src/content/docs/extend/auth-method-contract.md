@@ -265,8 +265,9 @@ such as a client secret. The runtime reads the marks from the schema's JSON Sche
 side and from its output side. A secret is a string, or a nullable one, at any depth of nested
 objects, marked on the input side or on the output side of a pipe that keeps its path and its
 string. It may sit inside a union whose branches are all objects, such as a discriminated union of
-client authentication methods, when every branch with a member at its path marks it there: a
-branch without the member (`private_key_jwt` beside `client_secret_basic`) takes no secret. The
+client authentication methods, when every branch with a member at its path marks it there, on the
+same side of the schema: a branch without the member (`private_key_jwt` beside
+`client_secret_basic`) takes no secret. The
 runtime puts a stored secret back at its path whatever branch the plain config takes, so a
 configure that switches to a branch without the member clears the secret in the same request
 (`"secrets": { "<path>": null }`), or a plugin whose branches are strict objects refuses the
@@ -456,7 +457,8 @@ Each use checks again, since every call goes through the egress client.
 A preset is a plugin for one named provider that runs the generic client's code under its own id,
 type and config (#951); the first-party provider plugins of #671 are built this way.
 `createUpstreamOidcPresetMethod` of `@qauth-labs/server-upstream-oidc` builds its AuthMethod, which
-the package exports as `authMethod`:
+the package exports as `authMethod`. That library is QAuth's own and is not published, so a preset
+is built in QAuth's repository:
 
 ```ts
 import { createUpstreamOidcPresetMethod } from '@qauth-labs/server-upstream-oidc';
@@ -494,11 +496,18 @@ export const authMethod = createUpstreamOidcPresetMethod({
   the clear.
 - **Its secret is bound to its provider.** The generic client binds a stored secret to the issuer
   and token endpoint it was entered for; a plugin's secret is bound to the plugin. So a preset
-  names the `https` origins its provider answers on (`origins`), and a config whose issuer, or any
-  endpoint set by hand, is on none of them is refused where the host parses it: at the configure
-  (400, naming no value) and at every use. Whatever a realm's admin sets, the secret goes to that
-  provider and to no other host. A provider whose host the admin chooses is a generic provider,
-  not a preset.
+  names the `https` origins its provider answers on (`origins`), every host its endpoints are on
+  included, and the client calls no endpoint off them. A config whose issuer, or any endpoint set
+  by hand, is on none of them is refused where the host parses it: at the configure (400, naming
+  no value) and at every use. A discovery document that names an endpoint off them is refused at
+  the sign-in, before any call to it. Whatever a realm's admin sets, the secret goes to that
+  provider's origins and to no other host. Within them it is not bound to a tenant: a member that
+  shapes the issuer's path, such as a tenant, may change while the stored secret is kept, where the
+  generic client asks for the secret again. A provider whose host the admin chooses is a generic
+  provider, not a preset.
+- **No secret elsewhere.** A config whose provider config carries a secret member's value anywhere
+  but in the client secret (the client id, a scope, a URL) is refused: it would go out, and be
+  logged, in the clear.
 - **No allowlisted address.** Every call goes out as a `remote_document` destination unless the
   preset's own config names its origin (the context's rule, [above](#what-a-method-is-handed)), so
   a preset whose config names no URL never reaches a private address the egress allowlist opens.

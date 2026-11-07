@@ -211,7 +211,8 @@ describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => 
     // No warn line about the plugin, and no experimental warning: it is first-party.
     expect(pluginLines(booted.log)).toEqual([]);
     expect(experimentalLines(booted.log)).toEqual([]);
-    // Mounted under its own type, and off in the realm until an admin enables it: 404.
+    // Off in the realm until an admin enables it: its callback answers 404.
+    // That it loaded under its own type is what `methods` shows above.
     expect(await booted.callbackStatus(EXAMPLE_PRESET_TYPE)).toBe(404);
   });
 
