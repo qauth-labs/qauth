@@ -65,7 +65,8 @@ export const TOKENS_POLICY_GROUP = {
     secret: false,
     environmentBound: false,
     doc: {
-      summary: 'How long a refresh token is valid, in seconds, at most 7776000 (90 days).',
+      summary:
+        "How long a refresh token is valid, in seconds, at most 7776000 (90 days), from its issue; a browser-based client's rotated token (a public client with an `https` redirect URI) never outlives the one it replaces, so its family ends with its first (RFC 10017).",
       link,
     },
   }),
