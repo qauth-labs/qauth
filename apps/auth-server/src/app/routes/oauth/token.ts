@@ -66,9 +66,11 @@ import {
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { realmIssuer, tokenRealm } from '../../helpers/realm-url';
 import {
+  isBrowserBasedClient,
   refreshFamilyEnd,
   refreshFamilyEnded,
   refreshTokenExpiresAt,
+  rotatedRefreshTokenExpiresAt,
 } from '../../helpers/refresh-family';
 import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
@@ -1587,6 +1589,10 @@ async function rejectRefreshTokenReplay(
  *   `sso_max_lifespan`, a family ends that long after its start. Past it the
  *   family is revoked and the answer is `invalid_grant`; before it, the
  *   rotated token expires no later than the family's end.
+ * - No sliding for a browser-based client (RFC 10017 §6.3.2.3, ADR-019
+ *   Decision 3, #928): a public client with a web redirect URI gets a rotated
+ *   token that expires no later than the one it replaces, so its family ends
+ *   with its first token, whatever the realm sets.
  * - Rotation: the presented token is marked `revoked='rotated'` BEFORE
  *   the new refresh token is persisted, by a compare-and-set that only one
  *   concurrent request can win — never issue two concurrently live tokens
@@ -1781,11 +1787,15 @@ async function handleRefreshToken(
   // neither does. A lost race writes no event here; the replay records its own.
   const { token: newRefreshToken, tokenHash: newRefreshTokenHash } =
     fastify.jwtUtils.generateRefreshToken();
-  // Never past the family's end (#552); the refresh lifespan from now otherwise.
-  const newRefreshTokenExpiresAt = refreshTokenExpiresAt(
+  // Never past the family's end (#552); the refresh lifespan from now
+  // otherwise. A browser-based client's token never outlives the one it
+  // replaces (RFC 10017 §6.3.2.3, #928), so its family ends with its first.
+  const newRefreshTokenExpiresAt = rotatedRefreshTokenExpiresAt(
     now,
     ctx.tokenLifetimes.refreshTokenLifespanSeconds,
-    familyEnd
+    familyEnd,
+    storedToken.expiresAt,
+    isBrowserBasedClient(client)
   );
 
   // A QAuth API audience only when a `resource` named it (#509).

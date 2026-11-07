@@ -109,6 +109,32 @@ export function isHttpLocalhostRedirect(redirectUri: string): boolean {
 }
 
 /**
+ * Whether `redirectUri` is one only a native app receives (RFC 8252 §7): a
+ * plain `http://` loopback URI (§7.3), or a URI of any scheme but `http` and
+ * `https`, such as an RFC 8252 §7.1 private-use scheme or a bare one the
+ * deployment lists in `REDIRECT_URI_CUSTOM_SCHEMES`. An `https` URI is never
+ * one, whatever its host: a web page may receive it, and a native app's
+ * claimed `https` URI (§7.2) cannot be told apart from it. Nor is a
+ * non-loopback `http` URI, or one that does not parse. A scheme the server
+ * refuses, such as `javascript:`, counts as a native one here; no response is
+ * ever sent to it ({@link isRedirectUriAllowedForPolicy}).
+ *
+ * Used to tell a browser-based client from a native app
+ * (`isBrowserBasedClient` in `refresh-family.ts`, #928).
+ */
+export function isNativeAppRedirectUri(redirectUri: string): boolean {
+  let protocol: string;
+  try {
+    protocol = new URL(redirectUri).protocol;
+  } catch {
+    return false;
+  }
+  if (protocol === 'https:') return false;
+  if (protocol === 'http:') return isHttpLocalhostRedirect(redirectUri);
+  return true;
+}
+
+/**
  * Lexical shape of a loopback redirect URI: `http://` + loopback host literal
  * + optional port + the rest. The host MUST be followed by `:`, `/`, `?` or
  * the end of the string, so userinfo (`http://127.0.0.1@evil.example/`),
