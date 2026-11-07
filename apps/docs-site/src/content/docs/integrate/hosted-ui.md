@@ -3,7 +3,7 @@ title: Hosted UI
 description: The server-rendered login, consent, and resume screens an integrator's users see during authorization_code + PKCE.
 sidebar:
   order: 3
-lastVerified: '2026-11-03'
+lastVerified: '2026-11-07'
 ---
 
 `authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
@@ -359,6 +359,62 @@ these pages are on and the account keeps an unused recovery code or another
 usable second factor, the authenticator app is turned off and the account is
 told. The next sign-in takes a recovery code in its place, then asks to set
 up the app again before it completes. No realm can switch these notices off.
+
+## The account pages
+
+`/ui/account` is the signed-in person's own account (#844; ADR-017 Decision 8,
+ADR-020 §3): their sign-in methods and their sessions, server-rendered in the
+style of the pages above until the design-system account console replaces
+them. The pages exist while the hosted pages do (`INTERACTION_UI_ENABLED`); with
+the switch off, every path answers `404`. They are reached with the realm's
+browser session: a browser with none is sent through a sign-in on the hosted
+pages and comes back.
+
+| Page or form                                                                    | What it does                                                                                                                                                   | Replaced by |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| `GET /ui/account`                                                               | The overview: the password, the passkeys, the authenticator app, the recovery codes, the linked upstream accounts and the live sessions, each with its actions | #685        |
+| `GET` and `POST /ui/account/password`                                           | Change the password, with the current one, under the realm's password policy and breach list                                                                   | #685        |
+| `POST /ui/account/passkeys/add`, `…/{passkeyId}/rename`, `…/{passkeyId}/remove` | Add a passkey through the enrolment step of the sign-in, rename one, remove one                                                                                | #686        |
+| `POST /ui/account/totp/setup`, `/ui/account/totp/remove`                        | Set up an authenticator app through the set-up step of the sign-in, turn it off                                                                                | #687        |
+| `POST /ui/account/recovery-codes/regenerate`, `…/confirm`                       | A new set of recovery codes, shown once; every code of the old set stops working                                                                               | #687        |
+| `POST /ui/account/sessions/{sessionId}/end`, `/ui/account/sessions/end-all`     | Sign one session out, or sign out everywhere                                                                                                                   | #688        |
+| `POST /ui/account/linked-accounts/link`, `…/{linkedAccountId}/unlink`           | Link an upstream account by signing in to it, unlink one                                                                                                       | —           |
+| `POST /ui/account/reauthenticate`                                               | "Confirm it's you": a fresh sign-in, then back to the page                                                                                                     | —           |
+
+Every action is a plain form that works without JavaScript, and every post is
+checked in the same order before anything is read or changed: it comes from the
+realm's origin (`Sec-Fetch-Site: same-origin`, or the realm's `Origin` when the
+browser sends no fetch metadata), it carries the browser session, and it
+carries the session's CSRF value. A post that fails the first or the last is
+refused with `403` and recorded as `request.csrf_rejected`.
+
+A change asks for the fresh authentication the account API asks of the same
+operation (#663): a sign-in from the last five minutes with the account's
+strongest bound factor, a passkey, else the authenticator app, else the
+password. Removing a passkey or the app also takes a sign-in that used a
+recovery code in place of the lost one; renaming a passkey and ending sessions
+ask for none. A change refused for want of one answers `403` with "Confirm it's
+you", which starts that sign-in and comes back. Adding a passkey, setting up an
+app and linking an account are such a sign-in themselves, followed by the
+binding step, with its own rules: a password-only account proves its mailbox
+with a mailed code before its first second factor, and the first one issues a
+recovery code set. A link attaches only the identity the provider proved to
+the account the same interaction signed in to; nothing is matched by an email
+address.
+
+The pages keep an account usable. A removal that would leave no way to sign
+in (an authenticator app is a second factor, never a way in on its own) is
+refused with `409`, and so is one that would leave no second factor where the
+realm's MFA policy requires one. A new password ends the account's other
+sessions and revokes every refresh token; this browser stays signed in. Ending a
+session, one or all, tells every relying party it signed in to with a
+back-channel logout URI. Each change is recorded as a user event:
+`user.password_changed`, `user.credential_added`, `user.credential_removed`,
+`user.passkey_renamed`, `user.recovery_codes_regenerated`,
+`user.upstream_linked`, `user.upstream_unlinked` and `user.signed_out`. A
+changed password, a new recovery code set and a linked or unlinked account
+mail the owner. No page puts a secret or a code in a URL, and every page is
+sent with `Cache-Control: no-store`.
 
 ## Pending authorization: why the login bounce carries a handle, not a URL
 
