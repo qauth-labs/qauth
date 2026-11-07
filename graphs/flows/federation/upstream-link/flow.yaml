@@ -334,7 +334,7 @@ states:
       - guard: "entry == 'qauthLink'"
         target: bad_request.unavailable
         say: 'at the callback: the error page, user.sign_in_failed with the reason unavailable'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1029
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1028
       - target: temporarily_unavailable.engine
         say: "at the choice: the Interaction API's answer"
 
@@ -366,7 +366,7 @@ states:
       - target: linking
         effect: [signIn]
         say: 'the sign-in finished: the account it proved is the one the identity joins'
-        source: apps/auth-server/src/app/routes/interaction-api.ts:842
+        source: apps/auth-server/src/app/routes/interaction-api.ts:846
 
   linking:
     title: Link the identity under the account's row lock
@@ -387,7 +387,7 @@ states:
 
   decidingLink:
     title: Go on as the link's transaction answered
-    source: apps/auth-server/src/app/routes/interaction-api.ts:850
+    source: apps/auth-server/src/app/routes/interaction-api.ts:854
     always:
       - guard: "linkCheck == 'takenMeanwhile'"
         target: link_refused.already_linked
@@ -464,7 +464,7 @@ states:
       user.upstream_link_failed is recorded with the reason already_linked; its subject is the account that holds the
       identity, since nobody has signed in for the link.
     redirect: never
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1022
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1021
     response:
       status: 409
       headers:
@@ -479,7 +479,7 @@ states:
       user.upstream_link_failed is recorded with the reason already_linked, for the account that signed in. The
       person is signed in to it; nothing goes to the client.
     redirect: never
-    source: apps/auth-server/src/app/routes/interaction-api.ts:850
+    source: apps/auth-server/src/app/routes/interaction-api.ts:854
     response: &linkRefused
       status: 303
       headers:
@@ -611,7 +611,7 @@ assertions:
   - id: no-link-without-a-sign-in
     never: 'linked and not signedIn'
     say: 'An identity joins an account only after a sign-in to that account, in the same interaction'
-    source: apps/auth-server/src/app/routes/interaction-api.ts:839
+    source: apps/auth-server/src/app/routes/interaction-api.ts:843
   - id: no-link-in-another-browser
     never: 'linked and (notTheStartingBrowser or answeredElsewhere)'
     say: "Neither the provider's answer nor the sign-in from another browser links anything"

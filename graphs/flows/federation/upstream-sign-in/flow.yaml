@@ -361,7 +361,7 @@ states:
         source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:590
       - target: creatingAccount
         say: 'an unknown identity, in a realm that allows sign-up'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:980
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:979
 
   creatingAccount:
     title: Create the user, the credential and the attributes in one transaction
@@ -387,7 +387,7 @@ states:
     description: >-
       The upstream step ranks with a password, below a passkey, under the realm's MFA policy. The interaction is
       answered at the revision the start recorded, so a callback for an interaction that moved on is refused.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1003
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1002
     invoke: { external: signInEngine }
     on:
       DONE:
@@ -396,11 +396,11 @@ states:
       FAIL.unavailable:
         target: bad_request.unavailable
         say: 'the interaction store or the failure ladder cannot answer'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1029
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1028
 
   decidingRound:
     title: Go on as the engine's round says
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1032
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1031
     always:
       - guard: engineRefuses
         target: bad_request.refused
@@ -413,16 +413,16 @@ states:
       - guard: needsFurtherStep
         target: step_continues.ceremony_page
         say: 'a further step (the passkey, a code): the ceremony page shows it'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1038
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1037
       - guard: pagesMode
         target: signed_in.authorization_request
         effect: [signIn]
         say: 'signed in: the pages start the authorization request again under the new session'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1054
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1053
       - target: code_issued
         effect: [signIn]
         say: 'signed in: the interaction finishes the authorization request as the Interaction API does'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1055
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1054
 
   # Exits: success
 
