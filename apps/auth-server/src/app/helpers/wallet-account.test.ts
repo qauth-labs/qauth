@@ -780,3 +780,103 @@ describe('resolveWalletAccount — the refusals, none of which writes anything',
     expectNothingWritten(harness);
   });
 });
+
+/**
+ * `issuer-scoped-claim` sign-in (ADR-009 §1 and §2): the credential's subject
+ * finds the account its wallet is linked to, and the asserted identifier must
+ * name that same account. Driven through the REAL strategy and the REAL port,
+ * so what is pinned is what the browser gets back.
+ */
+describe('resolveWalletAccount — issuer-scoped-claim honours the asserted identifier', () => {
+  const ISSUER_SCOPED: SubjectResolutionConfig = {
+    strategy: 'issuer-scoped-claim',
+    subjectClaim: 'personal_administrative_number',
+    issuers: [ISSUER],
+    fallback: { bindingClaims: ['family_name', 'given_name'] },
+  };
+  const HOLDER_CLAIMS = {
+    given_name: 'Alice',
+    family_name: 'Doe',
+    personal_administrative_number: 'PAN-1',
+  };
+
+  let harness: ReturnType<typeof fakeFastify>;
+
+  beforeEach(() => {
+    harness = fakeFastify();
+  });
+
+  /** Seed the holder's account: its own identifier, and its wallet keyed on the subject. */
+  function seedHolder(credential: ValidatedCredential, ownIdentifier = 'alice@example.com') {
+    const subject = createSubjectResolutionStrategy(ISSUER_SCOPED).deriveExternalSub(credential, {
+      realmId: REALM_ID,
+      assertedIdentifier: ownIdentifier,
+      lookup: createWalletAccountLookup(harness.fastify),
+    });
+    harness.userCredentials.findByRealmProviderSub.mockImplementation(
+      async (_realmId: string, providerType: string, externalSub: string) =>
+        providerType === 'wallet' && externalSub === subject
+          ? credentialRow({ userId: 'holder', externalSub: subject })
+          : undefined
+    );
+    harness.userCredentials.findAllByRealmAndExternalSub.mockImplementation(
+      async (_realmId: string, externalSub: string) =>
+        externalSub === ownIdentifier
+          ? [credentialRow({ userId: 'holder', providerType: 'password', externalSub })]
+          : externalSub === 'starter@example.com'
+            ? [credentialRow({ userId: 'starter', providerType: 'password', externalSub })]
+            : []
+    );
+  }
+
+  async function signIn(credential: ValidatedCredential, assertedIdentifier: string) {
+    return resolveWalletAccount(harness.fastify, {
+      realmId: REALM_ID,
+      credential,
+      assertedIdentifier,
+      strategy: createSubjectResolutionStrategy(ISSUER_SCOPED),
+      config: ISSUER_SCOPED,
+      attributeGates: GATES,
+      emailVerifyingIssuers: [],
+    });
+  }
+
+  it('signs the holder in when the asserted identifier is the account’s own', async () => {
+    const credential = credentialFor(HOLDER_CLAIMS);
+    seedHolder(credential);
+
+    const resolution = await signIn(credential, 'Alice@Example.com');
+
+    expect(resolution).toMatchObject({ status: 'authenticated', userId: 'holder' });
+  });
+
+  it('refuses a credential whose account is not the one asserted, exactly as an identifier with no account, writing nothing', async () => {
+    // The browser asked for one account and the credential resolves to
+    // another: someone else's wallet answered this sign-in.
+    const credential = credentialFor(HOLDER_CLAIMS);
+    seedHolder(credential);
+
+    const otherAccount = await signIn(credential, 'starter@example.com');
+    const noAccount = await signIn(credential, 'nobody@example.com');
+
+    expect(otherAccount).toEqual({ status: 'rejected' });
+    expect(otherAccount).toEqual(noAccount);
+    expectNothingWritten(harness);
+    // Both probes did the same store work: the subject and the identifier.
+    expect(harness.userCredentials.findByRealmProviderSub).toHaveBeenCalledTimes(2);
+    expect(harness.userCredentials.findAllByRealmAndExternalSub).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses an unknown subject exactly as a known one under another account', async () => {
+    const holder = credentialFor(HOLDER_CLAIMS);
+    seedHolder(holder);
+    const stranger = credentialFor({ ...HOLDER_CLAIMS, personal_administrative_number: 'PAN-2' });
+
+    const unknownSubject = await signIn(stranger, 'starter@example.com');
+    const knownSubject = await signIn(holder, 'starter@example.com');
+
+    expect(unknownSubject).toEqual({ status: 'rejected' });
+    expect(knownSubject).toEqual(unknownSubject);
+    expectNothingWritten(harness);
+  });
+});

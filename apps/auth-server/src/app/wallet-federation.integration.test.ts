@@ -879,12 +879,10 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
 
     /**
      * Linking is same-device only (ADR-013 as amended 2026-11-07). A link
-     * request answered by a wallet that is not on the signed-in browser's
-     * device — whoever holds it — must bind nothing to the account that asked,
-     * under `issuer-scoped-claim` too, where a linked row would carry that
-     * wallet's stable subject. Three ways in, each refused: the cross-device
-     * mode at both starts, the same-device request answered from another
-     * device, and a cross-device flow still pending from before the upgrade.
+     * answered by a wallet on another device binds nothing, under either
+     * strategy. Three ways in, each refused: the cross-device mode at both
+     * starts, the same-device request answered from another device, and a
+     * cross-device flow still pending from before the upgrade.
      */
     it.each<{ strategy: string; env: Record<string, string> }>([
       { strategy: 'asserted-lookup', env: {} },
@@ -1027,6 +1025,74 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
       },
       240_000
     );
+  });
+
+  describe('issuer-scoped-claim sign-in honours the asserted identifier (ADR-009 §1)', () => {
+    /**
+     * Wallet sign-in stays cross-device, and its residual risk is narrowed by
+     * the asserted identifier: the user says which account, and the
+     * presentation must be entitled to THAT account. Under
+     * `issuer-scoped-claim` the credential's subject finds the account its
+     * wallet is linked to, so the asserted identifier must name that same
+     * account. A sign-in started for one account and answered by the wallet
+     * linked to another is refused exactly like an identifier with no account,
+     * and signs nobody in.
+     */
+    it('refuses a sign-in answered by a wallet linked to another account, exactly as an unknown identifier', async () => {
+      const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+      const { wallet: holderWallet } = await walletHolding(issuer, {
+        claims: {
+          given_name: 'Victor',
+          family_name: 'Vale',
+          personal_administrative_number: 'PAN-HOLDER',
+        },
+      });
+
+      await withDeployment(
+        walletEnabledEnv({
+          OID4VP_ISSUER_JWKS: issuerJwksConfig([issuer]),
+          OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER] }),
+          OID4VP_SUBJECT_RESOLUTION: 'issuer-scoped-claim',
+          OID4VP_SUBJECT_CLAIM: 'personal_administrative_number',
+          OID4VP_SUBJECT_CLAIM_ISSUERS: TRUSTED_ISSUER,
+        }),
+        async ({ app }) => {
+          // The holder links their wallet the only way there is: signed in,
+          // on the same device. The row is keyed on the issuer-scoped subject.
+          const holderEmail = 'holder@example.com';
+          const holderId = await linkedAccount(app, holderWallet, holderEmail);
+          const holderRows = await app.dbPool.query<{ external_sub: string }>(
+            "SELECT external_sub FROM user_credentials WHERE user_id = $1 AND provider_type = 'wallet'",
+            [holderId]
+          );
+          expect(holderRows.rows.map((row) => row.external_sub)).toEqual([
+            expect.stringMatching(/^isc1:/),
+          ]);
+          const holderSessions = (await sessionRowsOf(app, holderId)).length;
+
+          // Someone else, with an ordinary account of their own.
+          const starterId = await registerPasswordAccount(app, 'starter@example.com');
+
+          // A sign-in started for the starter's account and answered by the
+          // holder's wallet; then one for an identifier with no account.
+          const otherAccount = await signInWithWallet(app, holderWallet, 'starter@example.com');
+          const noAccount = await signInWithWallet(app, holderWallet, 'nobody@example.com');
+
+          expect(otherAccount.status).toBe('rejected');
+          expect(noAccount.status).toBe(otherAccount.status);
+          expect(otherAccount.jar.get(SESSION_COOKIE)).toBeUndefined();
+          // Nobody was signed in: no session for the holder's account beyond
+          // the one linking used, and none for the starter's.
+          expect(await sessionRowsOf(app, holderId)).toHaveLength(holderSessions);
+          expect(await sessionRowsOf(app, starterId)).toHaveLength(0);
+
+          // The holder, naming their own account, still signs in.
+          const own = await signInWithWallet(app, holderWallet, holderEmail);
+          expect(own.status).toBe('complete');
+          expect(await sessionRowsOf(app, holderId)).toHaveLength(holderSessions + 1);
+        }
+      );
+    }, 180_000);
   });
 
   describe('acr on the wallet path, and never on the password path (#237)', () => {
