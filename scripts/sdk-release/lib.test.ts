@@ -228,14 +228,27 @@ describe('the draft release', () => {
       expect(body.text.length).toBeLessThan(RELEASE_BODY_LIMIT / 100);
     });
 
-    it.each([candidate, latest])('attaches the section of %s in full', (version) => {
+    const sectionOf = (version: string): string => {
       const heading = version === candidate ? '## [Unreleased]' : `## [${version}]`;
       const start = committed.indexOf('\n', committed.indexOf(`\n${heading}`) + 1) + 1;
       const end = committed.indexOf('\n## ', start);
-      const section = committed.slice(start, end === -1 ? undefined : end).trim();
-      expect(section.length).toBeGreaterThan(0);
+      return committed.slice(start, end === -1 ? undefined : end).trim();
+    };
+    // Right after a release the Unreleased section is empty, and an empty
+    // section proves nothing about where a section ends: the candidate is
+    // checked only while it has notes. The latest release always has them.
+    const withNotes = [candidate, latest].filter((version) => sectionOf(version) !== '');
+
+    it('finds the notes of the latest release', () => {
+      expect(withNotes).toContain(latest);
+    });
+
+    it.each(withNotes)('attaches the section of %s in full', (version) => {
       const [, notes] = releaseFiles(committed, version, REPOSITORY);
-      expect(notes).toEqual({ name: `release-notes-${version}.md`, text: `${section}\n` });
+      expect(notes).toEqual({
+        name: `release-notes-${version}.md`,
+        text: `${sectionOf(version)}\n`,
+      });
     });
   });
 
