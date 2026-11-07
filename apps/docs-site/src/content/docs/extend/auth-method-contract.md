@@ -585,12 +585,11 @@ releases it, yet it is not on the server's first-party list: like any other pack
 while `PLUGIN_API_ENABLED` is on.
 
 **Install the SDK.** The package carries QAuth's own version: install the version of the QAuth
-release the plugin is for. A release candidate is on npm's `next` dist-tag, the first being
-`0.2.0-rc.1`, and a release is on `latest`; until the first release, `latest` holds only a
-deprecated `0.0.0` placeholder. Zod is a peer dependency, so install it beside the SDK:
+release the plugin is for. A release is on npm's `latest` dist-tag, the first being `0.2.0`,
+and a release candidate is on `next`. Zod is a peer dependency, so install it beside the SDK:
 
 ```sh
-npm install @qauth-labs/plugin-sdk@0.2.0-rc.1 zod
+npm install @qauth-labs/plugin-sdk@0.2.0 zod
 ```
 
 **Export the method.** The package's entry point exports its method as `authMethod`
@@ -645,7 +644,7 @@ the method's schema is built with the server's Zod ([secret members](#packaging-
   "type": "module",
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
   "files": ["dist"],
-  "dependencies": { "@qauth-labs/plugin-sdk": "0.2.0-rc.1" },
+  "dependencies": { "@qauth-labs/plugin-sdk": "0.2.0" },
   "peerDependencies": { "zod": "^4.6.7" }
 }
 ```
