@@ -2,6 +2,13 @@ import { types } from 'node:util';
 
 import type { RealmAuthMethodPlugin } from '@qauth-labs/fastify-plugin-db';
 import { AuthMethodConfigError } from '@qauth-labs/fastify-plugin-federation';
+import {
+  EXAMPLE_PRESET_ID,
+  EXAMPLE_PRESET_PACKAGE,
+  EXAMPLE_PRESET_SECRET_PATH,
+  EXAMPLE_PRESET_TYPE,
+  examplePresetPackage,
+} from '@qauth-labs/fastify-plugin-federation/src/testing/upstream-oidc-fixtures';
 import { AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -14,6 +21,7 @@ import {
   installFixturePluginPackage,
 } from '../../testing/installed-auth-method-plugin';
 import { testRealm } from '../../testing/request-realm';
+import { pluginConfigBodySchema, pluginResource } from '../admin/plugins/routes';
 import {
   AUTH_METHOD_PLUGIN_SIGNER_CALLER,
   authMethodPluginContext,
@@ -281,6 +289,174 @@ describe('the plugin context (#600)', () => {
     );
     expect(error).toBeInstanceOf(AuthMethodConfigError);
     expect((error as AuthMethodConfigError).issues).toEqual(['clientSecret: invalid_type']);
+  });
+});
+
+describe('a preset plugin on the generic OpenID Connect client (#951)', () => {
+  /**
+   * A signer whose ciphertexts open only under the context they were sealed
+   * with, as the real one's do: what the admin API seals, the plugin's
+   * context opens, and nothing else.
+   */
+  function sealingSigner() {
+    const sealed = new Map<string, { context: string | undefined; plaintext: Buffer }>();
+    return {
+      encrypt: vi.fn(
+        async (_caller: string, request: { plaintext: Uint8Array; context?: string }) => {
+          const ciphertext = `v1.kid-1.n${sealed.size}.Y2lwaGVydGV4dA`;
+          sealed.set(ciphertext, {
+            context: request.context,
+            plaintext: Buffer.from(request.plaintext),
+          });
+          return ciphertext;
+        }
+      ),
+      decrypt: vi.fn(async (_caller: string, request: { ciphertext: string; context?: string }) => {
+        const entry = sealed.get(request.ciphertext);
+        if (entry === undefined || entry.context !== request.context) {
+          throw new Error('the ciphertext does not open under this context');
+        }
+        return entry.plaintext;
+      }),
+      signClientAssertion: vi.fn(),
+      getUpstreamJwks: vi.fn(async () => ({ keys: [] })),
+    };
+  }
+
+  // Acceptance: a preset plugin built on the generic client loads from the
+  // first-party list with PLUGIN_API_ENABLED off.
+  it('loads from the first-party list with the plugin API off, and logs it as first-party', async () => {
+    const log = silent();
+    const runtime = await loadDeploymentAuthMethodPlugins(
+      log,
+      { packages: [EXAMPLE_PRESET_PACKAGE], pluginApiEnabled: false, nodeEnv: 'test' },
+      {
+        importPackage: fixturePluginImporter({ [EXAMPLE_PRESET_PACKAGE]: examplePresetPackage() }),
+        firstParty: [EXAMPLE_PRESET_PACKAGE],
+      }
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authMethodPlugin: EXAMPLE_PRESET_PACKAGE,
+        id: EXAMPLE_PRESET_ID,
+        type: EXAMPLE_PRESET_TYPE,
+        firstParty: true,
+      }),
+      `AuthMethod plugin ${EXAMPLE_PRESET_PACKAGE} loaded: ${EXAMPLE_PRESET_ID} (${EXAMPLE_PRESET_TYPE})`
+    );
+    expect(runtime.find(EXAMPLE_PRESET_ID)?.secretPaths).toEqual([EXAMPLE_PRESET_SECRET_PATH]);
+  });
+
+  // Acceptance: its client secret is write-only end to end.
+  it('keeps its client secret write-only from the seal to the context', async () => {
+    const runtime = await loadDeploymentAuthMethodPlugins(
+      silent(),
+      { packages: [EXAMPLE_PRESET_PACKAGE], pluginApiEnabled: false, nodeEnv: 'test' },
+      {
+        importPackage: fixturePluginImporter({ [EXAMPLE_PRESET_PACKAGE]: examplePresetPackage() }),
+        firstParty: [EXAMPLE_PRESET_PACKAGE],
+      }
+    );
+    const plugin = runtime.find(EXAMPLE_PRESET_ID);
+    if (plugin === undefined) throw new Error('the preset did not load');
+    const signer = sealingSigner();
+    const plainConfig = {
+      clientId: 'qauth',
+      clientAuthentication: { method: 'client_secret_basic' },
+    };
+
+    // The admin API refuses the secret among the plain members, nested or dotted.
+    const body = pluginConfigBodySchema(runtime.installed);
+    for (const config of [
+      {
+        ...plainConfig,
+        clientAuthentication: { method: 'client_secret_basic', clientSecret: SECRET },
+      },
+      { ...plainConfig, [EXAMPLE_PRESET_SECRET_PATH]: SECRET },
+    ]) {
+      expect(body.safeParse({ version: 0, config }).success).toBe(false);
+    }
+
+    // It seals the value for the member, under the plugin's own context...
+    const sealed = await authMethodPluginSecretCipher({
+      signer,
+    } as unknown as FastifyInstance).seal(REALM.id, plugin.id, EXAMPLE_PRESET_SECRET_PATH, SECRET);
+    expect(signer.encrypt).toHaveBeenCalledWith('local', {
+      realmId: REALM.id,
+      plaintext: Buffer.from(SECRET, 'utf8'),
+      context: `auth-method-plugin:${EXAMPLE_PRESET_ID}:${EXAMPLE_PRESET_SECRET_PATH}`,
+    });
+    expect(
+      body.safeParse({
+        version: 0,
+        config: plainConfig,
+        secrets: { [EXAMPLE_PRESET_SECRET_PATH]: { sealed } },
+      }).success
+    ).toBe(true);
+
+    // ...the realm's row holds the ciphertext apart, and the API shows neither.
+    const row: RealmAuthMethodPlugin = {
+      realmId: REALM.id,
+      pluginId: plugin.id,
+      enabled: true,
+      config: plainConfig,
+      secrets: { [EXAMPLE_PRESET_SECRET_PATH]: sealed },
+      version: 1,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    const resource = pluginResource(plugin, row);
+    expect(resource).toMatchObject({
+      name: EXAMPLE_PRESET_ID,
+      type: EXAMPLE_PRESET_TYPE,
+      firstParty: true,
+      config: plainConfig,
+      secrets: [{ path: EXAMPLE_PRESET_SECRET_PATH, set: true }],
+    });
+    expect(JSON.stringify(resource)).not.toContain(SECRET);
+    expect(JSON.stringify(resource)).not.toContain(sealed);
+
+    // ...and only the plugin's context gets it back, in place, as the api caller.
+    const child = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const fastify = {
+      authMethodPlugins: runtime,
+      repositories: { realmAuthMethodPlugins: { find: vi.fn(async () => row) } },
+      signer,
+      egress: { request: vi.fn(), validateDestination: vi.fn() },
+    } as unknown as FastifyInstance;
+    const request = {
+      realm: REALM,
+      log: { child: vi.fn(() => child) },
+    } as unknown as FastifyRequest;
+    const context = await authMethodPluginContext(fastify, request, plugin.method);
+    expect(context.config).toEqual({
+      clientId: 'qauth',
+      clientAuthentication: { method: 'client_secret_basic', clientSecret: SECRET },
+      formPost: false,
+    });
+    expect(signer.decrypt).toHaveBeenCalledWith('api', {
+      realmId: REALM.id,
+      ciphertext: sealed,
+      context: `auth-method-plugin:${EXAMPLE_PRESET_ID}:${EXAMPLE_PRESET_SECRET_PATH}`,
+    });
+    context.log.warn({ clientSecret: SECRET, note: `sent ${SECRET}` }, `sent ${SECRET}`);
+    expect(JSON.stringify(child.warn.mock.calls)).not.toContain(SECRET);
+
+    // A ciphertext sealed for another plugin, or another member, never opens as this one.
+    const other = await authMethodPluginSecretCipher({ signer } as unknown as FastifyInstance).seal(
+      REALM.id,
+      'corp',
+      EXAMPLE_PRESET_SECRET_PATH,
+      SECRET
+    );
+    const misplaced = { ...row, secrets: { [EXAMPLE_PRESET_SECRET_PATH]: other } };
+    (
+      fastify.repositories.realmAuthMethodPlugins.find as ReturnType<typeof vi.fn>
+    ).mockResolvedValue(misplaced);
+    await expect(authMethodPluginContext(fastify, request, plugin.method)).rejects.toThrow(
+      'does not open'
+    );
   });
 });
 

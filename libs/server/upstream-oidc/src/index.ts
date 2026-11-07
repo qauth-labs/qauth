@@ -1,6 +1,7 @@
 // The generic upstream OpenID Connect client (#601): an AuthMethod (#599,
-// EXPERIMENTAL) for one OpenID Provider per configured `oidc_<alias>` type.
-// It makes no account decision; the upstream sign-in flow (#639) does.
+// EXPERIMENTAL) for one OpenID Provider per configured `oidc_<alias>` type,
+// and the preset plugins built on it (#951), each with its own id, type and
+// config. It makes no account decision; the upstream sign-in flow (#639) does.
 export * from './lib/config';
 export * from './lib/errors';
 export {
@@ -30,4 +31,19 @@ export {
   UPSTREAM_OIDC_PURPOSES,
   type UpstreamCallCaps,
 } from './lib/upstream-call';
-export * from './lib/upstream-oidc-method';
+export {
+  createUpstreamOidcMethod,
+  UPSTREAM_DISCOVERY_FAILURE_TTL_MS,
+  UPSTREAM_DISCOVERY_TTL_MS,
+  UPSTREAM_OIDC_CALLBACK_PATH,
+  UPSTREAM_OIDC_METHOD_ID,
+  UPSTREAM_OIDC_TYPE_PATTERN,
+  type UpstreamOidcMethodOptions,
+  upstreamOidcRedirectUri,
+  type UpstreamOidcTransaction,
+} from './lib/upstream-oidc-method';
+export {
+  createUpstreamOidcPresetMethod,
+  MAX_UPSTREAM_OIDC_PRESET_ORIGINS,
+  type UpstreamOidcPresetOptions,
+} from './lib/upstream-oidc-preset';

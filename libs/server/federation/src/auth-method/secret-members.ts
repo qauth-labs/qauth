@@ -15,12 +15,16 @@ import { z } from 'zod';
  *
  * Supported: a secret is a string member (or a nullable one) of the config
  * object, at any depth of nested objects, marked on the input side or on the
- * output side of a pipe that keeps its path and its string. A config whose
- * schema is not an object, holds a part JSON Schema cannot describe, or
- * marks a member inside a list, a union, a record or a recursive part, or
- * behind a pipe that reshapes it, cannot be split into members safely: the
- * method is refused, so the boot fails rather than store a secret in the
- * clear.
+ * output side of a pipe that keeps its path and its string. It may sit
+ * inside a union whose branches are all objects, such as a discriminated
+ * union of client authentication methods (#951), when every branch that has
+ * a member at its path marks it there: a branch without the member, such as
+ * `private_key_jwt`, takes no secret, and no branch takes the same member in
+ * the clear. A config whose schema is not an object, holds a part JSON
+ * Schema cannot describe, or marks a member inside a list, a record, a
+ * recursive part or a union with a branch that is not an object, or behind
+ * a pipe that reshapes it, cannot be split into members safely: the method
+ * is refused, so the boot fails rather than store a secret in the clear.
  *
  * @experimental
  */
@@ -153,13 +157,47 @@ function holdsMark(
   );
 }
 
-/** What one walk of a document found. */
+/** What one walk of a document, or of one branch of a union in it, found. */
 interface DocumentWalk {
   /** The secret paths it marks. */
   readonly paths: string[];
   /** The paths of every string member (a leaf whose values are strings or null). */
   readonly stringPaths: string[];
+  /** The path of every named member met, whatever its schema. */
+  readonly members: Set<string>;
+  /** The paths of the members that are objects, or unions of objects. */
+  readonly objects: Set<string>;
   readonly problems: string[];
+}
+
+function emptyWalk(): DocumentWalk {
+  return { paths: [], stringPaths: [], members: new Set(), objects: new Set(), problems: [] };
+}
+
+/**
+ * The branches of a union node (`anyOf` or `oneOf`, never both) when each of
+ * them is an object of named members: the union a secret member may sit
+ * inside, such as a discriminated union. `undefined` for any other node, a
+ * union with a `null`, a string or a record among its branches included: a
+ * secret member inside one of those is refused.
+ */
+function objectUnionBranches(
+  node: JsonSchemaNode,
+  document: SchemaDocument
+): readonly JsonSchemaNode[] | undefined {
+  const anyOf = node['anyOf'];
+  const oneOf = node['oneOf'];
+  if (Array.isArray(anyOf) === Array.isArray(oneOf)) return undefined;
+  const branches = (Array.isArray(anyOf) ? anyOf : oneOf) as unknown[];
+  if (branches.length === 0) return undefined;
+  for (const branch of branches) {
+    if (!isNode(branch)) return undefined;
+    const { node: target } = dereferenced(branch, document);
+    if (target === undefined || target['type'] !== 'object' || !isNode(target['properties'])) {
+      return undefined;
+    }
+  }
+  return branches as JsonSchemaNode[];
 }
 
 /**
@@ -172,14 +210,13 @@ interface DocumentWalk {
  * plain members.
  */
 function walkDocument(document: SchemaDocument, inputStrings?: ReadonlySet<string>): DocumentWalk {
-  const paths: string[] = [];
-  const stringPaths: string[] = [];
-  const problems: string[] = [];
   const walk = (
     given: JsonSchemaNode,
     path: readonly string[],
-    refs: ReadonlySet<string>
+    refs: ReadonlySet<string>,
+    found: DocumentWalk
   ): void => {
+    const { paths, stringPaths, problems } = found;
     const { node, ref } = dereferenced(given, document);
     if (node === undefined) {
       if (holdsMark(given, document, new Set())) {
@@ -201,9 +238,11 @@ function walkDocument(document: SchemaDocument, inputStrings?: ReadonlySet<strin
     const inside = ref === undefined ? refs : new Set([...refs, ref]);
     const properties = node['properties'];
     if (node['type'] === 'object' && isNode(properties)) {
+      if (path.length > 0) found.objects.add(path.join('.'));
       for (const [name, child] of Object.entries(properties)) {
         if (!isNode(child)) continue;
-        walk(child, [...path, name], inside);
+        found.members.add([...path, name].join('.'));
+        walk(child, [...path, name], inside, found);
       }
       // A mark below anything but `properties` (additionalProperties, a
       // pattern, a union of objects) has no member path.
@@ -240,15 +279,92 @@ function walkDocument(document: SchemaDocument, inputStrings?: ReadonlySet<strin
       }
       return;
     }
+    const branches = objectUnionBranches(node, document);
+    if (branches !== undefined) {
+      walkUnion(node, branches, path, inside, found);
+      return;
+    }
     if (isStringMember(node) && path.length > 0) stringPaths.push(path.join('.'));
     if (holdsMark(node, document, new Set())) {
       problems.push(
-        `configSchema marks a secret member inside ${path.join('.') || 'the config'} (a list, a union or a record), which cannot be kept write-only`
+        `configSchema marks a secret member inside ${path.join('.') || 'the config'} (a list, a record, or a union with a branch that is not an object), which cannot be kept write-only`
       );
     }
   };
-  walk(document.root, [], new Set());
-  return { paths, stringPaths, problems };
+
+  /**
+   * A union of objects at `path` (#951): each branch walked on its own, then
+   * held to one rule. A path one branch marks secret is marked, as a string,
+   * by every branch that has a member there, and no branch holds a member
+   * that is not an object on the way to it: so whichever branch a config
+   * takes, the value at that path is a secret, or the branch has no such
+   * member. A branch without the member (`private_key_jwt` beside
+   * `client_secret_basic`) is no problem: the server never puts a secret
+   * into a config the plain members do not shape for one, and a config that
+   * spells a secret path among its plain members is refused whatever branch
+   * it takes (`configSpellsMemberOf`).
+   */
+  const walkUnion = (
+    node: JsonSchemaNode,
+    branches: readonly JsonSchemaNode[],
+    path: readonly string[],
+    refs: ReadonlySet<string>,
+    found: DocumentWalk
+  ): void => {
+    const at = path.join('.') || 'its root';
+    // A mark beside the branches (on the union itself, which has a member
+    // path only through them) has no member path.
+    const rest = Object.fromEntries(
+      Object.entries(node).filter(([key]) => key !== 'anyOf' && key !== 'oneOf' && key !== '$defs')
+    );
+    if (holdsMark(rest, document, new Set())) {
+      found.problems.push(
+        `configSchema marks a secret member beside the branches of the union at ${at}, which cannot be kept write-only`
+      );
+    }
+    const walks = branches.map((branch) => {
+      const branchWalk = emptyWalk();
+      walk(branch, path, refs, branchWalk);
+      return branchWalk;
+    });
+    const marked = [...new Set(walks.flatMap((branchWalk) => branchWalk.paths))];
+    for (const secret of marked) {
+      const segments = secret.split('.');
+      // The members on the way to the secret below the union itself.
+      const between = segments
+        .slice(path.length, -1)
+        .map((_, index) => segments.slice(0, path.length + 1 + index).join('.'));
+      for (const branchWalk of walks) {
+        if (branchWalk.members.has(secret)) {
+          if (!branchWalk.paths.includes(secret)) {
+            found.problems.push(
+              `configSchema marks ${secret} as a secret in one branch of the union at ${at} and not in another, which would take its value in the clear`
+            );
+          }
+        } else if (
+          between.some(
+            (member) => branchWalk.members.has(member) && !branchWalk.objects.has(member)
+          )
+        ) {
+          found.problems.push(
+            `a branch of the union at ${at} holds a member that is not an object on the way to the secret ${secret}`
+          );
+        }
+      }
+    }
+    found.paths.push(...marked.filter((secret) => !found.paths.includes(secret)));
+    for (const branchWalk of walks) {
+      found.stringPaths.push(...branchWalk.stringPaths);
+      for (const member of branchWalk.members) found.members.add(member);
+      for (const member of branchWalk.objects) found.objects.add(member);
+      found.problems.push(...branchWalk.problems);
+    }
+    if (path.length > 0) found.objects.add(path.join('.'));
+  };
+
+  const result = emptyWalk();
+  walk(document.root, [], new Set(), result);
+  return result;
 }
 
 /** How many objects of a config schema's tree {@link foreignMarkOf} reads at most. */
@@ -336,10 +452,15 @@ function foreignMarkOf(schema: unknown): 'foreign' | 'unreadable' | undefined {
  * or too deep to read whole for such marks, or whose lazy part or metadata
  * throws.
  *
+ * A mark inside a union whose branches are all objects counts (#951) when
+ * every branch with a member at the marked path marks it, and no branch
+ * holds a member that is not an object on the way to it.
+ *
  * @throws AuthMethodContractError when the schema has no JSON Schema form, is
  *   not an object, or marks a member it cannot be split by: inside a list, a
- *   union, a record or a recursive part, one that is not a string, or one
- *   whose path holds a member name outside
+ *   record, a recursive part or a union with a branch that is not an object,
+ *   in one branch of a union and not in another that has the member, one
+ *   that is not a string, or one whose path holds a member name outside
  *   {@link AUTH_METHOD_SECRET_SEGMENT_PATTERN}; and when it marks more than
  *   {@link MAX_AUTH_METHOD_SECRET_MEMBERS}
  * @experimental
