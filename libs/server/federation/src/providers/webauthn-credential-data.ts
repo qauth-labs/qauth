@@ -28,6 +28,16 @@ export const webauthnCredentialDataSchema = z.object({
   backed_up: z.boolean(),
   /** The authenticator's AAGUID as reported, unverified (no attestation is trusted). */
   aaguid: z.string(),
+  /**
+   * Whether the registration's authenticator data carried the
+   * user-verification flag, which QAuth checked (WebAuthn Level 3 §7.1): a
+   * passkey that is an account's primary identity proves it only with the
+   * flag (ADR-015 Decision 8, #846). Migration 0068 wrote `true` on every
+   * passkey stored before it, each registered with the flag required; absent
+   * only on a passkey a release before that one stores during a rolling
+   * upgrade, which proves nothing.
+   */
+  user_verified: z.boolean().optional(),
   /** The RP ID the credential was created under. */
   rp_id: z.string().min(1),
   /** The WebAuthn user handle the credential was created for, base64url. */
