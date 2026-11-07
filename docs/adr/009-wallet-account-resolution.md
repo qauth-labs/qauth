@@ -2,7 +2,7 @@
 
 **Status:** Accepted — **findings partially superseded, see
 [Drift re-check (2026-07-26)](#drift-re-check-2026-07-26)**
-**Date:** 2026-07-20 (findings amended 2026-07-26; Decision §1 amended 2026-10-19)
+**Date:** 2026-07-20 (findings amended 2026-07-26; Decision §1 amended 2026-10-19; Decision §2 amended 2026-11-07)
 **Authors:** QAuth Team
 
 > ⚠️ **Regulatory drift landed on 2026-07-22 — one Decision needs a human call.**
@@ -644,6 +644,21 @@ since the holder may refuse it.
 
 Demoted from a plausible default to opt-in: no Member State policy guaranteeing
 `personal_administrative_number` stability was found, only the enabling clause.
+
+> **Amended 2026-11-07 — sign-in honours the asserted identifier (maintainer
+> decision).** Wallet sign-in has no usernameless form under this strategy
+> either (§1). The `(validated issuer, claim)` subject finds the account the
+> holder's wallet is linked to, and the identifier the browser asserted must
+> name that same account: it is normalized exactly as `asserted-lookup`
+> normalizes it and looked up through the same port. An identifier that names
+> another account, or none, and a sign-in with no usable identifier, are
+> refused with the same answer as any other non-match, after the same lookups.
+> No credential claim is used to find or link an account; the comparison is
+> between the account the person named and the account the credential
+> resolved to. The fallback to `asserted-lookup` is unchanged. An account
+> that holds no credential on any identifier a person can type (one that
+> wallet sign-in created under this strategy before §1's 2026-10-19
+> amendment) can no longer sign in with its wallet.
 
 > ⚠️ **Flagged 2026-07-26 — the header-parameter names above are wrong for PID.**
 > The **security principle is untouched**: the issuer must come from a validated

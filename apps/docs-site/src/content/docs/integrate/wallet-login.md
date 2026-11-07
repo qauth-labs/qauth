@@ -439,8 +439,7 @@ never registered and no wallet login exists to produce a level.
   address bar with a nonced `history.replaceState`, and the request log
   redacts `response_code`. The cross-device sign-in flow has no equivalent —
   §14.2 says the technique is not applicable there — and leans on the browser
-  binder and the asserted identifier instead; a link, which asserts no
-  identifier, is therefore same-device only. See
+  binder and the asserted identifier instead. Linking is same-device only. See
   [ADR-013](/reference/records/adr/013-same-device-return-leg/).
 - **One refusal.** Expired request, wallet-reported error, unvalidatable
   presentation, untrusted issuer, unknown account and disabled account all render
@@ -562,12 +561,6 @@ A wallet is linked only from a browser on the **same device** as the wallet
 - A link flow started cross-device before the upgrade is answered `rejected`
   when it is polled, and nothing is linked.
 
-The reason is the Response Code. A cross-device link completed by polling, and
-nothing on that path tied the wallet that answered to the browser that asked:
-the request names only the verifier, and a link asserts no identifier, so the
-credential presented said nothing about the account it would join. The return
-leg binds the presentation to the browser that requested it (OID4VP 1.0 §14.2).
-
 A person whose wallet is on their phone signs in on the phone and links it
 there. After that, wallet sign-in works from any device, the QR included.
 
@@ -675,6 +668,15 @@ add an unbound password account on a wallet-only user's email. Counting that
 account would lock the wallet owner out. Two bound accounts, or several unbound
 ones, are still `ambiguous`, and the remaining account still has to pass the
 binding comparison.
+
+Under `issuer-scoped-claim` the asserted identifier still names the account
+(ADR-009 §2, amended 2026-11-07). The `(validated issuer, claim)` subject finds
+the account the holder's wallet is linked to, and the identifier the user typed
+must name that same account, normalized and looked up exactly as
+`asserted-lookup` does. An identifier that names another account, or none, is
+refused with the same answer as any other non-match, after the same lookups.
+No credential claim is used to find an account. A sign-in with no usable
+identifier is refused before any lookup.
 
 Note the boot posture, deliberately unchanged: selecting a strategy is **not** a
 startup gate. A deployment that names a strategy and omits its settings fails at
@@ -822,11 +824,9 @@ refused; a landing from a fresh cookie jar refused, with the initiating poll
 answering `rejected` and no session minted; a redirect never followed, with the
 poll pending until the deadline and rejected after it; a cross-device sign-in
 (`device` omitted) acknowledged with `{}` and completed by polling exactly as
-before; and the link flow, which is same-device only. The base suite also
-shows that a link answered by a wallet on another device binds nothing, under
-`asserted-lookup` and `issuer-scoped-claim`: `device=other` refused at both
-starts, the redirect landing in that wallet's own browser refused, and a
-cross-device link flow left from before the upgrade refused on its poll. The
+before; and the link flow, which is same-device only: the base suite also
+pins that a cross-device link is refused at both starts, and that a
+cross-device link flow left from before the upgrade is refused on its poll. The
 mock wallet's acknowledgement parser is I/O-free and imports nothing from the
 verifier.
 

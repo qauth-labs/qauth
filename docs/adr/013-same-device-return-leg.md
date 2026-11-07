@@ -10,12 +10,14 @@
 > (`POST /auth/link/wallet`) accept `device=this` or no `device` at all, and
 > refuse `device=other` with `400` `validation_error`. The linking page renders
 > the "Open my wallet" link and no QR code. A link completes only on the
-> return leg, so the Response Code binds the wallet that answers to the
-> signed-in browser that asked. A cross-device link flow still pending from
+> return leg, with the Response Code. A cross-device link flow still pending from
 > before the upgrade is refused when it is polled, and the writer
 > (`linkWalletPresentation`) refuses any flow not recorded as same-device.
-> Wallet sign-in keeps both modes as decided below. Decision 1 and the
-> sections on residual risk and consequences are read with this amendment.
+> Wallet sign-in keeps both modes as decided below, and on the same day
+> `issuer-scoped-claim` sign-in began to honour the asserted identifier the
+> residual-risk section relies on (ADR-009 §2, amended 2026-11-07). Decision 1
+> and the sections on residual risk and consequences are read with this
+> amendment.
 
 ## Context
 
@@ -291,17 +293,17 @@ Verifier add when running `direct_post` without a redirect:
 - the signed `__Host-qauth_wallet_flow` binder cookie required on every poll —
   only the browser that started the flow can fetch its outcome
   (`routes/ui/wallet-login.test.ts`, "CSRF and the browser binder");
-- the asserted identifier the presentation must match ([ADR-009](./009-wallet-account-resolution.md)
-  §1) — a request relayed to a victim whose credential carries a different
-  identifier is refused ("the asserted identifier");
+- the asserted identifier ([ADR-009](./009-wallet-account-resolution.md) §1):
+  the presentation must be entitled to the account the browser named, under
+  either strategy. Under `asserted-lookup` the identifier finds the account
+  and the presentation's binding must match it; under `issuer-scoped-claim`
+  the credential's subject finds the account and the identifier must name
+  that same account (ADR-009 §2, amended 2026-11-07). A presentation for
+  another account is refused like one for an identifier with no account
+  ("the asserted identifier");
 - the six-minute flow lifetime and one uniform refusal.
 
 They narrow the attack; they do not close it the way the Response Code does.
-A sign-in attaches nothing to an account: it signs in an account the
-credential is already bound to. A link writes that binding, and a link flow
-asserts no identifier — the account is the session's — so the second
-mitigation above never applied to it. That is why linking became
-same-device only rather than keeping the QR flow under these mitigations.
 
 HAIP 1.0 §5.1's "Verifiers are RECOMMENDED to use only the same-device flow"
 is therefore a **waived** row in the conformance matrix for sign-in, not n/a —
@@ -385,7 +387,7 @@ Only the third is this record's subject.
 
 - Issue #405 — the request this record settles; epic #231
 - [ADR-004](./004-wallet-agnostic-federation.md) — OID4VP federation; the request-side `redirect_uri` rules
-- [ADR-009](./009-wallet-account-resolution.md) — the asserted identifier the cross-device sign-in flow relies on
+- [ADR-009](./009-wallet-account-resolution.md) — the asserted identifier the cross-device sign-in flow relies on, under both strategies
 - [OpenID for Verifiable Presentations 1.0](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html) §8.2, §13.3, §14.2, §14.3
 - [OpenID4VC High Assurance Interoperability Profile 1.0](https://openid.net/specs/openid4vc-high-assurance-interoperability-profile-1_0.html) §5.1
 - `docs/conformance/requirements/oid4vp-1_0.json`, `docs/conformance/requirements/haip-1_0.json` — the rows and their evidence

@@ -52,7 +52,7 @@
       "section": "14.2",
       "level": "RECOMMENDED",
       "quote": "When using the Response Mode direct_post without the further protection provided by the redirect URI, there is no session context for the Verifier to detect session fixation attempts. It is RECOMMENDED for the Verifiers to implement mechanisms to strengthen the security of the flow.",
-      "applies": "The cross-device (QR) flow on both profiles, which returns no `redirect_uri`. The mechanisms: the signed `__Host-qauth_wallet_flow` browser binder required on every poll (only the browser that started the flow can fetch its outcome), the asserted identifier the presentation must match (ADR-009 §1 — a request relayed to a victim whose credential carries a different identifier is refused), the six-minute flow lifetime, and one uniform refusal. See docs/adr/013-same-device-return-leg.md#residual-cross-device-risk.",
+      "applies": "The cross-device (QR) sign-in flow on both profiles, which returns no `redirect_uri`; account linking is same-device only (ADR-013 as amended 2026-11-07). The mechanisms: the signed `__Host-qauth_wallet_flow` browser binder required on every poll (only the browser that started the flow can fetch its outcome), the asserted identifier under both strategies (the presentation must be entitled to the account the browser named: ADR-009 §1 for `asserted-lookup`, §2 as amended 2026-11-07 for `issuer-scoped-claim`; a presentation for another account is refused like one for an identifier with no account), the six-minute flow lifetime, and one uniform refusal. See docs/adr/013-same-device-return-leg.md#residual-cross-device-risk.",
       "status": "covered",
       "evidenceMatch": "wrong binder as expired"
     },

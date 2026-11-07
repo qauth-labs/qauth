@@ -2258,9 +2258,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Linking a wallet to an account is same-device only** (ADR-013, amended
   2026-11-07). A wallet credential is linked only from a browser on the same
-  device as the wallet: the link completes on the same-device return leg,
-  whose single-use Response Code binds the wallet that answers to the
-  signed-in browser that asked. `/ui/wallet-link` shows one button, **Use a
+  device as the wallet, and a cross-device link is refused: the link completes
+  on the same-device return leg, with its single-use Response Code.
+  `/ui/wallet-link` shows one button, **Use a
   wallet on this device**, and the "Open my wallet" link; it no longer shows a
   QR code. `POST /ui/wallet-link` and `POST /auth/link/wallet` accept `device`
   `this` or no `device` at all, and refuse `device=other` with `400`
@@ -2271,6 +2271,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rendered the invocation URI as a QR code must render it as a link that opens
   a wallet on the same device; a person whose wallet is on their phone signs
   in on the phone to link it.
+- **`issuer-scoped-claim` wallet sign-in checks the asserted identifier**
+  (ADR-009 §2, amended 2026-11-07). With
+  `OID4VP_SUBJECT_RESOLUTION=issuer-scoped-claim`, a presentation's
+  `(validated issuer, claim)` subject still finds the account its wallet is
+  linked to, and the identifier typed on `/ui/wallet-login` must now name that
+  same account. It is normalized and looked up exactly as under
+  `asserted-lookup`. An identifier that names another account, or none, gets
+  the same refusal as any other non-match, after the same lookups, and a
+  sign-in with no usable identifier is refused. The fallback to
+  `asserted-lookup` and `asserted-lookup` itself are unchanged. **Action:**
+  none for accounts that hold a password; their owners type their own
+  identifier as before. An account that wallet sign-in created under
+  `issuer-scoped-claim` before the 2026-10-19 change holds no credential on a
+  typed identifier, so it can no longer sign in with its wallet.
 - **docs.qauth.dev and the developer portal use the design system** ([#472]).
   The portal's pages name the tokens of `libs/ui` instead of Tailwind's
   palette. The docs site maps Starlight's theme onto the same tokens and

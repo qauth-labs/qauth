@@ -41,10 +41,11 @@ This library defines that abstraction (see
 > - `assurance/` — eIDAS level-of-assurance resolution feeding the `acr` claim
 >   ([ADR-010](../../../docs/adr/010-acr-assurance-mapping.md), #237)
 > - `subject/` — configurable `SubjectResolutionStrategy` and account linking
->   (#300, #238). `prepareWalletLink` plans the row only; its caller must hand
->   it a presentation from a same-device link, whose Response Code ties the
->   wallet to the signed-in browser (linking is same-device only, ADR-013 as
->   amended 2026-11-07)
+>   (#300, #238). Under `issuer-scoped-claim` a sign-in's subject match counts
+>   only for the account the asserted identifier names (ADR-009 §2, amended
+>   2026-11-07). `prepareWalletLink` plans the row only; its caller must hand
+>   it a presentation from a same-device link (linking is same-device only,
+>   ADR-013 as amended 2026-11-07)
 > - `profiles/` — the `VerifierProfile` abstraction (#299)
 > - `providers/webauthn.provider.ts` and `webauthn/` — the **`WebAuthnProvider`**
 >   (#467) and the relying-party ID rules, below
