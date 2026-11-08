@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import {
   AUTH_METHOD_CONTRACT,
+  AUTH_METHOD_TYPE_PATTERN,
   type AuthMethod,
   type AuthMethodBounce,
   type AuthMethodCallbackRequest,
@@ -23,10 +24,18 @@ import {
 } from '@qauth-labs/server-federation';
 import type { z } from 'zod';
 
-import { claimAttributes } from './attributes';
-import { type UpstreamOidcConfig, upstreamOidcConfigSchema } from './config';
+import {
+  UPSTREAM_STANDARD_ATTRIBUTES,
+  type UpstreamClaimAttribute,
+  upstreamClaimAttributes,
+} from './attributes';
+import {
+  type UpstreamOidcClientConfig,
+  type UpstreamOidcConfig,
+  upstreamOidcConfigSchema,
+} from './config';
 import { invalidResponse, UpstreamOidcError } from './errors';
-import { sameText, validateIdToken } from './id-token';
+import { isTenantIssuer, sameText, validateIdToken } from './id-token';
 import { UpstreamJwksCache } from './jwks';
 import {
   fetchDiscoveryDocument,
@@ -87,15 +96,17 @@ export const UPSTREAM_OIDC_CALLBACK_PATH = '/callback';
 /**
  * The redirect URI an operator registers at the provider for a realm:
  * `<realm origin>/upstream/<type>/callback`. One per provider, so a response
- * meant for one provider cannot be replayed at another's callback.
+ * meant for one provider cannot be replayed at another's callback. `type` is
+ * a generic client's `oidc_<alias>` or a preset plugin's own type (#671),
+ * e.g. `example_idp`.
  */
 export function upstreamOidcRedirectUri(realmOrigin: string, type: string): string {
   const origin = new URL(realmOrigin);
   if (origin.origin !== realmOrigin) {
     throw new TypeError('realmOrigin must be a bare origin, such as https://auth.example.com');
   }
-  if (!UPSTREAM_OIDC_TYPE_PATTERN.test(type)) {
-    throw new TypeError('type must be oidc_ and a lower-case alias');
+  if (typeof type !== 'string' || !AUTH_METHOD_TYPE_PATTERN.test(type)) {
+    throw new TypeError('type must be an AuthMethod type, such as oidc_corp or example_idp');
   }
   return `${origin.origin}${authMethodRoutePrefix(type)}${UPSTREAM_OIDC_CALLBACK_PATH}`;
 }
@@ -141,6 +152,18 @@ const MAX_CACHED_DOCUMENTS = 256;
 
 /** The authorization response parameters a `form_post` bounce carries on. */
 const RESPONSE_PARAMETERS = ['code', 'state', 'iss', 'error', 'error_description', 'error_uri'];
+
+/** The name of a response member a preset reads: lower case, as a form member's. */
+const RESPONSE_MEMBER_NAME = /^[a-z][a-z0-9_]{0,31}$/;
+
+/** The most response members a preset reads. */
+const MAX_RESPONSE_MEMBERS = 4;
+
+/**
+ * The longest value of a response member the bounce carries on and the
+ * callback reads, in characters: it rides in the callback's URL.
+ */
+export const MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH = 1024;
 
 /** A BCP 47 tag as `ui_locales` may carry it. */
 const LOCALE_TAG = /^[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8}){0,7}$/;
@@ -196,14 +219,52 @@ export interface UpstreamOidcClientParts<TConfig> {
    * config itself for the generic client, a preset's mapping for a preset
    * plugin (#951).
    */
-  readonly providerConfig: (config: TConfig) => UpstreamOidcConfig;
+  readonly providerConfig: (config: TConfig) => UpstreamOidcClientConfig;
   /**
    * The only origins the provider's endpoints may be on, discovered ones
    * included: a preset's `origins` (#951). Without it, as for the generic
    * client, a discovered endpoint may be on any host.
    */
   readonly endpointOrigins?: ReadonlySet<string>;
+  /** A preset's response members (#671): see `UpstreamOidcPresetOptions`. */
+  readonly responseMembers?: UpstreamResponseMembers;
+  /** A preset's claims from the response and its config (#671): see `UpstreamOidcPresetOptions`. */
+  readonly identityClaims?: UpstreamIdentityClaims<TConfig>;
+  /** A preset's attribute rules (#671); the standard ones unless set. */
+  readonly attributes?: readonly UpstreamClaimAttribute[];
 }
+
+/**
+ * Members of the authorization response besides the protocol's own that a
+ * preset's callback reads (#671), by name: each maps the value the
+ * provider sent to the value the `form_post` bounce carries on, or
+ * `undefined` to drop it. The value is the browser's to choose, never signed
+ * by the provider: whatever the callback makes of it is only ever an
+ * unverified claim.
+ *
+ * @experimental
+ */
+export type UpstreamResponseMembers = Readonly<
+  Record<string, (value: string) => string | undefined>
+>;
+
+/**
+ * The claims a preset's identity gets besides the provider's (#671): from
+ * the response members it reads and the preset's config. The result's
+ * members are set over the provider's claims, and one set to `undefined`
+ * removes a claim; `sub` and the claims only the ID token may carry (`iss`,
+ * `aud`, `acr`, `auth_time` and the rest) stay the validated ones.
+ *
+ * @experimental
+ */
+export type UpstreamIdentityClaims<TConfig> = (input: {
+  /** The provider's claims, validated: the ID token's over userinfo's. */
+  readonly claims: Readonly<Record<string, unknown>>;
+  /** The preset's response members the response carried, each a single value. */
+  readonly response: Readonly<Record<string, string>>;
+  /** The preset's config, parsed. */
+  readonly config: TConfig;
+}) => Readonly<Record<string, unknown>>;
 
 /**
  * The client as an AuthMethod under the names and the config `parts` give
@@ -217,6 +278,8 @@ export function upstreamOidcClientMethod<TConfig>(
   parts: UpstreamOidcClientParts<TConfig>
 ): AuthMethod<TConfig, UpstreamOidcTransaction> {
   const { type, display } = parts;
+  const responseMembers = checkedResponseMembers(parts.responseMembers);
+  const attributeRules = parts.attributes ?? UPSTREAM_STANDARD_ATTRIBUTES;
   /** Results the callback produced and `verify()` has not taken yet. */
   const issued = new WeakSet<object>();
   const documents = new TtlCache<Record<string, unknown>>(
@@ -235,7 +298,7 @@ export function upstreamOidcClientMethod<TConfig>(
    * checks against the config run at every use.
    */
   const metadataFor = async (
-    context: AuthMethodContext<UpstreamOidcConfig>
+    context: AuthMethodContext<UpstreamOidcClientConfig>
   ): Promise<UpstreamProviderMetadata> => {
     const { config } = context;
     const scope = context.routeUrl(UPSTREAM_OIDC_CALLBACK_PATH);
@@ -315,10 +378,17 @@ export function upstreamOidcClientMethod<TConfig>(
 
     const metadata = await metadataFor(context);
     // RFC 9207 §2.4: a response that names another issuer is refused, and
-    // so is one without `iss` from a provider that says it sends it.
+    // so is one without `iss` from a provider that says it sends it. A
+    // multi-tenant provider's names its tenant, which the ID token's
+    // issuer check ties to the token's own.
     if (Object.hasOwn(query, 'iss')) {
       const iss = single(query, 'iss');
-      if (iss === undefined || iss !== metadata.issuer) {
+      if (
+        iss === undefined ||
+        (config.tenantIssuer === undefined
+          ? iss !== metadata.issuer
+          : !isTenantIssuer(config.tenantIssuer, iss))
+      ) {
         throw invalidResponse('the response names another issuer (RFC 9207)');
       }
     } else if (metadata.issParameterSupported) {
@@ -344,7 +414,7 @@ export function upstreamOidcClientMethod<TConfig>(
     const idTokenClaims = await validateIdToken(
       tokens.idToken,
       {
-        issuer: metadata.issuer,
+        issuer: config.tenantIssuer ?? metadata.issuer,
         clientId: config.clientId,
         nonce: transaction.nonce,
         algorithms: metadata.idTokenSigningAlgorithms,
@@ -361,7 +431,12 @@ export function upstreamOidcClientMethod<TConfig>(
     const userinfo = config.fetchUserinfo
       ? await readUserinfo(context, metadata, tokens.accessToken, sub)
       : {};
-    const claims = mergedClaims(idTokenClaims, userinfo);
+    const claims = withIdentityClaims(
+      mergedClaims(idTokenClaims, userinfo),
+      parts.identityClaims,
+      responseMembers === undefined ? {} : readResponseMembers(query, responseMembers),
+      methodContext.config
+    );
     if (Buffer.byteLength(JSON.stringify(claims), 'utf8') > MAX_AUTH_METHOD_RAW_CLAIMS_BYTES) {
       throw invalidResponse('the claims are larger than an identity may carry');
     }
@@ -409,6 +484,11 @@ export function upstreamOidcClientMethod<TConfig>(
             if (!Object.hasOwn(request.form, name)) continue;
             carried[name] = single(request.form, name) ?? '';
           }
+          // A preset's own members, as its map makes them; a repeated or
+          // unreadable one is dropped: none is a protocol parameter.
+          if (responseMembers !== undefined) {
+            Object.assign(carried, readResponseMembers(request.form, responseMembers));
+          }
           return { to: UPSTREAM_OIDC_CALLBACK_PATH, query: carried };
         },
       },
@@ -423,7 +503,7 @@ export function upstreamOidcClientMethod<TConfig>(
       return { externalSub: sub, assuranceLevel: 'low', rawClaims: { ...claims } };
     },
     extractAttributes(identity: VerifiedIdentity): UserAttribute[] {
-      return claimAttributes(type, identity);
+      return upstreamClaimAttributes(type, identity.rawClaims, attributeRules);
     },
   };
   return Object.freeze(method);
@@ -467,11 +547,11 @@ function requireEndpointsOn(
  */
 function providerContext<TConfig>(
   context: AuthMethodContext<TConfig>,
-  providerConfig: (config: TConfig) => UpstreamOidcConfig
-): AuthMethodContext<UpstreamOidcConfig> {
+  providerConfig: (config: TConfig) => UpstreamOidcClientConfig
+): AuthMethodContext<UpstreamOidcClientConfig> {
   const config = providerConfig(context.config);
   if ((config as unknown) === context.config) {
-    return context as unknown as AuthMethodContext<UpstreamOidcConfig>;
+    return context as unknown as AuthMethodContext<UpstreamOidcClientConfig>;
   }
   return Object.freeze({ ...context, config });
 }
@@ -484,8 +564,8 @@ function providerContext<TConfig>(
 function ownTransaction(
   value: unknown,
   type: string,
-  config: UpstreamOidcConfig,
-  context: AuthMethodContext<UpstreamOidcConfig>
+  config: UpstreamOidcClientConfig,
+  context: AuthMethodContext<UpstreamOidcClientConfig>
 ): UpstreamOidcTransaction {
   const mismatch = (problem: string) => new UpstreamOidcError('transaction_mismatch', problem);
   if (typeof value !== 'object' || value === null) throw mismatch('no transaction');
@@ -564,6 +644,89 @@ function mergedClaims(
     if (source !== undefined && Object.hasOwn(source, flag)) claims[flag] = source[flag];
   }
   return claims;
+}
+
+/** A preset's response members, checked: at most four, each a lower-case name and a function. */
+function checkedResponseMembers(
+  members: UpstreamResponseMembers | undefined
+): UpstreamResponseMembers | undefined {
+  if (members === undefined) return undefined;
+  const entries = typeof members === 'object' && members !== null ? Object.entries(members) : [];
+  if (
+    entries.length === 0 ||
+    entries.length > MAX_RESPONSE_MEMBERS ||
+    entries.some(
+      ([name, map]) =>
+        !RESPONSE_MEMBER_NAME.test(name) ||
+        RESPONSE_PARAMETERS.includes(name) ||
+        typeof map !== 'function'
+    )
+  ) {
+    throw new TypeError(
+      `responseMembers must map one to ${MAX_RESPONSE_MEMBERS} lower-case member names, none a protocol parameter, to functions`
+    );
+  }
+  return Object.freeze(Object.fromEntries(entries));
+}
+
+/**
+ * The preset's response members `parameters` carry, each a single value of
+ * at most {@link MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH} characters as its map
+ * makes it. A member whose map throws, or makes no such value, is left out.
+ */
+function readResponseMembers(
+  parameters: AuthMethodParameters,
+  members: UpstreamResponseMembers
+): Record<string, string> {
+  const read: Record<string, string> = {};
+  for (const [name, map] of Object.entries(members)) {
+    const value = single(parameters, name);
+    if (value === undefined || value.length > MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH) continue;
+    let mapped: unknown;
+    try {
+      mapped = map(value);
+    } catch {
+      continue;
+    }
+    if (
+      typeof mapped === 'string' &&
+      mapped.length > 0 &&
+      mapped.length <= MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH
+    ) {
+      read[name] = mapped;
+    }
+  }
+  return read;
+}
+
+/**
+ * The provider's claims with a preset's own over them
+ * ({@link UpstreamIdentityClaims}): never `sub` or a claim only the ID token
+ * may carry. A preset whose function throws fails the callback.
+ */
+function withIdentityClaims<TConfig>(
+  claims: Record<string, unknown>,
+  identityClaims: UpstreamIdentityClaims<TConfig> | undefined,
+  response: Readonly<Record<string, string>>,
+  config: TConfig
+): Record<string, unknown> {
+  if (identityClaims === undefined) return claims;
+  let extra: unknown;
+  try {
+    extra = identityClaims({ claims: Object.freeze({ ...claims }), response, config });
+  } catch (cause) {
+    throw invalidResponse("the preset's identity claims failed", { cause });
+  }
+  if (typeof extra !== 'object' || extra === null || Array.isArray(extra)) {
+    throw invalidResponse("the preset's identity claims are not an object");
+  }
+  const merged: Record<string, unknown> = { ...claims };
+  for (const [name, value] of Object.entries(extra)) {
+    if (name === 'sub' || ID_TOKEN_ONLY_CLAIMS.includes(name)) continue;
+    if (value === undefined) delete merged[name];
+    else merged[name] = value;
+  }
+  return merged;
 }
 
 /** One parameter's single value; a missing or repeated one is `undefined`. */

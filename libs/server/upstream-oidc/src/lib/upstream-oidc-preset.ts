@@ -10,13 +10,20 @@ import {
 } from '@qauth-labs/server-federation';
 import type { z } from 'zod';
 
+import type { UpstreamClaimAttribute } from './attributes';
 import {
-  type UpstreamOidcConfig,
-  type UpstreamOidcConfigInput,
-  upstreamOidcConfigSchema,
+  UPSTREAM_TENANT_PLACEHOLDER,
+  type UpstreamOidcClientConfig,
+  type UpstreamOidcClientConfigInput,
+  upstreamOidcClientConfigSchema,
 } from './config';
 import { upstreamClientSecretDestination } from './stored-config';
-import { upstreamOidcClientMethod, type UpstreamOidcTransaction } from './upstream-oidc-method';
+import {
+  type UpstreamIdentityClaims,
+  upstreamOidcClientMethod,
+  type UpstreamOidcTransaction,
+  type UpstreamResponseMembers,
+} from './upstream-oidc-method';
 
 /**
  * A PRESET PLUGIN on the generic upstream OpenID Connect client (#951): an
@@ -70,6 +77,14 @@ import { upstreamOidcClientMethod, type UpstreamOidcTransaction } from './upstre
  * S256, `state` and `nonce`, the ID token checks, the callback and its
  * `form_post` bounce, `verify()` and the attributes, under the preset's type.
  *
+ * What a named provider needs beyond that, a preset sets in its options
+ * (#671), never a realm's admin: a client secret the signer role signs
+ * (`signed_client_secret`, Sign in with Apple's), an issuer template for a
+ * multi-tenant provider (`tenantIssuer`, e.g. Microsoft's `common` and
+ * `organizations` endpoints), response members its callback reads (Apple's `user`),
+ * claims from them and its config (`identityClaims`) and its own attribute
+ * rules (`attributes`).
+ *
  * Every call the client makes goes as a `remote_document` destination unless
  * the preset's own config names its origin (the context's rule), so the
  * deployment's egress allowlist never opens a private address for a preset.
@@ -118,8 +133,28 @@ export interface UpstreamOidcPresetOptions<TConfig> {
    * issuer (or the endpoints) of the provider, and the client id and client
    * authentication, the secret passed on as the preset's secret member
    * holds it. Called at every use; it must not throw for a parsed config.
+   *
+   * Beyond the generic client's members, a preset's config may name a
+   * `signed_client_secret` client authentication, and a `tenantIssuer`
+   * whose template, as the issuer, is on the preset's origins.
    */
-  upstreamConfig(config: TConfig): UpstreamOidcConfigInput;
+  upstreamConfig(config: TConfig): UpstreamOidcClientConfigInput;
+  /**
+   * Members of the authorization response besides the protocol's own that
+   * the callback reads, such as Sign in with Apple's `user`: at most four,
+   * each mapped to the value the `form_post` bounce carries on in the
+   * callback's URL, at most 1024 characters. A member's value is the
+   * browser's to choose: whatever is made of it is an unverified claim.
+   */
+  readonly responseMembers?: UpstreamResponseMembers;
+  /**
+   * The claims the identity gets besides the provider's, from the response
+   * members and the config: never `sub` or a claim only the ID token may
+   * carry.
+   */
+  readonly identityClaims?: UpstreamIdentityClaims<TConfig>;
+  /** The attributes the claims map to; the generic client's standard ones unless set. */
+  readonly attributes?: readonly UpstreamClaimAttribute[];
 }
 
 /**
@@ -168,9 +203,18 @@ function originOf(value: string): string | undefined {
   }
 }
 
-/** The URLs of a provider config the preset's origins must hold: its issuer and its endpoints. */
-function providerUrls(config: UpstreamOidcConfig): [name: string, url: string][] {
+/**
+ * The URLs of a provider config the preset's origins must hold: its issuer,
+ * its issuer template (with a tenant id in place) and its endpoints.
+ */
+function providerUrls(config: UpstreamOidcClientConfig): [name: string, url: string][] {
   const urls: [string, string][] = [['issuer', config.issuer]];
+  if (config.tenantIssuer !== undefined) {
+    urls.push([
+      'tenantIssuer.template',
+      config.tenantIssuer.template.replace(UPSTREAM_TENANT_PLACEHOLDER, 'tenant'),
+    ]);
+  }
   for (const [name, url] of Object.entries(config.endpoints ?? {})) {
     if (typeof url === 'string') urls.push([`endpoints.${name}`, url]);
   }
@@ -218,7 +262,9 @@ function providerStrings(
  *
  * @throws TypeError when `id` is `oidc` or no AuthMethod id, `type` is in
  *   the generic client's namespace or no AuthMethod type, `origins` is not a
- *   list of bare `https` origins, or `upstreamConfig` is not a function
+ *   list of bare `https` origins, `upstreamConfig` or `identityClaims` is
+ *   not a function, `responseMembers` names a protocol parameter or more
+ *   than four members, or `attributes` is not a list of rules
  * @experimental
  */
 export function createUpstreamOidcPresetMethod<TConfig>(
@@ -247,6 +293,23 @@ export function createUpstreamOidcPresetMethod<TConfig>(
   if (typeof upstreamConfig !== 'function') {
     throw new TypeError('upstreamConfig must be a function of the parsed config');
   }
+  if (options.identityClaims !== undefined && typeof options.identityClaims !== 'function') {
+    throw new TypeError('identityClaims must be a function');
+  }
+  if (
+    options.attributes !== undefined &&
+    (!Array.isArray(options.attributes) ||
+      !options.attributes.every(
+        (rule) =>
+          typeof rule === 'object' &&
+          rule !== null &&
+          typeof rule.claim === 'string' &&
+          (rule.attribute === undefined || typeof rule.attribute === 'string') &&
+          (rule.verified === undefined || typeof rule.verified === 'function')
+      ))
+  ) {
+    throw new TypeError('attributes must be a list of claim attribute rules');
+  }
 
   // The preset's secret members, read once from its schema. A schema the
   // reader refuses fails the plugin loader too; here it means no member is
@@ -266,14 +329,14 @@ export function createUpstreamOidcPresetMethod<TConfig>(
   /** The provider config of a parsed preset config, or the problems with it. */
   const resolve = (
     config: TConfig
-  ): { readonly config: UpstreamOidcConfig } | { readonly problems: readonly string[] } => {
+  ): { readonly config: UpstreamOidcClientConfig } | { readonly problems: readonly string[] } => {
     let input: unknown;
     try {
       input = upstreamConfig(config);
     } catch {
       return { problems: ['upstreamConfig threw for the config'] };
     }
-    const parsed = upstreamOidcConfigSchema.safeParse(input);
+    const parsed = upstreamOidcClientConfigSchema.safeParse(input);
     if (!parsed.success) {
       return {
         problems: parsed.error.issues.map(
@@ -327,6 +390,11 @@ export function createUpstreamOidcPresetMethod<TConfig>(
     // Discovered endpoints too: the document is the provider's, but a path
     // of its origin an admin's config points the issuer at may serve one.
     endpointOrigins: origins,
+    ...(options.responseMembers === undefined ? {} : { responseMembers: options.responseMembers }),
+    ...(options.identityClaims === undefined ? {} : { identityClaims: options.identityClaims }),
+    ...(options.attributes === undefined
+      ? {}
+      : { attributes: Object.freeze([...options.attributes]) }),
     providerConfig(config) {
       const resolved = resolve(config);
       if ('problems' in resolved) {

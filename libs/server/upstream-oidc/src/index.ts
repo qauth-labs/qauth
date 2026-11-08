@@ -2,6 +2,12 @@
 // EXPERIMENTAL) for one OpenID Provider per configured `oidc_<alias>` type,
 // and the preset plugins built on it (#951), each with its own id, type and
 // config. It makes no account decision; the upstream sign-in flow (#639) does.
+export {
+  UPSTREAM_STANDARD_ATTRIBUTES,
+  type UpstreamClaimAttribute,
+  upstreamClaimAttributes,
+  upstreamClaimIsTrue,
+} from './lib/attributes';
 export * from './lib/config';
 export * from './lib/errors';
 export {
@@ -33,14 +39,17 @@ export {
 } from './lib/upstream-call';
 export {
   createUpstreamOidcMethod,
+  MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH,
   UPSTREAM_DISCOVERY_FAILURE_TTL_MS,
   UPSTREAM_DISCOVERY_TTL_MS,
   UPSTREAM_OIDC_CALLBACK_PATH,
   UPSTREAM_OIDC_METHOD_ID,
   UPSTREAM_OIDC_TYPE_PATTERN,
+  type UpstreamIdentityClaims,
   type UpstreamOidcMethodOptions,
   upstreamOidcRedirectUri,
   type UpstreamOidcTransaction,
+  type UpstreamResponseMembers,
 } from './lib/upstream-oidc-method';
 export {
   createUpstreamOidcPresetMethod,

@@ -27,7 +27,9 @@ import {
 export type FakeClientAuthentication =
   | 'client_secret_basic'
   | 'client_secret_post'
-  | 'private_key_jwt';
+  | 'private_key_jwt'
+  /** A JWT the client signs, sent as `client_secret` in the form (Sign in with Apple's). */
+  | 'signed_client_secret';
 
 /** A client registered at the fake provider. */
 export interface FakeClient {
@@ -35,8 +37,16 @@ export interface FakeClient {
   readonly method: FakeClientAuthentication;
   readonly clientSecret?: string;
   readonly redirectUris: readonly string[];
-  /** For `private_key_jwt`: the key set the client's assertions verify under. */
+  /**
+   * For `private_key_jwt` and `signed_client_secret`: the key set the
+   * client's assertions verify under.
+   */
   readonly assertionKeys?: () => Promise<{ readonly keys: readonly unknown[] }>;
+  /**
+   * For `signed_client_secret`: the `iss` the secret must carry, such as
+   * Apple's Team ID. The client id unless set.
+   */
+  readonly secretIssuer?: string;
   /**
    * For `private_key_jwt` under the contract test kit, whose signer hands back
    * a stand-in assertion: accept an assertion this says is good, unverified.
@@ -75,6 +85,14 @@ export interface FakeProviderOptions {
   readonly algorithm?: 'ES256' | 'RS256' | 'EdDSA';
   /** Whether the authorization response carries `iss` (RFC 9207). Default `true`. */
   readonly issParameter?: boolean;
+  /**
+   * The issuer the discovery document names: a multi-tenant provider's
+   * template, such as `https://idp.example.com/{tenantid}/v2.0`. The ID
+   * tokens' `iss` stays `issuer` unless a sign-in's claims name another.
+   */
+  readonly documentIssuer?: string;
+  /** The document's `token_endpoint_auth_methods_supported`. Default: every method but the signed secret. */
+  readonly tokenEndpointAuthMethods?: readonly string[];
 }
 
 /** What a test may change about the next answers. */
@@ -211,7 +229,7 @@ export async function createFakeProvider(options: FakeProviderOptions): Promise<
       const path = `${url.origin}${url.pathname}`;
       if (request.method === 'GET' && path === endpoints.discoveryUrl) {
         const document: Record<string, unknown> = {
-          issuer,
+          issuer: options.documentIssuer ?? issuer,
           authorization_endpoint: endpoints.authorizationEndpoint,
           token_endpoint: endpoints.tokenEndpoint,
           jwks_uri: endpoints.jwksUri,
@@ -221,7 +239,7 @@ export async function createFakeProvider(options: FakeProviderOptions): Promise<
           subject_types_supported: ['public'],
           id_token_signing_alg_values_supported: [algorithm],
           code_challenge_methods_supported: ['S256'],
-          token_endpoint_auth_methods_supported: [
+          token_endpoint_auth_methods_supported: options.tokenEndpointAuthMethods ?? [
             'client_secret_basic',
             'client_secret_post',
             'private_key_jwt',
@@ -355,10 +373,38 @@ export async function createFakeProvider(options: FakeProviderOptions): Promise<
       }
     }
     const client = clients.get(form.get('client_id') ?? '');
+    if (client?.method === 'signed_client_secret') {
+      return (await signedSecretVerifies(client, form.get('client_secret') ?? ''))
+        ? client
+        : undefined;
+    }
     return client?.method === 'client_secret_post' &&
       client.clientSecret === form.get('client_secret')
       ? client
       : undefined;
+  }
+
+  /**
+   * Whether `secret` is the client's signed client secret: a JWT under its
+   * assertion keys, `iss` its secret issuer, `sub` its client id, `aud` the
+   * issuer, with `iat` and `exp`, as Sign in with Apple checks it.
+   */
+  async function signedSecretVerifies(client: FakeClient, secret: string): Promise<boolean> {
+    if (client.trustAssertion !== undefined) return client.trustAssertion(secret);
+    if (client.assertionKeys === undefined) return false;
+    try {
+      const keys = createLocalJWKSet((await client.assertionKeys()) as JSONWebKeySet);
+      const { payload } = await jwtVerify(secret, keys, {
+        issuer: client.secretIssuer ?? client.clientId,
+        subject: client.clientId,
+        audience: issuer,
+        requiredClaims: ['iat', 'exp'],
+      });
+      assertions.push(payload as Record<string, unknown>);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   return provider;
