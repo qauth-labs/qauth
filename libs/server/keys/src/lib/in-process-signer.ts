@@ -368,26 +368,40 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   }
 
   /**
-   * The client id of the realm's configuration for `providerId`, read at most
-   * once per refresh interval. A provider without one is not kept, so its
-   * configuration is used as soon as it exists.
+   * The realm's configuration for `providerId`, read at most once per
+   * refresh interval: its client id, and its assertion issuer when it names
+   * one. A provider without a client id, or with an assertion issuer that is
+   * not a non-empty string, is not kept, so its configuration is used as
+   * soon as it is whole.
    */
-  async function upstreamClient(realmId: string, providerId: string): Promise<string> {
+  async function upstreamClient(
+    realmId: string,
+    providerId: string
+  ): Promise<UpstreamClientRecord> {
     const slot = `upstream\u0000${realmId}\u0000${providerId}`;
     const cached = upstreamClients.get(slot);
-    if (cached !== undefined && isFresh(cached)) return cached.value.clientId;
+    if (cached !== undefined && isFresh(cached)) return cached.value;
     const record = await sharedRead(slot, async (readAt) => {
       const found = await store.findUpstreamClient(realmId, providerId);
-      if (found === undefined || typeof found.clientId !== 'string' || found.clientId === '') {
+      const issuer = found?.assertionIssuer;
+      if (
+        found === undefined ||
+        typeof found.clientId !== 'string' ||
+        found.clientId === '' ||
+        (issuer !== undefined && (typeof issuer !== 'string' || issuer === ''))
+      ) {
         upstreamClients.delete(slot);
         return undefined;
       }
-      const value = Object.freeze({ clientId: found.clientId });
+      const value: UpstreamClientRecord = Object.freeze({
+        clientId: found.clientId,
+        ...(issuer === undefined ? {} : { assertionIssuer: issuer }),
+      });
       upstreamClients.set(slot, { value, readAt });
       return value;
     });
     if (record === undefined) throw new UpstreamClientNotFoundError(realmId);
-    return record.clientId;
+    return record;
   }
 
   /** The realm's published keys, read at most once per refresh interval. */
@@ -850,11 +864,16 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         );
       }
 
-      const clientId = await upstreamClient(realmId, providerId);
+      const client = await upstreamClient(realmId, providerId);
       const record = await activeKey(realmId, 'upstream_client_assertion', algorithm, providerId);
       const key = await jwsKey(realmId, 'upstream_client_assertion', record, providerId);
       return signJwt(
-        { iss: clientId, sub: clientId, aud: audience, ...claims } as JWTPayload,
+        {
+          iss: client.assertionIssuer ?? client.clientId,
+          sub: client.clientId,
+          aud: audience,
+          ...claims,
+        } as JWTPayload,
         key,
         {
           alg: algorithm,

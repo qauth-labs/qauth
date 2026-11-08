@@ -14,8 +14,18 @@ import type { StoredKeyStatus } from './key-store';
 
 /** What the signer reads of an upstream provider's configuration (#547). */
 export interface UpstreamClientRecord {
-  /** The client id QAuth is registered under at the provider: an assertion's `iss` and `sub`. */
+  /**
+   * The client id QAuth is registered under at the provider: an assertion's
+   * `sub`, and its `iss` unless `assertionIssuer` names another.
+   */
   readonly clientId: string;
+  /**
+   * The `iss` of the provider's assertions when it is not the client id
+   * (#671): Sign in with Apple's client secret is issued by the developer
+   * team (its Team ID) for the client id. Absent for RFC 7523, whose
+   * assertions are issued by the client itself.
+   */
+  readonly assertionIssuer?: string;
 }
 
 /** A stored key's metadata. No material. */
