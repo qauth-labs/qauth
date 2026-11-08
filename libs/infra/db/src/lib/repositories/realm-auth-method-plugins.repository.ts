@@ -13,12 +13,33 @@ import { EPOCH_MS_NOW } from '../schema/sql-helpers';
  * Secrets are stored as the caller hands them: ciphertexts the signer made
  * with the realm's `data_at_rest` key. The table refuses any other form, so
  * a plaintext value fails the write.
+ *
+ * Every write names the package and the type of the plugin it writes the
+ * state for (#949), and the row records them: the plugin runtime treats a
+ * state whose package or type is not the installed plugin's as off.
  */
+
+/**
+ * The plugin a realm's state was written for (#949): its npm package and its
+ * AuthMethod `type`.
+ */
+export interface RealmAuthMethodPluginBinding {
+  readonly package: string;
+  readonly type: string;
+}
 
 /** One realm's state of one plugin. */
 export interface RealmAuthMethodPlugin {
   readonly realmId: string;
   readonly pluginId: string;
+  /**
+   * The npm package of the plugin that wrote the state, or `null` for a
+   * state written before it was recorded (#949). Set together with
+   * {@link pluginType}.
+   */
+  readonly pluginPackage: string | null;
+  /** The AuthMethod `type` of the plugin that wrote the state, or `null` (#949). */
+  readonly pluginType: string | null;
   readonly enabled: boolean;
   /** The config's plain members. */
   readonly config: Record<string, unknown>;
@@ -35,6 +56,12 @@ export interface RealmAuthMethodPluginState {
   readonly enabled: boolean;
   readonly config: Readonly<Record<string, unknown>>;
   readonly secrets: Readonly<Record<string, string>>;
+  /**
+   * The plugin the state is written for (#949): the installed plugin's
+   * package and type, or, for a write that keeps the row's own, the row's
+   * (`null` for a row written before they were recorded).
+   */
+  readonly binding: RealmAuthMethodPluginBinding | null;
 }
 
 /**
@@ -124,6 +151,8 @@ export function createRealmAuthMethodPluginsRepository(
         enabled: state.enabled === true,
         config: plain({ ...state.config }),
         secrets: plain({ ...state.secrets }),
+        pluginPackage: state.binding?.package ?? null,
+        pluginType: state.binding?.type ?? null,
       };
       if (expectedVersion === null) {
         const [created] = await invoker

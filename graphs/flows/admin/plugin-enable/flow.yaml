@@ -9,6 +9,9 @@
 # - Configuring a plugin (`plugins.update`) is drawn as the precondition the enable checks, a config the plugin's own
 #   schema accepts; its secrets and their encryption are outside the view, as are the approval page and the factor
 #   (#512, #617, #623).
+# - The state a realm holds belongs to the plugin that wrote it, its package and its type (#949): a state another
+#   package, or this one under another type, wrote is drawn as the precondition `stateOwner`; the deployment change
+#   that puts another package behind the plugin's id is outside the view.
 # - Exits are HTTP answers of the admin API and of the plugin's routes, named `<error>.<cause>` (graphs/README.md,
 #   "Protocol exits"). A refused enable and a refused disable with the same cause are one exit: the plugin's state is
 #   left as it was.
@@ -65,6 +68,12 @@ context:
     say:
       current: "the body's version, and If-Match when present, name the version of the plugin state the handler reads"
       moved: 'the body or If-Match names another version: the state changed since the caller read it, or since its approval was filed'
+  stateOwner:
+    values: [installed, another]
+    initial: any
+    say:
+      installed: "the realm's state was written by the installed plugin's package under its type, or the realm has none"
+      another: 'another package wrote it under the same id, this package under another type, or a release that recorded no package: it reads as off, and its secrets do not open'
   config:
     values: [valid, invalid]
     initial: any
@@ -79,6 +88,7 @@ guards:
   noApproval: "approval == 'missing'"
   pluginUnknown: "plugin == 'unknown'"
   stateMoved: "stateMatch == 'moved'"
+  stateOfAnotherPlugin: "stateOwner == 'another'"
   configInvalid: "config == 'invalid'"
 
 effects:
@@ -92,6 +102,7 @@ main:
     approval: approved
     plugin: installed
     stateMatch: current
+    stateOwner: installed
     config: valid
   events: [ENABLE, ROUTE_REQUEST]
 
@@ -102,7 +113,7 @@ states:
     description: >-
       Every installed plugin starts off in every realm: a realm with no row for it has it off. Its config, if the
       realm set one, is kept.
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:170
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:220
     on:
       ENABLE:
         target: authorizingEnable
@@ -137,28 +148,32 @@ states:
 
   enabling:
     title: Check the plugin, its state and its config, and turn it on
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:771
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:844
     always:
       - guard: pluginUnknown
         target: not_found.plugin_unknown
         say: 'the path names no installed plugin'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:357
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:418
       - guard: stateMoved
         target: precondition_failed.state_moved
         say: 'the state moved since the caller read it, or its approver saw it: the body names the version the approval binds'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:368
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:429
+      - guard: stateOfAnotherPlugin
+        target: bad_request.state_of_another_plugin
+        say: "the realm's state was written by another package or under another type: a configure writes it again for this plugin first"
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:853
       - guard: configInvalid
         target: bad_request.config_invalid
         say: "the realm's config does not pass the plugin's schema: a plugin is on only with a config it accepts"
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:779
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:860
       - target: pluginOn
         effect: [turnOn]
         say: 'the row is written enabled, conditional on its version, and the audit row records the change'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:785
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:865
 
   pluginOn:
     title: The plugin is on in the realm
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:785
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:865
     on:
       ROUTE_REQUEST:
         target: bad_request.no_pending_sign_in
@@ -192,24 +207,24 @@ states:
 
   disabling:
     title: Check the plugin and its state, and turn it off
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:811
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:892
     always:
       - guard: pluginUnknown
         target: not_found.plugin_unknown
         say: 'the path names no installed plugin'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:357
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:418
       - guard: stateMoved
         target: precondition_failed.state_moved
         say: 'the state moved since the caller read it'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:368
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:429
       - target: pluginOffAgain
         effect: [turnOff]
         say: 'the row is written off, its config kept, conditional on its version'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:817
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:902
 
   pluginOffAgain:
     title: The plugin is off again, its config kept
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:817
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:902
     on:
       ROUTE_REQUEST:
         target: not_found.plugin_off
@@ -290,7 +305,7 @@ states:
   not_found.plugin_unknown:
     type: final
     title: Refuse a plugin the deployment did not load
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:357
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:418
     response:
       status: 404
       body:
@@ -301,7 +316,7 @@ states:
   precondition_failed.state_moved:
     type: final
     title: Refuse a request written against another state
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:368
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:429
     response:
       status: 412
       body:
@@ -309,11 +324,26 @@ states:
         status: 412
         code: precondition_failed
 
+  bad_request.state_of_another_plugin:
+    type: final
+    title: Refuse to enable a state another plugin wrote
+    description: >-
+      The problem names why the state is not this plugin's (package_changed, type_changed or package_unrecorded),
+      as plugins.get does. A configure under the installed plugin, with its secrets sealed again, writes the state
+      for it, off; an approved enable then turns it on.
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:853
+    response:
+      status: 400
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#bad-request
+        status: 400
+        code: bad_request
+
   bad_request.config_invalid:
     type: final
     title: Refuse to enable a plugin whose config its schema refuses
     description: The problem names each failing member and the schema's code, never a value.
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:446
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:506
     response:
       status: 400
       body:
@@ -330,10 +360,14 @@ assertions:
     never: 'enabled and noApproval'
     say: 'A plugin is turned on only by a request an approval was given for'
     source: apps/auth-server/src/app/admin/pipeline.ts:593
+  - id: no-enable-of-another-plugins-state
+    never: 'enabled and stateOfAnotherPlugin'
+    say: 'A plugin is never turned on over a realm state another package, or another type, wrote'
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:853
   - id: no-enable-with-a-refused-config
     never: 'enabled and configInvalid'
     say: 'A plugin is on only with a config its own schema accepts'
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:779
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:860
   - id: an-off-plugin-runs-nothing
     never: "state == 'bad_request.no_pending_sign_in' and not enabled"
     say: "A plugin's route reaches the plugin only while the realm has it on"

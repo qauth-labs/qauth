@@ -5,6 +5,7 @@
  */
 export type {
   RealmAuthMethodPlugin,
+  RealmAuthMethodPluginBinding,
   RealmAuthMethodPluginExpectedVersion,
   RealmAuthMethodPluginState,
 } from '@qauth-labs/infra-db';

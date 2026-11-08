@@ -23,6 +23,14 @@ import { EPOCH_MS_NOW, JSONB_EMPTY_OBJECT } from './sql-helpers';
  * - `plugin_id` is the plugin's AuthMethod `id`, the stable name of its
  *   implementation, not the package it came from: a new version of the
  *   package keeps the row.
+ * - `plugin_package` and `plugin_type` are the npm package and the
+ *   AuthMethod `type` of the plugin that wrote the state (#949). A state
+ *   whose package or type is not the installed plugin's is off, and its
+ *   secrets do not open, until a configure under the installed plugin
+ *   writes it again: a deployment that puts another package behind the same
+ *   id inherits neither the realm's switch, its config nor its secrets. Both
+ *   are `NULL` on a row written before they were recorded (by 0.2, or by a
+ *   node of it during a rolling upgrade), which counts as another package's.
  * - `config` holds the config's plain members, never a secret one.
  * - `secrets` maps the path of each secret member that holds a value
  *   (`clientSecret`, `mtls.keyPassword`) to its ciphertext, encrypted with
@@ -42,6 +50,16 @@ export const realmAuthMethodPlugins = pgTable(
       .references(() => realms.id, { onDelete: 'cascade' }),
     /** The plugin's AuthMethod `id`. */
     pluginId: varchar('plugin_id', { length: 63 }).notNull(),
+    /**
+     * The npm package of the plugin that wrote the state (#949), or `NULL`
+     * on a row written before it was recorded.
+     */
+    pluginPackage: varchar('plugin_package', { length: 214 }),
+    /**
+     * The AuthMethod `type` of the plugin that wrote the state (#949), or
+     * `NULL` on a row written before it was recorded.
+     */
+    pluginType: varchar('plugin_type', { length: 63 }),
     /** Whether the realm offers the plugin. */
     enabled: boolean('enabled').notNull().default(false),
     /** The config's plain members, as the plugin's schema takes them. */
@@ -59,6 +77,17 @@ export const realmAuthMethodPlugins = pgTable(
     check(
       'realm_auth_method_plugins_plugin_id_form',
       sql`${t.pluginId} ~ '^[a-z][a-z0-9_-]{0,62}$'`
+    ),
+    // The package and the type are recorded together, or neither is (#949).
+    check(
+      'realm_auth_method_plugins_binding_pair',
+      sql`(${t.pluginPackage} IS NULL) = (${t.pluginType} IS NULL)`
+    ),
+    check('realm_auth_method_plugins_plugin_package_form', sql`${t.pluginPackage} <> ''`),
+    // The AuthMethod type rule of the contract (`AUTH_METHOD_TYPE_PATTERN`).
+    check(
+      'realm_auth_method_plugins_plugin_type_form',
+      sql`${t.pluginType} ~ '^[a-z][a-z0-9_]{0,62}$'`
     ),
     check('realm_auth_method_plugins_config_object', sql`jsonb_typeof(${t.config}) = 'object'`),
     check('realm_auth_method_plugins_secrets_object', sql`jsonb_typeof(${t.secrets}) = 'object'`),

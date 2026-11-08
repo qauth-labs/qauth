@@ -29,6 +29,7 @@ import {
   authMethodPluginEnabledIn,
   authMethodPluginSecretCipher,
   authMethodPluginSecretContext,
+  authMethodPluginStateMismatch,
   FIRST_PARTY_AUTH_METHOD_PLUGINS,
   loadDeploymentAuthMethodPlugins,
 } from './auth-method-plugins';
@@ -45,6 +46,8 @@ const REALM = testRealm({
 const SECRET = 'fixture-client-secret-value';
 const CIPHERTEXT = 'v1.kid-1.aXY.Y2lwaGVydGV4dA';
 const PLUGIN_PACKAGE = '@example/qauth-plugin-corp-sso';
+/** What names the fixture plugin's secrets: its id, its package and its type (#949). */
+const CORP = { id: 'corp', package: PLUGIN_PACKAGE, type: 'corp_sso' } as const;
 
 const silent = () => ({ info: vi.fn(), warn: vi.fn() });
 
@@ -81,6 +84,8 @@ async function server(row: Partial<RealmAuthMethodPlugin> | undefined) {
       : {
           realmId: REALM.id,
           pluginId: 'corp',
+          pluginPackage: PLUGIN_PACKAGE,
+          pluginType: 'corp_sso',
           enabled: true,
           config: { issuer: 'https://idp.example', clientId: 'qauth' },
           secrets: { clientSecret: CIPHERTEXT },
@@ -177,11 +182,11 @@ describe('the plugin context (#600)', () => {
     expect(signer.decrypt).toHaveBeenCalledWith(AUTH_METHOD_PLUGIN_SIGNER_CALLER, {
       realmId: REALM.id,
       ciphertext: CIPHERTEXT,
-      context: authMethodPluginSecretContext('corp', 'clientSecret'),
+      context: authMethodPluginSecretContext(CORP, 'clientSecret'),
     });
     expect(AUTH_METHOD_PLUGIN_SIGNER_CALLER).toBe('api');
-    expect(authMethodPluginSecretContext('corp', 'clientSecret')).toBe(
-      'auth-method-plugin:corp:clientSecret'
+    expect(authMethodPluginSecretContext(CORP, 'clientSecret')).toBe(
+      'auth-method-plugin:corp:@example/qauth-plugin-corp-sso:corp_sso:clientSecret'
     );
   });
 
@@ -189,10 +194,10 @@ describe('the plugin context (#600)', () => {
     const { fastify, signer } = await server({});
     const cipher = authMethodPluginSecretCipher(fastify);
 
-    expect(await cipher.seal(REALM.id, 'corp', 'clientSecret', SECRET)).toBe(CIPHERTEXT);
-    expect(await cipher.open(REALM.id, 'corp', 'clientSecret', CIPHERTEXT)).toBe(SECRET);
+    expect(await cipher.seal(REALM.id, CORP, 'clientSecret', SECRET)).toBe(CIPHERTEXT);
+    expect(await cipher.open(REALM.id, CORP, 'clientSecret', CIPHERTEXT)).toBe(SECRET);
 
-    const context = authMethodPluginSecretContext('corp', 'clientSecret');
+    const context = authMethodPluginSecretContext(CORP, 'clientSecret');
     expect(context.startsWith(AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX)).toBe(true);
     expect(signer.encrypt).toHaveBeenCalledWith('local', {
       realmId: REALM.id,
@@ -269,7 +274,79 @@ describe('the plugin context (#600)', () => {
       AuthMethodPluginDisabledError
     );
     expect(signer.decrypt).not.toHaveBeenCalled();
-    expect(await authMethodPluginEnabledIn(fastify, REALM.id, { id: 'corp' })).toBe(false);
+    expect(await authMethodPluginEnabledIn(fastify, REALM.id, CORP)).toBe(false);
+  });
+
+  // #949: a state is the plugin's that wrote it, its package and its type.
+  it.each<[string, Partial<RealmAuthMethodPlugin>]>([
+    [
+      'another package wrote under the same id',
+      { pluginPackage: '@example/another-corp-sso', pluginType: 'corp_sso' },
+    ],
+    [
+      'this package wrote under another type',
+      { pluginPackage: PLUGIN_PACKAGE, pluginType: 'corp_sso_v1' },
+    ],
+    ['a release before #949 wrote, naming no package', { pluginPackage: null, pluginType: null }],
+  ])('builds no context, and opens no secret, from an enabled state %s', async (_case, binding) => {
+    const { fastify, request, runtime, signer } = await server({ enabled: true, ...binding });
+    const method = runtime.ofType('corp_sso')?.method;
+    if (method === undefined) throw new Error('the fixture plugin did not load');
+
+    await expect(authMethodPluginContext(fastify, request, method)).rejects.toBeInstanceOf(
+      AuthMethodPluginDisabledError
+    );
+    expect(signer.decrypt).not.toHaveBeenCalled();
+    expect(await authMethodPluginEnabledIn(fastify, REALM.id, CORP)).toBe(false);
+  });
+
+  it('names why a state is not the plugin, or nothing when the package and the type match', () => {
+    const plugin = { package: PLUGIN_PACKAGE, type: 'corp_sso' };
+    expect(
+      authMethodPluginStateMismatch(plugin, {
+        pluginPackage: PLUGIN_PACKAGE,
+        pluginType: 'corp_sso',
+      })
+    ).toBeNull();
+    expect(
+      authMethodPluginStateMismatch(plugin, { pluginPackage: '@example/b', pluginType: 'corp_sso' })
+    ).toBe('package_changed');
+    // The package is named first: both differ.
+    expect(
+      authMethodPluginStateMismatch(plugin, { pluginPackage: '@example/b', pluginType: 'b_sso' })
+    ).toBe('package_changed');
+    expect(
+      authMethodPluginStateMismatch(plugin, { pluginPackage: PLUGIN_PACKAGE, pluginType: 'b_sso' })
+    ).toBe('type_changed');
+    expect(authMethodPluginStateMismatch(plugin, { pluginPackage: null, pluginType: null })).toBe(
+      'package_unrecorded'
+    );
+  });
+
+  // #949, acceptance: a version bump of the same package needs nothing.
+  it('builds the context of a new version of the same package from the state the old one wrote', async () => {
+    const { fastify, request, signer } = await server({});
+    // The new version: another method object, the same package, id and type.
+    const upgraded = await loadDeploymentAuthMethodPlugins(
+      silent(),
+      { packages: [PLUGIN_PACKAGE], pluginApiEnabled: true, nodeEnv: 'test' },
+      {
+        importPackage: fixturePluginImporter({
+          [PLUGIN_PACKAGE]: { authMethod: fixturePluginMethod({ type: 'corp_sso', id: 'corp' }) },
+        }),
+      }
+    );
+    const server2 = { ...fastify, authMethodPlugins: upgraded } as unknown as FastifyInstance;
+    const method = upgraded.ofType('corp_sso')?.method;
+    if (method === undefined) throw new Error('the fixture plugin did not load');
+
+    const context = await authMethodPluginContext(server2, request, method);
+    expect(context.config).toMatchObject({ clientSecret: SECRET });
+    expect(signer.decrypt).toHaveBeenCalledWith('api', {
+      realmId: REALM.id,
+      ciphertext: CIPHERTEXT,
+      context: authMethodPluginSecretContext(CORP, 'clientSecret'),
+    });
   });
 
   it('builds no context for a method that is no loaded plugin', async () => {
@@ -381,11 +458,11 @@ describe('a preset plugin on the generic OpenID Connect client (#951)', () => {
     // It seals the value for the member, under the plugin's own context...
     const sealed = await authMethodPluginSecretCipher({
       signer,
-    } as unknown as FastifyInstance).seal(REALM.id, plugin.id, EXAMPLE_PRESET_SECRET_PATH, SECRET);
+    } as unknown as FastifyInstance).seal(REALM.id, plugin, EXAMPLE_PRESET_SECRET_PATH, SECRET);
     expect(signer.encrypt).toHaveBeenCalledWith('local', {
       realmId: REALM.id,
       plaintext: Buffer.from(SECRET, 'utf8'),
-      context: `auth-method-plugin:${EXAMPLE_PRESET_ID}:${EXAMPLE_PRESET_SECRET_PATH}`,
+      context: `auth-method-plugin:${EXAMPLE_PRESET_ID}:${EXAMPLE_PRESET_PACKAGE}:${EXAMPLE_PRESET_TYPE}:${EXAMPLE_PRESET_SECRET_PATH}`,
     });
     expect(
       body.safeParse({
@@ -399,6 +476,8 @@ describe('a preset plugin on the generic OpenID Connect client (#951)', () => {
     const row: RealmAuthMethodPlugin = {
       realmId: REALM.id,
       pluginId: plugin.id,
+      pluginPackage: EXAMPLE_PRESET_PACKAGE,
+      pluginType: EXAMPLE_PRESET_TYPE,
       enabled: true,
       config: plainConfig,
       secrets: { [EXAMPLE_PRESET_SECRET_PATH]: sealed },
@@ -438,25 +517,28 @@ describe('a preset plugin on the generic OpenID Connect client (#951)', () => {
     expect(signer.decrypt).toHaveBeenCalledWith('api', {
       realmId: REALM.id,
       ciphertext: sealed,
-      context: `auth-method-plugin:${EXAMPLE_PRESET_ID}:${EXAMPLE_PRESET_SECRET_PATH}`,
+      context: `auth-method-plugin:${EXAMPLE_PRESET_ID}:${EXAMPLE_PRESET_PACKAGE}:${EXAMPLE_PRESET_TYPE}:${EXAMPLE_PRESET_SECRET_PATH}`,
     });
     context.log.warn({ clientSecret: SECRET, note: `sent ${SECRET}` }, `sent ${SECRET}`);
     expect(JSON.stringify(child.warn.mock.calls)).not.toContain(SECRET);
 
-    // A ciphertext sealed for another plugin, or another member, never opens as this one.
-    const other = await authMethodPluginSecretCipher({ signer } as unknown as FastifyInstance).seal(
-      REALM.id,
-      'corp',
-      EXAMPLE_PRESET_SECRET_PATH,
-      SECRET
-    );
-    const misplaced = { ...row, secrets: { [EXAMPLE_PRESET_SECRET_PATH]: other } };
-    (
-      fastify.repositories.realmAuthMethodPlugins.find as ReturnType<typeof vi.fn>
-    ).mockResolvedValue(misplaced);
-    await expect(authMethodPluginContext(fastify, request, plugin.method)).rejects.toThrow(
-      'does not open'
-    );
+    // A ciphertext sealed for another plugin, another package behind the same
+    // id (#949), or another member, never opens as this one.
+    const cipher = authMethodPluginSecretCipher({ signer } as unknown as FastifyInstance);
+    for (const foreign of [
+      { id: 'corp', package: EXAMPLE_PRESET_PACKAGE, type: EXAMPLE_PRESET_TYPE },
+      { id: EXAMPLE_PRESET_ID, package: '@example/another-preset', type: EXAMPLE_PRESET_TYPE },
+      { id: EXAMPLE_PRESET_ID, package: EXAMPLE_PRESET_PACKAGE, type: 'another_type' },
+    ]) {
+      const other = await cipher.seal(REALM.id, foreign, EXAMPLE_PRESET_SECRET_PATH, SECRET);
+      const misplaced = { ...row, secrets: { [EXAMPLE_PRESET_SECRET_PATH]: other } };
+      (
+        fastify.repositories.realmAuthMethodPlugins.find as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(misplaced);
+      await expect(authMethodPluginContext(fastify, request, plugin.method)).rejects.toThrow(
+        'does not open'
+      );
+    }
   });
 });
 

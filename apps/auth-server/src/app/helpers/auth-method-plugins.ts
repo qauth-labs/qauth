@@ -1,4 +1,7 @@
-import type { RealmAuthMethodPlugin } from '@qauth-labs/fastify-plugin-db';
+import type {
+  RealmAuthMethodPlugin,
+  RealmAuthMethodPluginBinding,
+} from '@qauth-labs/fastify-plugin-db';
 import {
   type AuthMethod,
   type AuthMethodContext,
@@ -29,6 +32,12 @@ import { requestRealm } from './request-realm';
  *   `realm_auth_method_plugins`, its secret members stored encrypted with the
  *   realm's `data_at_rest` key. A disabled plugin's routes answer 404, as a
  *   path no route serves.
+ * - A realm's state belongs to the plugin that wrote it, its package and its
+ *   type (#949): a state another package, or another type, wrote is off, and
+ *   its secrets do not open, until a configure under the installed plugin
+ *   writes it again and an enable is approved
+ *   ({@link authMethodPluginStateMismatch}). A new version of the same
+ *   package, under the same type, keeps the state.
  * - A plugin is handed only its context ({@link authMethodPluginContext}):
  *   its config for the realm, parsed by its schema, the egress client and the
  *   signer bound to the realm and to the plugin, and a logger. No database
@@ -88,22 +97,44 @@ export const AUTH_METHOD_PLUGIN_SIGNER_CALLER = 'api';
 export const AUTH_METHOD_PLUGIN_SEAL_CALLER = 'local';
 
 /**
- * The `context` a plugin secret is encrypted under, beside its realm:
- * `auth-method-plugin:<plugin id>:<path>`, under the prefix the signer's
- * policy lets `api` decrypt. It binds the ciphertext to the plugin and to
- * the member, so a ciphertext of one plugin's secret, or of another member,
- * never decrypts as this one.
+ * What names a plugin's secrets and its state in a realm: its AuthMethod
+ * `id`, the npm package it was loaded from and its `type` (#949).
  */
-export function authMethodPluginSecretContext(pluginId: string, path: string): string {
-  return `${AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX}${pluginId}:${path}`;
+export type AuthMethodPluginIdentity = Pick<InstalledAuthMethodPlugin, 'id' | 'package' | 'type'>;
+
+/**
+ * The `context` a plugin secret is encrypted under, beside its realm:
+ * `auth-method-plugin:<plugin id>:<package>:<type>:<path>`, under the prefix
+ * the signer's policy lets `api` decrypt. It binds the ciphertext to the
+ * plugin, to the package and the type that sealed it (#949), and to the
+ * member, so a ciphertext of one plugin's secret, of another package behind
+ * the same id, or of another member, never decrypts as this one. No id,
+ * package name (`AUTH_METHOD_PLUGINS` takes npm names only) or type holds a
+ * `:`, so a context reads one way only.
+ */
+export function authMethodPluginSecretContext(
+  plugin: AuthMethodPluginIdentity,
+  path: string
+): string {
+  return `${AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX}${plugin.id}:${plugin.package}:${plugin.type}:${path}`;
 }
 
 /** Seals and opens a plugin's secret members over the signer (#600). */
 export interface AuthMethodPluginSecretCipher {
   /** Encrypt `plaintext` for `path` of the plugin in the realm, as {@link AUTH_METHOD_PLUGIN_SEAL_CALLER}. */
-  seal(realmId: string, pluginId: string, path: string, plaintext: string): Promise<string>;
+  seal(
+    realmId: string,
+    plugin: AuthMethodPluginIdentity,
+    path: string,
+    plaintext: string
+  ): Promise<string>;
   /** Decrypt a ciphertext sealed for `path` of the plugin in the realm, as {@link AUTH_METHOD_PLUGIN_SIGNER_CALLER}. */
-  open(realmId: string, pluginId: string, path: string, ciphertext: string): Promise<string>;
+  open(
+    realmId: string,
+    plugin: AuthMethodPluginIdentity,
+    path: string,
+    ciphertext: string
+  ): Promise<string>;
 }
 
 /**
@@ -115,17 +146,22 @@ export function authMethodPluginSecretCipher(
   fastify: Pick<FastifyInstance, 'signer'>
 ): AuthMethodPluginSecretCipher {
   return Object.freeze({
-    seal: (realmId: string, pluginId: string, path: string, plaintext: string) =>
+    seal: (realmId: string, plugin: AuthMethodPluginIdentity, path: string, plaintext: string) =>
       fastify.signer.encrypt(AUTH_METHOD_PLUGIN_SEAL_CALLER, {
         realmId,
         plaintext: Buffer.from(plaintext, 'utf8'),
-        context: authMethodPluginSecretContext(pluginId, path),
+        context: authMethodPluginSecretContext(plugin, path),
       }),
-    async open(realmId: string, pluginId: string, path: string, ciphertext: string) {
+    async open(
+      realmId: string,
+      plugin: AuthMethodPluginIdentity,
+      path: string,
+      ciphertext: string
+    ) {
       const plaintext = await fastify.signer.decrypt(AUTH_METHOD_PLUGIN_SIGNER_CALLER, {
         realmId,
         ciphertext,
-        context: authMethodPluginSecretContext(pluginId, path),
+        context: authMethodPluginSecretContext(plugin, path),
       });
       return plaintext.toString('utf8');
     },
@@ -240,14 +276,68 @@ export type AuthMethodPluginServer = Pick<
   'authMethodPlugins' | 'repositories' | 'signer'
 >;
 
-/** Whether the realm has the plugin on: it has a row for it, enabled. */
+/**
+ * Why a realm's stored state of a plugin is not the installed plugin's
+ * (#949), as `plugins.get` says it:
+ *
+ * - `package_unrecorded`: the state names no package; it was written before
+ *   QAuth recorded which plugin wrote it (by 0.2, or by a node of it during
+ *   a rolling upgrade).
+ * - `package_changed`: another package wrote it; the deployment put another
+ *   package behind the plugin's id.
+ * - `type_changed`: the same package wrote it under another type; a version
+ *   of the package that changed its type, and so its routes and the
+ *   credentials it writes.
+ */
+export const AUTH_METHOD_PLUGIN_STATE_MISMATCHES = Object.freeze([
+  'package_unrecorded',
+  'package_changed',
+  'type_changed',
+] as const);
+
+/** One of {@link AUTH_METHOD_PLUGIN_STATE_MISMATCHES}. */
+export type AuthMethodPluginStateMismatch = (typeof AUTH_METHOD_PLUGIN_STATE_MISMATCHES)[number];
+
+/** The package and type a realm's stored state was written for, or `null` when it names none. */
+export function authMethodPluginStateBinding(
+  row: Pick<RealmAuthMethodPlugin, 'pluginPackage' | 'pluginType'>
+): RealmAuthMethodPluginBinding | null {
+  return row.pluginPackage === null || row.pluginType === null
+    ? null
+    : { package: row.pluginPackage, type: row.pluginType };
+}
+
+/**
+ * Why the realm's stored state `row` is not the state of the installed
+ * `plugin` (#949), or `null` when it is: the package and the type that wrote
+ * it are the plugin's own. A version upgrade of the same package, under the
+ * same type, matches. A state that does not match is off whatever its
+ * `enabled` says, and its secrets do not open: they were sealed under a
+ * context that names the package and the type
+ * ({@link authMethodPluginSecretContext}).
+ */
+export function authMethodPluginStateMismatch(
+  plugin: Pick<InstalledAuthMethodPlugin, 'package' | 'type'>,
+  row: Pick<RealmAuthMethodPlugin, 'pluginPackage' | 'pluginType'>
+): AuthMethodPluginStateMismatch | null {
+  const binding = authMethodPluginStateBinding(row);
+  if (binding === null) return 'package_unrecorded';
+  if (binding.package !== plugin.package) return 'package_changed';
+  if (binding.type !== plugin.type) return 'type_changed';
+  return null;
+}
+
+/**
+ * Whether the realm has the plugin on: it has a row for it, enabled, and
+ * written by this plugin's package under its type (#949).
+ */
 export async function authMethodPluginEnabledIn(
   fastify: Pick<FastifyInstance, 'repositories'>,
   realmId: string,
-  plugin: Pick<InstalledAuthMethodPlugin, 'id'>
+  plugin: AuthMethodPluginIdentity
 ): Promise<boolean> {
   const row = await fastify.repositories.realmAuthMethodPlugins.find(realmId, plugin.id);
-  return row?.enabled === true;
+  return row?.enabled === true && authMethodPluginStateMismatch(plugin, row) === null;
 }
 
 /**
@@ -259,14 +349,14 @@ export async function authMethodPluginEnabledIn(
  */
 export async function authMethodPluginConfig(
   fastify: Pick<FastifyInstance, 'signer'>,
-  plugin: Pick<InstalledAuthMethodPlugin, 'id' | 'secretPaths'>,
+  plugin: AuthMethodPluginIdentity & Pick<InstalledAuthMethodPlugin, 'secretPaths'>,
   row: Pick<RealmAuthMethodPlugin, 'realmId' | 'config' | 'secrets'>
 ): Promise<{ config: Record<string, unknown>; secrets: ReadonlyMap<string, string> }> {
   const cipher = authMethodPluginSecretCipher(fastify);
   const secrets = new Map<string, string>();
   for (const path of plugin.secretPaths) {
     if (!Object.hasOwn(row.secrets, path)) continue;
-    secrets.set(path, await cipher.open(row.realmId, plugin.id, path, row.secrets[path]));
+    secrets.set(path, await cipher.open(row.realmId, plugin, path, row.secrets[path]));
   }
   // A member the plugin marks secret comes only from the secret store, never
   // from the plain config an earlier version of the plugin may have kept.
@@ -291,7 +381,8 @@ export class AuthMethodPluginDisabledError extends Error {
  * handle, no `decrypt` and no key.
  *
  * @throws AuthMethodPluginDisabledError when the method is no loaded plugin's,
- *   or the realm has not enabled it
+ *   the realm has not enabled it, or its state was written by another
+ *   package or under another type (#949)
  * @throws AuthMethodConfigError when the stored config fails the schema
  */
 export async function authMethodPluginContext(
@@ -305,7 +396,11 @@ export async function authMethodPluginContext(
     plugin === undefined
       ? undefined
       : await fastify.repositories.realmAuthMethodPlugins.find(realm.id, plugin.id);
-  if (plugin === undefined || row?.enabled !== true) {
+  if (
+    plugin === undefined ||
+    row?.enabled !== true ||
+    authMethodPluginStateMismatch(plugin, row) !== null
+  ) {
     throw new AuthMethodPluginDisabledError(
       `The AuthMethod ${method.type} is not an enabled plugin of the realm`
     );

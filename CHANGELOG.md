@@ -34,6 +34,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`account_not_verified`, or `no_primary_identity`) and the primary
   identity's kind. An anonymous registration is unchanged.
 
+### Changed
+
+- **A realm's plugin state belongs to the plugin that wrote it** ([#949],
+  experimental `plugin-api`). Each realm's state of an AuthMethod plugin now
+  records the npm package and the type of the plugin that wrote it
+  (`realm_auth_method_plugins.plugin_package` and `plugin_type`, migration
+  0069), and a plugin secret is sealed under a context that names both. A
+  deployment that puts another package behind the same plugin id, or a
+  version of a package that changes its type, inherits nothing in any realm:
+  the plugin's routes answer 404, its stored secrets do not open, and
+  `plugins.enable` is refused until a configure under the installed plugin
+  seals its secrets again; an approved enable then turns it on.
+  `plugins.get` and `plugins.list` say why, with the new members
+  `configuredBy` and `mismatch`. A new version of the same package, under the
+  same id and type, needs nothing. **Upgrading:** a plugin state written by
+  0.2 records no package, so every plugin a realm had on is off after the
+  upgrade (`mismatch: package_unrecorded`) until it is configured, with its
+  secrets sealed again, and enabled again. During a rolling upgrade, such a
+  plugin stays on at the nodes of 0.2; configure no plugin until every node
+  runs the new release.
+
 ## [0.2.0] - 2026-11-07
 
 ### Added
@@ -3574,6 +3595,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#914]: https://github.com/qauth-labs/qauth/issues/914
 [#472]: https://github.com/qauth-labs/qauth/issues/472
 [#933]: https://github.com/qauth-labs/qauth/issues/933
+[#949]: https://github.com/qauth-labs/qauth/issues/949
 [#951]: https://github.com/qauth-labs/qauth/issues/951
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963

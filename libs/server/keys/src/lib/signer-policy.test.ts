@@ -124,7 +124,7 @@ describe('SIGNER_POLICY', () => {
       'realm_secrets:mail.smtp.password',
       'delivery:ssf_streams.x:1',
       'upstream-oidc:client-secret:realm-1:oidc_corp',
-      'auth-method-plugin:corp:clientSecret',
+      'auth-method-plugin:corp:@example/qauth-plugin-corp-sso:corp_sso:clientSecret',
     ]) {
       expect(isSignerCallAllowed('web', 'encrypt', other), String(other)).toBe(false);
     }
@@ -180,7 +180,7 @@ describe('SIGNER_POLICY', () => {
       'realm_secrets:mail.smtp.password',
       'realm_secrets:mail.resend.apiKey',
       `upstream-oidc:client-secret:realm-1:oidc_corp:${'ab'.repeat(32)}`,
-      'auth-method-plugin:corp:clientSecret',
+      'auth-method-plugin:corp:@example/qauth-plugin-corp-sso:corp_sso:clientSecret',
       'totp-secret:realm-1:user-1',
     ]) {
       expect(isSignerCallAllowed('api', 'decrypt', context), context).toBe(true);
@@ -211,7 +211,7 @@ describe('SIGNER_POLICY', () => {
       );
       for (const context of [
         'upstream-oidc:client-secret:realm-1:oidc_corp',
-        'auth-method-plugin:corp:clientSecret',
+        'auth-method-plugin:corp:@example/qauth-plugin-corp-sso:corp_sso:clientSecret',
         'totp-secret:realm-1:user-1',
       ]) {
         expect(isSignerCallAllowed(caller, 'decrypt', context), `${caller} ${context}`).toBe(false);

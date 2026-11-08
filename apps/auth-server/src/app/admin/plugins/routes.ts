@@ -1,4 +1,7 @@
-import type { RealmAuthMethodPlugin } from '@qauth-labs/fastify-plugin-db';
+import type {
+  RealmAuthMethodPlugin,
+  RealmAuthMethodPluginState,
+} from '@qauth-labs/fastify-plugin-db';
 import {
   AuthMethodConfigError,
   configSpellsMemberOf,
@@ -17,7 +20,13 @@ import { ifMatchAllows } from '../../api-conventions/conditional-requests';
 import { pageQuerySchema, pageSchema } from '../../api-conventions/paging';
 import { type AdminOperation, operationSchemaExtensions } from '../../helpers/admin-operations';
 import { InvalidCursorError } from '../../helpers/api-request-errors';
-import { authMethodPluginSecretCipher } from '../../helpers/auth-method-plugins';
+import {
+  AUTH_METHOD_PLUGIN_STATE_MISMATCHES,
+  authMethodPluginSecretCipher,
+  authMethodPluginStateBinding,
+  type AuthMethodPluginStateMismatch,
+  authMethodPluginStateMismatch,
+} from '../../helpers/auth-method-plugins';
 import {
   ADMIN_SECURITY_SCHEME,
   type AdminChange,
@@ -72,6 +81,16 @@ import { PLUGIN_OPERATION_IDS } from './operations';
  * again, so it never follows a destination it was not set for. No response,
  * audit row or log line holds a value: the representation says only which
  * secret members hold one.
+ *
+ * THE PLUGIN THAT WROTE THE STATE (#949). Every write records the package and
+ * the type of the installed plugin it writes for, and a sealed value is bound
+ * to both. A realm's state that another package wrote, or this package under
+ * another type, is not this plugin's: it reads as off and as holding no
+ * secret, `mismatch` says why, an enable is refused with 400, and its stored
+ * secrets are never opened. A configure writes it again under the installed
+ * plugin, off, with the secrets it seals again; an approved enable then turns
+ * it on. A disable only turns the stored switch off and keeps the rest. A new
+ * version of the same package, under the same type, keeps the state.
  *
  * The admin API never uploads, replaces or edits plugin code.
  */
@@ -152,13 +171,31 @@ const pluginSchema = z
       .string()
       .meta({ description: 'The AuthMethod contract version it is written against.' }),
     displayName: z.string().meta({ description: "The plugin's default display name." }),
-    enabled: z.boolean().meta({ description: 'The realm offers it.' }),
+    enabled: z.boolean().meta({
+      description:
+        'The realm offers it. Always `false` while `mismatch` is set, whatever the stored state says.',
+    }),
     config: z.record(z.string(), z.unknown()).meta({
-      description: "The realm's config of the plugin: its plain members, never a secret one.",
+      description:
+        "The realm's config of the plugin: its plain members, never a secret one. While `mismatch` is set, the members the state another plugin wrote holds; a configure replaces them.",
     }),
     secrets: z.array(z.object({ path: z.string(), set: z.boolean() })).meta({
       description:
-        "Each secret member of the plugin's config, by path, and whether it holds a value. Its value is never shown.",
+        "Each secret member of the plugin's config, by path, and whether it holds a value. Its value is never shown. While `mismatch` is set, none holds one: a secret sealed for another package or type never opens for this plugin.",
+    }),
+    configuredBy: z
+      .object({
+        package: z.string().meta({ description: 'The npm package of the plugin that wrote it.' }),
+        type: z.string().meta({ description: 'The AuthMethod type it was written under.' }),
+      })
+      .nullable()
+      .meta({
+        description:
+          "The plugin the realm's state was written for. `null` before it was first written, or for a state written before QAuth recorded it.",
+      }),
+    mismatch: z.enum(AUTH_METHOD_PLUGIN_STATE_MISMATCHES).nullable().meta({
+      description:
+        "Why the realm's state is not this plugin's, or `null` when it is: `package_unrecorded` (written before QAuth recorded which package wrote it), `package_changed` (another package wrote it under this name), `type_changed` (this package wrote it under another type). Such a state is off and holds none of this plugin's secrets until a configure writes it again for this plugin, sealing its secrets again, and an enable is approved.",
     }),
     version: z.int().min(0).meta({
       description:
@@ -169,22 +206,41 @@ const pluginSchema = z
 
 type PluginResource = z.infer<typeof pluginSchema>;
 
-/** The state of a plugin a realm never configured. */
-function stateOf(row: RealmAuthMethodPlugin | undefined) {
+/** The version of the realm's state of a plugin: `0` before it was first written. */
+function versionOf(row: RealmAuthMethodPlugin | undefined): number {
+  return row?.version ?? 0;
+}
+
+/**
+ * The realm's state of `plugin` as the admin API acts on it: that of a
+ * plugin the realm never configured when it has no row, and, for a state
+ * another package or type wrote (#949), off and holding no secret of the
+ * plugin, with why.
+ */
+function stateOf(plugin: InstalledAuthMethodPlugin, row: RealmAuthMethodPlugin | undefined) {
+  const mismatch = row === undefined ? null : authMethodPluginStateMismatch(plugin, row);
   return {
-    enabled: row?.enabled ?? false,
+    mismatch,
+    enabled: mismatch === null && row?.enabled === true,
     config: row?.config ?? {},
-    secrets: row?.secrets ?? {},
-    version: row?.version ?? 0,
+    secrets: mismatch === null ? (row?.secrets ?? {}) : {},
+    version: versionOf(row),
   };
 }
+
+/** How the refusal of an enable names a mismatch (#949). */
+const MISMATCH_TEXT: Readonly<Record<AuthMethodPluginStateMismatch, string>> = Object.freeze({
+  package_unrecorded: 'before QAuth recorded which package wrote it',
+  package_changed: 'by another package than the one installed under this name',
+  type_changed: 'by this package under another type',
+});
 
 /** The representation of `plugin` in a realm whose row is `row`. */
 export function pluginResource(
   plugin: InstalledAuthMethodPlugin,
   row: RealmAuthMethodPlugin | undefined
 ): PluginResource {
-  const state = stateOf(row);
+  const state = stateOf(plugin, row);
   return {
     name: plugin.id,
     type: plugin.type,
@@ -197,13 +253,15 @@ export function pluginResource(
     // version of the plugin stored as plain.
     config: withoutConfigMembers(state.config, plugin.secretPaths),
     secrets: plugin.secretPaths.map((path) => ({ path, set: Object.hasOwn(state.secrets, path) })),
+    configuredBy: row === undefined ? null : authMethodPluginStateBinding(row),
+    mismatch: state.mismatch,
     version: state.version,
   };
 }
 
 /** The entity tag of a plugin's state in a realm. */
 function entityTag(row: RealmAuthMethodPlugin | undefined): string {
-  return `"${stateOf(row).version}"`;
+  return `"${versionOf(row)}"`;
 }
 
 /**
@@ -343,12 +401,12 @@ function requireKeptSecretsStay(
   config: Readonly<Record<string, unknown>>,
   changes: Readonly<Record<string, unknown>>
 ): void {
-  const stored = stateOf(row).secrets;
+  const state = stateOf(plugin, row);
   const kept = plugin.secretPaths.filter(
-    (path) => Object.hasOwn(stored, path) && !Object.hasOwn(changes, path)
+    (path) => Object.hasOwn(state.secrets, path) && !Object.hasOwn(changes, path)
   );
   if (kept.length === 0) return;
-  const before = withoutConfigMembers(stateOf(row).config, plugin.secretPaths);
+  const before = withoutConfigMembers(state.config, plugin.secretPaths);
   if (newUrlDestinations(before, config).length === 0) return;
   const names = kept.map((path) => JSON.stringify(path)).join(', ');
   throw new BadRequestError(
@@ -373,8 +431,7 @@ function requireNamedVersion(
   operationId: string,
   row: RealmAuthMethodPlugin | undefined
 ): void {
-  if (version !== stateOf(row).version)
-    throw new PreconditionFailedError({ operation: operationId });
+  if (version !== versionOf(row)) throw new PreconditionFailedError({ operation: operationId });
 }
 
 /** Refuse a write named against another version of the state than `row`'s. */
@@ -383,7 +440,7 @@ function requireCurrent(
   operationId: string,
   row: RealmAuthMethodPlugin | undefined
 ): void {
-  if (!ifMatchAllows(request.headers['if-match'], String(stateOf(row).version))) {
+  if (!ifMatchAllows(request.headers['if-match'], String(versionOf(row)))) {
     throw new PreconditionFailedError({ operation: operationId });
   }
 }
@@ -406,7 +463,7 @@ async function storedSecrets(
   const plaintexts = new Map<string, string>();
   for (const path of plugin.secretPaths) {
     if (!Object.hasOwn(ciphertexts, path) || skip.has(path)) continue;
-    plaintexts.set(path, await cipher.open(realmId, plugin.id, path, ciphertexts[path]));
+    plaintexts.set(path, await cipher.open(realmId, plugin, path, ciphertexts[path]));
   }
   return plaintexts;
 }
@@ -431,11 +488,11 @@ async function openSealed(
   sealed: string
 ): Promise<string> {
   try {
-    return await authMethodPluginSecretCipher(fastify).open(realmId, plugin.id, path, sealed);
+    return await authMethodPluginSecretCipher(fastify).open(realmId, plugin, path, sealed);
   } catch (error) {
     if (NOT_SEALED_HERE.has((error as { code?: unknown } | null)?.code)) {
       throw new BadRequestError(
-        `The value for the secret member ${JSON.stringify(path)} was not sealed for it, for this plugin, in this realm`
+        `The value for the secret member ${JSON.stringify(path)} was not sealed for it, for this plugin's package and type, in this realm`
       );
     }
     throw error;
@@ -481,17 +538,18 @@ async function rowOf(
   );
 }
 
-/** Write a new state over `row`, conditional on its version; 412 when it moved. */
+/**
+ * Write a new state over `row`, conditional on its version; 412 when it
+ * moved. `state.binding` names the plugin it is written for (#949): the
+ * installed plugin's package and type, or the row's own for a write that
+ * keeps them.
+ */
 async function writeState(
   request: FastifyRequest,
   operationId: string,
   plugin: InstalledAuthMethodPlugin,
   row: RealmAuthMethodPlugin | undefined,
-  state: {
-    readonly enabled: boolean;
-    readonly config: Readonly<Record<string, unknown>>;
-    readonly secrets: Readonly<Record<string, string>>;
-  }
+  state: RealmAuthMethodPluginState
 ): Promise<RealmAuthMethodPlugin> {
   const written = await request.server.repositories.realmAuthMethodPlugins.save(
     requestAdminCaller(request).targetRealm.id,
@@ -687,7 +745,7 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       }
       const sealed = await authMethodPluginSecretCipher(fastify).seal(
         requestAdminCaller(request).targetRealm.id,
-        plugin.id,
+        plugin,
         path,
         value
       );
@@ -738,8 +796,11 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       requireKeptSecretsStay(plugin, row, config, changes);
 
       // The secrets the realm will hold: those kept, and those set; a value
-      // this request replaces or clears is never opened.
-      const stored = stateOf(row).secrets;
+      // this request replaces or clears is never opened. A state another
+      // package or type wrote keeps none (#949): its secrets were sealed for
+      // that plugin, and are never opened for this one.
+      const state = stateOf(plugin, row);
+      const stored = state.secrets;
       const plaintexts = await storedSecrets(fastify, plugin, realmId, stored, new Set(named));
       const ciphertexts: Record<string, string> = {};
       for (const path of plugin.secretPaths) {
@@ -753,9 +814,12 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       requireValidConfig(plugin, config, plaintexts);
 
       const written = await writeState(request, operations.update.id, plugin, row, {
-        enabled: stateOf(row).enabled,
+        // A state another package or type wrote stays off until an approved
+        // enable turns it on for this plugin (#949).
+        enabled: state.enabled,
         config,
         secrets: ciphertexts,
+        binding: { package: plugin.package, type: plugin.type },
       });
       return answer(request, reply, plugin, row, written, named);
     }
@@ -783,8 +847,15 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       const row = await rowOf(request, plugin);
       requireNamedVersion(request.body.version, operations.enable.id, row);
       requireCurrent(request, operations.enable.id, row);
-      if (row?.enabled === true) return answer(request, reply, plugin, row, row);
-      const state = stateOf(row);
+      const state = stateOf(plugin, row);
+      // A state another package or type wrote is never turned on for this
+      // plugin: a configure writes it again for this one first (#949).
+      if (state.mismatch !== null) {
+        throw new BadRequestError(
+          `The realm's state of the plugin was written ${MISMATCH_TEXT[state.mismatch]} (${state.mismatch}): configure it again for the installed plugin, sealing its secrets again, before enabling it`
+        );
+      }
+      if (state.enabled) return answer(request, reply, plugin, row, row);
       // A plugin is enabled only with a config its own schema accepts.
       requireValidConfig(
         plugin,
@@ -796,6 +867,7 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
         // A member the plugin now marks secret leaves the plain config.
         config: withoutConfigMembers(state.config, plugin.secretPaths),
         secrets: state.secrets,
+        binding: { package: plugin.package, type: plugin.type },
       });
       return answer(request, reply, plugin, row, written);
     }
@@ -822,12 +894,18 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       const row = await rowOf(request, plugin);
       requireNamedVersion(request.body.version, operations.disable.id, row);
       requireCurrent(request, operations.disable.id, row);
+      // The stored switch, which a state another package or type wrote may
+      // hold on: disabling it turns it off, so the state stays off should
+      // that plugin return (#949).
       if (row === undefined || !row.enabled) return answer(request, reply, plugin, row, row);
+      const own = authMethodPluginStateMismatch(plugin, row) === null;
       const written = await writeState(request, operations.disable.id, plugin, row, {
         enabled: false,
-        // A member the plugin now marks secret leaves the plain config.
-        config: withoutConfigMembers(row.config, plugin.secretPaths),
+        // A member the plugin now marks secret leaves the plain config; the
+        // config of a state another plugin wrote is kept as it is.
+        config: own ? withoutConfigMembers(row.config, plugin.secretPaths) : row.config,
         secrets: row.secrets,
+        binding: authMethodPluginStateBinding(row),
       });
       return answer(request, reply, plugin, row, written);
     }

@@ -252,6 +252,8 @@ describe('the plugin representation (#600)', () => {
       enabled: false,
       config: {},
       secrets: [{ path: 'clientSecret', set: false }],
+      configuredBy: null,
+      mismatch: null,
       version: 0,
     });
   });
@@ -261,6 +263,8 @@ describe('the plugin representation (#600)', () => {
     const resource = pluginResource(plugin, {
       realmId: '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b',
       pluginId: 'corp',
+      pluginPackage: '@example/corp',
+      pluginType: 'corp_sso',
       enabled: false,
       config: { clientId: 'qauth', clientSecret: SECRET },
       secrets: {},
@@ -278,6 +282,8 @@ describe('the plugin representation (#600)', () => {
     const resource = pluginResource(plugin, {
       realmId: '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b',
       pluginId: 'corp',
+      pluginPackage: '@example/corp',
+      pluginType: 'corp_sso',
       enabled: true,
       config: { issuer: 'https://idp.example', clientId: 'qauth' },
       secrets: { clientSecret: ciphertext },
@@ -289,9 +295,73 @@ describe('the plugin representation (#600)', () => {
       enabled: true,
       config: { issuer: 'https://idp.example', clientId: 'qauth' },
       secrets: [{ path: 'clientSecret', set: true }],
+      configuredBy: { package: '@example/corp', type: 'corp_sso' },
+      mismatch: null,
       version: 3,
     });
     expect(JSON.stringify(resource)).not.toContain(ciphertext);
+  });
+
+  // #949: a state another package or type wrote is not this plugin's.
+  it.each([
+    ['another package wrote', '@example/other-corp', 'corp_sso', 'package_changed'],
+    ['this package wrote under another type', '@example/corp', 'corp_sso_v1', 'type_changed'],
+    ['a release before #949 wrote', null, null, 'package_unrecorded'],
+  ] as const)(
+    'shows a state %s as off, holding no secret, and says why',
+    async (_case, pluginPackage, pluginType, mismatch) => {
+      const [plugin] = await installed();
+      const resource = pluginResource(plugin, {
+        realmId: '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b',
+        pluginId: 'corp',
+        pluginPackage,
+        pluginType,
+        enabled: true,
+        config: { issuer: 'https://idp.example', clientId: 'qauth' },
+        secrets: { clientSecret: 'v1.kid-1.aXY.Y2lwaGVydGV4dA' },
+        version: 4,
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      expect(resource).toMatchObject({
+        name: 'corp',
+        package: '@example/corp',
+        type: 'corp_sso',
+        enabled: false,
+        config: { issuer: 'https://idp.example', clientId: 'qauth' },
+        secrets: [{ path: 'clientSecret', set: false }],
+        configuredBy: pluginPackage === null ? null : { package: pluginPackage, type: pluginType },
+        mismatch,
+        version: 4,
+      });
+    }
+  );
+
+  it('keeps the state of a new version of the same package, under the same type', async () => {
+    const [plugin] = await installed();
+    // What a version bump changes: the method, never the package or the type.
+    const upgraded = {
+      ...plugin,
+      method: { ...plugin.method, display: { name: 'Fixture provider 2' } },
+    };
+    const resource = pluginResource(upgraded, {
+      realmId: '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b',
+      pluginId: 'corp',
+      pluginPackage: '@example/corp',
+      pluginType: 'corp_sso',
+      enabled: true,
+      config: { issuer: 'https://idp.example', clientId: 'qauth' },
+      secrets: { clientSecret: 'v1.kid-1.aXY.Y2lwaGVydGV4dA' },
+      version: 5,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    expect(resource).toMatchObject({
+      displayName: 'Fixture provider 2',
+      enabled: true,
+      secrets: [{ path: 'clientSecret', set: true }],
+      mismatch: null,
+    });
   });
 });
 
