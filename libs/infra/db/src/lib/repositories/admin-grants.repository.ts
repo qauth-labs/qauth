@@ -53,6 +53,17 @@ export interface LiveAdminGrant {
   readonly role: AdminRole | null;
 }
 
+/** A live grant on a target, with the state of the account that holds it (#589). */
+export interface TargetAdminGrant extends LiveAdminGrant {
+  readonly account: {
+    /** The realm the account lives in. */
+    readonly realmId: string;
+    readonly enabled: boolean;
+    /** When the account was last disabled, in epoch ms; `null` when it never was. */
+    readonly notValidBefore: number | null;
+  };
+}
+
 /**
  * Admin grants (ADR-019 Decision 7, issue #510). A grant is created and
  * revoked, never changed. Every refusal of the realm rule below is also made
@@ -100,6 +111,23 @@ export interface AdminGrantsRepository {
    * for the account's own realm.
    */
   listLive(realmId: string, userId: string, tx?: DbClient): Promise<LiveAdminGrant[]>;
+
+  /**
+   * The live grants on one target, of every account, oldest first (#589):
+   * as {@link listLive} reads them, for each account that holds one, with the
+   * account's realm and state. `target` is a realm id, or `null` for the
+   * grants on every realm. Only those `realmId` sees (#489): on its own id,
+   * the grants on that realm, its own admins' and the operator realm's; a
+   * grant on every realm only from the operator realm, which holds its
+   * account. The realm rule and the account's state are the caller's to
+   * check, as for {@link listLive}. Who may approve a request on a realm is
+   * counted from these (`admin/approvals/eligibility.ts`).
+   */
+  listLiveOnTarget(
+    realmId: string,
+    target: string | null,
+    tx?: DbClient
+  ): Promise<TargetAdminGrant[]>;
 
   /**
    * Revoke a live grant. Its `revoked_at` and `last_security_change_at` are
@@ -293,6 +321,40 @@ export function createAdminGrantsRepository(
       return rows.map((row) => ({
         grant: row.grant,
         role: row.grant.roleId === null ? null : row.role,
+      }));
+    },
+
+    async listLiveOnTarget(realmId, target, tx) {
+      if (!isAdminRecordId(realmId) || (target !== null && !isAdminRecordId(target))) return [];
+      const db = tx ?? defaultDb;
+      const rows = await db
+        .select({
+          grant: getTableColumns(adminGrants),
+          role: getTableColumns(adminRoles),
+          account: {
+            realmId: users.realmId,
+            enabled: users.enabled,
+            notValidBefore: users.notValidBefore,
+          },
+        })
+        .from(adminGrants)
+        .innerJoin(users, eq(users.id, adminGrants.userId))
+        .leftJoin(adminRoles, eq(adminRoles.id, adminGrants.roleId))
+        .where(
+          and(
+            target === null
+              ? isNull(adminGrants.targetRealmId)
+              : eq(adminGrants.targetRealmId, target),
+            seenFromRealm(db, realmId),
+            isNull(adminGrants.revokedAt),
+            or(isNull(adminGrants.roleId), isNull(adminRoles.disabledAt))
+          )
+        )
+        .orderBy(asc(adminGrants.createdAt), asc(adminGrants.id));
+      return rows.map((row) => ({
+        grant: row.grant,
+        role: row.grant.roleId === null ? null : row.role,
+        account: row.account,
       }));
     },
 

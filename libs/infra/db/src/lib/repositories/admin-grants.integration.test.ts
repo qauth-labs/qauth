@@ -623,6 +623,77 @@ describe('admin roles and grants (real Postgres)', () => {
     });
   });
 
+  describe('live grants on a target (#589)', () => {
+    it("lists every account's live grant on the realm, with the account's state, as the realm sees them", async () => {
+      const d = await deployment();
+      const ops = await roles.create({
+        realmId: d.a,
+        name: 'ops',
+        permissionIds: ['approvals.approve', 'realms.read'],
+      });
+      const ofA = await grants.create({
+        userId: d.adminOfA,
+        role: { kind: 'built-in', name: 'security-admin' },
+        targetRealmId: d.a,
+        createdBy: null,
+      });
+      const customOfA = await grants.create({
+        userId: d.adminOfA,
+        role: { kind: 'custom', roleId: ops.id },
+        targetRealmId: d.a,
+        createdBy: null,
+      });
+      const onA = await grants.create({
+        userId: d.operatorAdmin,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: d.a,
+        createdBy: null,
+      });
+      const onAll = await grants.create({
+        userId: d.operatorAdmin,
+        role: { kind: 'built-in', name: 'editor' },
+        targetRealmId: null,
+        createdBy: null,
+      });
+      const onB = await grants.create({
+        userId: d.operatorAdmin,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: d.b,
+        createdBy: null,
+      });
+
+      const onTarget = await grants.listLiveOnTarget(d.a, d.a);
+      expect(onTarget.map(({ grant, role }) => [grant.id, role?.id ?? null])).toEqual([
+        [ofA.id, null],
+        [customOfA.id, ops.id],
+        [onA.id, null],
+      ]);
+      expect(onTarget.map(({ account }) => account)).toEqual([
+        { realmId: d.a, enabled: true, notValidBefore: null },
+        { realmId: d.a, enabled: true, notValidBefore: null },
+        { realmId: d.operator, enabled: true, notValidBefore: null },
+      ]);
+      expect(onTarget.map(({ grant }) => grant.id)).not.toContain(onB.id);
+
+      // A grant on every realm, only from the operator realm (#489).
+      expect((await grants.listLiveOnTarget(d.a, null)).map(({ grant }) => grant.id)).toEqual([]);
+      expect(
+        (await grants.listLiveOnTarget(d.operator, null)).map(({ grant }) => grant.id)
+      ).toEqual([onAll.id]);
+      // Another realm sees only its own accounts' grants on A: none here.
+      expect(await grants.listLiveOnTarget(d.b, d.a)).toEqual([]);
+
+      // A revoked grant and a disabled custom role give nothing.
+      await grants.revoke(d.a, ofA.id);
+      await roles.update(d.a, ops.id, { disabled: true });
+      expect((await grants.listLiveOnTarget(d.a, d.a)).map(({ grant }) => grant.id)).toEqual([
+        onA.id,
+      ]);
+      expect(await grants.listLiveOnTarget('not-a-uuid', d.a)).toEqual([]);
+      expect(await grants.listLiveOnTarget(d.a, 'not-a-uuid')).toEqual([]);
+    });
+  });
+
   describe('custom roles', () => {
     it('stores the permission ids once each, in catalog order', async () => {
       const realmId = await realm('tenant');

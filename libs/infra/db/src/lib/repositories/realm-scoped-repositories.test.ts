@@ -115,6 +115,8 @@ export function requiredRealmArgument(db: DbClient): void {
   void adminGrants.listByUser(ID);
   // @ts-expect-error an account's admin grants are those a realm sees (#489, #510)
   void adminGrants.listLive(ID);
+  // @ts-expect-error the grants on a target are those a realm sees (#489, #589)
+  void adminGrants.listLiveOnTarget(ID);
   // @ts-expect-error an admin grant is revoked in a realm (#489, #510)
   void adminGrants.revoke(ID);
   // @ts-expect-error an admin role is looked up in a realm (#510)
@@ -208,6 +210,14 @@ const CALLS: readonly RealmScopedCall[] = [
   ['adminGrants.findById', (db) => createAdminGrantsRepository(db).findById(REALM_ID, ID)],
   ['adminGrants.listByUser', (db) => createAdminGrantsRepository(db).listByUser(REALM_ID, ID)],
   ['adminGrants.listLive', (db) => createAdminGrantsRepository(db).listLive(REALM_ID, ID)],
+  [
+    'adminGrants.listLiveOnTarget',
+    (db) => createAdminGrantsRepository(db).listLiveOnTarget(REALM_ID, ID),
+  ],
+  [
+    'adminGrants.listLiveOnTarget (every realm)',
+    (db) => createAdminGrantsRepository(db).listLiveOnTarget(REALM_ID, null),
+  ],
   ['adminGrants.revoke', (db) => createAdminGrantsRepository(db).revoke(REALM_ID, ID)],
   ['adminRoles.findById', (db) => createAdminRolesRepository(db).findById(REALM_ID, ID)],
   ['adminRoles.listByRealm', (db) => createAdminRolesRepository(db).listByRealm(REALM_ID)],
