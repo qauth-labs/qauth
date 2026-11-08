@@ -56,6 +56,7 @@ import {
 } from './approvals/gate';
 import { isApprovalEngineOperation } from './approvals/operations';
 import { callerAccount } from './approvals/standing';
+import { runInAdminHandler } from './handler-scope';
 import { adminRealmRouteProblem } from './route-placement';
 import { secretMemberSchemaProblem } from './secrets/secret-members';
 
@@ -957,7 +958,9 @@ function prepareAnswer(
  * `reply.hijack()` throw ({@link refuseAnswering}). A body its response
  * schema refuses fails the call before the commit, so the change rolls back
  * and the call is `failed`: the answer and the row always agree. The answer
- * is sent after the commit.
+ * is sent after the commit. The handler runs in the scope of its
+ * transaction, where the admin listener's repositories refuse a call that
+ * does not pass it ({@link runInAdminHandler}).
  */
 function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry) {
   const wrapped = async function adminTransactionStage(
@@ -999,7 +1002,9 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
         refuseAnswering(reply);
         let result: unknown;
         try {
-          result = await handler.call(this, request, reply);
+          // In its transaction's scope: a repository call that does not pass
+          // it throws (`./handler-scope.ts`).
+          result = await runInAdminHandler(tx, () => handler.call(this, request, reply));
         } finally {
           allowAnswering(reply);
           state.transaction = undefined;

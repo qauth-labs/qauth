@@ -148,6 +148,13 @@ log stores the diff with each secret masked (`***`), and never its value. A call
 change. A call the pipeline refuses, or a handler that fails, gets its `denied` or `failed` row
 with no diff, and its transaction is rolled back.
 
+Pass that transaction to every repository call the handler makes. A call that does not pass it
+would take a second connection from the pool the public listener serves from, and commit on its
+own, outside the audited transaction. Inside a handler, `request.server.repositories` refuses
+such a call (`apps/auth-server/src/app/admin/handler-scope.ts`): it throws, so the call fails with
+500, its transaction rolls back, and its row is `failed`. A savepoint of the transaction is
+another transaction, and is refused too.
+
 `realms.policies.update` writes through the policy store in that transaction, conditional on the
 version it was classified against, with a guard that refuses a stored change that would need more
 than the request was authorized for. Its audit row holds the changed fields before and after and
