@@ -35,7 +35,8 @@ import {
  * through the Interaction API with plain form posts. The mailed code is read
  * off the realm's mail service. It proves the issue's integration criteria:
  * an unverified account gets the email_code step after its correct password,
- * whatever `REQUIRE_VERIFIED_ACCOUNT` says; after 5 wrong codes across two
+ * under the realm's gate (with it off, since 2026-11-08, the account signs in
+ * with no code); after 5 wrong codes across two
  * transactions the next attempt inside the email-code ladder's wait is
  * refused and the account stays unverified; and a correct code outside a wait
  * is accepted, verifies the address and completes the sign-in. Past the
@@ -340,8 +341,24 @@ describe('the inline verification of an account (#638, real containers)', () => 
   /** A six-digit code that is not `code`. */
   const wrong = (code: string) => (code === '000000' ? '111111' : '000000');
 
-  it.each([true, false])(
-    'offers the email_code step after the correct password of an unverified account, with REQUIRE_VERIFIED_ACCOUNT %s',
+  it('signs an unverified account in with no code while the realm’s gate is off (ADR-017 Decision 8, amended 2026-11-08)', async () => {
+    await registerUnverified();
+    await requireVerifiedAccount(false);
+    const browser = new Browser(port);
+    const id = await browser.start();
+    const identified = await browser.answer(id, IDENTIFIER, { login_hint: EMAIL });
+    expect(identified.status, identified.body).toBe(303);
+    const done = await browser.answer(id, PASSWORD, { password: E2E_PASSWORD });
+    expect(done.status, done.body).toBe(303);
+    const location = new URL(String(done.headers.location));
+    expect(`${location.origin}${location.pathname}`).toBe(AUTHORIZE_REQUEST.redirect_uri);
+    expect(location.searchParams.get('code')).toMatch(/.+/);
+    expect(codes.get(EMAIL) ?? []).toEqual([]);
+    expect(await addressVerified()).toBe(false);
+  });
+
+  it.each([true])(
+    'offers the email_code step after the correct password of an unverified account under the realm’s gate (REQUIRE_VERIFIED_ACCOUNT %s)',
     async (required) => {
       await registerUnverified();
       await requireVerifiedAccount(required);
