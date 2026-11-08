@@ -166,11 +166,14 @@ export function createRepositoryAccountDirectory(
       }
       const marked = credential.disabledAt !== undefined && credential.disabledAt !== null;
       const disabled = (await disabledOf(realmId, [credential]))[0] === true;
+      const addressProved = data.success && data.data.email_verified;
       return Object.freeze({
         userId: user.id,
         enabled: user.enabled,
         // Its confirmed address, or an operator's verification (#1052).
-        verified: isOperatorVerified(user) || (data.success && data.data.email_verified),
+        verified: isOperatorVerified(user) || addressProved,
+        // The address alone: what a reset reads (#1052).
+        addressProved,
         password: Object.freeze({
           disabled,
           hash: data.success ? data.data.password_hash : null,
@@ -232,13 +235,16 @@ export function createRepositoryAccountDirectory(
           const data = passwordCredentialDataSchema.safeParse(row.credentialData);
           return data.success && data.data.email_verified;
         }) &&
-        upstreams.every((row) => {
-          const data = upstreamCredentialDataSchema.safeParse(row.credentialData);
-          if (!data.success) {
-            log.error({ credentialId: row.id }, 'malformed credential_data on upstream credential');
-          }
-          return data.success && data.data.verified;
-        }));
+          upstreams.every((row) => {
+            const data = upstreamCredentialDataSchema.safeParse(row.credentialData);
+            if (!data.success) {
+              log.error(
+                { credentialId: row.id },
+                'malformed credential_data on upstream credential'
+              );
+            }
+            return data.success && data.data.verified;
+          }));
       return Object.freeze({
         userId: user.id,
         enabled: user.enabled,

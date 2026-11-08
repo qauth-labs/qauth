@@ -2742,12 +2742,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
        * password whose address was proved. An unclaimed account (an address
        * never proved, ADR-017 Decision 8) is not: a reset would keep a `sub`
        * someone other than the mailbox owner may have created, until #641
-       * ends such an account at this proof.
+       * ends such an account at this proof. Nor is an account an operator
+       * verified whose address was never proved (#1052): the operator
+       * attested the account, not the address.
        */
       const resettable = (candidate: SignInCandidate | null): candidate is SignInCandidate =>
         candidate !== null &&
         candidate.enabled &&
-        candidate.verified &&
+        candidate.addressProved &&
         candidate.password !== null;
       if (!provedMailbox()) {
         const taken: { candidate: SignInCandidate | null } = { candidate: null };
@@ -2762,7 +2764,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             const { candidate } = taken;
             if (candidate === null || candidate.password === null) return 'invalid_credentials';
             if (!candidate.enabled) return 'account_disabled';
-            return candidate.verified ? null : 'account_unclaimed';
+            if (candidate.addressProved) return null;
+            return candidate.verified ? 'address_unproved' : 'account_unclaimed';
           },
         });
         if ('result' in answered) return answered.result;

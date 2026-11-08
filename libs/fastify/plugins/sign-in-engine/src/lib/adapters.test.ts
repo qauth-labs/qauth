@@ -45,7 +45,7 @@ const IDENTIFIER = 'alice@example.com';
 function stubStores(
   overrides: Partial<{
     credential: Record<string, unknown> | undefined;
-    user: { id: string; enabled: boolean } | undefined;
+    user: { id: string; enabled: boolean; operatorVerifiedAt?: number | null } | undefined;
     passkeys: { realmId: string; disabledAt?: number | null }[];
     upstreams: Record<string, unknown>[];
     grants: unknown[];
@@ -57,7 +57,9 @@ function stubStores(
     credential: { password_hash: 'hash', email_verified: true } as
       | Record<string, unknown>
       | undefined,
-    user: { id: USER, enabled: true } as { id: string; enabled: boolean } | undefined,
+    user: { id: USER, enabled: true } as
+      | { id: string; enabled: boolean; operatorVerifiedAt?: number | null }
+      | undefined,
     passkeys: [] as { realmId: string; disabledAt?: number | null }[],
     upstreams: [] as Record<string, unknown>[],
     grants: [] as unknown[],
@@ -155,6 +157,7 @@ describe('the repository account directory', () => {
       userId: USER,
       enabled: true,
       verified: true,
+      addressProved: true,
       password: { disabled: false, hash: 'hash' },
     });
     expect(calls).toEqual([`credential:${REALM}:password:${IDENTIFIER}`, `user:${REALM}:${USER}`]);
@@ -219,6 +222,20 @@ describe('the repository account directory', () => {
     expect(
       await createRepositoryAccountDirectory(passkeyOnly.repos, log()).findByUserId(REALM, USER)
     ).toMatchObject({ verified: true });
+  });
+
+  it('reads an account an operator verified as verified, its unconfirmed address as unproved (#1052)', async () => {
+    const operatorVerified = stubStores({
+      credential: { password_hash: 'hash', email_verified: false },
+      user: { id: USER, enabled: true, operatorVerifiedAt: 1_800_000_000_000 },
+    });
+    const directory = createRepositoryAccountDirectory(operatorVerified.repos, log());
+    // The gate reads `verified`; a reset reads `addressProved`.
+    expect(await directory.findByIdentifier(REALM, IDENTIFIER)).toMatchObject({
+      verified: true,
+      addressProved: false,
+    });
+    expect(await directory.findByUserId(REALM, USER)).toMatchObject({ verified: true });
   });
 
   it("reads an upstream provider's account as its credential's verified says (#639)", async () => {

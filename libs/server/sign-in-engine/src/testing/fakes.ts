@@ -70,6 +70,12 @@ export interface FakeAccount {
   readonly userId: string;
   readonly enabled: boolean;
   readonly verified: boolean;
+  /**
+   * Whether its address was proved by its mailbox, as `SignInCandidate`
+   * holds it; `verified` when absent. `false` beside a `true` `verified` is
+   * an account an operator verified (#1052).
+   */
+  readonly addressProved?: boolean;
   readonly admin: boolean;
   /** The password, as `SignInCandidate` holds it; `null` for an account without one. */
   readonly password: SignInCandidate['password'];
@@ -90,7 +96,13 @@ export class FakeDirectory implements AccountDirectory {
     const account = this.accounts.get(identifier);
     if (account === undefined) return null;
     const { userId, enabled, verified, password } = account;
-    return { userId, enabled, verified, password };
+    return {
+      userId,
+      enabled,
+      verified,
+      addressProved: account.addressProved ?? verified,
+      password,
+    };
   }
 
   async findByUserId(realmId: string, userId: string): Promise<SignInAccount | null> {
@@ -292,7 +304,11 @@ export class FakeAddresses implements AddressVerifier {
       return { kind: 'refused', reason: 'subject_mismatch' };
     }
     if (!account.enabled) return { kind: 'refused', reason: 'account_disabled' };
-    this.directory.accounts.set(input.identifier, { ...account, verified: true });
+    this.directory.accounts.set(input.identifier, {
+      ...account,
+      verified: true,
+      addressProved: true,
+    });
     return { kind: 'verified' };
   }
 }

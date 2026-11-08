@@ -351,6 +351,9 @@ goes upstream.
   answered and counted as a wrong one: nothing of that user changes. An unclaimed account may be
   someone else's squat on the address, and a reset would keep its `sub` (audited as
   `account_unclaimed`): PRO-17 (#641) ends such an account at the first mailbox proof instead.
+  An account an operator verified (#1052) whose address was never proved is refused the same way
+  (audited as `address_unproved`): the operator attested the account, not its address, so the
+  mailbox holder need not be the person verified.
 - **Every other authenticator** the account holds (a passkey, TOTP), disabled or not, is proved
   next, with any registered, served step that proves it; an email code never stands in for it, and
   a recovery code may, on a transport that serves `recovery_code` (#649). When none can, the answer

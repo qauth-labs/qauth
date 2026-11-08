@@ -223,6 +223,10 @@ amended 2026-11-08). The verification:
   account;
 - leaves `email_verified` as it is. The address stays unconfirmed, and QAuth
   asserts no address it did not confirm;
+- does not open a password reset by mail while the address stays
+  unconfirmed: the operator attested the account, not the address, so the
+  mailbox's holder need not be the person verified. A reset code for it is
+  answered as a wrong one;
 - is recorded on the account with the operator who made it, and kept: an
   account an operator verified is not verified again;
 - is refused for a disabled account, and for an account the realm does not
