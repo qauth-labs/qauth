@@ -1,0 +1,35 @@
+{
+  "name": "plugin-google",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/plugins/google/src",
+  "projectType": "library",
+  "tags": ["scope:plugin", "type:auth-method-plugin"],
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "json": "{workspaceRoot}/tsconfig.json",
+          "fields": ["compilerOptions"]
+        },
+        {
+          "externalDependencies": ["vitest", "oxlint", "@nx/oxlint", "nx", "typescript"]
+        },
+        {
+          "env": "CI"
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.js",
+          "transitive": true
+        },
+        "{workspaceRoot}/.oxlintrc.json",
+        "{workspaceRoot}/libs/plugins/*/project.json"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. `src/boundaries.test.ts` runs Nx's module-boundaries rule through Oxlint with the options of `.oxlintrc.json` on samples in every plugin package, so a change to `.oxlintrc.json`, to a plugin's project.json (its tags), to Oxlint, @nx/oxlint, Nx or TypeScript must re-run it. Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared."
+      }
+    }
+  },
+  "// targets": "to see all targets run: nx show project plugin-google --web"
+}

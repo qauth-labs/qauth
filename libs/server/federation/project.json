@@ -3,6 +3,6 @@
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "libs/server/federation/src",
   "projectType": "library",
-  "tags": ["scope:server", "type:utility"],
+  "tags": ["scope:server", "type:utility", "type:plugin-base"],
   "// targets": "to see all targets run: nx show project server-federation --web"
 }

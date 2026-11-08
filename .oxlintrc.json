@@ -333,6 +333,25 @@
               {
                 "sourceTag": "scope:reference-proxy",
                 "onlyDependOnLibsWithTags": []
+              },
+              // Sign-in method plugins (#671, ADR-019 Decision 12): the
+              // first-party provider presets in libs/plugins/, each an
+              // AuthMethod package the plugin runtime imports by name
+              // (AUTH_METHOD_PLUGINS). A plugin reaches the federation library,
+              // the generic upstream client it is a preset on
+              // (`type:plugin-base`) and the plugin SDK, and nothing else: never
+              // the app, a Fastify plugin, the database, the config or the key
+              // library. It holds no key and calls out through its context.
+              {
+                "sourceTag": "scope:plugin",
+                "onlyDependOnLibsWithTags": ["type:plugin-base", "type:plugin-sdk"]
+              },
+              // ...and nothing imports a plugin: the loader imports it by name,
+              // and the auth server lists the packages among its dependencies
+              // only so its image carries them.
+              {
+                "sourceTag": "*",
+                "notDependOnLibsWithTags": ["scope:plugin"]
               }
             ]
           }
@@ -502,7 +521,9 @@
     // server's own origin, so it is not server code. The plugin SDK
     // (`libs/sdk/plugin-sdk`, #1009) is in: the server runs its engine checks
     // and the context it hands a method; its test kit, under `src/testing/`,
-    // is not. The KEK custody adapters (`libs/keys/*`, loaded
+    // is not. The sign-in method plugins (`libs/plugins/*`, #671) are in
+    // too: every call a plugin makes goes through its context's egress client.
+    // The KEK custody adapters (`libs/keys/*`, loaded
     // by `KEK_PROVIDER`) are outside `files`: their calls to the key service are
     // outside the egress client by ADR-019's amendment of 2026-10-27. The
     // operator's OpenTelemetry export goes through the SDK's exporter, outside
@@ -523,6 +544,7 @@
         "libs/core/**",
         "libs/fastify/**",
         "libs/infra/**",
+        "libs/plugins/**",
         "libs/sdk/plugin-sdk/**",
         "libs/server/**",
         "libs/shared/**"
