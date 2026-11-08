@@ -113,10 +113,11 @@ export interface AuthMethod<TConfig = unknown, TTransaction = unknown> extends C
    * An admin API that keeps a stored secret across a configure compares it
    * for the stored config and for the new one: when they differ, the secret
    * must be sent again, so it never follows a destination it was not set
-   * for. A method without it is held to the host's own rule, which reads
-   * only the URLs among the plain members and compares their origins: a
-   * method whose destination depends on any other member (a tenant that
-   * shapes the issuer's path) or on a URL's path needs it.
+   * for. It adds to the host's own rule, which holds every method and
+   * never lifts: that rule reads only the URLs among the plain members and
+   * compares their origins, so a method whose destination depends on any
+   * other member (a tenant that shapes the issuer's path) or on a URL's
+   * path needs the hook.
    *
    * The host calls it with a config `configSchema` parsed, its secret
    * members in place, and never logs, stores or answers the result, which

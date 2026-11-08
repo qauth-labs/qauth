@@ -343,15 +343,7 @@ sealed value, `null` clears it, and one it does not name keeps its value, unless
 sends the plugin somewhere new: a configure that keeps a stored secret while a member whose value
 is an http(s) URL is added or changes origin is refused with `400`, naming the secrets to seal
 again, so a kept secret never follows a destination it was not set for (as the upstream OpenID
-Connect client refuses a changed issuer or token endpoint). That rule reads only the URLs among
-the plain members, and only their origins. A plugin whose destination depends on another member,
-such as a tenant that shapes an issuer's path, or on a URL's path, names it with
-`secretDestination(config)`, and is held to that instead (#1031): the handler calls it for the
-stored config and for the new one, each parsed with the secret values the realm will hold, and a
-configure that keeps a stored secret while the two differ is refused with the same `400`. So is
-one for which either cannot be told: a stored config the plugin's schema no longer takes, or a
-hook that throws or answers no string. The result is compared only, never logged, stored or
-answered. So the request an
+Connect client refuses a changed issuer or token endpoint). So the request an
 approval stores until it is used, and the digest it is bound by, hold a ciphertext, never the
 value. The handler opens each sealed value for `plugins.update`, its member, the plugin of the path with
 the package and type installed under it, and this realm (a value sealed for another operation,
@@ -365,6 +357,19 @@ is refused. No response, audit row, event or log line holds a value: the represe
 which secret members hold one, and the audit row of a configure names the secrets it set or
 cleared. A member that a newer version of a plugin marks secret is never shown or handed to the
 plugin from the plain config an older version stored, and leaves it at the next write.
+
+**A plugin's own destination** (#1031). The URL rule above holds every plugin, and reads only the
+URLs among the plain members, and only their origins. A plugin whose destination depends on
+another member, such as a tenant that shapes an issuer's path, or on a URL's path, names it with
+`secretDestination(config)`, and is held to that too: once the new config passes the plugin's
+schema, the handler calls it for the stored config and for the new one, each parsed with the
+secret values the realm will hold, and a configure that keeps a stored secret while the two
+differ is refused with the same `400`. So is one for which either cannot be told: a stored config
+the plugin's schema no longer takes, or a hook that throws or answers no string. The hook only
+adds a refusal; it never lifts the URL rule. Its result is compared, never logged, stored or
+answered. It is a check made at each configure: the stored secret's context does not name the
+destination, as the upstream OpenID Connect client's does, so a new version of a plugin that maps
+the same config elsewhere sends the stored secret there without asking for it again.
 
 ```http
 POST /admin/v1-rc.0/realms/{realmId}/secrets/seal
@@ -556,14 +561,15 @@ export const authMethod = createUpstreamOidcPresetMethod({
   the sign-in, before any call to it. Whatever a realm's admin sets, the secret goes to that
   provider's origins and to no other host. A provider whose host the admin chooses is a generic
   provider, not a preset.
-- **Its secret is bound to its destination.** Within those origins, the preset's
+- **A configure that moves its secret asks for it again.** Within those origins, the preset's
   `secretDestination` names the issuer and the token endpoint set by hand that `upstreamConfig`
   makes for a config, as the digest the generic client binds its stored secret to
   (`upstreamClientSecretDestination`). A configure that changes either and keeps the stored secret,
   through a member that shapes the issuer's path such as a tenant, or through a token endpoint's
-  path, is refused with `400`: the secret is sealed again, as the generic client asks for it
-  again. A discovered token endpoint is not part of it, since discovery reads the issuer's own
-  document.
+  path, is refused with `400` ([above](#installing-and-enabling-a-plugin)): the secret is sealed
+  again, as the generic client asks for it again. A discovered token endpoint is not part of it,
+  since discovery reads the issuer's own document. The URL rule still holds the preset too, so a
+  URL member that moves to another of its origins asks for the secret again as well.
 - **No secret elsewhere.** A config whose provider config carries a secret member's value anywhere
   but in the client secret (the client id, a scope, a URL) is refused: it would go out, and be
   logged, in the clear.

@@ -52,10 +52,12 @@ import { upstreamOidcClientMethod, type UpstreamOidcTransaction } from './upstre
  *   `secretDestination` names the issuer and the token endpoint set by hand
  *   that `upstreamConfig` makes for a config, as the digest the generic
  *   client binds its secret to (`upstreamClientSecretDestination`). The admin
- *   API compares it for the stored config and the new one, so a configure
- *   that changes either (a member that shapes the issuer's path, such as a
- *   tenant or a region, or a token endpoint's path) must send the secret
- *   again, as the generic client asks for it again.
+ *   API compares it for the stored config and the new one at each
+ *   configure, on top of its own URL-origin rule, so a configure that
+ *   changes either (a member that shapes the issuer's path, such as a tenant
+ *   or a region, or a token endpoint's path) must send the secret again, as
+ *   the generic client asks for it again. The plugin secret's context does
+ *   not name the destination, as the generic client's does.
  *
  * What it adds to the generic client, it checks when the config is parsed,
  * so the admin API refuses such a config at the configure: a config whose

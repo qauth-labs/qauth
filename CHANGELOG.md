@@ -65,9 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   realm will hold, and refuses with 400 a configure that keeps a stored
   secret while the two differ, or while either cannot be told (a stored
   config the plugin's schema no longer takes, a hook that throws): the
-  secret is sealed again with `secrets.seal`. A plugin without the member is
-  held to the rule as before, which compares the origins of the URLs among
-  its plain members. A preset on the generic upstream OpenID Connect client
+  secret is sealed again with `secrets.seal`. Every plugin is still held to
+  the rule as before, which compares the origins of the URLs among its plain
+  members: the member only adds a refusal. A preset on the generic upstream OpenID Connect client
   (`createUpstreamOidcPresetMethod`) implements it with the issuer and the
   token endpoint set by hand that its config makes, as the digest the
   generic client binds its own stored secret to, so a configure that

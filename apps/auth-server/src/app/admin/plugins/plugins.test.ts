@@ -22,6 +22,7 @@ import {
   pluginSecretMember,
   pluginStateBodySchema,
   requireKeptSecretsAtDestination,
+  requireKeptSecretsStay,
 } from './routes';
 
 /**
@@ -364,6 +365,39 @@ describe("a configure that changes where a plugin's own hook says its secrets go
     ).not.toThrow();
   });
 
+  /** The fixture plugin `corp` with `secretDestination` set to `hook`, loaded. */
+  async function corpWithHook(hook: unknown) {
+    const runtime = await loadDeploymentAuthMethodPlugins(
+      { info: () => undefined, warn: () => undefined },
+      { packages: ['@example/corp'], pluginApiEnabled: true, nodeEnv: 'test' },
+      {
+        importPackage: fixturePluginImporter({
+          '@example/corp': {
+            authMethod: {
+              ...fixturePluginMethod({ type: 'corp_sso', id: 'corp' }),
+              secretDestination: hook,
+            },
+          },
+        }),
+      }
+    );
+    const [corp] = runtime.installed;
+    if (corp === undefined) throw new Error('the fixture did not load');
+    return corp;
+  }
+
+  const CORP_CONFIG = { issuer: 'https://idp.example', clientId: 'qauth' };
+
+  /** The realm's row of the fixture plugin `corp`, its client secret stored. */
+  function corpRow(config: Record<string, unknown>) {
+    return {
+      ...rowWith(config),
+      pluginId: 'corp',
+      pluginPackage: '@example/corp',
+      pluginType: 'corp_sso',
+    };
+  }
+
   it('refuses to keep the secret when the stored destination cannot be told', async () => {
     const plugin = await tenantPreset();
     // A stored config the schema no longer takes.
@@ -378,66 +412,57 @@ describe("a configure that changes where a plugin's own hook says its secrets go
         )
       )
     ).toBeInstanceOf(BadRequestError);
+    // The same config with a hook that answers a string is kept, so the
+    // refusals below are the hook's own.
+    const answering = await corpWithHook(() => 'same');
+    expect(() =>
+      requireKeptSecretsAtDestination(answering, corpRow(CORP_CONFIG), CORP_CONFIG, {}, KEPT)
+    ).not.toThrow();
     // A hook that throws, or answers no string.
-    for (const secretDestination of [
+    for (const hook of [
       () => {
         throw new Error('a hook bug');
       },
       () => 42,
     ]) {
-      const runtime = await loadDeploymentAuthMethodPlugins(
-        { info: () => undefined, warn: () => undefined },
-        { packages: ['@example/corp'], pluginApiEnabled: true, nodeEnv: 'test' },
-        {
-          importPackage: fixturePluginImporter({
-            '@example/corp': {
-              authMethod: {
-                ...fixturePluginMethod({ type: 'corp_sso', id: 'corp' }),
-                secretDestination,
-              },
-            },
-          }),
-        }
-      );
-      const [corp] = runtime.installed;
-      if (corp === undefined) throw new Error('the fixture did not load');
-      const config = { issuer: 'https://idp.example', clientId: 'qauth' };
+      const corp = await corpWithHook(hook);
       expect(
         refusal(() =>
-          requireKeptSecretsAtDestination(
-            corp,
-            {
-              ...rowWith(config),
-              pluginId: 'corp',
-              pluginPackage: '@example/corp',
-              pluginType: 'corp_sso',
-            },
-            config,
-            {},
-            KEPT
-          )
+          requireKeptSecretsAtDestination(corp, corpRow(CORP_CONFIG), CORP_CONFIG, {}, KEPT)
         )
       ).toBeInstanceOf(BadRequestError);
     }
   });
 
-  it('leaves a plugin without the hook to the URL rule', async () => {
-    const [corp] = await installed();
-    const config = { issuer: 'https://idp.example', clientId: 'qauth' };
-    expect(corp.method.secretDestination).toBeUndefined();
+  it('holds a plugin with the hook to the URL rule too, which the hook never lifts', async () => {
+    const moved = { ...CORP_CONFIG, issuer: 'https://attacker.example' };
+    const urlRule =
+      'The configuration sends the plugin to a new destination (a member that holds a URL is new or names another origin), and the stored secret "clientSecret" was set for the old one: seal it again with secrets.seal and send it under secrets';
+    // A hook that names the same destination whatever the config: the URL
+    // rule still refuses an issuer on another origin.
+    const hooked = await corpWithHook(() => 'same');
     expect(() =>
-      requireKeptSecretsAtDestination(
-        corp,
-        {
-          ...rowWith(config),
-          pluginId: 'corp',
-          pluginPackage: '@example/corp',
-          pluginType: 'corp_sso',
-        },
-        { ...config, issuer: 'https://attacker.example' },
-        {},
-        KEPT
-      )
+      requireKeptSecretsAtDestination(hooked, corpRow(CORP_CONFIG), moved, {}, KEPT)
+    ).not.toThrow();
+    const [plain] = await installed();
+    expect(plain.method.secretDestination).toBeUndefined();
+    for (const plugin of [hooked, plain]) {
+      const error = refusal(() => requireKeptSecretsStay(plugin, corpRow(CORP_CONFIG), moved, {}));
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect((error as Error).message).toBe(urlRule);
+      // Nothing moved, or the secret set again: kept, or not kept at all.
+      expect(() =>
+        requireKeptSecretsStay(plugin, corpRow(CORP_CONFIG), CORP_CONFIG, {})
+      ).not.toThrow();
+      expect(() =>
+        requireKeptSecretsStay(plugin, corpRow(CORP_CONFIG), moved, {
+          clientSecret: { sealed: SEALED },
+        })
+      ).not.toThrow();
+    }
+    // A plugin without the hook is left to the URL rule alone.
+    expect(() =>
+      requireKeptSecretsAtDestination(plain, corpRow(CORP_CONFIG), moved, {}, KEPT)
     ).not.toThrow();
   });
 });

@@ -81,7 +81,7 @@ import { PLUGIN_OPERATION_IDS } from './operations';
  * a URL is added or changes origin is refused: the secret must be sealed
  * again, so it never follows a destination it was not set for. A plugin that
  * names where its secrets go (`secretDestination`, #1031) is held to that
- * instead: a configure that keeps a stored secret while the plugin names
+ * too: a configure that keeps a stored secret while the plugin names
  * another destination for the new config than for the stored one is
  * refused. No response, audit row or log line holds a value: the
  * representation says only which secret members hold one.
@@ -413,18 +413,18 @@ function keptSecretsMoved(kept: readonly string[], why: string): BadRequestError
  * cannot read a write-only secret cannot send it elsewhere by changing, say,
  * `tokenEndpoint`.
  *
- * A plugin that names its own destination (`secretDestination`, #1031) is
- * held to that instead, once its config parses
- * ({@link requireKeptSecretsAtDestination}): this rule reads no member that
- * is not a URL, and no URL's path.
+ * Every plugin is held to it. This rule reads no member that is not a URL,
+ * and no URL's path, so a plugin that names its own destination
+ * (`secretDestination`, #1031) is held to that too, once its config parses
+ * ({@link requireKeptSecretsAtDestination}): the hook adds a refusal, and
+ * never lifts this one.
  */
-function requireKeptSecretsStay(
+export function requireKeptSecretsStay(
   plugin: InstalledAuthMethodPlugin,
   row: RealmAuthMethodPlugin | undefined,
   config: Readonly<Record<string, unknown>>,
   changes: Readonly<Record<string, unknown>>
 ): void {
-  if (plugin.method.secretDestination !== undefined) return;
   const kept = keptSecretPaths(plugin, row, changes);
   if (kept.length === 0) return;
   const before = withoutConfigMembers(stateOf(plugin, row).config, plugin.secretPaths);
@@ -819,8 +819,8 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
         );
       }
       // A kept secret never follows a changed destination: here by the URL
-      // rule, and below, once the config parses, by the plugin's own
-      // secretDestination when it has one (#1031).
+      // rule, for every plugin, and below, once the config parses, by the
+      // plugin's own secretDestination too when it has one (#1031).
       requireKeptSecretsStay(plugin, row, config, changes);
 
       // The secrets the realm will hold: those kept, and those set; a value
