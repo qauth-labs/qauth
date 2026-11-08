@@ -5,6 +5,7 @@ import {
   authMethodParameters,
   completeUpstreamStep,
   loadAuthMethodPlugins,
+  rankAttributeSource,
   startUpstreamStep,
   type VerifiedIdentity,
 } from '@qauth-labs/server-federation';
@@ -192,6 +193,10 @@ describe('the Google plugin (#671)', () => {
     expect(createGoogleMethod().configSchema.safeParse({ clientId: CLIENT_ID }).success).toBe(
       false
     );
+  });
+
+  it("ranks its attributes with an oidc_ provider's in claim resolution", () => {
+    expect(rankAttributeSource(GOOGLE_PLUGIN_TYPE)).toBe(rankAttributeSource('oidc_example'));
   });
 
   it('names the redirect URI to register at Google', () => {
