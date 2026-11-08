@@ -57,8 +57,9 @@ export type OAuthClientLike = {
    * {@link scopes}: a client that also signs users in lists only those it
    * needs as itself, so it gets no token without a user for its users' scopes.
    * Operator-set through the seed manifest only. NULL, or absent for older
-   * callers, ⇒ any scope of `scopes`. Read through
-   * `clientCredentialsScopeAllowlist` in `routes/oauth/token.ts`.
+   * callers, ⇒ any scope of `scopes`, except for a CIMD client (#956), which
+   * then gets none. Read through `clientCredentialsScopeAllowlist` in
+   * `routes/oauth/token.ts`.
    */
   clientCredentialsScopes?: string[] | null;
   audience: string[] | null;

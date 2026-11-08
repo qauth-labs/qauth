@@ -180,6 +180,13 @@ export type CimdGrantType =
  * ADR-007 §2's whole delegation surface unreachable through the path the
  * project positions first.
  *
+ * `client_credentials` is admitted for a document that registers a key set
+ * for `private_key_jwt`, but its tokens name no user, and the document's host,
+ * not the operator, chose the grant. So the token endpoint issues a CIMD client
+ * nothing on it until the operator lists the scopes it may get as itself, in
+ * the seed manifest's `cimd_clients` entry (`client_credentials_scopes`,
+ * #956); materialisation never writes that list.
+ *
  * `urn:ietf:params:oauth:grant-type:jwt-bearer` stays OUT, matching DCR: its
  * capability depends on an operator-set issuer allowlist a CIMD document
  * cannot reach, so accepting it would advertise something the client can never
