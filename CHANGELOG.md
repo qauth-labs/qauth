@@ -60,6 +60,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the signer can neither import the key Apple issues nor read the
   provider's Team ID and Services ID, so its code exchange fails. An Oxlint
   module-boundary rule and a source scan keep the plugins off the apps.
+- **An operator can verify an account** ([#1052], ADR-015 Decision 8 as
+  amended 2026-11-08, experimental route). A deployment that cannot send mail
+  had no way to verify a password account but a hand-written database update.
+  `POST /admin/v1-rc.0/realms/{realmId}/users/{userId}/verification`
+  (`users.verify`) is a security operation: effect `credential-path`, the new
+  permission `users.security`, and an approval ([#512]). Its approver sees the
+  account, its credentials and the proof each holds, and the approval holds
+  only for the account as it stood when it was filed. The verification is
+  recorded on the account (`users.operator_verified_at` and
+  `operator_verified_by`, migration 0070) and counts beside the proof of its
+  primary identity: in the sign-in gate of every path ([#1051]), and in the
+  verified-owner check of an agent ([#846]). It claims an unclaimed account,
+  and never sets `email_verified`. Where no admin API is set up, the migration
+  runner's `verify-account --realm <name> --user <id>` records the same
+  verification on the host, as the operating-system user that ran it. It
+  refuses a disabled or missing account (exit 6), and runs only on a current
+  database. Both paths record the new admin event
+  `urn:qauth:event:user.verified:v1-rc.0`, whose `method` is `operator` or
+  `operator_cli`. The pair of operations stays reserved for the admin
+  console's user screen ([#682]). The admin role's database user gains UPDATE
+  on `users`, SELECT on `user_credentials` and the event writer's grants. An
+  admin operation may now read state without `classify`, only to show it to
+  the approver and bind the approval to it; it then needs its declaration on
+  every request.
 
 ### Changed
 
@@ -3883,6 +3907,7 @@ It adds migrations 0068 and 0069.
 [#663]: https://github.com/qauth-labs/qauth/issues/663
 [#670]: https://github.com/qauth-labs/qauth/issues/670
 [#671]: https://github.com/qauth-labs/qauth/issues/671
+[#682]: https://github.com/qauth-labs/qauth/issues/682
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689
@@ -3916,6 +3941,7 @@ It adds migrations 0068 and 0069.
 [#1031]: https://github.com/qauth-labs/qauth/issues/1031
 [#1044]: https://github.com/qauth-labs/qauth/issues/1044
 [#1051]: https://github.com/qauth-labs/qauth/issues/1051
+[#1052]: https://github.com/qauth-labs/qauth/issues/1052
 [#1064]: https://github.com/qauth-labs/qauth/issues/1064
 
 ### Deprecated

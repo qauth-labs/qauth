@@ -1,14 +1,17 @@
 ---
 title: Accounts
-description: How to disable a user account and enable it again, and what disabling ends for good.
+description: How to disable a user account and enable it again, what disabling ends for good, and how an operator verifies an account that cannot confirm its address.
 sidebar:
   order: 13
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-08'
 ---
 
 An operator disables an account to stop whoever holds it, for example after
-the account was taken over. The admin API has no user operations yet, so this
-page uses the operator tool, which talks to the database directly.
+the account was taken over. The admin API has no operation for that yet, so
+this page uses the operator tool, which talks to the database directly. An
+operator also verifies an account that cannot confirm its address
+([Verify an account](#verify-an-account)): through the admin API, or on the
+server host where no admin API is set up.
 
 ## What disabling does
 
@@ -203,3 +206,92 @@ that requested them and has the user as a subject
 `UPDATE users SET enabled = false WHERE id = '<user id>'` by hand disables the
 account just as well, and the database records the time the same way, but no
 event is written. Use the tool.
+
+## Verify an account
+
+A realm that requires verified accounts (`accounts.requireVerifiedAccount`)
+signs a password account in only once its address is confirmed, by the code
+mailed to it. A deployment that cannot send mail, or an account whose mailbox
+is gone, has another way: an operator verifies the account
+([ADR-015](/reference/records/adr/015-agent-tree-hardening/), Decision 8, as
+amended 2026-11-08). The verification:
+
+- counts wherever QAuth asks for a verified account: signing in where the
+  realm requires one, and owning an agent;
+- claims the account if it is unclaimed: it is the operator's attestation, so
+  another person's later mailbox proof of the address no longer ends the
+  account;
+- leaves `email_verified` as it is. The address stays unconfirmed, and QAuth
+  asserts no address it did not confirm;
+- is recorded on the account with the operator who made it, and kept: an
+  account an operator verified is not verified again;
+- is refused for a disabled account, and for an account the realm does not
+  hold (a deleted one).
+
+### Through the admin API
+
+`users.verify` is a security operation: it needs the permission
+`users.security`, so a token with `qauth:admin:security`, and an approval
+([security operations](/reference/security-operations/)). File the approval
+with the account in `params` and an empty body. The approver sees the
+account, its credentials with the proof each holds, and the reason you give:
+
+```http
+POST /admin/v1-rc.0/realms/<realm id>/approvals
+Content-Type: application/json
+
+{ "operation": "users.verify", "params": { "userId": "<user id>" }, "body": {},
+  "reason": "No mail transport; the owner confirmed by phone." }
+```
+
+Once it is approved, send the verification with the approval:
+
+```http
+POST /admin/v1-rc.0/realms/<realm id>/users/<user id>/verification
+Content-Type: application/json
+If-Match: *
+QAuth-Approval: <approval id>
+
+{}
+```
+
+It answers the verification, with you as `verifiedBy`. The approval holds
+only for the account as it stood when the approval was filed: when a
+credential is added, removed or proved in between, it no longer matches, and
+you file a new one. A disabled account, and one an operator already verified,
+are refused with `409`.
+
+### On the server host
+
+A deployment with no admin API set up yet (no admin listener, or no admin
+with a passkey to approve with) runs the migration runner's `verify-account`
+command, on a host that holds the database credentials, as it runs the
+[migrations](/operate/upgrades/):
+
+```bash
+docker compose run --rm migration-runner verify-account --realm <realm name> --user <user id>
+```
+
+The command runs only on a database whose migrations are all applied. It
+records the verification and its event in one transaction, with the
+operating-system user that ran it as the operator, and prints what it did.
+
+| Exit | Meaning                                                                             |
+| ---- | ----------------------------------------------------------------------------------- |
+| `0`  | The account is verified now, or an operator verified it before (that is kept)       |
+| `1`  | Migrations are pending: run the migration runner first. Nothing was changed         |
+| `2`  | The arguments are wrong, or `DATABASE_URL` is not set                               |
+| `3`  | The command could not run: the database unreachable, or the migrations unreadable   |
+| `6`  | The realm holds no such account, there is no such realm, or the account is disabled |
+
+| Event                                                                 | When                            |
+| --------------------------------------------------------------------- | ------------------------------- |
+| [`user.verified`](/reference/events/#userverified-v1-rc0) (`warning`) | An operator verified an account |
+
+It is an admin event, in the realm's hash chain. Its `method` is `operator`
+for `users.verify`, with the admin as its actor, and `operator_cli` for the
+command, with the operating-system user as its actor.
+
+During a rolling upgrade from 0.2, a node of 0.2 does not read the
+verification: it still asks the account for its mailbox code. Verify accounts
+once every node runs this release.
