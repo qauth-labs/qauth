@@ -40,7 +40,6 @@ import {
   TokenExpiredError,
   TokenAlreadyUsedError,
   WeakPasswordError,
-  EmailNotVerifiedError,
   EmailAlreadyVerifiedError,
 } from '@qauth-labs/shared-errors';
 
@@ -65,12 +64,14 @@ try {
 // Login flow. Since ADR-002 (#230) the hash lives on the credential
 // (`credential_data.password_hash`), and verification state on the credential
 // too — the `users` row carries neither.
-if (!credential || !(await verifyPassword(credential.credentialData.password_hash, password))) {
+// An unverified account under the realm's gate gets the same error: a
+// distinct one would tell a free address from a registered one.
+if (
+  !credential ||
+  !(await verifyPassword(credential.credentialData.password_hash, password)) ||
+  (requireVerifiedAccount && !accountVerified)
+) {
   throw new InvalidCredentialsError(); // 401
-}
-
-if (!credential.credentialData.email_verified) {
-  throw new EmailNotVerifiedError(); // 403
 }
 
 // Email verification token
@@ -282,7 +283,6 @@ libs/shared/errors/
 │   └── lib/
 │       ├── auth/                          # Authentication errors
 │       │   ├── email-already-verified.error.ts
-│       │   ├── email-not-verified.error.ts
 │       │   ├── invalid-credentials.error.ts
 │       │   ├── invalid-token.error.ts
 │       │   ├── jwt-expired.error.ts
@@ -311,7 +311,6 @@ Errors are organized by domain to maintain clear separation:
 
 - **auth/**: Authentication-specific errors
   - `EmailAlreadyVerifiedError`: Email is already verified (400)
-  - `EmailNotVerifiedError`: Email not verified yet (403)
   - `InvalidCredentialsError`: Invalid email or password (401)
   - `InvalidTokenError`: Token is invalid or malformed (401)
   - `JWTExpiredError`: JWT token has expired (401)

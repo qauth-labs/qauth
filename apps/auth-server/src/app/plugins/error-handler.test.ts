@@ -2,7 +2,6 @@ import { Writable } from 'node:stream';
 
 import rateLimit from '@fastify/rate-limit';
 import {
-  EmailNotVerifiedError,
   ForbiddenError,
   InvalidClientError,
   InvalidClientMetadataError,
@@ -174,9 +173,6 @@ async function buildApp(): Promise<FastifyInstance> {
   app.get('/auth/credentials', async () => {
     throw new InvalidCredentialsError();
   });
-  app.get('/auth/unverified', async () => {
-    throw new EmailNotVerifiedError();
-  });
   app.get('/api/bearer-forbidden', { schema: { security: [{ bearerAuth: [] }] } }, async () => {
     throw new ForbiddenError('Static API keys are disabled for production clients.');
   });
@@ -298,7 +294,6 @@ describe('error-handler plugin (#513)', { timeout: 30_000 }, () => {
       const app = await buildApp();
       const cases: [string, number, keyof typeof PROBLEM_CODES][] = [
         ['/auth/credentials', 401, 'invalid_credentials'],
-        ['/auth/unverified', 403, 'email_not_verified'],
         ['/auth/oauth-class', 400, 'invalid_request'],
         ['/auth/misdirected', 421, 'misdirected_request'],
         ['/auth/shed', 503, 'service_unavailable'],
