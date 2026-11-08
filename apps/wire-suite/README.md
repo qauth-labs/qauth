@@ -102,11 +102,13 @@ You need Docker and a workspace install (`pnpm install`).
    REGISTRATION_RATE_WINDOW=60
    ```
 
-   The suite signs accounts in through `/ui/login`, and the server signs in only verified
-   accounts by default. Through Compose, let unverified accounts sign in and leave
-   `QAUTH_WIRE_MAIL_URL` unset:
+   The suite makes its accounts through `POST /auth/register`, which a realm's sign-up switch
+   closes (`ALLOW_SIGN_UP`, off by default), and signs them in through `/ui/login`, and the
+   server signs in only verified accounts by default. Through Compose, open sign-up, let
+   unverified accounts sign in and leave `QAUTH_WIRE_MAIL_URL` unset:
 
    ```bash
+   ALLOW_SIGN_UP=true
    REQUIRE_VERIFIED_ACCOUNT=false
    ```
 

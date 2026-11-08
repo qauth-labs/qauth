@@ -980,8 +980,8 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
     });
   });
 
-  describe('with sign-up off (ALLOW_SIGN_UP unset)', () => {
-    const server = bootForBlock({});
+  describe('with sign-up off (ALLOW_SIGN_UP=false)', () => {
+    const server = bootForBlock({ ALLOW_SIGN_UP: 'false' });
 
     describe('an unknown subject', () => {
       it('gets the error page and creates no account', async () => {

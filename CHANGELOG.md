@@ -58,6 +58,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`POST /auth/register` follows the realm's sign-up switch**
+  (`accounts.allowSignUp`). The legacy registration route did not read it,
+  so a realm whose sign-up was closed still let anyone create a password
+  account there. While the switch is off, the route now refuses every
+  request with `403 forbidden` ("Sign-up is closed in this realm"), before
+  the password or the address is checked, so the answer says only what
+  discovery already says. The developer portal's sign-up page shows that
+  message. **Upgrading:** the switch is off by default, so a deployment whose
+  people sign up through the portal or this route turns it on for their
+  realm (`ALLOW_SIGN_UP=true` seeds a new realm; an existing realm changes
+  `accounts.allowSignUp` through its policies). That also opens the hosted
+  sign-up and new accounts from upstream sign-in: one switch now answers
+  whether a person may create an account.
+
 - **A realm's plugin state belongs to the plugin that wrote it** ([#949],
   experimental `plugin-api`). Each realm's state of an AuthMethod plugin now
   records the npm package and the type of the plugin that wrote it

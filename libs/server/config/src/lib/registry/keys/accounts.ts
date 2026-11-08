@@ -26,7 +26,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: 'false',
     since: '0.2.0',
-    docs: "Whether a person may create a new account through the hosted sign-in (an upstream identity that no account holds yet, and a password registration a client starts with `prompt=create` while its operator-set `hosted_flows` name `register`, create one only while this is on; the legacy `POST /auth/register` does not read it), that seeds `accounts.allowSignUp` of a new realm, and of a realm whose stored policies lack it at the first boot of the release that added it; once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
+    docs: "Whether a person may create a new account through the hosted sign-in (an upstream identity that no account holds yet, and a password registration a client starts with `prompt=create` while its operator-set `hosted_flows` name `register`, create one only while this is on, and since 0.2.1 the legacy `POST /auth/register` answers 403 while it is off), that seeds `accounts.allowSignUp` of a new realm, and of a realm whose stored policies lack it at the first boot of the release that added it; once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
   },
   {
     name: 'SYSTEM_CLIENT_ID',
