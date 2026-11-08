@@ -55,9 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   claims and attribute rules. The signer signs an upstream assertion as the
   issuer the provider's configuration names (`assertionIssuer`). The server
   log censors the `user` query parameter, which a `form_post` bounce
-  carries. Apple sign-in needs the signer's provider configuration, which
-  the deployment's key store does not read yet. An Oxlint module-boundary
-  rule and a source scan keep the plugins off the apps.
+  carries. In claim resolution the plugins' attributes rank with an
+  `oidc_*` provider's. Apple sign-in does not work on a deployment yet:
+  the signer can neither import the key Apple issues nor read the
+  provider's Team ID and Services ID, so its code exchange fails. An Oxlint
+  module-boundary rule and a source scan keep the plugins off the apps.
 
 ### Changed
 
