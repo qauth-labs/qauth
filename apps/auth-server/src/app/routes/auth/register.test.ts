@@ -5,7 +5,7 @@ import {
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
 import { createPasswordValidators, type PasswordPolicy } from '@qauth-labs/shared-validation';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../helpers/timing', () => ({
@@ -40,6 +40,9 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
 });
 
 const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** A realm whose sign-up is open (`accounts.allowSignUp`); the seeded default is closed. */
+const OPEN_SIGN_UP: TestPolicyOverrides = { accounts: { allowSignUp: true } };
 
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
@@ -163,8 +166,9 @@ function createFastifyStub() {
       return { forPolicy: vi.fn((policy: PasswordPolicy) => validators.forPolicy(policy)) };
     })(),
     // The realm's password policy (#528, #634), read from the request's realm
-    // row: the seeded defaults, 15 characters and score 2.
-    policyStore: testPolicyStore(),
+    // row: the seeded defaults, 15 characters and score 2, with sign-up open
+    // (`accounts.allowSignUp`, off by default) so the route registers.
+    policyStore: testPolicyStore({}, OPEN_SIGN_UP),
     // The realm's breach list (#635): off, as a realm starts.
     breachedPasswords: {
       check: vi.fn().mockResolvedValue({ kind: 'off' }),
@@ -309,6 +313,28 @@ describe('POST /auth/register', () => {
       }
     );
     expect(fastify.emailService.sendAccountExistsEmail).not.toHaveBeenCalled();
+  });
+
+  describe("the realm's sign-up switch (accounts.allowSignUp)", () => {
+    it('refuses every request with 403 while sign-up is closed, before the password or the address is checked', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      fastify.policyStore = testPolicyStore() as unknown as FastifyInstance['policyStore'];
+      await registerRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      for (const email of ['new@example.com', 'taken@example.com']) {
+        const request = {
+          ...requestFixture(),
+          body: { email, password: 'correct horse battery staple tonic' },
+        } as unknown as FastifyRequest;
+        await expect(ctx.handler(request, createReply())).rejects.toMatchObject({
+          statusCode: 403,
+          message: 'Sign-up is closed in this realm',
+        });
+      }
+      expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+      expect(fastify.repositories.users.create).not.toHaveBeenCalled();
+      expect(emitUserEventMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('an address that is already registered (ANT-2026-SPEMY9GU)', () => {
@@ -611,7 +637,7 @@ describe('POST /auth/register', () => {
     const { fastify, ctx } = createFastifyStub();
     fastify.policyStore = testPolicyStore(
       {},
-      options.groups ?? {}
+      { ...OPEN_SIGN_UP, ...options.groups }
     ) as unknown as FastifyInstance['policyStore'];
     await registerRoute(fastify);
     if (!ctx.handler) throw new Error('Handler missing');
@@ -829,7 +855,7 @@ describe('POST /auth/register', () => {
       const { fastify, ctx } = createFastifyStub();
       fastify.policyStore = testPolicyStore(
         {},
-        { password: { minScore: 4 } }
+        { ...OPEN_SIGN_UP, password: { minScore: 4 } }
       ) as unknown as FastifyInstance['policyStore'];
       await registerRoute(fastify);
       if (!ctx.handler) throw new Error('Handler missing');

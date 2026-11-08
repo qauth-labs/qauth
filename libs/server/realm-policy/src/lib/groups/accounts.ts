@@ -44,7 +44,7 @@ export const ACCOUNTS_POLICY_GROUP = {
     environmentBound: false,
     doc: {
       summary:
-        'Whether a person may create a new account through the hosted sign-in, from an unknown upstream identity (#639) or with `prompt=create` (#640, for a client whose `hosted_flows` name `register`); the legacy `POST /auth/register` does not read it.',
+        'Whether a person may create a new account through the hosted sign-in, from an unknown upstream identity (#639) or with `prompt=create` (#640, for a client whose `hosted_flows` name `register`), or through the legacy `POST /auth/register` (since 0.2.1; it answers 403 while this is off).',
       link: groupDocsLink('accounts'),
     },
   }),

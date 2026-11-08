@@ -698,6 +698,7 @@ jobs:
             -e SMTP_ALLOWED_HOSTS=localhost \
             -e EMAIL_FROM_ADDRESS='noreply@qauth.dev' \
             -e EMAIL_BASE_URL="$QAUTH_BASE_URL" \
+            -e ALLOW_SIGN_UP=true \
             -e RATE_LIMIT_MAX=10000 \
             -e REGISTRATION_RATE_LIMIT=100 \
             -e LOGIN_RATE_LIMIT=100 \

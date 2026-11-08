@@ -5,6 +5,7 @@ import {
 } from '@qauth-labs/fastify-plugin-federation';
 import {
   BadRequestError,
+  ForbiddenError,
   UniqueConstraintError,
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
@@ -182,10 +183,10 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          "Register a password account. Answers every address with the same 202 and message, whether it was free or already registered; the next step arrives by email (a verification link for a new account, a notice for an existing one). The password must meet the realm's password policy: at least `password.minLength` characters (15 by default) after NFC normalisation, at most 256 UTF-16 code units, not a common word or password or the address, service or realm name as a whole, and a zxcvbn score of at least `password.minScore`. A password over 256 UTF-16 code units is refused by the request schema with a 400 `validation_error`, before the policy runs. A refusal by the policy is a 422 `weak_password` whose `reasons` say why (`too_short`, `blocklisted`, `too_weak`).",
+          "Register a password account. Answers every address with the same 202 and message, whether it was free or already registered; the next step arrives by email (a verification link for a new account, a notice for an existing one). The password must meet the realm's password policy: at least `password.minLength` characters (15 by default) after NFC normalisation, at most 256 UTF-16 code units, not a common word or password or the address, service or realm name as a whole, and a zxcvbn score of at least `password.minScore`. A password over 256 UTF-16 code units is refused by the request schema with a 400 `validation_error`, before the policy runs. A refusal by the policy is a 422 `weak_password` whose `reasons` say why (`too_short`, `blocklisted`, `too_weak`). While the realm's `accounts.allowSignUp` is off (the default), every request is refused with a 403 `forbidden`, before the password or the address is checked.",
         tags: ['Auth'],
         'x-qauth-stability': 'stable',
-        'x-qauth-errors': [400, 422],
+        'x-qauth-errors': [400, 403, 422],
         body: registerSchema,
         response: {
           202: registerResponseSchema,
@@ -220,6 +221,17 @@ export default async function (fastify: FastifyInstance) {
       // Independent of whether the address is registered, so it may answer
       // early, with every reason found.
       const policies = accountPoliciesOf(fastify, realm);
+
+      // The realm's sign-up switch (`accounts.allowSignUp`, off by default)
+      // closes this route too: one switch answers whether a person may create
+      // an account, here as on the hosted sign-up and the upstream sign-in.
+      // Refused before the password or the address is looked at, the same way
+      // for every request, so the answer says only what discovery already
+      // says (`prompt_values_supported` lists `create` only while it is on).
+      if (!policies.allowSignUp) {
+        throw new ForbiddenError('Sign-up is closed in this realm');
+      }
+
       const checked = fastify.passwordValidators
         .forPolicy({
           minLength: policies.passwordMinLength,

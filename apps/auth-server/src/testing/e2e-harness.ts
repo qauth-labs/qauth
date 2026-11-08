@@ -335,6 +335,10 @@ export function baseEnvironment(infra: E2eInfrastructure, jwt: PemKeyPair): Reco
     LOGIN_RATE_LIMIT: '10000',
     OID4VP_RESPONSE_RATE_LIMIT: '10000',
     RATE_LIMIT_MAX: '10000',
+    // Sign-up open (`accounts.allowSignUp`, off by default): most suites make
+    // their accounts through `POST /auth/register`, which the switch closes
+    // too. A suite about a closed realm sets `ALLOW_SIGN_UP: 'false'`.
+    ALLOW_SIGN_UP: 'true',
   };
 }
 
