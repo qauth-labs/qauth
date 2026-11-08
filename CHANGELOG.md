@@ -100,6 +100,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on and no ceremony app turns it off; one with a ceremony app sets
   `CEREMONY_APP_DEPLOYED=true`.
 
+- CI's integration suites run on three runners, and a pull request that
+  changes only docs runs none of them ([#1044]). The `integration` check now
+  passes when the three `integration (shard N/3)` jobs do, each running one
+  shard of every affected project's `*.integration.test.ts` files
+  (`QAUTH_INTEGRATION_SHARD`, read by `vitest.integration.config.mts`), so
+  every file runs once. The checks that compare the docs with the code of
+  `server-realm-policy`, `shared-stability` and `server-config` moved to a
+  new project, `docs-checks` (`apps/docs-checks`), which nothing may depend
+  on: with the docs among those libraries' inputs, a docs edit marked the
+  auth server affected and ran its integration suite. They run on every pull
+  request in the `coverage` job, as before.
+
+  **Action for contributors**: regenerate `reference/realm-policies.md`,
+  `reference/experimental-features.md` and `operate/configuration.md` with
+  `pnpm nx test docs-checks -- -u`, which replaces the libraries' own
+  `test -- -u`. Run `pnpm install` once, for the new project.
+
 ## [0.2.1] - 2026-11-08
 
 A patch release that carries breaking changes, as a 0.x release may (see
@@ -3788,6 +3805,7 @@ It adds migrations 0068 and 0069.
 [#1009]: https://github.com/qauth-labs/qauth/issues/1009
 [#1012]: https://github.com/qauth-labs/qauth/issues/1012
 [#1031]: https://github.com/qauth-labs/qauth/issues/1031
+[#1044]: https://github.com/qauth-labs/qauth/issues/1044
 
 ### Deprecated
 
