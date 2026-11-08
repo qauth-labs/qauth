@@ -178,11 +178,12 @@ describe('decideVerifiedOwner (ADR-015 Decision 8, #846)', () => {
       ).toEqual({ verified: true, identity: 'password' });
     });
 
-    it('does not verify an account that has no primary identity left', () => {
+    it('verifies an account that has no primary identity left (#1052)', () => {
+      // Its primary upstream identity unlinked while a passkey still signs in.
       expect(decideVerifiedOwner(undefined, undefined, { operatorVerified: true })).toEqual({
-        verified: false,
+        verified: true,
         identity: 'none',
-        reason: 'no_primary_identity',
+        operatorVerified: true,
       });
     });
   });

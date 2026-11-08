@@ -225,7 +225,7 @@ function proofText(credential: AccountCredentialState): string {
 function standingOf(state: AccountVerificationState): string {
   const primary = state.credentials.find((credential) => credential.primary);
   if (primary === undefined) {
-    return 'no primary identity: the verification lets it sign in where verified accounts are required, and it still cannot own an agent';
+    return 'no primary identity: the verification lets it sign in where verified accounts are required, and own an agent';
   }
   switch (primary.proof) {
     case 'proved':

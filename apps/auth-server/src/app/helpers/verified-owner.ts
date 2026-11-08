@@ -62,15 +62,15 @@ export async function checkVerifiedOwner(
     account.realmId,
     account.userId
   );
-  if (primary === undefined) return decideVerifiedOwner(undefined);
+  // An operator's verification counts with no primary identity left too.
   const user = await fastify.repositories.users.findById(account.realmId, account.userId);
+  const operatorVerified = user !== undefined && isOperatorVerified(user);
+  if (primary === undefined) return decideVerifiedOwner(undefined, undefined, { operatorVerified });
   const provider =
     primaryIdentityKindOf(primary) === 'upstream'
       ? await upstreamProviderCatalog(fastify).find(account.realmId, primary.providerType)
       : undefined;
-  return decideVerifiedOwner(primary, provider, {
-    operatorVerified: user !== undefined && isOperatorVerified(user),
-  });
+  return decideVerifiedOwner(primary, provider, { operatorVerified });
 }
 
 /** Whether `account` is a verified owner of an agent (ADR-015 Decision 8). */

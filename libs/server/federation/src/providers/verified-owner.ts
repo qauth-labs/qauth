@@ -90,10 +90,12 @@ export interface UpstreamProviderSwitch {
 export type VerifiedOwnerDecision =
   | {
       readonly verified: true;
-      readonly identity: PrimaryIdentityKind;
+      /** `none` only beside `operatorVerified`: the account has no primary identity left. */
+      readonly identity: PrimaryIdentityKind | 'none';
       /**
        * `true` when an operator's verification (#1052) decided it: the
-       * primary identity is not proved by its kind's rule. Absent otherwise.
+       * primary identity is not proved by its kind's rule, or the account has
+       * none left. Absent otherwise.
        */
       readonly operatorVerified?: true;
     }
@@ -132,8 +134,10 @@ export interface VerifiedOwnerAccount {
  * provider of the identity's type while it is on, read only for an upstream
  * identity; `undefined` when the realm has none of that type, or it is off.
  * An operator's verification of the account (`account.operatorVerified`)
- * makes it verified whatever its primary identity's proof says; an account
- * with no primary identity left stays refused, since nothing of it signs in.
+ * makes it verified whatever its primary identity's proof says, and with no
+ * primary identity left too (one unlinked while another credential still
+ * signs in): it attests the account, not a credential, and counts beside
+ * the table (Decision 8, amended 2026-11-08).
  */
 export function decideVerifiedOwner(
   primary: PrimaryIdentity | undefined,
@@ -141,7 +145,9 @@ export function decideVerifiedOwner(
   account: VerifiedOwnerAccount = {}
 ): VerifiedOwnerDecision {
   if (primary === undefined) {
-    return { verified: false, identity: 'none', reason: 'no_primary_identity' };
+    return account.operatorVerified === true
+      ? { verified: true, identity: 'none', operatorVerified: true }
+      : { verified: false, identity: 'none', reason: 'no_primary_identity' };
   }
   const decision = decideByPrimaryIdentity(primary, upstreamProvider);
   if (decision.verified || account.operatorVerified !== true) return decision;

@@ -95,6 +95,17 @@ describe('checkVerifiedOwner (ADR-015 Decision 8, #846)', () => {
       true
     );
   });
+
+  it("counts an operator's verification of an account with no primary identity left (#1052)", async () => {
+    // Its primary identity unlinked while another credential still signs in.
+    const { fastify, findById } = serverWith(undefined, 1_700_000_000_000);
+    expect(await checkVerifiedOwner(fastify, ACCOUNT)).toEqual({
+      verified: true,
+      identity: 'none',
+      operatorVerified: true,
+    });
+    expect(findById).toHaveBeenCalledWith(REALM, USER);
+  });
 });
 
 describe('assertVerifiedOwner', () => {
