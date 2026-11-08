@@ -294,7 +294,7 @@ describe('events integration (real Postgres)', () => {
   });
 
   describe('the read rule', () => {
-    it('a reader polling for 200 rounds, while transactions commit in the reverse order of their xid, never skips and never repeats an event', async () => {
+    it('a reader polling for at least 200 rounds, while transactions commit in the reverse order of their xid, never skips and never repeats an event', async () => {
       const realm = randomUUID();
       const committed: string[] = [];
       const rolledBack: string[] = [];
@@ -338,10 +338,20 @@ describe('events integration (real Postgres)', () => {
         return reversals;
       }
 
+      // At least 200 rounds, and on until the reader has seen an event: the
+      // read rule shows nothing before the first older transaction commits,
+      // and on a slow runner 200 quick reads can end before it does. The
+      // deadline keeps a writer that never commits from holding the test
+      // until its timeout; the assertions below then say what is missing.
       async function reader(): Promise<{ ids: string[]; next: EventPosition }> {
         const ids: string[] = [];
         let next = eventStreamStart(realm);
-        for (let round = 0; round < 200; round += 1) {
+        const deadline = Date.now() + 30_000;
+        for (
+          let round = 0;
+          round < 200 || (ids.length === 0 && Date.now() < deadline);
+          round += 1
+        ) {
           const page = await store.readAfter(realm, next, 3);
           ids.push(...page.events.map((stored) => stored.event.id));
           next = page.next;
