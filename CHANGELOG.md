@@ -65,6 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the state moved does not run on it. Filing or withdrawing an approval
   needs the security permissions the operation declares, no longer every
   permission it declares: what else a call needs is checked when it runs.
+- **An admin handler reaches the database only through its transaction**
+  ([#517]). Inside the handler of an admin route, a call to
+  `request.server.repositories` that does not pass `adminTransaction(request)`
+  throws, so the call fails with 500 and rolls back, and its audit row is
+  `failed`: such a call took a second connection from the pool the public
+  listener serves from, and committed outside the audited transaction.
 
 ### Changed
 
