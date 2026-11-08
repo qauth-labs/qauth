@@ -3,10 +3,13 @@
  *
  * A CIMD client's metadata document owns its identity: every re-resolution
  * rewrites the row's name, redirect URIs, grant types and the rest from it
- * (ADR-012). It never rewrites `scopes` or `audience`, and a CIMD row starts
- * with no scopes, so which scopes the client may receive is the operator's
- * call. This writes that call, from the `cimd_clients` section of the seed
- * manifest, and nothing else.
+ * (ADR-012). It never rewrites `scopes`, `audience` or
+ * `client_credentials_scopes`, and a CIMD row starts with no scopes, so which
+ * scopes the client may receive is the operator's call. So is which of them
+ * the `client_credentials` grant may issue it (#956): its document can add
+ * the grant, and without the operator's list the token endpoint issues a CIMD
+ * client nothing on it. This writes those calls, from the `cimd_clients`
+ * section of the seed manifest, and nothing else.
  *
  * The logic lives here, apart from the CLI in `seed-oauth-clients.ts`, so it
  * can be tested without running the script.
@@ -21,7 +24,8 @@ import type { CimdClientSpec } from './seed-manifest';
 
 /**
  * - `created`: no row existed; one now waits for its first resolution.
- * - `updated`: the CIMD row's `scopes` or `audience` changed.
+ * - `updated`: the CIMD row's `scopes`, `client_credentials_scopes` or
+ *   `audience` changed.
  * - `unchanged`: the CIMD row already held the entry's values.
  * - `not_cimd`: a row with this `client_id` exists and is not a CIMD row.
  *   Nothing was written.
@@ -85,15 +89,19 @@ function buildPendingCimdRow(
     verifiedDomain: null,
     isAgent: false,
     scopes: spec.scopes,
+    clientCredentialsScopes: spec.client_credentials_scopes ?? null,
     audience: spec.audience ?? null,
     metadata: { registrationType: 'cimd', client_id_metadata_url: spec.client_id },
   };
 }
 
 /**
- * Converge one CIMD client's `scopes` and `audience` on a manifest entry, in
- * one transaction. Idempotent. Never touches another column of an existing
- * row, so `enabled`, `suspended` and the document's fields stay as they are.
+ * Converge one CIMD client's `scopes`, `client_credentials_scopes` and
+ * `audience` on a manifest entry, in one transaction. Idempotent. Never
+ * touches another column of an existing row, so `enabled`, `suspended` and
+ * the document's fields stay as they are. An entry without
+ * `client_credentials_scopes` writes NULL, which closes the grant again: on a
+ * CIMD client NULL issues nothing, so leaving the list out never opens it.
  */
 export async function applyCimdClientGrant(
   db: OperatorDb,
@@ -101,12 +109,14 @@ export async function applyCimdClientGrant(
   spec: CimdClientSpec
 ): Promise<CimdGrantResult> {
   const audience = spec.audience ?? null;
+  const clientCredentialsScopes = spec.client_credentials_scopes ?? null;
   return db.transaction(async (tx) => {
     const [existing] = await tx
       .select({
         id: oauthClients.id,
         metadata: oauthClients.metadata,
         scopes: oauthClients.scopes,
+        clientCredentialsScopes: oauthClients.clientCredentialsScopes,
         audience: oauthClients.audience,
       })
       .from(oauthClients)
@@ -126,7 +136,11 @@ export async function applyCimdClientGrant(
       return { clientId: spec.client_id, status: 'not_cimd' as const };
     }
 
-    if (sameValue(existing.scopes, spec.scopes) && sameValue(existing.audience, audience)) {
+    if (
+      sameValue(existing.scopes, spec.scopes) &&
+      sameValue(existing.clientCredentialsScopes, clientCredentialsScopes) &&
+      sameValue(existing.audience, audience)
+    ) {
       return { clientId: spec.client_id, status: 'unchanged' as const };
     }
 
@@ -134,6 +148,7 @@ export async function applyCimdClientGrant(
       .update(oauthClients)
       .set({
         scopes: spec.scopes,
+        clientCredentialsScopes,
         audience,
         updatedAt: sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`,
       })

@@ -123,6 +123,26 @@ describe('createOAuthClientsRepository.upsertCimdClient', () => {
     expect(placeholders[columns.indexOf('"suspended"')]).toBe('default');
     expect(placeholders[columns.indexOf('"suspended_at"')]).toBe('default');
   });
+
+  // #956: the scopes `client_credentials` may issue a CIMD client are the
+  // operator's grant. A resolution writes none on a new row, whatever the
+  // caller passed, and leaves the grant's list on an existing one.
+  it('writes NULL for `client_credentials_scopes` on insert and never names it on conflict', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createOAuthClientsRepository(db).upsertCimdClient({
+      ...CIMD_ROW,
+      clientCredentialsScopes: ['notes:read'],
+    });
+
+    expect(queries).toHaveLength(1);
+    expect(insertedValues(queries[0]).get('"client_credentials_scopes"')).toBeNull();
+    const sql = queries[0].text.toLowerCase();
+    const conflictSet = sql.slice(sql.indexOf('on conflict'), sql.indexOf('returning'));
+    expect(conflictSet).not.toContain('"client_credentials_scopes"');
+    expect(conflictSet).not.toContain('"scopes"');
+    expect(conflictSet).not.toContain('"audience"');
+  });
 });
 
 /** The INSERT's column list and the parameter each column takes (`default` for none). */
