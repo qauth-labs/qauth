@@ -221,11 +221,12 @@ describe("a realm's plugin state is bound to the plugin that wrote it (#949, rea
       return send('POST', pluginPath(suffix), body, { 'qauth-approval': approvalId });
     }
 
-    /** Seal `value` for a configure's client secret (`secrets.seal`, #984). */
+    /** Seal `value` for a configure's client secret of `corp` (`secrets.seal`, #984). */
     async function seal(value: string): Promise<string> {
       const sealed = await send('POST', `/admin/v1-rc.0/realms/${realmId}/secrets/seal`, {
         operation: 'plugins.update',
         member: '/secrets/clientSecret',
+        params: { plugin: 'corp' },
         value,
       });
       expect(sealed.statusCode, sealed.body).toBe(200);
@@ -234,12 +235,20 @@ describe("a realm's plugin state is bound to the plugin that wrote it (#949, rea
 
     return {
       read: () => send('GET', pluginPath()),
+      seal,
       /** Configure CONFIG over the state of `version`, with `secret` sealed, or no secret. */
       async configure(version: number, secret?: string): Promise<LightMyRequestResponse> {
         const secrets =
           secret === undefined ? {} : { secrets: { clientSecret: { sealed: await seal(secret) } } };
         return approvedCall('plugins.update', '/config', { version, config: CONFIG, ...secrets });
       },
+      /** Configure CONFIG over the state of `version`, with the client secret `sealed` as it is. */
+      configureSealed: (version: number, sealed: string) =>
+        approvedCall('plugins.update', '/config', {
+          version,
+          config: CONFIG,
+          secrets: { clientSecret: { sealed } },
+        }),
       enable: (version: number) => approvedCall('plugins.enable', '/enable', { version }),
     };
   }
@@ -285,14 +294,16 @@ describe("a realm's plugin state is bound to the plugin that wrote it (#949, rea
     const stored = (await at.app.repositories.realmAuthMethodPlugins.find(realm.id, 'corp'))
       ?.secrets['clientSecret'];
     if (stored === undefined) throw new Error('the secret was not stored');
-    return { realm, who, stored };
+    // A value sealed for a configure while package A is installed, not yet sent.
+    const sealedUnderA = await calls.seal(SECRET_A);
+    return { realm, who, stored, sealedUnderA };
   }
 
   // Acceptance criterion: after the package behind an id is swapped, the
   // plugin answers 404, its stored secrets do not open, and enable is refused
   // until a configure.
   it('keeps a state another package wrote off, closed and unenabled until a configure under the new package', async () => {
-    const { realm, who, stored } = await configuredUnderA();
+    const { realm, who, stored, sealedUnderA } = await configuredUnderA();
 
     // The deployment now loads another package that declares the same id.
     const at = await deploy(PACKAGE_B, fixturePluginMethod({ type: 'corp_sso', id: 'corp' }));
@@ -348,6 +359,15 @@ describe("a realm's plugin state is bound to the plugin that wrote it (#949, rea
     const unsealed = await calls.configure(2);
     expect(unsealed.statusCode).toBe(400);
     expect(unsealed.json<{ detail?: string }>().detail).toContain('clientSecret: invalid_type');
+
+    // A value sealed while package A was installed is not handed to package
+    // B (#984): sealed for a configure of A's, it opens for none of B's.
+    const sealedForA = await calls.configureSealed(2, sealedUnderA);
+    expect(sealedForA.statusCode).toBe(400);
+    expect(sealedForA.json<{ detail?: string }>().detail).toContain(
+      'was not sealed for it, for this operation, in this realm'
+    );
+    expect(sealedForA.body).not.toContain(SECRET_A);
 
     // A configure under package B, with the secret sealed again: the state is
     // B's, and still off.

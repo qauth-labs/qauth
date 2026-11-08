@@ -402,6 +402,24 @@ function requireKeptSecretsStay(
   );
 }
 
+/**
+ * What a value sealed for a configure is bound to beside the plugin the path
+ * names (#984): the npm package and the type of the plugin installed under
+ * that name, as its stored secrets are (#949). A value sealed while one
+ * package is installed never opens once another is, so the secret is never
+ * handed to code it was not set for; `undefined` for a name no plugin is
+ * installed under.
+ */
+export function pluginSealScope(
+  plugins: {
+    find(name: string): Pick<InstalledAuthMethodPlugin, 'package' | 'type'> | undefined;
+  },
+  params: Readonly<Record<string, unknown>>
+): string | undefined {
+  const plugin = typeof params['plugin'] === 'string' ? plugins.find(params['plugin']) : undefined;
+  return plugin === undefined ? undefined : JSON.stringify([plugin.package, plugin.type]);
+}
+
 /** The installed plugin of the path, or 404. */
 function installedPlugin(fastify: FastifyInstance, name: string): InstalledAuthMethodPlugin {
   const plugin = fastify.authMethodPlugins.find(name);
@@ -458,10 +476,11 @@ async function storedSecrets(
 
 /**
  * The plaintext of the sealed value a configure sets `path` to, opened for
- * `plugins.update`, the member `/secrets/<path>` and the request's realm
- * (#984): one sealed for another operation, member or realm, or changed, is
- * refused with 400. Any other failure (the signer unreachable) is thrown on,
- * and the request fails.
+ * `plugins.update`, the member `/secrets/<path>`, the plugin of the path and
+ * its installed package and type, and the request's realm (#984): one sealed
+ * for another operation, member, plugin, package, type or realm, or changed,
+ * is refused with 400. Any other failure (the signer unreachable) is thrown
+ * on, and the request fails.
  */
 function openSealed(request: FastifyRequest, path: string, sealed: string): Promise<string> {
   return openRequestSealedValue(
@@ -676,13 +695,16 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
   typed.post(
     `${PLUGINS_PATH}/:plugin/config`,
     {
-      config: { operation: operations.update.id },
+      config: {
+        operation: operations.update.id,
+        sealScope: (params) => pluginSealScope(fastify.authMethodPlugins, params),
+      },
       schema: {
         ...operationSchemaExtensions(operations.update),
         ...common,
         summary: "Replace an AuthMethod plugin's configuration in the realm",
         description:
-          'Names the version of the state it replaces in its body (412 when the state moved). Secret members are named under secrets with values secrets.seal sealed for plugins.update and the member /secrets/<path>, never in the clear.',
+          'Names the version of the state it replaces in its body (412 when the state moved). Secret members are named under secrets with values secrets.seal sealed for plugins.update, the member /secrets/<path> (the path escaped as a JSON Pointer token) and the params { plugin }, never in the clear.',
         'x-qauth-errors': [400, 401, 403, 404, 412],
         params: configParams,
         body: configBody,

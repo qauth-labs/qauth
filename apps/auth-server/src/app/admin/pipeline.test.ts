@@ -531,6 +531,51 @@ describe('the routes of security operations at boot (#512)', () => {
         )
       ).resolves.toBeDefined();
     });
+
+    /** The pipeline's scope the last {@link bootWithScope} registered its route in. */
+    let routeScope: FastifyInstance | undefined;
+
+    /** Boot the route of `operation` with the route option `sealScope`. */
+    const bootWithScope = (operation: AdminOperation, sealScope: unknown) =>
+      bootSecurity(operation, (scope, schema) => {
+        routeScope = scope;
+        scope.post(
+          credentialsPath,
+          {
+            config: { operation: operation.id, sealScope } as object,
+            schema: {
+              ...schema,
+              params,
+              body: z.strictObject({ password: SEALED_VALUE_SCHEMA }),
+            } as object,
+          },
+          async () => ({})
+        );
+      });
+
+    it('records what the route binds a sealed value to, beside its path parameters', async () => {
+      const sealScope = () => 'the installed version';
+      await bootWithScope(credentials(['/password']), sealScope);
+      expect(routeScope?.adminApi.routeOf('fixtureCredentials.update')?.sealScope).toBe(sealScope);
+    });
+
+    it('refuses to boot a sealScope that is no function, or on an operation that declares no secret member', async () => {
+      await expect(bootWithScope(credentials(['/password']), 'scope')).rejects.toThrow(
+        /sealScope is a function of the path parameters/
+      );
+      await instance?.close();
+      const plain = defineOperation({
+        id: 'fixtureCredentials.update',
+        class: 'security',
+        effects: ['credential-path'],
+        permissions: ['realms.policies.security'],
+        description: 'A security operation that sets no secret (fixture).',
+        render: () => ({ title: 'Set the credential' }),
+      });
+      await expect(bootWithScope(plain, () => 'scope')).rejects.toThrow(
+        /only the route of a security operation that declares secret members binds a sealed value \(sealScope\)/
+      );
+    });
   });
 });
 

@@ -250,17 +250,20 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
 
   /**
    * Seal `value` for the plugin's client secret in the realm: for
-   * `plugins.update` and its member `/secrets/clientSecret`, or `member`.
+   * `plugins.update`, its member `/secrets/clientSecret` or `member`, and the
+   * plugin `corp` or `plugin`.
    */
   async function seal(
     realmId: string,
     token: string,
     value = SECRET,
-    member = '/secrets/clientSecret'
+    member = '/secrets/clientSecret',
+    plugin = 'corp'
   ) {
     const sealed = await send('POST', sealPath(realmId), token, {
       operation: 'plugins.update',
       member,
+      params: { plugin },
       value,
     });
     expect(sealed.statusCode, sealed.body).toBe(200);
@@ -594,14 +597,22 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     const refused = await send('POST', sealPath(alpha.id), viewer.token, {
       operation: 'plugins.update',
       member: '/secrets/clientSecret',
+      params: { plugin: 'corp' },
       value: SECRET,
     });
     expect(refused.statusCode).toBe(403);
-    // A member the operation does not declare secret, and an operation that
-    // declares none, are refused, naming neither.
+    // A member the operation does not declare secret, an operation that
+    // declares none, and a plugin no package is installed under, are refused,
+    // naming none of them.
     for (const target of [
-      { operation: 'plugins.update', member: '/config/clientId' },
-      { operation: 'plugins.enable', member: '/secrets/clientSecret' },
+      { operation: 'plugins.update', member: '/config/clientId', params: { plugin: 'corp' } },
+      { operation: 'plugins.enable', member: '/secrets/clientSecret', params: { plugin: 'corp' } },
+      {
+        operation: 'plugins.update',
+        member: '/secrets/clientSecret',
+        params: { plugin: 'partner' },
+      },
+      { operation: 'plugins.update', member: '/secrets/clientSecret' },
     ]) {
       const notSecret = await send('POST', sealPath(alpha.id), editor.token, {
         ...target,
