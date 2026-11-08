@@ -146,6 +146,10 @@ export const LOG_REDACTED_QUERY_PARAMETERS = [
   // The mailed pass (#637): it takes one reset or registration start past
   // the per-address send tiers, so its link is a bearer value.
   'pass',
+  // An upstream callback's form_post bounce (#671): a provider's own
+  // response member the bounce carries on to the GET callback, such as
+  // Sign in with Apple's `user`, which holds the person's name.
+  'user',
 ] as const;
 
 /**

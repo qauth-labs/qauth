@@ -307,7 +307,7 @@ describe('percentEncodingTolerantPattern', () => {
 });
 
 describe('redactLoggedUrl', () => {
-  it('lists the bearer values that ride in a query string, login_hint (#628), the end-session hints (#675) and the mailed pass (#637)', () => {
+  it("lists the bearer values that ride in a query string, login_hint (#628), the end-session hints (#675), the mailed pass (#637) and a form_post bounce's provider member (#671)", () => {
     expect(LOG_REDACTED_QUERY_PARAMETERS).toEqual([
       'code',
       'id_token',
@@ -318,7 +318,15 @@ describe('redactLoggedUrl', () => {
       'id_token_hint',
       'logout_hint',
       'pass',
+      'user',
     ]);
+  });
+
+  it("censors the name a form_post bounce carries in the provider's user member (#671)", () => {
+    const user = encodeURIComponent(JSON.stringify({ name: { firstName: 'Ada' } }));
+    const redacted = redactLoggedUrl(`/upstream/apple/callback?code=abc&state=s&user=${user}`);
+    expect(redacted).not.toContain('Ada');
+    expect(redacted).toContain('state=s');
   });
 
   it('censors the mailed pass a notice link carries (#637)', () => {
