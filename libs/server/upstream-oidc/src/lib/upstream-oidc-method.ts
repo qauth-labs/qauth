@@ -253,7 +253,10 @@ export type UpstreamResponseMembers = Readonly<
  * the response members it reads and the preset's config. The result's
  * members are set over the provider's claims, and one set to `undefined`
  * removes a claim; `sub` and the claims only the ID token may carry (`iss`,
- * `aud`, `acr`, `auth_time` and the rest) stay the validated ones.
+ * `aud`, `acr`, `auth_time` and the rest) stay the validated ones. A claim
+ * the provider vouches for, `email` or `phone_number`, and its
+ * `*_verified` flag may be removed, never set: a value the preset makes up
+ * is never taken as one the provider verified.
  *
  * @experimental
  */
@@ -379,8 +382,10 @@ export function upstreamOidcClientMethod<TConfig>(
     const metadata = await metadataFor(context);
     // RFC 9207 §2.4: a response that names another issuer is refused, and
     // so is one without `iss` from a provider that says it sends it. A
-    // multi-tenant provider's names its tenant, which the ID token's
-    // issuer check ties to the token's own.
+    // multi-tenant provider's must fit its issuer template. It is not
+    // compared with the ID token's issuer, which the token's own check binds
+    // to the token's tenant claim: which tenant such a provider names here
+    // is not specified.
     if (Object.hasOwn(query, 'iss')) {
       const iss = single(query, 'iss');
       if (
@@ -618,6 +623,9 @@ const VERIFIED_CLAIM_PAIRS: readonly (readonly [value: string, flag: string])[] 
   ['phone_number', 'phone_number_verified'],
 ];
 
+/** Every claim of {@link VERIFIED_CLAIM_PAIRS}: a value or its flag. */
+const VOUCHED_CLAIMS: ReadonlySet<string> = new Set(VERIFIED_CLAIM_PAIRS.flat());
+
 /**
  * The identity's claims: the ID token's over the userinfo answer's. The ID
  * token's win: they are signed, and `iss`, `sub` and `aud` stay the checked
@@ -702,7 +710,8 @@ function readResponseMembers(
 /**
  * The provider's claims with a preset's own over them
  * ({@link UpstreamIdentityClaims}): never `sub` or a claim only the ID token
- * may carry. A preset whose function throws fails the callback.
+ * may carry, and a claim the provider vouches for removed at most. A preset
+ * whose function throws fails the callback.
  */
 function withIdentityClaims<TConfig>(
   claims: Record<string, unknown>,
@@ -724,7 +733,10 @@ function withIdentityClaims<TConfig>(
   for (const [name, value] of Object.entries(extra)) {
     if (name === 'sub' || ID_TOKEN_ONLY_CLAIMS.includes(name)) continue;
     if (value === undefined) delete merged[name];
-    else merged[name] = value;
+    // A claim the provider vouches for, or its flag, is the provider's to
+    // set: a preset only removes one, so a value it makes up, such as one
+    // from a response member, is never taken as verified.
+    else if (!VOUCHED_CLAIMS.has(name)) merged[name] = value;
   }
   return merged;
 }

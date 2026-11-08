@@ -365,6 +365,26 @@ describe('response members and identity claims (#671)', () => {
     ]);
   });
 
+  it('never sets a claim the provider vouches for, or its flag, from the preset', async () => {
+    const { provider, method, host } = await memberHost(({ response }) => ({
+      email: response['user'] === undefined ? undefined : JSON.parse(response['user']).email,
+      email_verified: true,
+      phone_number: '+15550100',
+      phone_number_verified: true,
+    }));
+    const { completion } = await signIn(
+      method,
+      host,
+      provider,
+      { sub: 'user-1', claims: { email: 'ada@example.com', email_verified: true } },
+      { user: '{"email":"mallory@example.com"}' }
+    );
+    const identity = identityOf(completion);
+    expect(identity.rawClaims).toMatchObject({ email: 'ada@example.com', email_verified: true });
+    expect(identity.rawClaims).not.toHaveProperty('phone_number');
+    expect(identity.rawClaims).not.toHaveProperty('phone_number_verified');
+  });
+
   it('fails the callback when the identity claims throw', async () => {
     const { provider, method, host } = await memberHost(() => {
       throw new Error('broken');
