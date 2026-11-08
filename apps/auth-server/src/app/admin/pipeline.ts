@@ -56,6 +56,7 @@ import {
 import { isApprovalEngineOperation } from './approvals/operations';
 import { callerAccount } from './approvals/standing';
 import { adminRealmRouteProblem } from './route-placement';
+import { secretMemberSchemaProblem } from './secrets/secret-members';
 
 /**
  * THE ADMIN API'S REQUEST PIPELINE (ADR-019 Decision 7, issue #511).
@@ -1094,7 +1095,9 @@ function schemaPart(schema: Record<string, unknown>, name: (typeof FILED_PARTS)[
  *   object schema for its path parameters, which always hold the realm,
  *   naming every parameter of its URL; one for its body under every method
  *   that carries one (all but GET, HEAD and TRACE); and one for its query
- *   where it has one.
+ *   where it has one. Its body schema holds each secret member its
+ *   definition declares (`secretMembers`) to the sealed-value schema, so a
+ *   secret never reaches the request an approval binds in the clear (#984).
  * - An operation is served by one route. A HEAD route, which Fastify adds
  *   beside a GET route on a listener that exposes them (the admin listener
  *   does not), is checked as any route but is never the operation's route:
@@ -1136,6 +1139,14 @@ function operationRouteProblem(
     }
     if (!BODYLESS_METHODS.has(methods[0]) && schemaPart(schema, 'body') === undefined) {
       return `${where}: the security operation ${operation.id} has no Zod body schema, so its handler would read a body no schema parsed`;
+    }
+    // An approval keeps a digest of the request that a copy of the approvals
+    // table can test a guessed body against: a secret reaches it only sealed.
+    for (const member of operation.secretMembers ?? []) {
+      const problem = secretMemberSchemaProblem(schemaPart(schema, 'body'), member);
+      if (problem !== undefined) {
+        return `${where}: the security operation ${operation.id} declares the secret member ${member}, but ${problem}; a secret member takes only a value sealed with secrets.seal (#984)`;
+      }
     }
   }
   if (methods.length === 1 && methods[0] === 'HEAD') return undefined;

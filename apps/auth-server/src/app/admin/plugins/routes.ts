@@ -6,7 +6,6 @@ import {
   AuthMethodConfigError,
   configSpellsMemberOf,
   type InstalledAuthMethodPlugin,
-  MAX_AUTH_METHOD_SECRET_LENGTH,
   parseAuthMethodConfig,
   withConfigMembers,
   withoutConfigMembers,
@@ -34,6 +33,8 @@ import {
   recordAdminChange,
   requestAdminCaller,
 } from '../pipeline';
+import { openRequestSealedValue } from '../secrets/sealed-values';
+import { memberPointer, SEALED_VALUE_SCHEMA } from '../secrets/secret-members';
 import { PLUGIN_OPERATION_IDS } from './operations';
 
 /**
@@ -43,9 +44,6 @@ import { PLUGIN_OPERATION_IDS } from './operations';
  * - `GET  …/plugins` lists the installed plugins with the realm's state of
  *   each (`plugins.list`), one page at a time;
  * - `GET  …/plugins/{plugin}` reads one (`plugins.get`), with its `ETag`;
- * - `POST …/plugins/{plugin}/secrets/seal` seals one secret member's value
- *   for the realm (`plugins.secrets.seal`): it changes nothing, and answers
- *   the value encrypted;
  * - `POST …/plugins/{plugin}/config` replaces its config and sets or clears
  *   its secret members (`plugins.update`), naming the version it replaces;
  * - `POST …/plugins/{plugin}/enable` and `…/disable` turn it on and off
@@ -64,19 +62,22 @@ import { PLUGIN_OPERATION_IDS } from './operations';
  *
  * SECRETS. A plugin's config schema marks its secret members
  * (`writeOnly`). A secret's value reaches the server in one place only: the
- * body of `plugins.secrets.seal`, which encrypts it with the realm's
- * `data_at_rest` key, under a context bound to the plugin and the member,
- * and answers the ciphertext; it stores nothing and records no value. A
- * configure request then names each secret member apart from the plain
- * ones, under `secrets`, by path: `{ sealed }` sets one to a sealed value,
- * `null` clears it, and one it does not name keeps its value. So the request
- * an approval stores, and the digests it is bound by, hold a ciphertext,
- * never the value (a value in an approval would sit in the clear until the
- * approval closes, and a digest over it could be guessed offline). The
- * handler checks that each sealed value opens for its member of this plugin
- * in this realm, and stores the ciphertext as it is. The body schema refuses
- * any installed plugin's secret member under `config`, however it is
- * spelled. A configure that keeps a stored secret while a member that holds
+ * body of `secrets.seal` (#984), which encrypts it with the realm's
+ * `data_at_rest` key, under a context bound to `plugins.update` and the
+ * member `/secrets/<path>`, and answers the ciphertext; it stores nothing and
+ * records no value. A configure request then names each secret member apart
+ * from the plain ones, under `secrets`, by path: `{ sealed }` sets one to a
+ * sealed value, `null` clears it, and one it does not name keeps its value.
+ * `plugins.update` declares `/secrets/*` its secret members, so the admin
+ * listener boots its route only with the sealed-value schema there. So the
+ * request an approval stores, and the digest it is bound by, hold a
+ * ciphertext, never the value (a value in an approval would sit in the clear
+ * until the approval closes, and a digest over it could be guessed offline).
+ * The handler opens each sealed value for its own operation, that member and
+ * this realm, and seals it again for the store under the plugin's own context
+ * (bound to the plugin, its package and type, and the member): what the
+ * approval bound is never what is stored. The body schema refuses any
+ * installed plugin's secret member under `config`, however it is spelled. A configure that keeps a stored secret while a member that holds
  * a URL is added or changes origin is refused: the secret must be sealed
  * again, so it never follows a destination it was not set for. No response,
  * audit row or log line holds a value: the representation says only which
@@ -106,23 +107,13 @@ const MAX_CONFIG_MEMBERS = 64;
 /** The largest config a request may set, as JSON. */
 const MAX_CONFIG_BYTES = 16 * 1024;
 
-/** A data-at-rest ciphertext, `v1.<kid>.<iv>.<ciphertext>`, as the signer writes one. */
-const SEALED_PATTERN = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
-
-/**
- * The longest sealed value: a secret of the longest length (8192 UTF-16
- * units, at most 24 KiB as UTF-8), encrypted and base64url-encoded, with room
- * for its key id and IV.
- */
-const MAX_SEALED_LENGTH = 48 * 1024;
-
 /** A secret member's path, as a request names it. */
 const secretPathSchema = z.string().min(1).max(260);
 
-/** A sealed value, as `plugins.secrets.seal` answered it. */
-const sealedSchema = z.string().max(MAX_SEALED_LENGTH).regex(SEALED_PATTERN).meta({
-  description: 'A secret value sealed for this member, as plugins.secrets.seal answered it.',
-});
+/** The member of a configure's body a plugin secret's sealed value sits at: `/secrets/<path>`. */
+export function pluginSecretMember(path: string): string {
+  return memberPointer(['secrets', path]);
+}
 
 /**
  * A plugin's name in this API: its AuthMethod id, as the contract defines it
@@ -325,16 +316,13 @@ export function pluginConfigBodySchema(installed: readonly InstalledAuthMethodPl
         )
         .refine((config) => !configSpellsMemberOf(config, secretPaths), {
           message:
-            'config holds a secret member: seal it with plugins.secrets.seal and send it under secrets',
+            'config holds a secret member: seal it with secrets.seal and send it under secrets',
         })
         .meta({ description: "The plugin's plain config members: the whole config, replaced." }),
-      secrets: z
-        .record(secretPathSchema, z.strictObject({ sealed: sealedSchema }).nullable())
-        .optional()
-        .meta({
-          description:
-            'Secret members to set to a sealed value (`{ sealed }`) or clear (`null`), by path. One not named keeps its value.',
-        }),
+      secrets: z.record(secretPathSchema, SEALED_VALUE_SCHEMA.nullable()).optional().meta({
+        description:
+          'Secret members to set to a sealed value (`{ sealed }`, from secrets.seal for plugins.update and the member `/secrets/<path>`) or clear (`null`), by path. One not named keeps its value.',
+      }),
     })
     .meta({ description: "An AuthMethod plugin's configuration in the realm." });
 }
@@ -410,7 +398,7 @@ function requireKeptSecretsStay(
   if (newUrlDestinations(before, config).length === 0) return;
   const names = kept.map((path) => JSON.stringify(path)).join(', ');
   throw new BadRequestError(
-    `The configuration sends the plugin to a new destination (a member that holds a URL is new or names another origin), and the stored secret ${names} was set for the old one: seal ${kept.length === 1 ? 'it' : 'each'} again with plugins.secrets.seal and send ${kept.length === 1 ? 'it' : 'them'} under secrets`
+    `The configuration sends the plugin to a new destination (a member that holds a URL is new or names another origin), and the stored secret ${names} was set for the old one: seal ${kept.length === 1 ? 'it' : 'each'} again with secrets.seal and send ${kept.length === 1 ? 'it' : 'them'} under secrets`
   );
 }
 
@@ -468,35 +456,20 @@ async function storedSecrets(
   return plaintexts;
 }
 
-/** Signer error codes that say a ciphertext was not made for this slot of this realm. */
-const NOT_SEALED_HERE: ReadonlySet<unknown> = new Set([
-  'DATA_DECRYPTION_FAILED',
-  'SIGNER_KEY_NOT_FOUND',
-]);
-
 /**
- * The plaintext of a sealed value, which must open for `path` of `plugin` in
- * the realm: one sealed for another member, plugin or realm, or changed, is
+ * The plaintext of the sealed value a configure sets `path` to, opened for
+ * `plugins.update`, the member `/secrets/<path>` and the request's realm
+ * (#984): one sealed for another operation, member or realm, or changed, is
  * refused with 400. Any other failure (the signer unreachable) is thrown on,
  * and the request fails.
  */
-async function openSealed(
-  fastify: FastifyInstance,
-  plugin: InstalledAuthMethodPlugin,
-  realmId: string,
-  path: string,
-  sealed: string
-): Promise<string> {
-  try {
-    return await authMethodPluginSecretCipher(fastify).open(realmId, plugin, path, sealed);
-  } catch (error) {
-    if (NOT_SEALED_HERE.has((error as { code?: unknown } | null)?.code)) {
-      throw new BadRequestError(
-        `The value for the secret member ${JSON.stringify(path)} was not sealed for it, for this plugin's package and type, in this realm`
-      );
-    }
-    throw error;
-  }
+function openSealed(request: FastifyRequest, path: string, sealed: string): Promise<string> {
+  return openRequestSealedValue(
+    request,
+    pluginSecretMember(path),
+    sealed,
+    `the secret member ${JSON.stringify(path)}`
+  );
 }
 
 /**
@@ -701,59 +674,6 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   typed.post(
-    `${PLUGINS_PATH}/:plugin/secrets/seal`,
-    {
-      config: { operation: operations.seal.id },
-      schema: {
-        ...operationSchemaExtensions(operations.seal),
-        ...common,
-        summary: "Seal a value for one of an AuthMethod plugin's secret members in the realm",
-        description:
-          'Encrypts the value with the realm data_at_rest key, bound to this plugin and member, and answers the ciphertext. It changes nothing and records no value; a configure request sets the member to the sealed value.',
-        'x-qauth-errors': [400, 401, 403, 404],
-        params: pluginParams,
-        body: z
-          .strictObject({
-            path: secretPathSchema.meta({ description: 'The secret member, by path.' }),
-            value: z
-              .string()
-              .min(1)
-              .max(MAX_AUTH_METHOD_SECRET_LENGTH)
-              .meta({ description: 'Its value. Write-only: no response, row or log holds it.' }),
-          })
-          .meta({ description: 'A value to seal for a secret member.' }),
-        response: {
-          200: z
-            .object({
-              path: z.string(),
-              sealed: z.string().meta({
-                description:
-                  'The value, encrypted for this member of this plugin in this realm: what a configure request sends under secrets.',
-              }),
-            })
-            .meta({ description: 'A sealed secret value.' }),
-        },
-      },
-    },
-    async (request) => {
-      const plugin = installedPlugin(fastify, request.params.plugin);
-      const { path, value } = request.body;
-      if (!plugin.secretPaths.includes(path)) {
-        // The path is not echoed: a client that swapped the path and the value
-        // would get the value back, and the log would keep it.
-        throw new BadRequestError('path names no secret member of the plugin');
-      }
-      const sealed = await authMethodPluginSecretCipher(fastify).seal(
-        requestAdminCaller(request).targetRealm.id,
-        plugin,
-        path,
-        value
-      );
-      return { path, sealed };
-    }
-  );
-
-  typed.post(
     `${PLUGINS_PATH}/:plugin/config`,
     {
       config: { operation: operations.update.id },
@@ -762,7 +682,7 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: "Replace an AuthMethod plugin's configuration in the realm",
         description:
-          'Names the version of the state it replaces in its body (412 when the state moved). Secret members are named under secrets with values plugins.secrets.seal sealed, never in the clear.',
+          'Names the version of the state it replaces in its body (412 when the state moved). Secret members are named under secrets with values secrets.seal sealed for plugins.update and the member /secrets/<path>, never in the clear.',
         'x-qauth-errors': [400, 401, 403, 404, 412],
         params: configParams,
         body: configBody,
@@ -789,7 +709,7 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       }
       if (configSpellsMemberOf(config, plugin.secretPaths)) {
         throw new BadRequestError(
-          'config holds a secret member: seal it with plugins.secrets.seal and send it under secrets'
+          'config holds a secret member: seal it with secrets.seal and send it under secrets'
         );
       }
       // A kept secret never follows a changed destination.
@@ -806,12 +726,20 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       for (const path of plugin.secretPaths) {
         if (plaintexts.has(path)) ciphertexts[path] = stored[path];
       }
+      const opened = new Map<string, string>();
       for (const [path, change] of Object.entries(changes)) {
         if (change === null) continue;
-        plaintexts.set(path, await openSealed(fastify, plugin, realmId, path, change.sealed));
-        ciphertexts[path] = change.sealed;
+        opened.set(path, await openSealed(request, path, change.sealed));
       }
+      for (const [path, plaintext] of opened) plaintexts.set(path, plaintext);
       requireValidConfig(plugin, config, plaintexts);
+      // Each secret set is stored sealed again, under the plugin's own
+      // context: the value sealed for the approval never opens as a stored
+      // secret, nor a stored secret as a sealed value.
+      const cipher = authMethodPluginSecretCipher(fastify);
+      for (const [path, plaintext] of opened) {
+        ciphertexts[path] = await cipher.seal(realmId, plugin, path, plaintext);
+      }
 
       const written = await writeState(request, operations.update.id, plugin, row, {
         // A state another package or type wrote stays off until an approved

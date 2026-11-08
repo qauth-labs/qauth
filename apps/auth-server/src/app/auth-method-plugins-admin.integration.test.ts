@@ -245,14 +245,42 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     return { done, responses: [filed, read, done] };
   }
 
-  /** Seal `value` for the plugin's client secret in the realm. */
-  async function seal(realmId: string, token: string, value = SECRET) {
-    const sealed = await send('POST', pluginPath(realmId, '/corp/secrets/seal'), token, {
-      path: 'clientSecret',
+  /** The seal route of a realm's admin API (`secrets.seal`, #984). */
+  const sealPath = (realmId: string) => `/admin/v1-rc.0/realms/${realmId}/secrets/seal`;
+
+  /**
+   * Seal `value` for the plugin's client secret in the realm: for
+   * `plugins.update` and its member `/secrets/clientSecret`, or `member`.
+   */
+  async function seal(
+    realmId: string,
+    token: string,
+    value = SECRET,
+    member = '/secrets/clientSecret'
+  ) {
+    const sealed = await send('POST', sealPath(realmId), token, {
+      operation: 'plugins.update',
+      member,
       value,
     });
     expect(sealed.statusCode, sealed.body).toBe(200);
     return { response: sealed, sealed: sealed.json<{ sealed: string }>().sealed };
+  }
+
+  /** The plaintext of the client secret the realm stores for the plugin. */
+  async function storedSecret(realmId: string): Promise<string> {
+    const stored = (await app().repositories.realmAuthMethodPlugins.find(realmId, 'corp'))?.secrets[
+      'clientSecret'
+    ];
+    if (stored === undefined) throw new Error('no client secret stored');
+    // Imported once the boot reset the modules, as the engine is.
+    const { authMethodPluginSecretCipher } = await import('./helpers/auth-method-plugins');
+    return authMethodPluginSecretCipher(app()).open(
+      realmId,
+      { id: 'corp', package: PLUGIN_PACKAGE, type: 'corp_sso' },
+      'clientSecret',
+      stored
+    );
   }
 
   /**
@@ -448,7 +476,7 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     );
     expect(filed.statusCode).toBe(400);
     expect(filed.json<{ detail?: string }>().detail).toContain(
-      'config holds a secret member: seal it with plugins.secrets.seal and send it under secrets'
+      'config holds a secret member: seal it with secrets.seal and send it under secrets'
     );
     expect(filed.body).not.toContain(SECRET);
     expect(await rowsText('admin_approvals', realm.id)).toBe('');
@@ -547,7 +575,8 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     ).toEqual({ ...CONFIG, issuer: 'https://attacker.example' });
   });
 
-  it('seals a secret for a write admin, and refuses a sealed value of another realm', async () => {
+  // #984: a secret is sealed for one operation, member and realm.
+  it('seals a secret for a write admin, and refuses a sealed value of another realm or member', async () => {
     const alpha = await tenant('alpha');
     const beta = await tenant('beta');
     const editor = await adminWith(alpha.id, 'editor');
@@ -556,21 +585,53 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     // Sealing changes nothing, so a write admin may; a reader may not.
     const { response, sealed } = await seal(alpha.id, editor.token);
     expect(response.json()).toEqual({
-      path: 'clientSecret',
+      operation: 'plugins.update',
+      member: '/secrets/clientSecret',
       sealed: expect.stringMatching(/^v1\./),
     });
     expect(response.body).not.toContain(SECRET);
     expect(await app().repositories.realmAuthMethodPlugins.find(alpha.id, 'corp')).toBeUndefined();
-    const refused = await send('POST', pluginPath(alpha.id, '/corp/secrets/seal'), viewer.token, {
-      path: 'clientSecret',
+    const refused = await send('POST', sealPath(alpha.id), viewer.token, {
+      operation: 'plugins.update',
+      member: '/secrets/clientSecret',
       value: SECRET,
     });
     expect(refused.statusCode).toBe(403);
-    const notSecret = await send('POST', pluginPath(alpha.id, '/corp/secrets/seal'), editor.token, {
-      path: 'clientId',
-      value: SECRET,
-    });
-    expect(notSecret.statusCode).toBe(400);
+    // A member the operation does not declare secret, and an operation that
+    // declares none, are refused, naming neither.
+    for (const target of [
+      { operation: 'plugins.update', member: '/config/clientId' },
+      { operation: 'plugins.enable', member: '/secrets/clientSecret' },
+    ]) {
+      const notSecret = await send('POST', sealPath(alpha.id), editor.token, {
+        ...target,
+        value: SECRET,
+      });
+      expect(notSecret.statusCode).toBe(400);
+      expect(notSecret.body).not.toContain(SECRET);
+    }
+
+    // A value sealed for another member of the operation does not open as this one.
+    const alphaAdmin = await adminWith(alpha.id, 'security-admin');
+    const other = await seal(alpha.id, editor.token, SECRET, '/secrets/otherSecret');
+    const misplaced = {
+      version: 0,
+      config: CONFIG,
+      secrets: { clientSecret: { sealed: other.sealed } },
+    };
+    const filedMisplaced = await fileAndApprove(alpha.id, alphaAdmin, 'plugins.update', misplaced);
+    const wrongMember = await send(
+      'POST',
+      pluginPath(alpha.id, '/corp/config'),
+      alphaAdmin.token,
+      misplaced,
+      { 'qauth-approval': filedMisplaced.approvalId }
+    );
+    expect(wrongMember.statusCode).toBe(400);
+    expect(wrongMember.json<{ detail?: string }>().detail).toContain(
+      'was not sealed for it, for this operation, in this realm'
+    );
+    expect(await app().repositories.realmAuthMethodPlugins.find(alpha.id, 'corp')).toBeUndefined();
 
     // Alpha's sealed value does not open in beta.
     const requester = await adminWith(beta.id, 'security-admin');
@@ -690,11 +751,14 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
       );
       expect(moved.statusCode).toBe(412);
     }
+    // The first configure's secret, sealed again for the store: what the
+    // approval bound is never what is stored (#984).
+    expect(await storedSecret(realm.id)).toBe('first-client-secret-value');
     expect(
       (await app().repositories.realmAuthMethodPlugins.find(realm.id, 'corp'))?.secrets[
         'clientSecret'
       ]
-    ).toBe(first.sealed);
+    ).not.toBe(first.sealed);
 
     // An enable approved for the state of version 0, which moved to 1 since:
     // its approver never saw the config it would turn on.

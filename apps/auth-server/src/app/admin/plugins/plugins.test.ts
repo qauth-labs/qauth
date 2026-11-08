@@ -5,11 +5,13 @@ import { OPERATION_REGISTRY } from '../../helpers/admin-operations';
 import { ADMIN_SCOPES } from '../../helpers/admin-scopes';
 import { loadDeploymentAuthMethodPlugins } from '../../helpers/auth-method-plugins';
 import type { AdminRateLimitCheck } from '../pipeline';
+import { secretMemberSchemaProblem } from '../secrets/secret-members';
 import { PLUGIN_OPERATION_IDS } from './operations';
 import {
   newUrlDestinations,
   pluginConfigBodySchema,
   pluginResource,
+  pluginSecretMember,
   pluginStateBodySchema,
 } from './routes';
 
@@ -21,7 +23,7 @@ import {
  */
 
 const SECRET = 'fixture-client-secret-value';
-/** A value as plugins.secrets.seal answers one. */
+/** A value as secrets.seal answers one. */
 const SEALED = 'v1.kid-1.aXY.Y2lwaGVydGV4dA';
 
 async function installed() {
@@ -48,7 +50,6 @@ describe('the plugin operations (#600)', () => {
     expect(shape).toEqual([
       ['plugins.list', 'read', [], ['plugins.read']],
       ['plugins.get', 'read', [], ['plugins.read']],
-      ['plugins.secrets.seal', 'write', [], ['plugins.write']],
       ['plugins.update', 'security', ['credential-path'], ['plugins.security']],
       ['plugins.enable', 'security', ['credential-path'], ['plugins.security']],
       ['plugins.disable', 'security', ['credential-path'], ['plugins.security']],
@@ -56,6 +57,18 @@ describe('the plugin operations (#600)', () => {
     const security = OPERATION_REGISTRY.permissions.get('plugins.security');
     expect(security?.class).toBe('security');
     expect(ADMIN_SCOPES.security).toBe('qauth:admin:security');
+  });
+
+  // #984: the plugin operations take their secrets by the shared rule.
+  it('declares the secrets of a configure secret members, sealed with secrets.seal', () => {
+    expect(OPERATION_REGISTRY.get(PLUGIN_OPERATION_IDS.update)?.secretMembers).toEqual([
+      '/secrets/*',
+    ]);
+    // Their own seal and its permission gave way to the shared one.
+    expect(OPERATION_REGISTRY.get('plugins.secrets.seal')).toBeUndefined();
+    expect(OPERATION_REGISTRY.get('secrets.seal')?.permissions).toEqual(['secrets.seal']);
+    expect(OPERATION_REGISTRY.permissions.isGrantable('plugins.write')).toBe(false);
+    expect(pluginSecretMember('clientSecret')).toBe('/secrets/clientSecret');
   });
 
   it('shows an approver which secret a configure request sets or clears, never its value', () => {
@@ -147,6 +160,12 @@ describe('the configure body (#600)', () => {
     expect(schema.safeParse({ config: {}, secrets: { clientSecret: null } }).success).toBe(false);
   });
 
+  it('holds every secret member to the sealed-value schema, as the boot check reads it', async () => {
+    expect(
+      secretMemberSchemaProblem(pluginConfigBodySchema(await installed()), '/secrets/*')
+    ).toBeUndefined();
+  });
+
   it('refuses a secret in the clear, so the request an approval stores holds none', async () => {
     const schema = pluginConfigBodySchema(await installed());
     for (const value of [SECRET, { sealed: SECRET }, { sealed: SEALED, value: SECRET }]) {
@@ -162,7 +181,7 @@ describe('the configure body (#600)', () => {
       const parsed = schema.safeParse({ version: 0, config });
       expect(parsed.success).toBe(false);
       expect(parsed.error?.issues.map((issue) => issue.message)).toEqual([
-        'config holds a secret member: seal it with plugins.secrets.seal and send it under secrets',
+        'config holds a secret member: seal it with secrets.seal and send it under secrets',
       ]);
     }
   });
@@ -403,11 +422,10 @@ describe('the plugin routes in the admin OpenAPI document (#600)', () => {
         '/admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/config',
         '/admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/disable',
         '/admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/enable',
-        '/admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/secrets/seal',
       ]);
       const report = checkApiConventions(document, { operations: OPERATION_REGISTRY });
       expect(report.violations).toEqual([]);
-      expect(report.checkedOperations).toBe(6);
+      expect(report.checkedOperations).toBe(5);
     } finally {
       await app.close();
     }

@@ -4,6 +4,7 @@ import {
   type RenderedField,
   type RenderInput,
 } from '../../helpers/admin-operations';
+import { sealedMembersOf } from '../secrets/secret-members';
 
 /**
  * WHAT AN APPROVER IS SHOWN (ADR-019 Decisions 6 and 7, issue #512).
@@ -30,8 +31,17 @@ import {
  *
  * The display data goes to every reader of the approval, and is stored with
  * it: a renderer never shows a secret value of the request, such as a
- * password in its body.
+ * password in its body. A security operation takes a secret only sealed
+ * (#984), and shows a secret member by name only: an approval whose renderer
+ * shows the sealed value of a member its operation declares secret is never
+ * filed.
  */
+
+/**
+ * How much of a sealed value tells it apart in a rendered text: its version,
+ * key id and IV, and the start of its ciphertext.
+ */
+const SEALED_VALUE_PREFIX = 40;
 
 /** The length caps, in code points. A longer string ends in `…`. */
 export const DISPLAY_LIMITS = Object.freeze({
@@ -191,13 +201,15 @@ function displayField(field: unknown, index: number): DisplayField {
  * the display rules ({@link displayText}); the reason is quoted.
  *
  * @throws {ApprovalRenderError} when the operation has no renderer, or its
- *   renderer throws or returns anything but a title and fields of strings
+ *   renderer throws, returns anything but a title and fields of strings, or
+ *   shows the sealed value of a secret member (#984)
  */
 export function renderOperation(
   approval: RenderableApproval,
   registry: Pick<OperationRegistry, 'get'>
 ): OperationDisplay {
-  const render = registry.get(approval.operationId)?.render;
+  const operation = registry.get(approval.operationId);
+  const render = operation?.render;
   if (render === undefined) {
     throw new ApprovalRenderError(`the operation ${approval.operationId} has no renderer`);
   }
@@ -232,6 +244,17 @@ export function renderOperation(
   if (fields.length > DISPLAY_LIMITS.fields) {
     throw new ApprovalRenderError(
       `the renderer of ${approval.operationId} returned more than ${DISPLAY_LIMITS.fields} fields`
+    );
+  }
+  // A secret member is shown by name only (#984): not its value, which the
+  // body never holds, nor the value sealed for it, which every reader of the
+  // approval would get. Its start is enough to tell, as a renderer that caps
+  // a long value shows only its start.
+  const shown = JSON.stringify({ title, fields });
+  const sealed = sealedMembersOf(request.body, operation?.secretMembers ?? []);
+  if (sealed.some(({ sealed: value }) => shown.includes(value.slice(0, SEALED_VALUE_PREFIX)))) {
+    throw new ApprovalRenderError(
+      `the renderer of ${approval.operationId} shows the sealed value of a secret member; it names a secret member only`
     );
   }
 

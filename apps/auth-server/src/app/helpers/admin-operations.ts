@@ -15,7 +15,8 @@
  *   - when the request decides what the operation needs, `classify` (with
  *     `loadState` to read the current state it compares against);
  *   - and, on a security operation, `render`: what an approver is shown of
- *     one request (#512).
+ *     one request (#512), and `secretMembers`: the members of its body that
+ *     carry a secret, which it takes only sealed (#984).
  *
  * THE STATIC RULE. An operation is of class `security` if and only if its
  * `effects` are not empty, and its class is the strictest class among its
@@ -83,6 +84,8 @@ import type { FastifyRequest } from 'fastify';
 
 import { approvalOperationDefinitions } from '../admin/approvals/operations';
 import { PLUGIN_OPERATION_DEFINITIONS } from '../admin/plugins/operations';
+import { SECRET_OPERATION_DEFINITIONS } from '../admin/secrets/operations';
+import { isSecretMemberPattern } from '../admin/secrets/secret-members';
 import {
   RESERVED_OPERATIONS,
   type ReservedOperation,
@@ -215,6 +218,21 @@ export interface AdminOperationDefinition<State = unknown> {
    * as a credential the body sets: it says one is set.
    */
   render?(request: RenderInput): RenderedOperation;
+  /**
+   * The members of the request body that carry a secret (#984), each a JSON
+   * Pointer (RFC 6901) into the body in which `*` stands for every member of
+   * a record or every item of an array, such as `/secrets/*`. Only a security
+   * operation declares any: an approval binds its request by a digest that a
+   * copy of the approvals table lets anyone test a guessed body against, so it
+   * takes a secret only sealed, with `secrets.seal`, for this operation and
+   * that member. The admin listener refuses to boot its route unless the body
+   * schema holds each member to `SEALED_VALUE_SCHEMA`
+   * (`admin/secrets/secret-members.ts`), and its handler opens a value only
+   * for its own operation, that member and the realm
+   * (`admin/secrets/sealed-values.ts`). A renderer shows such a member by
+   * name only.
+   */
+  readonly secretMembers?: readonly string[];
 }
 
 /** A registered operation: a definition that {@link defineOperation} accepted, frozen. */
@@ -231,6 +249,7 @@ const DEFINITION_KEYS: ReadonlySet<string> = new Set([
   'loadState',
   'stateVersion',
   'render',
+  'secretMembers',
 ]);
 
 /** A definition refused by {@link defineOperation} or {@link createOperationRegistry}. */
@@ -287,7 +306,8 @@ function snapshotOperation(operation: AdminOperationDefinition): AdminOperationD
       throw new OperationDefinitionError(`${where}: ${key} is a value, not an accessor`);
     }
     snapshot[key] =
-      (key === 'effects' || key === 'permissions') && Array.isArray(descriptor.value)
+      (key === 'effects' || key === 'permissions' || key === 'secretMembers') &&
+      Array.isArray(descriptor.value)
         ? Array.from(descriptor.value as unknown[])
         : descriptor.value;
   }
@@ -300,8 +320,17 @@ function snapshotOperation(operation: AdminOperationDefinition): AdminOperationD
  */
 function assertOperation(operation: AdminOperationDefinition): void {
   const where = `operation ${JSON.stringify(operation.id)}`;
-  const { id, effects, permissions, description, classify, loadState, stateVersion, render } =
-    operation;
+  const {
+    id,
+    effects,
+    permissions,
+    description,
+    classify,
+    loadState,
+    stateVersion,
+    render,
+    secretMembers,
+  } = operation;
   if (typeof id !== 'string' || !OPERATION_ID_PATTERN.test(id)) {
     throw new OperationDefinitionError(
       `${where}: an id is <resource>.<verb>, lower camelCase segments joined by dots, such as realms.get`
@@ -386,6 +415,27 @@ function assertOperation(operation: AdminOperationDefinition): void {
       `${where}: only a security operation renders; render shows an approver the operation`
     );
   }
+  if (secretMembers !== undefined) {
+    if (
+      !Array.isArray(secretMembers) ||
+      secretMembers.length === 0 ||
+      !secretMembers.every(isSecretMemberPattern)
+    ) {
+      throw new OperationDefinitionError(
+        `${where}: secretMembers is a non-empty list of members of the body, each a JSON Pointer such as /secrets/* (RFC 6901, * for every member of a record)`
+      );
+    }
+    if (new Set(secretMembers).size !== secretMembers.length) {
+      throw new OperationDefinitionError(`${where}: a secret member is listed twice`);
+    }
+    // Only an approval binds a request by a digest a guess can be tested
+    // against, and only a security operation is approved (#984).
+    if (operation.class !== 'security') {
+      throw new OperationDefinitionError(
+        `${where}: only a security operation declares secret members, which it takes sealed for its approval`
+      );
+    }
+  }
   // A request whose classification fails closed gets the declaration, which
   // must therefore be a security classification: otherwise a broken
   // `classify` would hand a request that may be a security operation the
@@ -419,6 +469,9 @@ function frozenOperation(snapshot: AdminOperationDefinition): AdminOperation {
     ...snapshot,
     effects: Object.freeze([...snapshot.effects]),
     permissions: Object.freeze([...snapshot.permissions]),
+    ...(snapshot.secretMembers === undefined
+      ? {}
+      : { secretMembers: Object.freeze([...snapshot.secretMembers]) }),
   });
 }
 
@@ -1136,12 +1189,15 @@ export function createAdminOperationRegistry(
 }
 
 /**
- * Every admin operation, but the approval engine's own: the plugin
- * operations (#600). The operations that read a realm and patch its
- * policies (#517) register here too.
+ * Every admin operation, but the approval engine's own: sealing a secret for
+ * a security operation (#984) and the plugin operations (#600). The
+ * operations that read a realm and patch its policies (#517) register here
+ * too.
  */
 export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
-  PLUGIN_OPERATION_DEFINITIONS.map((operation) => defineOperation(operation))
+  [...SECRET_OPERATION_DEFINITIONS, ...PLUGIN_OPERATION_DEFINITIONS].map((operation) =>
+    defineOperation(operation)
+  )
 );
 
 /** The registry the admin pipeline classifies against: {@link ADMIN_OPERATIONS} and the approval operations. */

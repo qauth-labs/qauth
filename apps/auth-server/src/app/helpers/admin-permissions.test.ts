@@ -30,6 +30,7 @@ describe('the admin permission catalog (#507)', () => {
       ['plugins.read', 'read'],
       ['plugins.write', 'write'],
       ['plugins.security', 'security'],
+      ['secrets.seal', 'write'],
       ['approvals.read', 'read'],
       ['approvals.approve', 'security'],
     ]);
@@ -42,8 +43,15 @@ describe('the admin permission catalog (#507)', () => {
     expect(security.filter((id) => write.includes(id))).toEqual([]);
   });
 
-  it('retires nothing yet', () => {
-    expect(PERMISSION_REGISTRY.active).toEqual(PERMISSION_REGISTRY.all);
+  // #984: secrets.seal, which seals for every security operation, took the
+  // place of the plugin operations' own seal, so its permission is retired.
+  it('retires plugins.write in v0.3.0, and nothing else', () => {
+    expect(
+      PERMISSION_REGISTRY.all
+        .filter((permission) => permission.retiredIn !== undefined)
+        .map(({ id, retiredIn }) => [id, retiredIn])
+    ).toEqual([['plugins.write', 'v0.3.0']]);
+    expect(PERMISSION_REGISTRY.active.map(({ id }) => id)).not.toContain('plugins.write');
   });
 
   it('cannot be changed at run time', () => {

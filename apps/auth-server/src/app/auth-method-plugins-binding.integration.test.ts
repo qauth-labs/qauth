@@ -221,10 +221,11 @@ describe("a realm's plugin state is bound to the plugin that wrote it (#949, rea
       return send('POST', pluginPath(suffix), body, { 'qauth-approval': approvalId });
     }
 
-    /** Seal `value` for the client secret of the plugin this deployment loaded. */
+    /** Seal `value` for a configure's client secret (`secrets.seal`, #984). */
     async function seal(value: string): Promise<string> {
-      const sealed = await send('POST', pluginPath('/secrets/seal'), {
-        path: 'clientSecret',
+      const sealed = await send('POST', `/admin/v1-rc.0/realms/${realmId}/secrets/seal`, {
+        operation: 'plugins.update',
+        member: '/secrets/clientSecret',
         value,
       });
       expect(sealed.statusCode, sealed.body).toBe(200);

@@ -18,11 +18,13 @@ import type {
  * `plugins.update` are reserved as such in `admin-operations-reserved.ts`;
  * disabling is one by the same effect, as `upstreamProviders.disable` is.
  *
- * `plugins.secrets.seal` encrypts a secret member's value for the realm and
- * answers the ciphertext: it changes nothing, so it is a write with no
- * effect, under `plugins.write`. A configure request carries only sealed
- * values, so the request an approval stores never holds a secret in the
- * clear.
+ * A configure (`plugins.update`) takes a plugin's secret members only sealed,
+ * under `secrets` (#984): it declares `/secrets/*` its secret members, so the
+ * admin listener holds each to the sealed-value schema, and a value is sealed
+ * for it with `secrets.seal` (`admin/secrets/`), for `plugins.update` and the
+ * member `/secrets/<path>`. So the request an approval binds never holds a
+ * secret in the clear. (`plugins.secrets.seal`, the plugin operations' own
+ * seal, and its permission `plugins.write` gave way to `secrets.seal`.)
  *
  * No operation uploads, replaces or edits plugin code: the code is what the
  * operator installed with the deployment, and the operations set only data
@@ -33,7 +35,6 @@ import type {
 export const PLUGIN_OPERATION_IDS = Object.freeze({
   list: 'plugins.list',
   get: 'plugins.get',
-  seal: 'plugins.secrets.seal',
   update: 'plugins.update',
   enable: 'plugins.enable',
   disable: 'plugins.disable',
@@ -118,14 +119,6 @@ export const PLUGIN_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
       "Read one installed AuthMethod plugin with the realm's state of it; secret members show only whether they hold a value, and a state another package or type wrote says so.",
   },
   {
-    id: PLUGIN_OPERATION_IDS.seal,
-    class: 'write',
-    effects: [],
-    permissions: ['plugins.write'],
-    description:
-      "Seal a value for one of an AuthMethod plugin's secret members in a realm: it changes nothing, and answers the value encrypted for that member, which plugins.update then sets.",
-  },
-  {
     id: PLUGIN_OPERATION_IDS.update,
     class: 'security',
     effects: ['credential-path'],
@@ -133,6 +126,8 @@ export const PLUGIN_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
     description:
       "Replace an AuthMethod plugin's configuration in a realm, set or clear its secret members, checked against the plugin's config schema, and record the installed package and type it is written for; it never changes plugin code.",
     render: renderUpdate,
+    // Each secret member, by its path, as `{ sealed }` (or `null` to clear it).
+    secretMembers: ['/secrets/*'],
   },
   {
     id: PLUGIN_OPERATION_IDS.enable,

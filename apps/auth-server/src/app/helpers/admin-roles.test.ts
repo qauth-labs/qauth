@@ -45,7 +45,7 @@ describe('built-in roles (#507)', () => {
       'realms.import.plan',
       'realms.policies.write',
       'plugins.read',
-      'plugins.write',
+      'secrets.seal',
       'approvals.read',
     ]);
   });
@@ -219,7 +219,7 @@ describe('effectivePermissions (#507)', () => {
     expect(effectivePermissions(['realms.read'], 'qauth:admin:write').size).toBe(0);
     expect([...effectivePermissions(all, 'qauth:admin:write')]).toEqual([
       'realms.policies.write',
-      'plugins.write',
+      'secrets.seal',
     ]);
   });
 

@@ -34,6 +34,7 @@ import { approvalRoutes } from './approvals/routes';
 import { adminOpenapiOptions } from './openapi-options';
 import { AdminCallsInFlight, adminDpopService, adminPipeline } from './pipeline';
 import { pluginRoutes } from './plugins/routes';
+import { secretRoutes } from './secrets/routes';
 
 /**
  * THE ADMIN LISTENER (ADR-019 Decisions 7 and 8, issue #511).
@@ -63,12 +64,14 @@ export const ADMIN_OPENAPI_PATH = `${API_FAMILY_PREFIXES.admin}/openapi.json`;
 /**
  * The route modules of the admin API, each registered behind the pipeline:
  * the approval routes (#512), which every registry built with
- * `createAdminOperationRegistry` holds the operations of, and the AuthMethod
- * plugin routes (#600), whose operations `ADMIN_OPERATIONS` holds. The
- * operations that read a realm and update its policies arrive with #517.
+ * `createAdminOperationRegistry` holds the operations of, the seal route of a
+ * security operation's secrets (#984) and the AuthMethod plugin routes
+ * (#600), whose operations `ADMIN_OPERATIONS` holds. The operations that read
+ * a realm and update its policies arrive with #517.
  */
 export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze([
   approvalRoutes,
+  secretRoutes,
   pluginRoutes,
 ]);
 
