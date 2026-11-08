@@ -44,7 +44,7 @@ const REALM = testRealm({
   issuer: 'https://auth.example.com',
 });
 const SECRET = 'fixture-client-secret-value';
-const CIPHERTEXT = 'v1.kid-1.aXY.Y2lwaGVydGV4dA';
+const CIPHERTEXT = 'v1.kid-1.aXZhaXZhaXZhaXZh.Y2lwaGVydGV4dGNpcGhlcnRleHQ';
 const PLUGIN_PACKAGE = '@example/qauth-plugin-corp-sso';
 /** What names the fixture plugin's secrets: its id, its package and its type (#949). */
 const CORP = { id: 'corp', package: PLUGIN_PACKAGE, type: 'corp_sso' } as const;
@@ -380,7 +380,7 @@ describe('a preset plugin on the generic OpenID Connect client (#951)', () => {
     return {
       encrypt: vi.fn(
         async (_caller: string, request: { plaintext: Uint8Array; context?: string }) => {
-          const ciphertext = `v1.kid-1.n${sealed.size}.Y2lwaGVydGV4dA`;
+          const ciphertext = `v1.kid-1.${`n${sealed.size}`.padEnd(16, 'A')}.Y2lwaGVydGV4dGNpcGhlcnRleHQ`;
           sealed.set(ciphertext, {
             context: request.context,
             plaintext: Buffer.from(request.plaintext),

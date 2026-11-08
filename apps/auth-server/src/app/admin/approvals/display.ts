@@ -38,10 +38,27 @@ import { sealedMembersOf } from '../secrets/secret-members';
  */
 
 /**
- * How much of a sealed value tells it apart in a rendered text: its version,
- * key id and IV, and the start of its ciphertext.
+ * How much of a sealed value tells it apart in a rendered text: at its start,
+ * its version, key id and IV; of its ciphertext, which follows the last `.`,
+ * a run this long at either end (the shortest ciphertext, a tag alone, has 22
+ * characters).
  */
 const SEALED_VALUE_PREFIX = 40;
+const SEALED_CIPHERTEXT_RUN = 20;
+
+/**
+ * The parts of a sealed value a renderer that shows any of it would show: its
+ * start, as a renderer that caps a long value shows only that, and both ends
+ * of its ciphertext, as one that shows a slice of it from either end would.
+ */
+function sealedValueParts(sealed: string): string[] {
+  const ciphertext = sealed.slice(sealed.lastIndexOf('.') + 1);
+  return [
+    sealed.slice(0, SEALED_VALUE_PREFIX),
+    ciphertext.slice(0, SEALED_CIPHERTEXT_RUN),
+    ciphertext.slice(-SEALED_CIPHERTEXT_RUN),
+  ];
+}
 
 /** The length caps, in code points. A longer string ends in `…`. */
 export const DISPLAY_LIMITS = Object.freeze({
@@ -248,11 +265,14 @@ export function renderOperation(
   }
   // A secret member is shown by name only (#984): not its value, which the
   // body never holds, nor the value sealed for it, which every reader of the
-  // approval would get. Its start is enough to tell, as a renderer that caps
-  // a long value shows only its start.
+  // approval would get.
   const shown = JSON.stringify({ title, fields });
   const sealed = sealedMembersOf(request.body, operation?.secretMembers ?? []);
-  if (sealed.some(({ sealed: value }) => shown.includes(value.slice(0, SEALED_VALUE_PREFIX)))) {
+  if (
+    sealed.some(({ sealed: value }) =>
+      sealedValueParts(value).some((part) => part.length > 0 && shown.includes(part))
+    )
+  ) {
     throw new ApprovalRenderError(
       `the renderer of ${approval.operationId} shows the sealed value of a secret member; it names a secret member only`
     );

@@ -24,7 +24,7 @@ import {
 
 const SECRET = 'fixture-client-secret-value';
 /** A value as secrets.seal answers one. */
-const SEALED = 'v1.kid-1.aXY.Y2lwaGVydGV4dA';
+const SEALED = 'v1.kid-1.aXZhaXZhaXZhaXZh.Y2lwaGVydGV4dGNpcGhlcnRleHQ';
 
 async function installed() {
   const runtime = await loadDeploymentAuthMethodPlugins(

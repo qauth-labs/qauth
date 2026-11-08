@@ -29,8 +29,12 @@ import { z } from 'zod';
  * and the pipeline can both read it.
  */
 
-/** A data-at-rest ciphertext, `v1.<kid>.<iv>.<ciphertext>`, as the signer writes one. */
-const CIPHERTEXT_PATTERN = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+/**
+ * A data-at-rest ciphertext, `v1.<kid>.<iv>.<ciphertext>`, as the signer
+ * writes one: a 96-bit IV (16 base64url characters) and a ciphertext of at
+ * least its 128-bit tag (22).
+ */
+const CIPHERTEXT_PATTERN = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{22,}$/;
 
 /** The longest value `secrets.seal` seals, in UTF-16 code units. */
 export const MAX_SEALED_SECRET_LENGTH = 8192;
