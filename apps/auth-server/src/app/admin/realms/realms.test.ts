@@ -363,6 +363,7 @@ describe('the realm representation (#517)', () => {
     name: 'example',
     enabled: true,
     isOperator: false,
+    sandboxOfRealmId: null,
     createdAt: new Date('2026-11-01T10:00:00.000Z'),
     updatedAt: new Date('2026-11-02T10:00:00.000Z'),
   };
@@ -373,7 +374,9 @@ describe('the realm representation (#517)', () => {
     return {
       adminPipeline: { transaction: { id: 'tx' } },
       server: {
-        repositories: { realms: { findById: vi.fn(async () => ROW) } },
+        repositories: {
+          realms: { findById: vi.fn(async () => ROW), findSandboxOf: vi.fn(async () => undefined) },
+        },
         realmSecretStore: { isSet: vi.fn(async () => true) },
         policyStore: {
           representation: vi.fn(async () => ({
@@ -398,6 +401,8 @@ describe('the realm representation (#517)', () => {
       operator: false,
       createdAt: '2026-11-01T10:00:00.000Z',
       updatedAt: '2026-11-02T10:00:00.000Z',
+      sandboxOf: null,
+      sandbox: null,
       policySchemaVersion: REALM_POLICY_SCHEMA_VERSION,
     });
     const smtp = (body.policies as { mail: { smtp: Record<string, unknown> } }).mail.smtp;
@@ -420,6 +425,8 @@ describe('the realm representation (#517)', () => {
       operator: false,
       createdAt: '2026-11-01T10:00:00.000Z',
       updatedAt: '2026-11-02T10:00:00.000Z',
+      sandboxOf: null,
+      sandbox: null,
       policySchemaVersion: REALM_POLICY_SCHEMA_VERSION,
       policies: leaked,
     });

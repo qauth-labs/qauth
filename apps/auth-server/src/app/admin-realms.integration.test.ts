@@ -71,6 +71,8 @@ interface RealmBody {
   operator: boolean;
   createdAt: string;
   updatedAt: string;
+  sandboxOf: string | null;
+  sandbox: string | null;
   policySchemaVersion: string;
   policies: {
     password: { minScore: number; minLength: number };
@@ -283,6 +285,8 @@ describe('the realm operations of the admin API (#517, real containers)', () => 
       name: 'alpha',
       enabled: true,
       operator: false,
+      sandboxOf: null,
+      sandbox: null,
       policies: { password: { minScore: expect.any(Number) } },
     });
     expect(body.policies.mail.smtp).toHaveProperty('passwordSet', false);

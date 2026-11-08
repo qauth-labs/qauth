@@ -35,6 +35,7 @@ import {
   unprocessablePolicyField,
   updateRealmPolicies,
 } from '../../helpers/realm-policy-update';
+import { sandboxPairingOf } from '../../helpers/sandbox-realm';
 import { requestClassification } from '../../plugins/admin-operations';
 import {
   ADMIN_SECURITY_SCHEME,
@@ -94,6 +95,13 @@ export const realmSchema = z
     }),
     createdAt: isoTime,
     updatedAt: isoTime,
+    sandboxOf: z.uuid().nullable().meta({
+      description:
+        'The live realm this realm is the sandbox of (ADR-019 Decision 11), or null. Read-only.',
+    }),
+    sandbox: z.uuid().nullable().meta({
+      description: "This realm's sandbox, or null. Read-only.",
+    }),
     policySchemaVersion: z.string().meta({
       description: 'The version of the realm policy schema `policies` follows (ADR-018 §5).',
     }),
@@ -174,6 +182,7 @@ export async function realmResource(
   const row = await request.server.repositories.realms.findById(realmId, tx);
   if (row === undefined) throw new NotFoundError('Realm', realmId);
   const state = await readPolicyState(request, realmId, tx);
+  const pairing = await sandboxPairingOf(request.server.repositories.realms, row, tx);
   return {
     etag: `"${state.version}"`,
     body: {
@@ -183,6 +192,8 @@ export async function realmResource(
       operator: row.isOperator,
       createdAt: rfc3339(row.createdAt),
       updatedAt: rfc3339(row.updatedAt),
+      sandboxOf: pairing.sandboxOf,
+      sandbox: pairing.sandbox,
       policySchemaVersion: state.schemaVersion,
       policies: state.policies as RealmResource['policies'],
     },

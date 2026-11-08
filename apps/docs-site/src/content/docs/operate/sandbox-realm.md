@@ -52,7 +52,7 @@ The ceiling can be tightened to `production`, and set back to `staging`. It can 
 `development`: the database refuses the value whoever writes it, and the server's realm policy
 update answers a request for it with `422` and the problem type
 [`sandbox_ceiling`](/reference/problem-types/#sandbox-ceiling). The admin API operation that updates
-a realm's policies, which calls that update, is #517.
+a realm's policies, `realms.policies.update`, calls that update.
 
 ## Tokens
 
@@ -97,9 +97,8 @@ keys. Either all of it is stored, or none of it.
 The admin API operation that creates a sandbox and reads the pairing comes with the realm lifecycle
 operations (#694). Creating a realm is a security operation. Until that operation ships, a sandbox
 is created only from the server's code (`createSandboxRealm`). The admin API's realm representation
-(#517) is to show the pairing as two read-only fields: `sandboxOf`, the live realm's id on a sandbox,
-and `sandbox`, the sandbox's id on a live realm; each is `null` otherwise. The server already reads
-both (`sandboxPairingOf`).
+(`realms.get`) shows the pairing as two read-only fields: `sandboxOf`, the live realm's id on a
+sandbox, and `sandbox`, the sandbox's id on a live realm; each is `null` otherwise.
 
 Moving settings from the sandbox to the live realm goes through the realm file's diff, where fields
 that describe the sandbox's environment (its ceiling, `http` redirect URIs, test upstreams, test
