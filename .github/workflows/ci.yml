@@ -359,11 +359,13 @@ jobs:
           QAUTH_INTEGRATION_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
 
   # The check named `integration`, as it was before the suites were split: it
-  # passes only when every shard did. `!cancelled()` so a failed shard fails
-  # it rather than skipping it.
+  # passes only when every shard did. `always()`, so the job runs and fails
+  # when a shard failed or the run was cancelled: a job its condition skips
+  # reports success, and a required check that was skipped does not block a
+  # merge.
   integration:
     needs: integration-shard
-    if: ${{ !cancelled() }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - name: Every shard passed

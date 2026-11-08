@@ -8,8 +8,9 @@ The checks that compare the docs with the code of the libraries (#1044):
 - every realm policy field's docs link names a page of the docs site and a heading on it;
 - the docs pages flagged `experimental: true` and the experimental-feature registry match one to
   one (#477), and the decision records and evidence paths the registry names exist (#476);
-- no project but the docs site and this one names a docs file in its Nx inputs
-  (`docs-inputs.test.ts`).
+- no project but the docs site and this one names a docs file in its Nx inputs, beyond the seven
+  generated or checked reference pages a project writes or checks itself, which
+  `docs-inputs.test.ts` lists with the reason for each.
 
 ```bash
 pnpm nx test docs-checks        # run the checks
