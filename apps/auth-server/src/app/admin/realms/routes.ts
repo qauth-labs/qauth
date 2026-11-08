@@ -37,6 +37,10 @@ import {
 } from '../../helpers/realm-policy-update';
 import { sandboxPairingOf } from '../../helpers/sandbox-realm';
 import { requestClassification } from '../../plugins/admin-operations';
+import { eligibleApproverCount } from '../approvals/eligibility';
+import { approvalRequirement } from '../approvals/engine';
+import { callerAccount } from '../approvals/standing';
+import { changePreview, changePreviewSchema } from '../change-preview';
 import {
   ADMIN_SECURITY_SCHEME,
   type AdminChange,
@@ -46,16 +50,24 @@ import {
 } from '../pipeline';
 import { openRequestSealedValue } from '../secrets/sealed-values';
 import { SEALED_VALUE_SCHEMA } from '../secrets/secret-members';
-import { readPolicyState, REALM_OPERATION_IDS, REALM_POLICY_SECRET_MEMBERS } from './operations';
+import {
+  checkPolicyPatch,
+  readPolicyState,
+  REALM_OPERATION_IDS,
+  REALM_POLICY_SECRET_MEMBERS,
+} from './operations';
+import { previewPolicyPatch } from './preview';
 
 /**
  * THE REALM ROUTES OF THE ADMIN API (ADR-019 Decisions 7 and 10, issue #517):
  *
- *   GET   /admin/v1-rc.0/realms/{realmId}           — realms.get, with its ETag
- *   PATCH /admin/v1-rc.0/realms/{realmId}/policies  — realms.policies.update,
- *                                                    a JSON Merge Patch, If-Match required
+ *   GET   /admin/v1-rc.0/realms/{realmId}                   — realms.get, with its ETag
+ *   PATCH /admin/v1-rc.0/realms/{realmId}/policies          — realms.policies.update,
+ *                                                            a JSON Merge Patch, If-Match required
+ *   POST  /admin/v1-rc.0/realms/{realmId}/policies/preview  — realms.policies.preview (#589),
+ *                                                            the same patch, nothing written
  *
- * Both answer the realm representation. Its `ETag` is the version of the
+ * The first two answer the realm representation. Its `ETag` is the version of the
  * realm's policies (`policies_version`), which the patch names in `If-Match`;
  * the pipeline answers 428 without one and 412 with another
  * (`plugins/admin-operations.ts`), and the store's write is conditional on it,
@@ -69,6 +81,14 @@ import { readPolicyState, REALM_OPERATION_IDS, REALM_POLICY_SECRET_MEMBERS } fro
  * or `null` to clear it; the handler opens it in the operation's
  * transaction, the policy store hands it to the realm's secret store, and no
  * response, log or audit record ever holds it.
+ *
+ * The preview takes the same body, refused the same way (400, 415, 422), and
+ * answers what the patch would change and need (`AdminChangePreview`,
+ * `../change-preview.ts`), with the realm's `ETag` in its body. It needs
+ * only `realms.read`, as reading the realm does: it shows nothing a read of
+ * the realm does not, but which admins could approve the change, as a count.
+ * It never opens a sealed value, writes nothing, and its audit row, as every
+ * admin call's, records the read and no change.
  */
 
 /** The path of a realm, as the admin listener routes it. */
@@ -328,25 +348,31 @@ function storeRefusal(error: unknown, realmId: string): unknown {
   return error;
 }
 
+/** The realm operations, by their key in {@link REALM_OPERATION_IDS}. */
+type RealmOperations = Record<keyof typeof REALM_OPERATION_IDS, AdminOperation>;
+
 /**
  * The realm operations in the pipeline's registry, or `undefined` when it
  * holds none: a test registry built from fixture operations alone serves no
- * realm route, and the server's own registry (`OPERATION_REGISTRY`) holds both.
+ * realm route, and the server's own registry (`OPERATION_REGISTRY`) holds
+ * them all.
  *
- * @throws {Error} when it holds one and not the other
+ * @throws {Error} when it holds some and not the others
  */
-function realmOperations(
-  fastify: FastifyInstance
-): { get: AdminOperation; updatePolicies: AdminOperation } | undefined {
-  const get = fastify.adminApi.registry.get(REALM_OPERATION_IDS.get);
-  const updatePolicies = fastify.adminApi.registry.get(REALM_OPERATION_IDS.updatePolicies);
-  if (get === undefined && updatePolicies === undefined) return undefined;
-  if (get === undefined || updatePolicies === undefined) {
+function realmOperations(fastify: FastifyInstance): RealmOperations | undefined {
+  const entries = Object.entries(REALM_OPERATION_IDS).map(
+    ([key, id]) => [key, fastify.adminApi.registry.get(id)] as const
+  );
+  const missing = entries.filter(([, operation]) => operation === undefined);
+  if (missing.length === entries.length) return undefined;
+  if (missing.length > 0) {
     throw new Error(
-      `The admin operation registry holds only some realm operations; it lacks ${get === undefined ? REALM_OPERATION_IDS.get : REALM_OPERATION_IDS.updatePolicies}`
+      `The admin operation registry holds only some realm operations; it lacks ${missing
+        .map(([key]) => REALM_OPERATION_IDS[key as keyof typeof REALM_OPERATION_IDS])
+        .join(', ')}`
     );
   }
-  return { get, updatePolicies };
+  return Object.fromEntries(entries) as RealmOperations;
 }
 
 /** Register the realm routes behind the admin pipeline. */
@@ -354,6 +380,9 @@ export const realmRoutes: FastifyPluginAsync = async (fastify) => {
   const typed = fastify.withTypeProvider<ZodTypeProvider>();
   const operations = realmOperations(fastify);
   if (operations === undefined) return;
+  // One body schema for the patch and its preview: they take the same patch,
+  // and the document holds it once (`AdminRealmPolicyPatch`).
+  const patchBody = policyPatchBodySchema();
   const common = {
     'x-qauth-stability': 'experimental' as const,
     // A DPoP-bound admin token (#520).
@@ -402,7 +431,7 @@ export const realmRoutes: FastifyPluginAsync = async (fastify) => {
         consumes: [MERGE_PATCH_MEDIA_TYPE],
         params: realmParams,
         headers: ifMatchHeadersSchema,
-        body: policyPatchBodySchema(),
+        body: patchBody,
         response: { 200: realmSchema },
       },
     },
@@ -430,6 +459,56 @@ export const realmRoutes: FastifyPluginAsync = async (fastify) => {
       const { etag, body } = await realmResource(request, realmId);
       reply.header('etag', etag);
       return body;
+    }
+  );
+
+  typed.post(
+    `${REALM_PATH}/policies/preview`,
+    {
+      config: { operation: operations.previewPolicies.id },
+      // After the pipeline's stages, as the patch's.
+      preHandler: requireMergePatch,
+      schema: {
+        ...operationSchemaExtensions(operations.previewPolicies),
+        ...common,
+        summary: "Preview a change of a realm's policies",
+        description:
+          'Takes the JSON Merge Patch realms.policies.update takes and answers what it would change and need, without saving it: each changed field before and after, tightening, loosening or neutral, its class, effects, permissions and scopes; for the whole patch, its class and scopes, whether it needs an approval, whether a second admin is recommended or mandatory, how many other admins could approve it, and the realm’s current ETag, which the save names in If-Match. It is judged by the same diff and classification as the save, and refused the same way (400, 415, 422). It writes nothing, needs only realms.read, never opens a sealed value, and shows a secret field only as set or not set.',
+        'x-qauth-errors': [400, 401, 403, 404, 415, 422],
+        consumes: [MERGE_PATCH_MEDIA_TYPE],
+        params: realmParams,
+        body: patchBody,
+        response: { 200: changePreviewSchema },
+      },
+    },
+    async (request) => {
+      const caller = requestAdminCaller(request);
+      const realmId = caller.targetRealm.id;
+      const tx = adminTransaction(request);
+      const state = await readPolicyState(request, realmId, tx);
+      checkPolicyPatch(request, request.body, state);
+      const { registry } = request.server.adminApi;
+      const preview = previewPolicyPatch(registry, realmId, request.body, state);
+      const approval =
+        preview.classification.class === 'security'
+          ? {
+              twoAdmin: approvalRequirement().twoAdmin,
+              eligibleApprovers: await eligibleApproverCount(request.server, {
+                targetRealm: caller.targetRealm,
+                requester: callerAccount(caller),
+                tx,
+              }),
+            }
+          : null;
+      return changePreview(
+        {
+          etag: `"${state.version}"`,
+          classification: preview.classification,
+          changes: preview.changes,
+          approval,
+        },
+        registry.permissions
+      );
     }
   );
 };
