@@ -347,9 +347,12 @@ jobs:
       # each `test-integration` task whose inputs a change reaches (#1044,
       # `affected` in nx.json). A change to the schema, the migrations or
       # the repositories reaches infra-db and its dependents. A pull request
-      # that changes only docs (the docs site's content, docs/ or CHANGELOG.md)
-      # runs no suite: no `test-integration` input names a docs file. The
-      # inputs are the `integration` named input in nx.json, plus what a
+      # that changes only docs (the docs site's pages under src/content/docs,
+      # docs/ or CHANGELOG.md) runs no suite: no `test-integration` input names
+      # a docs file. The OpenAPI documents auth-server generates
+      # (stable-surface/openapi.json, apps/docs-site/public/openapi.json) are
+      # not docs pages: auth-server's suites read them, so they are its inputs.
+      # The inputs are the `integration` named input in nx.json, plus what a
       # project's suite reads beyond it, named in its project.json
       # (auth-server, migration-runner); a file a suite reads that its inputs
       # do not name would drop the suite out of a change to that file.
