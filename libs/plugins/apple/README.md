@@ -95,9 +95,10 @@ The config holds no secret. Configure it with `plugins.update` and turn it on wi
 | `given_name`          | the `user` member's `firstName` | never                                         |
 | `family_name`         | the `user` member's `lastName`  | never                                         |
 
+The plugin carries no logo: the sign-in page shows the provider's name, `Apple`.
+
 ## Not yet
 
-- No icon: the sign-in page shows the name `Apple`.
 - Apple answers a cancelled sign-in with `user_cancelled_authorize`, which ends as a failed
   sign-in, not a declined one.
 - Validated against a mock provider only, not against Apple itself.

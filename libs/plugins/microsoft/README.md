@@ -89,7 +89,8 @@ so it is unverified by default. `xms_edov` (email domain owner verified) is an o
 it to the app registration's token configuration for verified addresses. `email_verified` is not
 read.
 
+The plugin carries no logo: the sign-in page shows the provider's name, `Microsoft`.
+
 ## Not yet
 
-- No icon: the sign-in page shows the name `Microsoft`.
 - Validated against a mock provider only, not against Microsoft itself.

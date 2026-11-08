@@ -66,7 +66,8 @@ No other member is accepted. Configure it with `plugins.update` and turn it on w
 plugin does not restrict who signs in by it. The upstream sign-in flow stores the attributes when it
 creates the account, under the source `google`.
 
+The plugin carries no logo: the sign-in page shows the provider's name, `Google`.
+
 ## Not yet
 
-- No icon: the sign-in page shows the name `Google`.
 - Validated against a mock provider only, not against Google itself.
