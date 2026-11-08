@@ -74,7 +74,7 @@ async function fixtureAdminApi() {
     await import('./admin/pipeline');
 
   const read = operations.defineOperation({
-    id: 'realms.get',
+    id: 'fixtureRealms.get',
     class: 'read',
     effects: [],
     permissions: ['realms.read'],
@@ -498,7 +498,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(onAdmin.statusCode).toBe(200);
       expect(onAdmin.json()).toEqual({ realm: realmId, operator: true, requestRealm: realmId });
       // The public listener ran nothing and wrote nothing.
-      expect(runs).toEqual(['realms.get']);
+      expect(runs).toEqual(['fixtureRealms.get']);
       expect(await auditRows(realmId)).toHaveLength(1);
     });
 
@@ -728,7 +728,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
 
       // The same token under the DPoP scheme, with a proof of its key, passes.
       expect((await call('GET', url, token)).statusCode).toBe(200);
-      expect(runs).toEqual(['realms.get']);
+      expect(runs).toEqual(['fixtureRealms.get']);
     });
 
     it('refuses a valid token with a proof signed by another key, or with no proof', async () => {
@@ -790,7 +790,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(replayed.statusCode).toBe(401);
       expect(replayed.json()).toMatchObject({ code: 'invalid_dpop_proof' });
       expect(replayed.headers['www-authenticate']).toMatch(/^DPoP error="invalid_dpop_proof"/);
-      expect(runs).toEqual(['realms.get']);
+      expect(runs).toEqual(['fixtureRealms.get']);
       expect(await auditRows(realmId)).toHaveLength(1);
     });
 
@@ -936,7 +936,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       // only the realm the issuer names decided which keys verify.
       const genuine = await signedWithOperatorKey(operator.issuer, ofOperator);
       expect((await call('GET', realmPath(alpha.id), genuine)).statusCode).toBe(200);
-      expect(runs).toEqual(['realms.get']);
+      expect(runs).toEqual(['fixtureRealms.get']);
     });
   });
 
@@ -980,7 +980,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         actor_kind: 'human_admin',
         actor_id: userId,
         actor_realm_id: operator.id,
-        operation_id: 'realms.get',
+        operation_id: 'fixtureRealms.get',
         operation_class: 'read',
         effects: [],
         outcome: 'succeeded',
@@ -1369,7 +1369,7 @@ describe('the request ceilings of the admin listener (#511, real containers)', (
     expect((await call({ authorization: 'DPoP not-a-token' })).statusCode).toBe(429);
     // A token under the Bearer scheme is no DPoP token: refused before the guard.
     expect((await call({ authorization: `Bearer ${token}` })).statusCode).toBe(429);
-    expect(runs).toEqual(['realms.get']);
+    expect(runs).toEqual(['fixtureRealms.get']);
   });
 
   it('counts the TCP peer, whatever X-Forwarded-For says, even from a proxy the public listener trusts', async () => {
