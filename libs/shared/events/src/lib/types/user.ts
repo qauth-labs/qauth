@@ -546,6 +546,41 @@ export const userAgentOwnershipRefused = defineEventType({
   }),
 });
 
+/**
+ * The ways an operator verifies an account (#1052): the admin security
+ * operation `users.verify`, and the migration runner's `verify-account`
+ * command on the server host. `OPERATOR_VERIFICATION_METHODS` of
+ * shared-validation, which the stored form of `users.operator_verified_by`
+ * reads.
+ */
+export const ACCOUNT_VERIFICATION_METHODS = ['operator', 'operator_cli'] as const;
+
+/**
+ * An operator verified an account (ADR-015 Decision 8, amended 2026-11-08;
+ * #1052). Recorded in the transaction of the change; the subject is the
+ * account, the actor the operator.
+ */
+export const userVerified = defineEventType({
+  name: 'user.verified',
+  version: 1,
+  rc: 0,
+  description:
+    'An operator verified an account: from now on it counts as verified for the realm’s verified-account sign-in gate and for owning an agent, whatever its primary identity proves, and an unclaimed account is claimed, so a later mailbox proof by someone else no longer ends it. It attests the account, not an address: the account’s `email_verified` is unchanged, and no token says more about its address than before.',
+  category: 'admin',
+  severity: 'warning',
+  since: 'v0.3.0',
+  subject: 'user',
+  data: z.strictObject({
+    method: extensibleEnum(ACCOUNT_VERIFICATION_METHODS).describe(
+      '`operator`: the admin security operation `users.verify`, run with its approval; the actor is the admin account that filed it. `operator_cli`: the `verify-account` command of the migration runner, run on the server host where no admin API is set up; the actor is `operator_cli`, with the operating-system user when the host names one. The set may grow in a minor release.'
+    ),
+  }),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'Neither CAEP 1.0 nor RISC 1.0 defines an event for an account an operator verified, and none is agreed with receivers yet.',
+});
+
 export const USER_EVENT_TYPES = [
   userSignedIn,
   userSignInFailed,
@@ -570,4 +605,5 @@ export const USER_EVENT_TYPES = [
   userPasskeyRenamed,
   userRecoveryCodesRegenerated,
   userAgentOwnershipRefused,
+  userVerified,
 ] as const;

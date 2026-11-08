@@ -232,6 +232,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.passkey_renamed:v1-rc.0`](#userpasskey_renamed-v1-rc0)                           | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0`](#userrecovery_codes_regenerated-v1-rc0)     | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.agent_ownership_refused:v1-rc.0`](#useragent_ownership_refused-v1-rc0)           | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.verified:v1-rc.0`](#userverified-v1-rc0)                                         | admin    | warning  | v0.3.0 |
 | [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0 |
 | [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                           | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                   | user     | info     | v0.2.0 |
@@ -587,6 +588,20 @@ QAuth refused to make an account the owner of an agent, because the account is n
 | `action`          | one of `client_registration`, or a later value                                        | yes      | `client_registration`: an RFC 7591 dynamic registration of an agent client (`is_agent: true`) with the account’s developer access token, which would have made the account the client’s owner. The set may grow in a minor release.                                                                                                                                                                                                                               |
 | `reason`          | one of `no_primary_identity`, `account_not_verified`, or a later value                | yes      | `no_primary_identity`: the account has no primary credential (it was removed). `account_not_verified`: its primary identity is not proved by its kind’s rule (a password whose mailbox code was never entered, a passkey registered without user verification, an upstream identity whose provider’s verified switch is off or that the realm no longer offers, or a type with no proof); `primaryIdentity` says which kind. The set may grow in a minor release. |
 | `primaryIdentity` | one of `password`, `passkey`, `wallet`, `upstream`, `other`, `none`, or a later value | yes      | The kind of the account’s primary identity: `password`, `passkey`, `wallet`, `upstream`, `other`, or `none` when it has none. The set may grow in a minor release.                                                                                                                                                                                                                                                                                                |
+
+### user.verified v1-rc.0
+
+An operator verified an account: from now on it counts as verified for the realm’s verified-account sign-in gate and for owning an agent, whatever its primary identity proves, and an unclaimed account is claimed, so a later mailbox proof by someone else no longer ends it. It attests the account, not an address: the account’s `email_verified` is unchanged, and no token says more about its address than before.
+
+- Identifier: `urn:qauth:event:user.verified:v1-rc.0`
+- Category: `admin` · Severity: `warning` · Since: v0.3.0
+- Subject: `user`, when known
+- Schema: [user.verified.v1-rc.0.json](/schemas/events/user.verified.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+| Member   | Type                                                | Required | Meaning                                                                                                                                                                                                                                                                                                                                                                            |
+| -------- | --------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `method` | one of `operator`, `operator_cli`, or a later value | yes      | `operator`: the admin security operation `users.verify`, run with its approval; the actor is the admin account that filed it. `operator_cli`: the `verify-account` command of the migration runner, run on the server host where no admin API is set up; the actor is `operator_cli`, with the operating-system user when the host names one. The set may grow in a minor release. |
 
 ### authorization.completed v1-rc.0
 
