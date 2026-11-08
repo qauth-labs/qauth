@@ -220,16 +220,16 @@ export const envSchema = z
     }
 
     // The hosted pages (INTERACTION_UI_ENABLED) send every browser sign-in to
-    // the ceremony page /ui/interaction/{id} and the account to /ui/account,
-    // neither of which this server serves; until the reference ceremony app
-    // ships, nothing does. The server cannot see whether a reverse proxy
-    // routes /ui/* to one, so the operator says so, or the boot refuses.
+    // the ceremony page /ui/interaction/{id}, which this server does not
+    // serve; until the reference ceremony app ships, nothing does. The server
+    // cannot see whether a reverse proxy routes that page to one, so the
+    // operator says so, or the boot refuses. It keeps its own /ui pages.
     if (env.INTERACTION_UI_ENABLED && !env.CEREMONY_APP_DEPLOYED) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['INTERACTION_UI_ENABLED'],
         message:
-          'INTERACTION_UI_ENABLED sends every browser sign-in to /ui/interaction/{id} and the account to /ui/account, which this server does not serve: a ceremony app must serve /ui/* on every realm host (operate/reverse-proxy.md). Set CEREMONY_APP_DEPLOYED=true once one does, or leave INTERACTION_UI_ENABLED off.',
+          'INTERACTION_UI_ENABLED sends every browser sign-in to the ceremony page /ui/interaction/{id}, which this server does not serve: a ceremony app must serve it on every realm host (operate/reverse-proxy.md). Set CEREMONY_APP_DEPLOYED=true once one does, or leave INTERACTION_UI_ENABLED off.',
       });
     }
 

@@ -271,7 +271,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'sessions',
     default: 'false',
     since: '0.2.0',
-    docs: 'Temporary: have `/oauth/authorize` start an interaction where a person must sign in or consent, and redirect to the ceremony page `/ui/interaction/{id}` with that id only, instead of the `/ui/login` and `/ui/consent` pages, and route the hosted account pages to `/ui/account`; the auth server serves neither page, a ceremony app must serve `/ui/*` on every realm host, so the boot refuses this switch unless `CEREMONY_APP_DEPLOYED` is on; the cut-over to the ceremony app removes the switch.',
+    docs: 'Temporary: have `/oauth/authorize` start an interaction where a person must sign in or consent, and redirect to the ceremony page `/ui/interaction/{id}` with that id only, instead of the `/ui/login` and `/ui/consent` pages, and serve the hosted account pages at `/ui/account`; the auth server does not serve the ceremony page, a ceremony app must serve it on every realm host, so the boot refuses this switch unless `CEREMONY_APP_DEPLOYED` is on; the cut-over to the ceremony app removes the switch.',
   },
   {
     name: 'CEREMONY_APP_DEPLOYED',
@@ -280,7 +280,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'sessions',
     default: 'false',
     since: '0.2.2',
-    docs: "Temporary: the operator's word that a ceremony app serves `/ui/*` on every realm host (operate/reverse-proxy.md), required while `INTERACTION_UI_ENABLED` is on, which sends every browser sign-in to `/ui/interaction/{id}`, a page the auth server does not serve, so that without a ceremony app every sign-in would end in a 404; it changes nothing else, and goes with the switch.",
+    docs: "Temporary: the operator's word that a ceremony app serves the ceremony page `/ui/interaction/{id}` on every realm host (operate/reverse-proxy.md), required while `INTERACTION_UI_ENABLED` is on, which sends every browser sign-in there, a page the auth server does not serve, so that without a ceremony app every sign-in would end in a 404; it only lifts that refusal, the auth server goes on serving its own `/ui` pages, and it goes with the switch.",
   },
   {
     name: 'SESSION_RETENTION_DAYS',

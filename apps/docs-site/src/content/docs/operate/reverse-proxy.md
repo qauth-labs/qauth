@@ -18,8 +18,9 @@ Until the reference ceremony app ships, the auth server renders `/ui/*` itself a
 session cookie there. This configuration strips that cookie and sends `/ui/*` to the ceremony app,
 so it is not yet a working front for browser sign-in. It fixes and tests the rules ahead of that
 split. For the same reason the auth server refuses to boot with `INTERACTION_UI_ENABLED` on unless
-`CEREMONY_APP_DEPLOYED` says a ceremony app serves `/ui/*`: the server serves neither
-`/ui/interaction/{id}` nor `/ui/account`, so without one every browser sign-in ends in a 404.
+`CEREMONY_APP_DEPLOYED` says a ceremony app serves the ceremony page `/ui/interaction/{id}`: the
+server does not serve it, so without one every browser sign-in ends in a 404. The setting only
+lifts that refusal; the auth server goes on serving its own `/ui` pages.
 :::
 
 ## The rules
