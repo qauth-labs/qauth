@@ -328,15 +328,23 @@ function storeRefusal(error: unknown, realmId: string): unknown {
   return error;
 }
 
-/** The realm operations in the pipeline's registry. */
-function realmOperations(fastify: FastifyInstance): {
-  get: AdminOperation;
-  updatePolicies: AdminOperation;
-} {
+/**
+ * The realm operations in the pipeline's registry, or `undefined` when it
+ * holds none: a test registry built from fixture operations alone serves no
+ * realm route, and the server's own registry (`OPERATION_REGISTRY`) holds both.
+ *
+ * @throws {Error} when it holds one and not the other
+ */
+function realmOperations(
+  fastify: FastifyInstance
+): { get: AdminOperation; updatePolicies: AdminOperation } | undefined {
   const get = fastify.adminApi.registry.get(REALM_OPERATION_IDS.get);
   const updatePolicies = fastify.adminApi.registry.get(REALM_OPERATION_IDS.updatePolicies);
+  if (get === undefined && updatePolicies === undefined) return undefined;
   if (get === undefined || updatePolicies === undefined) {
-    throw new Error('The admin operation registry holds no realm operations');
+    throw new Error(
+      `The admin operation registry holds only some realm operations; it lacks ${get === undefined ? REALM_OPERATION_IDS.get : REALM_OPERATION_IDS.updatePolicies}`
+    );
   }
   return { get, updatePolicies };
 }
@@ -345,6 +353,7 @@ function realmOperations(fastify: FastifyInstance): {
 export const realmRoutes: FastifyPluginAsync = async (fastify) => {
   const typed = fastify.withTypeProvider<ZodTypeProvider>();
   const operations = realmOperations(fastify);
+  if (operations === undefined) return;
   const common = {
     'x-qauth-stability': 'experimental' as const,
     // A DPoP-bound admin token (#520).
