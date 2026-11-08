@@ -157,6 +157,12 @@ export interface RealmPolicyUpdateOptions<Tx> {
   readonly guard?: (change: RealmPolicyChange) => void | Promise<void>;
 }
 
+/** What {@link RealmPolicyStore.check} takes. */
+export interface RealmPolicyCheckOptions<Tx> {
+  /** The transaction to read in, such as the one of the preview's audit record. */
+  readonly tx?: Tx;
+}
+
 /**
  * The change an update is about to store, as its `guard` sees it. Frozen, and
  * never a secret's value: a secret appears in `diff` only as whether it is
@@ -291,6 +297,27 @@ export interface RealmPolicyStore<Row, Tx> {
     patch: unknown,
     options: RealmPolicyUpdateOptions<Tx>
   ): Promise<RealmPolicySnapshot>;
+  /**
+   * Whether {@link update} would take `patch` now, writing nothing: the
+   * checks the update makes before it writes, against the realm's current
+   * policies, and nothing else. The admin API's policy preview (#589) runs it
+   * so that it refuses what the save would.
+   *
+   * Two things differ from the update. A secret member is judged only by
+   * what it does: `null` clears the secret and any other value sets it, and
+   * the value is never read or checked, so a preview can run on a value still
+   * sealed; the update checks it once opened. And there is no counter: the
+   * check runs against the policies as they are, which a later update may no
+   * longer find. What the database itself refuses as it writes (a sandbox
+   * realm's ceiling, #554) is the update's alone.
+   *
+   * @throws RealmPolicyNotFoundError when there is no such realm
+   * @throws PolicyValidationError when the update would refuse the patch or
+   *   the merged document, by its schema or a rule
+   * @throws PolicySecretStoreUnavailableError as the update throws it
+   * @throws PolicySchemaVersionError as the update throws it
+   */
+  check(realmId: string, patch: unknown, options?: RealmPolicyCheckOptions<Tx>): Promise<void>;
   /**
    * The boot step (#516): give every realm with no policies its fill (the
    * environment's seeds, with the values of its row the server already
@@ -759,7 +786,16 @@ export function createPolicyStore<Row, Tx>(
    * Split the secret fields a patch sets or clears off a copy of it. A value
    * is checked by its field's type; the issues name the path, never the value.
    */
-  function takeSecrets(patch: Record<string, unknown>): {
+  /**
+   * The secret members of `patch`, taken out of it. `checked`, as an update
+   * takes them, refuses a value its field refuses; `unread`, as a check
+   * takes them, reads only whether each sets or clears its secret, and hands
+   * on no value.
+   */
+  function takeSecrets(
+    patch: Record<string, unknown>,
+    values: 'checked' | 'unread' = 'checked'
+  ): {
     readonly rest: Record<string, unknown>;
     readonly writes: readonly { readonly path: string; readonly value: string | null }[];
   } {
@@ -773,6 +809,9 @@ export function createPolicyStore<Row, Tx>(
       delete parent[entry.segments[entry.segments.length - 1]];
       if (value === null) {
         writes.push({ path: entry.path, value: null });
+      } else if (values === 'unread') {
+        // Set, by a value this check never reads.
+        writes.push({ path: entry.path, value: '' });
       } else if (typeof value === 'string' && entry.field.schema.safeParse(value).success) {
         writes.push({ path: entry.path, value });
       } else {
@@ -859,6 +898,37 @@ export function createPolicyStore<Row, Tx>(
     }
   }
 
+  /**
+   * What an update makes of `rest` against `record` before it writes, and
+   * what a check makes of it: the record must be of a schema version this
+   * release writes, and the merged document valid and within every rule.
+   */
+  async function checked(
+    record: RealmPolicyRecord,
+    rest: Record<string, unknown>,
+    writes: readonly { readonly path: string; readonly value: string | null }[],
+    tx: Tx
+  ) {
+    const standing = standingOf(record);
+    if (standing.kind === 'newer' || standing.kind === 'no-upgrade') {
+      throw new PolicySchemaVersionError(
+        record.realmId,
+        record.schemaVersion,
+        registry.version,
+        standing.kind
+      );
+    }
+    // A document of an older version is patched as it reads upgraded, and
+    // an update stores it under this release's version.
+    const current = effective(readable(record, standing));
+    const merged = mergePolicyPatch(current.document, rest);
+    // The `input` view takes the representation's `<name>Set` members and
+    // drops them, so a representation sent back changes nothing.
+    const next = registry.parse(merged, 'input');
+    await checkRules(record.realmId, current.document, next, writes, tx);
+    return { current, next };
+  }
+
   async function conflictOrMissing(
     realmId: string,
     expectedVersion: number,
@@ -929,23 +999,7 @@ export function createPolicyStore<Row, Tx>(
         if (record.version !== expectedVersion) {
           throw new PolicyVersionConflictError(realmId, expectedVersion, record.version);
         }
-        const standing = standingOf(record);
-        if (standing.kind === 'newer' || standing.kind === 'no-upgrade') {
-          throw new PolicySchemaVersionError(
-            realmId,
-            record.schemaVersion,
-            registry.version,
-            standing.kind
-          );
-        }
-        // A document of an older version is patched as it reads upgraded,
-        // and stored under this release's version below.
-        const current = effective(readable(record, standing));
-        const merged = mergePolicyPatch(current.document, rest);
-        // The `input` view takes the representation's `<name>Set` members and
-        // drops them, so a representation sent back changes nothing.
-        const next = registry.parse(merged, 'input');
-        await checkRules(realmId, current.document, next, writes, inner);
+        const { current, next } = await checked(record, rest, writes, inner);
         if (guard !== undefined) {
           const setBefore: string[] = [];
           for (const entry of secretFields) {
@@ -977,6 +1031,27 @@ export function createPolicyStore<Row, Tx>(
           await secrets?.put(realmId, write.path, write.value, inner);
         }
         return snapshotOf(written);
+      }, tx);
+    },
+
+    async check(
+      realmId: string,
+      patch: unknown,
+      { tx }: RealmPolicyCheckOptions<Tx> = {}
+    ): Promise<void> {
+      if (!isPlainObject(patch)) {
+        throw new PolicyValidationError('The policy patch is not valid', [
+          { path: '', message: 'a policy patch is a JSON object' },
+        ]);
+      }
+      const { rest, writes } = takeSecrets(patch, 'unread');
+      if (writes.length > 0 && secrets === undefined) {
+        throw new PolicySecretStoreUnavailableError(writes.map((write) => write.path));
+      }
+      await storage.transaction(async (inner) => {
+        const record = await storage.read(realmId, inner);
+        if (record === undefined) throw new RealmPolicyNotFoundError(realmId);
+        await checked(record, rest, writes, inner);
       }, tx);
     },
 

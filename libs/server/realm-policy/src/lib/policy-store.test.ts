@@ -1980,3 +1980,91 @@ describe('createPolicyStore — the update guard (#517)', () => {
     expect(guard).not.toHaveBeenCalled();
   });
 });
+
+describe('createPolicyStore — check, the update without its write (#589)', () => {
+  it('refuses what the update refuses, with the same issues, and writes nothing', async () => {
+    const { secrets } = workingSecrets();
+    const { store, writes, locks } = storeOver([realmWithPolicies()], secrets);
+    // The update's answers, from a store of its own.
+    const reference = storeOver([realmWithPolicies()], workingSecrets().secrets).store;
+
+    for (const patch of [
+      { mail: SMTP_TRANSPORT },
+      { mail: { provider: 'smtp', smtp: { password: SECRET } } },
+      { password: { minScore: 9 } },
+      { tokens: { lifetime: 5 } },
+    ]) {
+      const byUpdate = await reference
+        .update('realm-a', patch, { expectedVersion: 3 })
+        .catch((error: unknown) => error);
+      const byCheck = await store.check('realm-a', patch).catch((error: unknown) => error);
+      expect(byCheck, JSON.stringify(patch)).toBeInstanceOf(PolicyValidationError);
+      expect((byCheck as PolicyValidationError).issues).toEqual(
+        (byUpdate as PolicyValidationError).issues
+      );
+    }
+    await expect(store.check('realm-a', [])).rejects.toBeInstanceOf(PolicyValidationError);
+    await expect(store.check('nowhere', {})).rejects.toBeInstanceOf(RealmPolicyNotFoundError);
+    expect(writes).toEqual([]);
+    expect(locks).toEqual([]);
+    expect(await secrets.isSet('realm-a', 'mail.smtp.password')).toBe(false);
+  });
+
+  it('takes what the update takes, writing nothing', async () => {
+    const { store, writes, rows } = storeOver([realmWithPolicies()]);
+    const before = structuredClone(rows.get('realm-a'));
+
+    await expect(
+      store.check('realm-a', { tokens: { accessTokenLifespanSeconds: 300 } })
+    ).resolves.toBeUndefined();
+    await expect(store.check('realm-a', {})).resolves.toBeUndefined();
+    expect(writes).toEqual([]);
+    expect(rows.get('realm-a')).toEqual(before);
+  });
+
+  it('judges a secret member by whether it sets or clears the secret, never reading the value', async () => {
+    const { secrets, rows: secretRows } = workingSecrets();
+    const { store, writes } = storeOver([realmWithPolicies()], secrets);
+    const smtp = (password: unknown) => ({
+      mail: { ...SMTP_TRANSPORT, smtp: { ...SMTP_TRANSPORT.smtp, password } },
+    });
+
+    // A value still sealed, which the update would refuse unopened, sets it.
+    await expect(store.check('realm-a', smtp({ sealed: 'v1.kid.x.y' }))).resolves.toBeUndefined();
+    await expect(store.check('realm-a', smtp(SECRET))).resolves.toBeUndefined();
+    // Cleared, smtp has no password.
+    await expect(store.check('realm-a', smtp(null))).rejects.toMatchObject({
+      issues: [{ path: 'mail.smtp.password', message: 'must be set when mail.provider is smtp' }],
+    });
+    expect(writes).toEqual([]);
+    expect(secretRows.size).toBe(0);
+  });
+
+  it('refuses a secret member while there is no secret store, as the update does', async () => {
+    const { store } = storeOver([realmWithPolicies()]);
+
+    await expect(
+      store.check('realm-a', { mail: { smtp: { password: { sealed: 'v1.kid.x.y' } } } })
+    ).rejects.toBeInstanceOf(PolicySecretStoreUnavailableError);
+  });
+
+  it('refuses policies of a later schema version, as the update does', async () => {
+    const { store } = storeOver([realmWithPolicies({ schemaVersion: '1-rc.7' })]);
+
+    await expect(store.check('realm-a', {})).rejects.toMatchObject({
+      name: expect.any(String),
+      storedVersion: '1-rc.7',
+      reason: 'newer',
+    });
+    await expect(store.check('realm-a', {})).rejects.toBeInstanceOf(PolicySchemaVersionError);
+  });
+
+  it('reads in the transaction it is given', async () => {
+    const { store, transactions } = storeOver([realmWithPolicies()]);
+    const outer: Tx = { id: 200 };
+
+    await store.check('realm-a', {}, { tx: outer });
+
+    expect(transactions).toEqual([outer]);
+  });
+});
