@@ -84,6 +84,7 @@ import type { FastifyRequest } from 'fastify';
 
 import { approvalOperationDefinitions } from '../admin/approvals/operations';
 import { PLUGIN_OPERATION_DEFINITIONS } from '../admin/plugins/operations';
+import { REALM_OPERATION_DEFINITIONS } from '../admin/realms/operations';
 import { SECRET_OPERATION_DEFINITIONS } from '../admin/secrets/operations';
 import { isSecretMemberPattern } from '../admin/secrets/secret-members';
 import { classRank, isUnknownFieldError, strictestClass } from './admin-classification';
@@ -1081,6 +1082,7 @@ export function createAdminOperationRegistry(
 export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
   [
     ...SECRET_OPERATION_DEFINITIONS,
+    ...REALM_OPERATION_DEFINITIONS,
     ...PLUGIN_OPERATION_DEFINITIONS,
   ].map((operation) => defineOperation(operation))
 );

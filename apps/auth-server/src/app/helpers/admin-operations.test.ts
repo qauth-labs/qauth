@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { SECURITY_EFFECTS, type SecurityEffect } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
+import { classifyPolicyPatch, type RealmPolicyState } from '../admin/realms/operations';
 import {
   ADMIN_OPERATIONS,
   type AdminOperationDefinition,
@@ -361,13 +362,18 @@ describe('defineOperation: secret members (#984)', () => {
     ).toThrow(/only a security operation declares secret members/);
   });
 
-  it('declares the plugin configure secret under /secrets/* in the server registry', () => {
+  it('declares the plugin configure and the policy patch secrets in the server registry', () => {
     expect(OPERATION_REGISTRY.get('plugins.update')?.secretMembers).toEqual(['/secrets/*']);
+    expect(OPERATION_REGISTRY.get('realms.policies.update')?.secretMembers).toEqual([
+      '/mail/smtp/password',
+      '/mail/resend/apiKey',
+    ]);
     expect(
       OPERATION_REGISTRY.all
         .filter((operation) => operation.secretMembers !== undefined)
         .map((operation) => operation.id)
-    ).toEqual(['plugins.update']);
+        .sort()
+    ).toEqual(['plugins.update', 'realms.policies.update']);
   });
 });
 
@@ -1099,28 +1105,6 @@ function at(value: unknown, path: string): unknown {
     );
 }
 
-/** A number that grows, or a cap removed, loosens. */
-const lengthening =
-  (path: string) =>
-  (request: ClassifyInput, state: unknown): Classification => {
-    const next = at(request.body, path);
-    const current = at(state, path);
-    return next === null || (typeof next === 'number' && next > (current as number))
-      ? securityWith('posture-loosening')
-      : WRITE;
-  };
-
-/** A retention that shrinks, or is switched off, loosens. */
-const shortening =
-  (path: string) =>
-  (request: ClassifyInput, state: unknown): Classification => {
-    const next = at(request.body, path);
-    const current = at(state, path);
-    return next === null || (typeof next === 'number' && next < (current as number))
-      ? securityWith('posture-loosening')
-      : WRITE;
-  };
-
 /** A field that is a security change unless it keeps or tightens `safe`. */
 const unless =
   (path: string, safe: (value: unknown, current: unknown) => boolean, effect: SecurityEffect) =>
@@ -1131,34 +1115,9 @@ const REQUEST_DEPENDENT_PERMISSIONS = ['realms.policies.write', 'realms.policies
 
 /** A correct classify for each request-dependent reserved entry, as its issue would write it. */
 const CORRECT_CLASSIFY: Record<string, AdminOperationDefinition['classify']> = {
-  'realms.policies.update': classifyByField<unknown>({
-    changedFields: (request) => mergePatchLeafPaths(request.body),
-    fields: {
-      '/passwordPolicy/minLength': unless(
-        '/passwordPolicy/minLength',
-        (next, current) => typeof next === 'number' && next >= (current as number),
-        'credential-path'
-      ),
-      '/bruteForce/enabled': unless(
-        '/bruteForce/enabled',
-        (next) => next === true,
-        'credential-path'
-      ),
-      '/maxEnvironmentLaxity': unless(
-        '/maxEnvironmentLaxity',
-        (next) => next === 'production',
-        'posture-loosening'
-      ),
-      '/accessTokenLifespan': lengthening('/accessTokenLifespan'),
-      '/refreshTokenLifespan': lengthening('/refreshTokenLifespan'),
-      '/ssoMaxLifespan': lengthening('/ssoMaxLifespan'),
-      '/ssoIdleTimeout': lengthening('/ssoIdleTimeout'),
-      '/keyRotationIntervalDays': lengthening('/keyRotationIntervalDays'),
-      '/adminEventRetentionDays': shortening('/adminEventRetentionDays'),
-      '/userEventRetentionDays': shortening('/userEventRetentionDays'),
-    },
-    unchanged: WRITE,
-  }),
+  // The shipped classify (#517): every field by the merged document's diff.
+  'realms.policies.update': (request, state) =>
+    classifyPolicyPatch(request, state as RealmPolicyState),
   'clients.update': classifyByField<unknown>({
     changedFields: (request) => mergePatchLeafPaths(request.body),
     fields: {
@@ -1275,10 +1234,11 @@ describe('the reserved security cases (#508)', () => {
     );
   });
 
-  // ADR-019 Decision 7, by effect: lengthening a lifetime or the rotation
-  // interval, or shortening or switching off retention, loosens the posture;
-  // the opposite direction is a write.
-  it('counts lifetimes, the rotation interval and retention by direction', () => {
+  // ADR-019 Decision 7, by effect: lengthening a lifetime loosens the
+  // posture; the opposite direction is a write. The rotation interval and
+  // retention are no policy fields yet (#517): their cases come back with
+  // the issue that registers each.
+  it('counts lifetimes by direction', () => {
     const policies = requestDependentOperation(
       'realms.policies.update',
       CORRECT_CLASSIFY['realms.policies.update']
@@ -1294,11 +1254,10 @@ describe('the reserved security cases (#508)', () => {
         { method: 'PATCH', params: {}, query: {}, body },
         state
       ).class;
-    expect(classOf({ accessTokenLifespan: 3600 })).toBe('security');
-    expect(classOf({ accessTokenLifespan: 300 })).toBe('write');
-    expect(classOf({ keyRotationIntervalDays: 30 })).toBe('write');
-    expect(classOf({ adminEventRetentionDays: 730 })).toBe('write');
-    expect(classOf({ adminEventRetentionDays: null })).toBe('security');
+    expect(classOf({ tokens: { accessTokenLifespanSeconds: 3600 } })).toBe('security');
+    expect(classOf({ tokens: { accessTokenLifespanSeconds: 300 } })).toBe('write');
+    expect(classOf({ tokens: { refreshTokenLifespanSeconds: 7_776_000 } })).toBe('security');
+    expect(classOf({ tokens: { refreshTokenLifespanSeconds: 3600 } })).toBe('write');
     expect(entry?.description).toMatch(/lengthening a lifetime or the rotation interval/);
   });
 

@@ -458,11 +458,10 @@ describe('the API conventions check — fixture document (#506)', () => {
       expect(rulesOf(mutated((d) => (GET(d).operationId = 'getRealm')))).toEqual(['operation-id']);
     });
 
-    it("compares with the server's own registry by default, which holds no operation yet", () => {
+    it("compares with the server's own registry by default, whose realm operations differ from the fixture's", () => {
       const { violations } = checkApiConventions(fixture);
       expect(violations.map((violation) => [violation.operation, violation.rule])).toEqual([
         ['GET /admin/v1-rc.0/realms', 'registry'],
-        ['GET /admin/v1-rc.0/realms/{realmId}', 'registry'],
         ['PATCH /admin/v1-rc.0/realms/{realmId}/policies', 'registry'],
       ]);
     });

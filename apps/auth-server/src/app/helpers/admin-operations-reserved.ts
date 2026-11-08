@@ -1,3 +1,7 @@
+import {
+  defaultsFromEnv,
+  toRealmPoliciesRepresentation,
+} from '@qauth-labs/fastify-plugin-realm-policy';
 import type { SecurityEffect } from '@qauth-labs/shared-validation';
 
 /**
@@ -132,19 +136,38 @@ const patch = (params: Record<string, string>, body: Record<string, unknown>) =>
 const REALM = { realmId: '00000000-0000-4000-8000-000000000001' };
 const CLIENT = { ...REALM, clientId: '00000000-0000-4000-8000-000000000002' };
 
-/** A realm's policies, as the policy cases meet them. */
-const REALM_POLICIES = {
-  accessTokenLifespan: 900,
-  refreshTokenLifespan: 604800,
-  ssoMaxLifespan: 86400,
-  ssoIdleTimeout: 1800,
-  keyRotationIntervalDays: 90,
-  adminEventRetentionDays: 365,
-  userEventRetentionDays: 90,
-  maxEnvironmentLaxity: 'production',
-  passwordPolicy: { minLength: 12 },
-  bruteForce: { enabled: true, maxFailures: 5 },
-};
+/**
+ * A realm's policies, as the policy cases meet them: the state
+ * `realms.policies.update` reads (#517), its policies in the realm
+ * representation's view (each secret as `<name>Set`), with values a loosening
+ * can be measured against. Built from the defaults, so the cases follow the
+ * schema the release ships.
+ */
+const REALM_POLICIES = (() => {
+  const document = defaultsFromEnv({}) as unknown as Record<string, Record<string, unknown>>;
+  document['password'] = { ...document['password'], minLength: 15, minScore: 3 };
+  document['bruteForce'] = { ...document['bruteForce'], enabled: true, lockoutSeconds: 900 };
+  document['tokens'] = {
+    ...document['tokens'],
+    accessTokenLifespanSeconds: 900,
+    refreshTokenLifespanSeconds: 604800,
+  };
+  document['posture'] = { ...document['posture'], maxEnvironmentLaxity: 'production' };
+  document['registration'] = {
+    ...document['registration'],
+    dynamicRegistrationAllowedScopes: ['openid'],
+    cimd: {
+      ...(document['registration']['cimd'] as Record<string, unknown>),
+      trustPolicy: 'allowlist',
+      trustedDomains: ['clients.example'],
+    },
+  };
+  document['admin'] = { ...document['admin'], twoAdminMandatoryOperations: ['keys.rotate'] };
+  return {
+    version: 7,
+    policies: toRealmPoliciesRepresentation(document, ['mail.smtp.password']),
+  };
+})();
 
 /** A client, as the client cases meet it. */
 const CLIENT_STATE = {
@@ -333,35 +356,61 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     `${ADR_019}, #514, #517`,
     'Change realm policies: the mail transport and sender, the sign-in, password and brute-force policy, the registration policy, the environment ceiling, token and session lifetimes, the key rotation interval, audit-event retention and the two-admin set; lengthening a lifetime or the rotation interval, or shortening or switching off retention, is posture-loosening.',
     [
-      policyCase('lowers the password minimum length', { passwordPolicy: { minLength: 8 } }, [
+      // The cases of this entry, in the representation #517 ships. Five
+      // cases of the first guess name fields no policy group has yet: the
+      // session lifetime (lengthened, and its cap removed), the key rotation
+      // interval, and audit-event retention (shortened, and switched off),
+      // which the realm row holds outside the policies. The issue that
+      // registers each field adds its case back here.
+      policyCase('lowers the password minimum length', { password: { minLength: 8 } }, [
         'credential-path',
       ]),
+      policyCase('lowers the password score', { password: { minScore: 1 } }, ['credential-path']),
       policyCase('switches brute-force protection off', { bruteForce: { enabled: false } }, [
         'credential-path',
       ]),
-      policyCase('raises the environment ceiling', { maxEnvironmentLaxity: 'development' }, [
-        'posture-loosening',
+      policyCase('shortens the lockout', { bruteForce: { lockoutSeconds: 60 } }, [
+        'credential-path',
       ]),
-      policyCase('lengthens the access-token lifetime', { accessTokenLifespan: 3600 }, [
-        'posture-loosening',
+      policyCase('lets anyone sign up', { accounts: { allowSignUp: true } }, ['credential-path']),
+      policyCase(
+        'raises the environment ceiling',
+        { posture: { maxEnvironmentLaxity: 'development' } },
+        ['posture-loosening']
+      ),
+      policyCase(
+        'lengthens the access-token lifetime',
+        { tokens: { accessTokenLifespanSeconds: 3600 } },
+        ['posture-loosening']
+      ),
+      policyCase(
+        'lengthens the refresh-token lifetime',
+        { tokens: { refreshTokenLifespanSeconds: 2592000 } },
+        ['posture-loosening']
+      ),
+      policyCase(
+        'gives a field its looser default',
+        { registration: { cimd: { trustPolicy: null } } },
+        ['token-content']
+      ),
+      policyCase(
+        'widens the scopes dynamic registration allows',
+        { registration: { dynamicRegistrationAllowedScopes: ['openid', 'offline_access'] } },
+        ['token-content']
+      ),
+      policyCase('changes the mail transport', { mail: { provider: 'resend' } }, [
+        'credential-path',
       ]),
-      policyCase('lengthens the refresh-token lifetime', { refreshTokenLifespan: 2592000 }, [
-        'posture-loosening',
+      policyCase(
+        'sets the SMTP password',
+        { mail: { smtp: { password: { sealed: 'v1.k.aXY.Y2lwaGVydGV4dA' } } } },
+        ['credential-path']
+      ),
+      policyCase('clears the SMTP password', { mail: { smtp: { password: null } } }, [
+        'credential-path',
       ]),
-      policyCase('lengthens the session lifetime', { ssoMaxLifespan: 604800 }, [
-        'posture-loosening',
-      ]),
-      policyCase('removes the session lifetime cap', { ssoMaxLifespan: null }, [
-        'posture-loosening',
-      ]),
-      policyCase('lengthens the key rotation interval', { keyRotationIntervalDays: 365 }, [
-        'posture-loosening',
-      ]),
-      policyCase('shortens audit-event retention', { adminEventRetentionDays: 90 }, [
-        'posture-loosening',
-      ]),
-      policyCase('switches audit-event retention off', { adminEventRetentionDays: null }, [
-        'posture-loosening',
+      policyCase('changes the two-admin set', { admin: { twoAdminMandatoryOperations: [] } }, [
+        'administration',
       ]),
     ]
   ),
