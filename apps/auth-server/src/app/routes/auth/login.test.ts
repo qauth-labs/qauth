@@ -943,7 +943,7 @@ describe('POST /auth/login', () => {
       expect(fresh.sessionService.create).not.toHaveBeenCalled();
     });
 
-    it('reads credential_data.email_verified, before the users row is looked up', async () => {
+    it("reads credential_data.email_verified, never the users row's emailVerified", async () => {
       const { fastify, observed } = await refusal((stub) => {
         (
           stub.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
@@ -961,7 +961,9 @@ describe('POST /auth/login', () => {
 
       expect(observed.error?.name).toBe('InvalidCredentialsError');
       expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
-      expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+      // The row is read for an operator's verification only (#1052), which
+      // this one does not hold.
+      expect(fastify.repositories.users.findById).toHaveBeenCalledWith('realm-1', 'user-1');
       // The reason survives where only operators read it.
       expect(emitUserEventMock).toHaveBeenCalledWith(
         expect.anything(),
@@ -969,6 +971,45 @@ describe('POST /auth/login', () => {
         { method: 'password', reason: 'account_not_verified' },
         expect.objectContaining({ realmId: 'realm-1', userId: 'user-1', actor: 'user' })
       );
+    });
+
+    // ADR-015 Decision 8, amended 2026-11-08: an operator's verification of
+    // the account counts beside the confirmed address.
+    it('signs in an account with an unconfirmed address that an operator verified (#1052)', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      fastify.policyStore = testPolicyStore(
+        {},
+        { accounts: { requireVerifiedAccount: true } }
+      ) as unknown as FastifyInstance['policyStore'];
+      await loginRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(
+        credentialFixture({ credentialData: { password_hash: 'hash', email_verified: false } })
+      );
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(
+        userFixture({ operatorVerifiedAt: 1_762_000_000_000, operatorVerifiedBy: 'operator_cli' })
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        id: 'sc-uuid',
+        clientId: 'system',
+        audience: ['urn:qauth:aud:developer:v1-rc.0'],
+      });
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+      await expect(
+        ctx.handler(
+          {
+            body: { email: 'user@example.com', password: 'p' },
+            ip: '127.0.0.1',
+            headers: { 'user-agent': 'vitest' },
+            log: requestLog(),
+          },
+          createReply()
+        )
+      ).resolves.toMatchObject({ access_token: 'jwt' });
     });
 
     it("still signs in an unverified account in a realm whose gate is off, and reads the gate from the request's realm row (#528)", async () => {
