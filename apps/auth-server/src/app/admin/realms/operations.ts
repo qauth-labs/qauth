@@ -32,7 +32,7 @@ import {
 /**
  * THE REALM OPERATIONS OF THE ADMIN API (ADR-019 Decisions 7 and 10, issue
  * #517): read a realm, and change its policies. They are the reference for
- * every later admin operation (`docs-site/.../reference/admin-operations.md`):
+ * every later admin operation (`docs-site/.../extend/adding-an-admin-operation.md`):
  * a permission in the catalog (`helpers/admin-permissions.ts`), a definition
  * here, its classification, its renderer, and the audit record its handler
  * keeps (`./routes.ts`).

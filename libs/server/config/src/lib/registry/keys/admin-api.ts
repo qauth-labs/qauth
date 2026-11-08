@@ -22,7 +22,7 @@ export const ADMIN_API_KEYS = defineKeys([
     owner: 'server',
     default: 'false',
     since: '0.2.0',
-    docs: 'Run the admin API on its own internal listener, on a process whose `SERVICE_ROLES` holds `admin`, off by default until the first admin operations (#517) ship; it needs `DPOP_ENABLED` and `ADMIN_API_BASE_URL`, since every admin call carries a DPoP-bound admin token; `false` serves no admin API on this process, and the public listener never serves it.',
+    docs: 'Run the admin API on its own internal listener, on a process whose `SERVICE_ROLES` holds `admin`, off by default; it needs `DPOP_ENABLED` and `ADMIN_API_BASE_URL`, since every admin call carries a DPoP-bound admin token; `false` serves no admin API on this process, and the public listener never serves it.',
   },
   {
     name: 'ADMIN_API_HOST',

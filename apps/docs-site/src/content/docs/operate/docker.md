@@ -538,7 +538,7 @@ A metadata document and a client's `jwks_uri` are fetched through the egress cli
 
 #### Changing a realm's CIMD policy
 
-Until the admin API's realm policy update ([#517](https://github.com/qauth-labs/qauth/issues/517)) ships, no route changes a realm's CIMD policy, and the environment keys no longer do. To switch CIMD off for a realm meanwhile, or to hold it to an allowlist, change its stored policies in Postgres:
+The admin API's realm policy update, `realms.policies.update` ([#517](https://github.com/qauth-labs/qauth/issues/517)), changes a realm's CIMD policy; the environment keys no longer do. On a deployment that runs no admin listener, switch CIMD off for a realm, or hold it to an allowlist, by changing its stored policies in Postgres:
 
 ```sql
 -- Switch CIMD off for the realm `master`.
