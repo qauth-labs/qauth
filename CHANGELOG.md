@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`INTERACTION_UI_ENABLED` needs `CEREMONY_APP_DEPLOYED`.** The switch
+  sends every browser sign-in to the ceremony page `/ui/interaction/{id}`
+  and the account to `/ui/account`, which the auth server does not serve:
+  until the reference ceremony app ships, a deployment that turned it on
+  answered every sign-in with a 404, and the boot said only that the switch
+  is experimental. The boot now refuses the switch unless the new
+  `CEREMONY_APP_DEPLOYED=true` says a ceremony app serves `/ui/*` on every
+  realm host (operate/reverse-proxy.md); the server cannot see a reverse
+  proxy's routes. **Upgrading:** a deployment with `INTERACTION_UI_ENABLED`
+  on and no ceremony app turns it off; one with a ceremony app sets
+  `CEREMONY_APP_DEPLOYED=true`.
+
 ## [0.2.1] - 2026-11-08
 
 A patch release that carries breaking changes, as a 0.x release may (see

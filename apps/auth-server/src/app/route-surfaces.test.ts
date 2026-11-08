@@ -79,6 +79,7 @@ function maximalEnvironment(): Record<string, string> {
     SSF_TRANSMITTER_ENABLED: 'true',
     // The switches `openapi-export.ts --surface maximal` sets, for the same routes.
     INTERACTION_UI_ENABLED: 'true',
+    CEREMONY_APP_DEPLOYED: 'true',
     WALLET_FEDERATION_ENABLED: 'true',
     OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
     OID4VP_SUBJECT_RESOLUTION: 'asserted-lookup',
@@ -153,7 +154,11 @@ const savedEnv = new Map<string, string | undefined>();
 
 beforeAll(async () => {
   for (const key of Object.keys(process.env)) {
-    if (/^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|CORS_|INTERACTION_UI_ENABLED$)/.test(key)) {
+    if (
+      /^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|CORS_|INTERACTION_UI_ENABLED$|CEREMONY_APP_DEPLOYED$)/.test(
+        key
+      )
+    ) {
       savedEnv.set(key, process.env[key]);
       delete process.env[key];
     }

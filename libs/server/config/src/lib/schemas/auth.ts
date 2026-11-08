@@ -355,6 +355,16 @@ export const authEnvSchema = z.object({
   INTERACTION_UI_ENABLED: strictBoolean(false),
 
   /**
+   * The operator's word that a ceremony app serves `/ui/*` on every realm
+   * host (operate/reverse-proxy.md). The auth server does not serve the
+   * ceremony page `/ui/interaction/{id}` that `INTERACTION_UI_ENABLED` sends
+   * every browser sign-in to, nor `/ui/account`, and it cannot see whether a
+   * reverse proxy routes them to one, so the boot refuses the switch without
+   * this. Temporary, with the switch. Parsed by {@link strictBoolean}.
+   */
+  CEREMONY_APP_DEPLOYED: strictBoolean(false),
+
+  /**
    * How long, in days, a browser session row is kept once it has ended or
    * expired (ADR-019 Decision 3, issue #550). The session purge job deletes
    * a row whose revocation or absolute end is older than this; until then
