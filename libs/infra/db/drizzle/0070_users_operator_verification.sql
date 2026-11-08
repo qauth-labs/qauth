@@ -26,9 +26,9 @@ ALTER TABLE "users" ADD CONSTRAINT "users_operator_verified_by_form" CHECK ("use
 --
 -- user_credential_proofs: the account's credentials in its realm, as its
 -- approver is shown them. It returns nothing secret: of credential_data only
--- `email_verified`, `user_verified` and `kind`, the fields that say what a
--- credential proves; no password hash, TOTP secret, passkey key or upstream
--- claim. The identifier only of a password credential, its address. STABLE.
+-- `email_verified`, `user_verified`, `kind` and `verified` (an upstream
+-- identity's), the fields that say what a credential proves; no password
+-- hash, TOTP secret, passkey key or upstream claim. The identifier only of a password credential, its address. STABLE.
 --
 -- users_record_operator_verification: the verification of an enabled account
 -- no operator verified yet, recorded as `operator:<admin account id>`, with
@@ -55,7 +55,8 @@ AS $$
          jsonb_strip_nulls(jsonb_build_object(
            'email_verified', c."credential_data" -> 'email_verified',
            'user_verified', c."credential_data" -> 'user_verified',
-           'kind', c."credential_data" -> 'kind'
+           'kind', c."credential_data" -> 'kind',
+           'verified', c."credential_data" -> 'verified'
          ))
     FROM public."user_credentials" c
    WHERE c."realm_id" = p_realm_id

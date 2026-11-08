@@ -63,8 +63,11 @@ export const USER_OPERATION_IDS = Object.freeze({
  * - `proved`: its kind's proof holds (a confirmed address, a passkey
  *   registered with user verification, a wallet presentation QAuth verified);
  * - `not_proved`: it does not;
- * - `provider`: an upstream identity, which counts while the realm's provider
- *   is marked to vouch for its accounts (ADR-020 §3);
+ * - `provider`: an upstream identity the account counts as verified by (its
+ *   `verified`: the provider vouched as it was created, or QAuth confirmed
+ *   its address since), which counts while the realm's provider is marked to
+ *   vouch for its accounts (ADR-020 §3); one whose `verified` does not hold
+ *   is `not_proved`, as the sign-in reads it;
  * - `none`: a type with no proof of identity, such as TOTP.
  */
 export type CredentialProof = 'proved' | 'not_proved' | 'provider' | 'none';
@@ -101,7 +104,8 @@ type CredentialRow = Awaited<
  * What one credential proves, by its kind's row of Decision 8's table
  * (`decideVerifiedOwner` of federation), read off the keys of its data that
  * say so: a confirmed address, a passkey registered with user verification,
- * a wallet binding (made only after a presentation QAuth verified). The
+ * a wallet binding (made only after a presentation QAuth verified), an
+ * upstream identity's own `verified`, so the approval binds it too. The
  * admin role reads no more of the data (migration 0070), so a row whose data
  * is malformed otherwise is shown by these keys alone; what the account's
  * standing is decided by is the full rule, wherever it is checked.
@@ -119,7 +123,7 @@ function proofOf(credential: CredentialRow): CredentialProof {
     case 'wallet':
       return 'proved';
     case 'upstream':
-      return 'provider';
+      return credential.proofData.verified === true ? 'provider' : 'not_proved';
     case 'other':
       return 'none';
   }

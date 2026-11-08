@@ -170,7 +170,11 @@ describe('the account users.verify meets (#1052)', () => {
 
   it("shows each credential's proof by its kind's row of Decision 8's table", async () => {
     const rows = [
-      credential({ id: 'c3', providerType: 'oidc_corp', proofData: { kind: 'upstream' } }),
+      credential({
+        id: 'c3',
+        providerType: 'oidc_corp',
+        proofData: { kind: 'upstream', verified: true },
+      }),
       credential({
         id: 'c4',
         providerType: 'password',
@@ -183,6 +187,14 @@ describe('the account users.verify meets (#1052)', () => {
       credential({ id: 'c8', providerType: 'oidc_corp' }),
       // A password row whose flag is not a boolean `true` is not confirmed.
       credential({ id: 'c9', providerType: 'password', proofData: { email_verified: 'true' } }),
+      // An upstream identity the account is not verified by yet, or whose
+      // flag is missing, is not proved.
+      credential({
+        id: 'd1',
+        providerType: 'oidc_corp',
+        proofData: { kind: 'upstream', verified: false },
+      }),
+      credential({ id: 'd2', providerType: 'oidc_corp', proofData: { kind: 'upstream' } }),
     ];
     const state = await load(requestFor(userRow(), rows));
     expect(state.credentials.map((entry) => [entry.id, entry.proof])).toEqual([
@@ -193,6 +205,8 @@ describe('the account users.verify meets (#1052)', () => {
       ['c7', 'proved'],
       ['c8', 'none'],
       ['c9', 'not_proved'],
+      ['d1', 'not_proved'],
+      ['d2', 'not_proved'],
     ]);
   });
 
@@ -257,6 +271,19 @@ describe('the account users.verify meets (#1052)', () => {
     expect(version).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(accountVerificationStateVersion(again)).toBe(version);
     expect(accountVerificationStateVersion(added)).not.toBe(version);
+
+    // An upstream identity verified after the filing changes it too.
+    const upstream = (verified: boolean) =>
+      credential({
+        id: 'c3',
+        providerType: 'oidc_corp',
+        proofData: { kind: 'upstream', verified },
+      });
+    const unverified = await load(requestFor(userRow(), [upstream(false)]));
+    const verified = await load(requestFor(userRow(), [upstream(true)]));
+    expect(accountVerificationStateVersion(verified)).not.toBe(
+      accountVerificationStateVersion(unverified)
+    );
   });
 });
 

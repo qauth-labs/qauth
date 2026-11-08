@@ -100,6 +100,7 @@ describe("migration 0070 (an operator's verification of an account)", () => {
       `"credential_data" -> 'email_verified'`,
       `"credential_data" -> 'user_verified'`,
       `"credential_data" -> 'kind'`,
+      `"credential_data" -> 'verified'`,
     ]);
     expect(proofs).not.toMatch(/"credential_data"\s*(,|$|\))/m);
     expect(revokeProofs).toBe(

@@ -73,7 +73,12 @@ describe("users.verify's functions (real Postgres)", () => {
       realmId: realm.id,
       providerType: 'oidc_corp',
       externalSub: 'sub-1',
-      credentialData: { kind: 'upstream', iss: 'https://idp.example.com', claims: { a: 1 } },
+      credentialData: {
+        kind: 'upstream',
+        iss: 'https://idp.example.com',
+        verified: true,
+        claims: { a: 1 },
+      },
     });
 
     const rows = await credentials.findProofsByUserId(realm.id, user.id);
@@ -91,7 +96,7 @@ describe("users.verify's functions (real Postgres)", () => {
     });
     expect(byType['oidc_corp']).toMatchObject({
       identifier: null,
-      proofData: { kind: 'upstream' },
+      proofData: { kind: 'upstream', verified: true },
     });
     const shown = JSON.stringify(rows);
     expect(shown).not.toContain('secret-hash');

@@ -144,12 +144,14 @@ export interface CredentialProofRow {
   readonly identifier: string | null;
   /**
    * Of `credential_data`, only the keys that say what it proves, where set:
-   * `email_verified`, `user_verified` and `kind`.
+   * `email_verified`, `user_verified`, `kind` and an upstream identity's
+   * `verified`.
    */
   readonly proofData: {
     readonly email_verified?: unknown;
     readonly user_verified?: unknown;
     readonly kind?: unknown;
+    readonly verified?: unknown;
   };
 }
 
