@@ -339,6 +339,9 @@ export function baseEnvironment(infra: E2eInfrastructure, jwt: PemKeyPair): Reco
     // their accounts through `POST /auth/register`, which the switch closes
     // too. A suite about a closed realm sets `ALLOW_SIGN_UP: 'false'`.
     ALLOW_SIGN_UP: 'true',
+    // The suites answer the Interaction API themselves, in the ceremony app's
+    // place, so a suite that turns the hosted pages on may boot.
+    CEREMONY_APP_DEPLOYED: 'true',
   };
 }
 

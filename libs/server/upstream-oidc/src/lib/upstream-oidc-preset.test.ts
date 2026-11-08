@@ -23,8 +23,12 @@ import {
   EXAMPLE_PRESET_PACKAGE,
   EXAMPLE_PRESET_SECRET_PATH,
   EXAMPLE_PRESET_TYPE,
+  EXAMPLE_TENANT_PRESET_PACKAGE,
   examplePresetMethod,
   examplePresetPackage,
+  exampleTenantIssuer,
+  exampleTenantPresetMethod,
+  exampleTenantPresetPackage,
 } from '../testing/example-preset';
 import {
   createFakeProvider,
@@ -32,6 +36,7 @@ import {
   type FakeSignIn,
 } from '../testing/fake-provider';
 import { type HostEgressCall, TEST_ORIGIN, testHost } from '../testing/test-host';
+import { upstreamClientSecretDestination } from './stored-config';
 import { createUpstreamOidcMethod } from './upstream-oidc-method';
 import { createUpstreamOidcPresetMethod } from './upstream-oidc-preset';
 
@@ -575,6 +580,67 @@ describe("the secret bound to the preset's provider (#951)", () => {
     expect(() => parseAuthMethodConfig(throwing, { clientId: CLIENT_ID })).not.toThrow(
       CLIENT_SECRET
     );
+  });
+});
+
+describe("the destination of a preset's secret (#1031)", () => {
+  const method = exampleTenantPresetMethod();
+  const config = (change: Record<string, unknown> = {}) =>
+    parseAuthMethodConfig(method, {
+      tenant: 'alpha',
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      ...change,
+    });
+  const destination = (change: Record<string, unknown> = {}) =>
+    method.secretDestination?.(config(change));
+
+  it("names the issuer and the token endpoint set by hand, as the generic client's digest", () => {
+    const issuer = exampleTenantIssuer('alpha');
+    expect(destination()).toBe(upstreamClientSecretDestination({ issuer }));
+    const token = `${issuer}/oauth/token`;
+    expect(destination({ tokenEndpoint: token })).toBe(
+      upstreamClientSecretDestination({ issuer, endpoints: { token } })
+    );
+    const fixed = examplePresetMethod();
+    expect(
+      fixed.secretDestination?.(parseAuthMethodConfig(fixed, presetConfig('client_secret_post')))
+    ).toBe(upstreamClientSecretDestination({ issuer: EXAMPLE_PRESET_ISSUER }));
+  });
+
+  it("changes with a member that shapes the issuer's path, or a token endpoint's path on the same origin", () => {
+    expect(destination({ tenant: 'beta' })).not.toBe(destination());
+    const token = `${exampleTenantIssuer('alpha')}/token`;
+    expect(destination({ tokenEndpoint: token })).not.toBe(destination());
+    expect(destination({ tokenEndpoint: `${token}-2` })).not.toBe(
+      destination({ tokenEndpoint: token })
+    );
+  });
+
+  it('stays for a change that sends the secret nowhere new', () => {
+    expect(destination({ clientId: 'another-client' })).toBe(destination());
+    expect(destination({ clientSecret: 'another-secret' })).toBe(destination());
+  });
+
+  it('holds no secret, survives the plugin loader, and throws for a config its checks refuse', async () => {
+    expect(destination()).toMatch(/^[0-9a-f]{64}$/);
+    const loaded = await loadAuthMethodPlugins({
+      packages: [EXAMPLE_TENANT_PRESET_PACKAGE],
+      pluginApiEnabled: false,
+      firstParty: [EXAMPLE_TENANT_PRESET_PACKAGE],
+      importPackage: importer({ [EXAMPLE_TENANT_PRESET_PACKAGE]: exampleTenantPresetPackage() }),
+    });
+    expect(loaded.installed[0]?.method.secretDestination?.(config())).toBe(destination());
+    // An unparsed config whose token endpoint leaves the origins: the host
+    // never passes one, and a throw counts as a new destination there.
+    expect(() =>
+      method.secretDestination?.({
+        tenant: 'alpha',
+        clientId: CLIENT_ID,
+        clientSecret: CLIENT_SECRET,
+        tokenEndpoint: 'https://attacker.example/token',
+      })
+    ).toThrow(Error);
   });
 });
 

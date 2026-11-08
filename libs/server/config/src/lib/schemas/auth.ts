@@ -355,6 +355,18 @@ export const authEnvSchema = z.object({
   INTERACTION_UI_ENABLED: strictBoolean(false),
 
   /**
+   * The operator's word that a ceremony app serves the ceremony page
+   * `/ui/interaction/{id}` on every realm host (operate/reverse-proxy.md).
+   * `INTERACTION_UI_ENABLED` sends every browser sign-in there, and the auth
+   * server does not serve it; it cannot see whether a reverse proxy routes it
+   * to one, so the boot refuses the switch without this. It only lifts that
+   * refusal: the auth server goes on serving its own `/ui` pages (the account,
+   * passkey, TOTP and recovery-code pages) until the cut-over. Temporary,
+   * with the switch. Parsed by {@link strictBoolean}.
+   */
+  CEREMONY_APP_DEPLOYED: strictBoolean(false),
+
+  /**
    * How long, in days, a browser session row is kept once it has ended or
    * expired (ADR-019 Decision 3, issue #550). The session purge job deletes
    * a row whose revocation or absolute end is older than this; until then
