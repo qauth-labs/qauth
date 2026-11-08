@@ -515,6 +515,25 @@ describe('the seal route (#984)', () => {
     expect(response.statusCode).toBe(400);
   });
 
+  // UTF-8 cannot carry a lone surrogate: sealed, it would open as another secret.
+  it('refuses a value that is not well-formed text, echoing none of it', async () => {
+    const response = await (
+      await boot()
+    ).inject({
+      method: 'POST',
+      url,
+      payload: {
+        operation: 'plugins.update',
+        member: MEMBER,
+        params: { plugin: 'corp' },
+        value: `${SECRET}\ud800`,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toContain('lone surrogate');
+    expect(response.body).not.toContain(SECRET);
+  });
+
   it('serves nothing on a registry without secrets.seal', async () => {
     const instance = Fastify({ logger: false });
     app = instance;

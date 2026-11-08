@@ -29,6 +29,18 @@ import { MAX_SEALED_SECRET_LENGTH, MAX_SECRET_MEMBER_LENGTH } from './secret-mem
 
 const SECRETS_PATH = '/admin/v1-rc.0/realms/:realmId/secrets';
 
+/**
+ * Whether `value` is well-formed UTF-16, with no lone surrogate:
+ * `String.prototype.isWellFormed` (ES2024; the workspace's TypeScript lib is
+ * ES2022). UTF-8 cannot carry a lone surrogate: the signer would seal U+FFFD
+ * in its place, and the secret the operation stores would not be the one sent.
+ */
+function isWellFormedText(value: string): boolean {
+  return (String.prototype as unknown as { isWellFormed(this: string): boolean }).isWellFormed.call(
+    value
+  );
+}
+
 /** A path parameter's name, as a route's URL writes it. */
 const PARAMETER_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
@@ -55,6 +67,10 @@ export const sealBodySchema = z
       .string()
       .min(1)
       .max(MAX_SEALED_SECRET_LENGTH)
+      .refine(isWellFormedText, {
+        message:
+          'value is not well-formed text: it holds a lone surrogate, which UTF-8 cannot carry',
+      })
       .meta({ description: 'The secret. Write-only: no response, row or log holds it.' }),
   })
   .meta({ description: "A value to seal for a security operation's secret member." });
