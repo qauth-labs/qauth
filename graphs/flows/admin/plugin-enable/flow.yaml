@@ -134,46 +134,46 @@ states:
       - guard: roleLacksPermission
         target: forbidden.no_permission
         say: 'the role lacks the permission: no token would pass, and the challenge names no scope'
-        source: apps/auth-server/src/app/admin/pipeline.ts:532
+        source: apps/auth-server/src/app/admin/pipeline.ts:558
       - guard: scopeLacksSecurity
         target: insufficient_scope.no_security_scope
         say: 'only the token withholds the permission: qauth:admin:write is refused'
-        source: apps/auth-server/src/app/admin/pipeline.ts:532
+        source: apps/auth-server/src/app/admin/pipeline.ts:558
       - guard: noApproval
         target: approval_required.no_approval
         say: 'no approval for exactly this request: the operation never runs'
-        source: apps/auth-server/src/app/admin/pipeline.ts:594
+        source: apps/auth-server/src/app/admin/pipeline.ts:620
       - target: enabling
         say: 'the caller holds the permission and the approval, which the handler transaction consumes'
 
   enabling:
     title: Check the plugin, its state and its config, and turn it on
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:772
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:794
     always:
       - guard: pluginUnknown
         target: not_found.plugin_unknown
         say: 'the path names no installed plugin'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:406
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:424
       - guard: stateMoved
         target: precondition_failed.state_moved
         say: 'the state moved since the caller read it, or its approver saw it: the body names the version the approval binds'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:417
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:435
       - guard: stateOfAnotherPlugin
         target: bad_request.state_of_another_plugin
         say: "the realm's state was written by another package or under another type: a configure writes it again for this plugin first"
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:781
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:803
       - guard: configInvalid
         target: bad_request.config_invalid
         say: "the realm's config does not pass the plugin's schema: a plugin is on only with a config it accepts"
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:788
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:810
       - target: pluginOn
         effect: [turnOn]
         say: 'the row is written enabled, conditional on its version, and the audit row records the change'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:793
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:815
 
   pluginOn:
     title: The plugin is on in the realm
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:793
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:815
     on:
       ROUTE_REQUEST:
         target: bad_request.no_pending_sign_in
@@ -193,38 +193,38 @@ states:
       - guard: roleLacksPermission
         target: forbidden.no_permission
         say: 'the role lacks the permission'
-        source: apps/auth-server/src/app/admin/pipeline.ts:532
+        source: apps/auth-server/src/app/admin/pipeline.ts:558
       - guard: scopeLacksSecurity
         target: insufficient_scope.no_security_scope
         say: 'only the token withholds the permission'
-        source: apps/auth-server/src/app/admin/pipeline.ts:532
+        source: apps/auth-server/src/app/admin/pipeline.ts:558
       - guard: noApproval
         target: approval_required.no_approval
         say: 'no approval for exactly this request'
-        source: apps/auth-server/src/app/admin/pipeline.ts:594
+        source: apps/auth-server/src/app/admin/pipeline.ts:620
       - target: disabling
         say: 'the caller holds the permission and the approval'
 
   disabling:
     title: Check the plugin and its state, and turn it off
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:820
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:842
     always:
       - guard: pluginUnknown
         target: not_found.plugin_unknown
         say: 'the path names no installed plugin'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:406
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:424
       - guard: stateMoved
         target: precondition_failed.state_moved
         say: 'the state moved since the caller read it'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:417
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:435
       - target: pluginOffAgain
         effect: [turnOff]
         say: 'the row is written off, its config kept, conditional on its version'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:830
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:852
 
   pluginOffAgain:
     title: The plugin is off again, its config kept
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:830
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:852
     on:
       ROUTE_REQUEST:
         target: not_found.plugin_off
@@ -270,7 +270,7 @@ states:
   forbidden.no_permission:
     type: final
     title: Refuse a caller whose role lacks the permission
-    source: apps/auth-server/src/app/admin/pipeline.ts:532
+    source: apps/auth-server/src/app/admin/pipeline.ts:558
     response:
       status: 403
       body:
@@ -281,7 +281,7 @@ states:
   insufficient_scope.no_security_scope:
     type: final
     title: Refuse a token without qauth:admin:security, naming the scope
-    source: apps/auth-server/src/app/admin/pipeline.ts:532
+    source: apps/auth-server/src/app/admin/pipeline.ts:558
     response:
       status: 403
       headers:
@@ -294,7 +294,7 @@ states:
   approval_required.no_approval:
     type: final
     title: Refuse a security operation without its approval
-    source: apps/auth-server/src/app/admin/pipeline.ts:594
+    source: apps/auth-server/src/app/admin/pipeline.ts:620
     response:
       status: 403
       body:
@@ -305,7 +305,7 @@ states:
   not_found.plugin_unknown:
     type: final
     title: Refuse a plugin the deployment did not load
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:406
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:424
     response:
       status: 404
       body:
@@ -316,7 +316,7 @@ states:
   precondition_failed.state_moved:
     type: final
     title: Refuse a request written against another state
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:417
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:435
     response:
       status: 412
       body:
@@ -331,7 +331,7 @@ states:
       The problem names why the state is not this plugin's (package_changed, type_changed or package_unrecorded),
       as plugins.get does. A configure under the installed plugin, with its secrets sealed again, writes the state
       for it, off; an approved enable then turns it on.
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:781
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:803
     response:
       status: 400
       body:
@@ -343,7 +343,7 @@ states:
     type: final
     title: Refuse to enable a plugin whose config its schema refuses
     description: The problem names each failing member and the schema's code, never a value.
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:479
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:498
     response:
       status: 400
       body:
@@ -359,15 +359,15 @@ assertions:
   - id: no-enable-without-approval
     never: 'enabled and noApproval'
     say: 'A plugin is turned on only by a request an approval was given for'
-    source: apps/auth-server/src/app/admin/pipeline.ts:594
+    source: apps/auth-server/src/app/admin/pipeline.ts:620
   - id: no-enable-of-another-plugins-state
     never: 'enabled and stateOfAnotherPlugin'
     say: 'A plugin is never turned on over a realm state another package, or another type, wrote'
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:781
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:803
   - id: no-enable-with-a-refused-config
     never: 'enabled and configInvalid'
     say: 'A plugin is on only with a config its own schema accepts'
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:788
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:810
   - id: an-off-plugin-runs-nothing
     never: "state == 'bad_request.no_pending_sign_in' and not enabled"
     say: "A plugin's route reaches the plugin only while the realm has it on"
