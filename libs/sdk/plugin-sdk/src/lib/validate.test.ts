@@ -10,7 +10,7 @@ import {
   UPSTREAM_STEP_URN,
 } from './contract';
 import { AuthMethodContractError } from './errors';
-import { assertAuthMethod, authMethodProblems, isAuthMethod } from './validate';
+import { assertAuthMethod, authMethodProblems, authMethodSnapshot, isAuthMethod } from './validate';
 
 const PNG = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d);
 const handle = async () => ({ kind: 'failed' as const, reason: 'transaction_mismatch' as const });
@@ -134,6 +134,29 @@ describe('the static checks of the AuthMethod contract', () => {
       'start must be a function',
     ]);
     expect(authMethodProblems(sample({ configSchema: z.object({}) }))).toEqual([]);
+  });
+
+  // #1031: the optional destination hook of a method's secret members.
+  it('takes a secretDestination only as a function, and keeps it bound in the snapshot', () => {
+    expect(authMethodProblems(sample({ secretDestination: 'https://idp.example.com' }))).toEqual([
+      'secretDestination must be a function when the method has one',
+    ]);
+    const method = {
+      ...createSampleAuthMethod(),
+      prefix: 'tenant:',
+      secretDestination(this: { prefix: string }, config: { tenant: string }): string {
+        return `${this.prefix}${config.tenant}`;
+      },
+    };
+    expect(authMethodProblems(method)).toEqual([]);
+    const snapshot = authMethodSnapshot(method) as {
+      secretDestination?: (config: { tenant: string }) => string;
+    };
+    expect(snapshot.secretDestination?.({ tenant: 'alpha' })).toBe('tenant:alpha');
+    // A method without one gets no such member in its snapshot.
+    expect(
+      Object.hasOwn(authMethodSnapshot(createSampleAuthMethod()) as object, 'secretDestination')
+    ).toBe(false);
   });
 
   it('refuses steps that are missing, unknown, of another version or repeated', () => {

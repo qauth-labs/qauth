@@ -38,18 +38,19 @@ AuthMethod and stays a plain provider whose `verify()` rejects; wallet sign-in k
 
 `libs/sdk/plugin-sdk/src/lib/auth-method.ts` (`AuthMethod`):
 
-| Member                | What it is                                                                                                                                                                   |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `type`                | From `CredentialProvider`: the registry key, the `user_credentials.provider_type` value, the `source` of every attribute, and a segment of the route prefix.                 |
-| `verify()`            | From `CredentialProvider`: turns the result the method's own callback returned into a `VerifiedIdentity`, and rejects anything else.                                         |
-| `extractAttributes()` | From `CredentialProvider`: the attributes of a verified identity.                                                                                                            |
-| `contract`            | The contract version the method is written against: `qauth-auth-method/1-rc.0`. Its presence is what makes a registered provider an AuthMethod.                              |
-| `id`                  | The stable name of the method's implementation. Instances of one implementation, one per configured provider, share it; `type` tells them apart.                             |
-| `display`             | Default display data: `name` (at most 64 characters, under the Interaction API's display rule) and an optional `icon` (a PNG of at most 16 KiB). An admin may override both. |
-| `configSchema`        | A Zod object schema of the method's config for one realm. A secret member is marked `.meta({ writeOnly: true })`.                                                            |
-| `steps`               | The Interaction API steps the method contributes, by versioned URN. Today only the upstream step, `urn:qauth:ia:upstream:v1-rc.0`.                                           |
-| `routes`              | The routes the method mounts below its prefix.                                                                                                                               |
-| `start()`             | Starts an upstream transaction: where the browser goes, the transaction the method needs back, and the binding the provider carries back.                                    |
+| Member                | What it is                                                                                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `type`                | From `CredentialProvider`: the registry key, the `user_credentials.provider_type` value, the `source` of every attribute, and a segment of the route prefix.                                           |
+| `verify()`            | From `CredentialProvider`: turns the result the method's own callback returned into a `VerifiedIdentity`, and rejects anything else.                                                                   |
+| `extractAttributes()` | From `CredentialProvider`: the attributes of a verified identity.                                                                                                                                      |
+| `contract`            | The contract version the method is written against: `qauth-auth-method/1-rc.0`. Its presence is what makes a registered provider an AuthMethod.                                                        |
+| `id`                  | The stable name of the method's implementation. Instances of one implementation, one per configured provider, share it; `type` tells them apart.                                                       |
+| `display`             | Default display data: `name` (at most 64 characters, under the Interaction API's display rule) and an optional `icon` (a PNG of at most 16 KiB). An admin may override both.                           |
+| `configSchema`        | A Zod object schema of the method's config for one realm. A secret member is marked `.meta({ writeOnly: true })`.                                                                                      |
+| `steps`               | The Interaction API steps the method contributes, by versioned URN. Today only the upstream step, `urn:qauth:ia:upstream:v1-rc.0`.                                                                     |
+| `routes`              | The routes the method mounts below its prefix.                                                                                                                                                         |
+| `start()`             | Starts an upstream transaction: where the browser goes, the transaction the method needs back, and the binding the provider carries back.                                                              |
+| `secretDestination()` | Optional. Where the config's secret members are sent, as a stable string for a parsed config. The admin API asks for a kept secret again when it changes ([below](#installing-and-enabling-a-plugin)). |
 
 The type rules are strict because `type` lands in four places: lower-case ASCII letters, digits
 and `_`, starting with a letter, at most 63 characters. A type with `:` or `/` (an ID-JAG issuer
@@ -357,6 +358,22 @@ which secret members hold one, and the audit row of a configure names the secret
 cleared. A member that a newer version of a plugin marks secret is never shown or handed to the
 plugin from the plain config an older version stored, and leaves it at the next write.
 
+**A plugin's own destination** (#1031). The URL rule above holds every plugin, and reads only the
+URLs among the plain members, and only their origins. A plugin whose destination depends on
+another member, such as a tenant that shapes an issuer's path, or on a URL's path, names it with
+`secretDestination(config)`, and is held to that too: once the new config passes the plugin's
+schema, the handler calls it for the stored config, parsed with the secrets it was stored with,
+and for the new one, parsed with those the realm will hold, and a configure that keeps a stored
+secret while the two differ is refused with the same `400`. So a secret member the plugin routes
+by, replaced while another is kept, moves the kept one too; a stored value the configure replaces
+or clears is opened for this comparison alone. A configure for which either destination cannot
+be told is refused as well: a stored value that does not open, a stored config the plugin's
+schema no longer takes, or a hook that throws or answers no string. The hook only
+adds a refusal; it never lifts the URL rule. Its result is compared, never logged, stored or
+answered. It is a check made at each configure: the stored secret's context does not name the
+destination, as the upstream OpenID Connect client's does, so a new version of a plugin that maps
+the same config elsewhere sends the stored secret there without asking for it again.
+
 ```http
 POST /admin/v1-rc.0/realms/{realmId}/secrets/seal
 { "operation": "plugins.update", "member": "/secrets/clientSecret",
@@ -545,10 +562,17 @@ export const authMethod = createUpstreamOidcPresetMethod({
   by hand, is on none of them is refused where the host parses it: at the configure (400, naming
   no value) and at every use. A discovery document that names an endpoint off them is refused at
   the sign-in, before any call to it. Whatever a realm's admin sets, the secret goes to that
-  provider's origins and to no other host. Within them it is not bound to a tenant: a member that
-  shapes the issuer's path, such as a tenant, may change while the stored secret is kept, where the
-  generic client asks for the secret again. A provider whose host the admin chooses is a generic
+  provider's origins and to no other host. A provider whose host the admin chooses is a generic
   provider, not a preset.
+- **A configure that moves its secret asks for it again.** Within those origins, the preset's
+  `secretDestination` names the issuer and the token endpoint set by hand that `upstreamConfig`
+  makes for a config, as the digest the generic client binds its stored secret to
+  (`upstreamClientSecretDestination`). A configure that changes either and keeps the stored secret,
+  through a member that shapes the issuer's path such as a tenant, or through a token endpoint's
+  path, is refused with `400` ([above](#installing-and-enabling-a-plugin)): the secret is sealed
+  again, as the generic client asks for it again. A discovered token endpoint is not part of it,
+  since discovery reads the issuer's own document. The URL rule still holds the preset too, so a
+  URL member that moves to another of its origins asks for the secret again as well.
 - **No secret elsewhere.** A config whose provider config carries a secret member's value anywhere
   but in the client secret (the client id, a scope, a URL) is refused: it would go out, and be
   logged, in the clear.

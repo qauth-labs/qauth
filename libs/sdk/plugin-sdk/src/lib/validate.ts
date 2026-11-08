@@ -57,6 +57,7 @@ export function authMethodSnapshot(method: object): unknown {
   const display = member['display'];
   const steps = member['steps'];
   const routes = member['routes'];
+  const secretDestination = member['secretDestination'];
   return Object.freeze({
     contract: member['contract'],
     type: member['type'],
@@ -88,6 +89,10 @@ export function authMethodSnapshot(method: object): unknown {
     start: bound(member['start'], method),
     verify: bound(member['verify'], method),
     extractAttributes: bound(member['extractAttributes'], method),
+    // Optional: a method without it gets no member, so `in` tells them apart.
+    ...(secretDestination === undefined
+      ? {}
+      : { secretDestination: bound(secretDestination, method) }),
   });
 }
 
@@ -148,6 +153,12 @@ export function authMethodProblems(value: unknown): string[] {
 
   for (const member of ['verify', 'extractAttributes', 'start']) {
     if (typeof method[member] !== 'function') problems.push(`${member} must be a function`);
+  }
+  if (
+    method['secretDestination'] !== undefined &&
+    typeof method['secretDestination'] !== 'function'
+  ) {
+    problems.push('secretDestination must be a function when the method has one');
   }
 
   problems.push(...displayProblems(method['display']));

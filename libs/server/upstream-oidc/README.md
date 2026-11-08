@@ -114,8 +114,15 @@ export const authMethod = createUpstreamOidcPresetMethod({
   every host its endpoints are on included. A config whose issuer or any endpoint set by hand is on
   none of them is refused where the host parses it, at the admin API's configure and at every use,
   and a discovery document that names an endpoint off them is refused before any call to it: no
-  config sends the secret to another host. Within the origins it is not bound to a tenant: a member
-  that shapes the issuer's path may change while the stored secret is kept.
+  config sends the secret to another host.
+- `secretDestination` names where the secret goes within the origins (#1031). The preset
+  implements this optional AuthMethod member with the issuer and the token endpoint set by hand
+  that `upstreamConfig` makes for a config, as the digest `upstreamClientSecretDestination` gives
+  the stored config above. The admin API compares it for the stored config and the new one at
+  each configure, on top of its own URL-origin rule, so a configure that changes either (a member
+  that shapes the issuer's path, such as a tenant, or a token endpoint's path) and keeps the
+  stored secret is refused: the secret is sealed again, as the generic client asks for it again.
+  Unlike the stored config above, the plugin secret's context does not name the destination.
 - A config whose provider config carries a secret member's value anywhere but in the client
   secret (the client id, a scope, a URL) is refused: it would go out, and be logged, in the clear.
 - Every call goes out as a `remote_document` destination unless the preset's own config names its

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A plugin names where its secrets go, and a preset's kept secret is
+  bound to its issuer and token endpoint** ([#1031], experimental
+  `plugin-api`, ADR-019 Decision 12). The AuthMethod contract has a new
+  optional member, `secretDestination(config)`: a stable string that names
+  where a parsed config sends the secret members. `plugins.update` calls it
+  for the stored config, with the secrets it was stored with, and for the
+  new one, with those the realm will hold, and refuses with 400 a configure
+  that keeps a stored secret while the two differ, or while either cannot be
+  told (a stored value that does not open, a stored config the plugin's
+  schema no longer takes, a hook that throws): the
+  secret is sealed again with `secrets.seal`. Every plugin is still held to
+  the rule as before, which compares the origins of the URLs among its plain
+  members: the member only adds a refusal. A preset on the generic upstream OpenID Connect client
+  (`createUpstreamOidcPresetMethod`) implements it with the issuer and the
+  token endpoint set by hand that its config makes, as the digest the
+  generic client binds its own stored secret to, so a configure that
+  changes the tenant in the issuer's path, or the path of a token endpoint
+  on the same origin, no longer keeps the secret set for the old one. The
+  contract version stays `qauth-auth-method/1-rc.0`: a method without the
+  member is unchanged.
+
 ### Changed
 
 - **`INTERACTION_UI_ENABLED` needs `CEREMONY_APP_DEPLOYED`.** The switch
@@ -3709,6 +3732,7 @@ It adds migrations 0068 and 0069.
 [#984]: https://github.com/qauth-labs/qauth/issues/984
 [#1009]: https://github.com/qauth-labs/qauth/issues/1009
 [#1012]: https://github.com/qauth-labs/qauth/issues/1012
+[#1031]: https://github.com/qauth-labs/qauth/issues/1031
 
 ### Deprecated
 
