@@ -343,11 +343,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - uses: nrwl/nx-set-shas@v5
 
-      # Affected-scoped, by task: NX_LEGACY_AFFECTED=false selects each
-      # `test-integration` task whose inputs a change reaches (#1044), where
-      # the `affected` job's whole-project selection (`affected.legacy`,
-      # nx.json) also runs every target of a project that another of its
-      # targets' inputs mark touched. A change to the schema, the migrations or
+      # Affected-scoped, by task like the `affected` job: `nx affected` runs
+      # each `test-integration` task whose inputs a change reaches (#1044,
+      # `affected` in nx.json). A change to the schema, the migrations or
       # the repositories reaches infra-db and its dependents. A pull request
       # that changes only docs (the docs site's content, docs/ or CHANGELOG.md)
       # runs no suite: no `test-integration` input names a docs file. The
@@ -361,7 +359,6 @@ jobs:
       # password-login invariant are asserted end to end.
       - run: pnpm exec nx affected -t test-integration
         env:
-          NX_LEGACY_AFFECTED: 'false'
           QAUTH_INTEGRATION_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
 
   # The check named `integration`, as it was before the suites were split: it

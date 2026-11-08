@@ -19,13 +19,13 @@ pnpm nx test docs-checks -- -u  # regenerate the three pages after a registry ch
 
 ## Why a project of its own
 
-Nx counts a project as touched by a changed file that one of its targets' inputs names, and with
-`affected.legacy` (nx.json) a touched project marks every project that depends on it affected, for
-every target. These checks used to be the libraries' own tests, with the docs among their inputs,
-so a docs-only pull request marked the auth server affected and ran its tests. Here a docs edit
-affects this project alone: nothing may depend on it, which a module-boundary constraint in
-`.oxlintrc.json` enforces. (CI's integration job selects its tasks by their inputs instead, so a
-docs edit runs no integration suite at all.)
+These checks used to be the libraries' own tests, with the docs among their inputs. Under the
+whole-project selection Nx 24's migration had kept (`affected.legacy`), a docs edit touched those
+libraries and marked every project depending on them affected, the auth server and its integration
+suite among them. Here the checks read the docs from a project nothing may depend on, which a
+module-boundary constraint in `.oxlintrc.json` enforces, and the libraries' test inputs are their
+own files. `nx affected` now selects tasks by their inputs, so a docs edit reruns these checks and
+nothing else.
 
 The libraries' own tests still check what each registry renders; this project checks the committed
 files. CI runs these tests in the `coverage` job's repository-wide Vitest run, like every other unit

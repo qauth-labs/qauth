@@ -121,11 +121,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CEREMONY_APP_DEPLOYED=true`.
 
 - CI's integration suites run on three runners, and a pull request that
-  changes only docs runs none of them ([#1044]). The integration job selects
-  each `test-integration` task whose inputs a change reaches
-  (`NX_LEGACY_AFFECTED=false`); its inputs are the new `integration` named
-  input in `nx.json`, plus what a suite reads beyond it, named in its
-  `project.json`. The `integration` check now
+  changes only docs runs none of them ([#1044]). `nx affected`, in CI as
+  locally, now runs the tasks whose inputs a change reaches (`affected.legacy`
+  is off), not every target of each project a change touches and of its
+  dependents. A target that reads a file outside its project and its
+  dependencies must name it among its inputs; the integration suites' inputs
+  are the new `integration` named input in `nx.json`, plus what a suite reads
+  beyond it, named in its `project.json`. The `integration` check now
   passes when the three `integration (shard N/3)` jobs do, each running one
   shard of every affected project's `*.integration.test.ts` files
   (`QAUTH_INTEGRATION_SHARD`, read by `vitest.integration.config.mts`), so

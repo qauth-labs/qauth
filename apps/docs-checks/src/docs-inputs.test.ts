@@ -6,16 +6,15 @@ import { describe, expect, it } from 'vitest';
 import { REPO_ROOT } from './workspace';
 
 /**
- * A docs-only change touches no project but the docs site and this one
+ * A docs-only change reaches no project but the docs site and this one
  * (#1044).
  *
- * Nx counts a project as touched by a changed file that an input of one of
- * its targets names as `{workspaceRoot}/…`, and with `affected.legacy`
- * (nx.json) a touched project marks every project that depends on it
- * affected, for every target. A docs page in a library's `test` inputs
- * therefore ran the auth server's integration suite on a pull request that
- * changed only docs. The checks that read the docs live here instead, and
- * nothing depends on this project.
+ * `nx affected` runs every task whose inputs name a changed file. A docs page
+ * in a library's `test` inputs once ran the auth server's integration suite on
+ * a pull request that changed only docs, under the whole-project selection
+ * (`affected.legacy`) since turned off. The checks that read the docs live
+ * here instead, nothing depends on this project, and this guard keeps the
+ * docs out of every other project's inputs.
  */
 
 /** The directories that hold docs, and nothing a project builds from. */

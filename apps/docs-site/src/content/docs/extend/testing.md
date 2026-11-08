@@ -150,8 +150,8 @@ Locally, an integration suite skips when Docker is not running. On CI it does no
 a GitHub-hosted runner, which ships a Docker daemon, so the throw is unreachable in practice — it
 exists so that a runner _without_ one fails loudly instead of reporting success.
 
-The job is affected-scoped by task: it runs each `test-integration` task whose inputs a change
-reaches (`NX_LEGACY_AFFECTED=false`), so a schema, migration, or repository change runs it. A pull
+The job is affected-scoped by task: like every `nx affected` run, it runs each `test-integration`
+task whose inputs a change reaches, so a schema, migration, or repository change runs it. A pull
 request that changes only docs runs no suite, since no `test-integration` input names a docs file.
 The inputs are the `integration` named input in `nx.json`, plus what a project's suite reads beyond
 it, named in that project's `project.json`. A suite that starts reading a file outside them, such as
