@@ -31,11 +31,13 @@ import type { ApprovalAccount } from './standing';
  * credential of the requester), this count must take the same narrowing, so
  * the preview and the approval it announces read one rule. It does not yet.
  *
- * The preview needs only `realms.read`, and must show nothing the caller's
- * realm cannot see: the count covers the grants that realm sees (#489). A
- * grant on the realm is seen from it, whoever holds it; a grant on every
- * realm only from the operator realm, so it counts only for an
- * operator-realm caller.
+ * The preview needs only `realms.read`, and must show nothing the request
+ * may not see (#489). It acts on `targetRealm`, which sees every grant on it,
+ * whoever holds it: a realm-local admin's and an operator-realm admin's.
+ * Those it counts for any caller authorized there. A grant on every realm
+ * is the operator realm's alone, seen from no other realm, so it counts only
+ * for an operator-realm caller: a realm-local admin never learns from the
+ * count who in the operator realm holds one.
  *
  * Every read takes `tx`: inside an admin handler a repository call outside
  * the handler's transaction is refused (`admin/handler-scope.ts`).
