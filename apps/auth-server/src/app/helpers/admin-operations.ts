@@ -86,8 +86,8 @@ import { approvalOperationDefinitions } from '../admin/approvals/operations';
 import { PLUGIN_OPERATION_DEFINITIONS } from '../admin/plugins/operations';
 import { REALM_OPERATION_DEFINITIONS } from '../admin/realms/operations';
 import { SECRET_OPERATION_DEFINITIONS } from '../admin/secrets/operations';
-import { USER_OPERATION_DEFINITIONS } from '../admin/users/operations';
 import { isSecretMemberPattern } from '../admin/secrets/secret-members';
+import { USER_OPERATION_DEFINITIONS } from '../admin/users/operations';
 import { classRank, isUnknownFieldError, strictestClass } from './admin-classification';
 import {
   RESERVED_OPERATIONS,

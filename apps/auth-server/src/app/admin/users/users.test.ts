@@ -1,6 +1,6 @@
 import { buildPasswordCredentialData } from '@qauth-labs/fastify-plugin-federation';
-import { getEventType } from '@qauth-labs/shared-events';
 import { NotFoundError } from '@qauth-labs/shared-errors';
+import { getEventType } from '@qauth-labs/shared-events';
 import { OPERATOR_VERIFICATION_METHODS } from '@qauth-labs/shared-validation';
 import type { FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
@@ -10,8 +10,8 @@ import { OPERATION_REGISTRY } from '../../helpers/admin-operations';
 import { RESERVED_OPERATIONS } from '../../helpers/admin-operations-reserved';
 import type { AdminRateLimitCheck } from '../pipeline';
 import {
-  accountVerificationStateVersion,
   type AccountVerificationState,
+  accountVerificationStateVersion,
   USER_OPERATION_IDS,
 } from './operations';
 import { accountVerificationOf, accountVerificationSchema } from './routes';

@@ -35,12 +35,12 @@ import {
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
 
-import { AccountVerificationConflictError } from '../helpers/account-verification-errors';
 import {
   DelegatedTokenRefusedError,
   InsufficientUserAuthenticationError,
   LastCredentialError,
 } from '../helpers/account-operation-errors';
+import { AccountVerificationConflictError } from '../helpers/account-verification-errors';
 import {
   InvalidCursorError,
   SandboxCeilingError,
