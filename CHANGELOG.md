@@ -30,6 +30,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   direction) for the admin console; `pnpm nx test server-realm-policy -- -u`
   regenerates it, and a field without an explanation, a docs link or a
   default fails the generation.
+- **Google, Microsoft and Apple sign-in plugins** ([#671], ADR-018 §4,
+  experimental). Three packages in the new `libs/plugins/` directory,
+  `@qauth-labs/plugin-google`, `@qauth-labs/plugin-microsoft` and
+  `@qauth-labs/plugin-apple`, are presets on the generic upstream OpenID
+  Connect client and ship with the server on its first-party list: a
+  deployment loads one by naming it in `AUTH_METHOD_PLUGINS`, with the
+  plugin API off, and every realm starts with it off until an admin
+  configures and enables it through the plugin operations. Google keeps
+  `hd` as an unverified attribute and takes the email as verified only when
+  `email_verified` is `true`. Microsoft takes a fixed tenant or the
+  multi-tenant `organizations` and `common` endpoints, where the token's
+  issuer must be the v2.0 template filled with the token's own `tid`; its
+  email is verified only when the token says the domain is (`xms_edov`).
+  Apple's client secret is a short-lived ES256 JWT that the signer role
+  signs with the realm's `upstream_client_assertion` key for the plugin, as
+  the developer team's Team ID; its response arrives as a `form_post`; the
+  name of the `user` member is stored when the account is created and never
+  changed by a later sign-in; and a private relay address is kept as
+  `private_relay_email`, never as the address QAuth mails, unless the
+  realm's config says the relay receives its mail. The generic client gains
+  what the presets need: a signed client secret (`signed_client_secret`), a
+  tenant issuer template, and hooks for a preset's own response members,
+  claims and attribute rules. The signer signs an upstream assertion as the
+  issuer the provider's configuration names (`assertionIssuer`). The server
+  log censors the `user` query parameter, which a `form_post` bounce
+  carries. Apple sign-in needs the signer's provider configuration, which
+  the deployment's key store does not read yet. An Oxlint module-boundary
+  rule and a source scan keep the plugins off the apps.
 
 ### Changed
 
@@ -3852,6 +3880,7 @@ It adds migrations 0068 and 0069.
 [#662]: https://github.com/qauth-labs/qauth/issues/662
 [#663]: https://github.com/qauth-labs/qauth/issues/663
 [#670]: https://github.com/qauth-labs/qauth/issues/670
+[#671]: https://github.com/qauth-labs/qauth/issues/671
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689
