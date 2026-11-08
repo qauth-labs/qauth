@@ -176,6 +176,25 @@
 > was created before the change or by a sign-in that adds no `amr` value, gives tokens without
 > `amr`. Discovery lists `amr` and `auth_time` in `claims_supported` whatever the switch.
 > Decisions 10 and 11 and F5 are edited in place.
+>
+> **Amended 2026-11-08** with the maintainer's decisions of that day. 0.2's sign-in engine (#638)
+> asked every unverified account for a mailed code after its correct password, whatever the
+> realm's gate said. A deployment that cannot send mail therefore locked such an account out, so
+> sign-in depended on an email address and on mail delivery. That breaks the rule that an email
+> address is only an attribute. The maintainer decided that accounts need ways to be verified
+> other than by email. A strong credential QAuth proved counts whenever it was added (ADR-015's
+> amendment of the same date). So does an operator's audited verification. Decisions 5 and 8
+> are edited in place:
+>
+> - The account's verified state is its own fact, never read from `email_verified`. A password
+>   account's address is one thing the mailbox code proves, not the account's identity.
+> - The realm's `accounts.requireVerifiedAccount` decides again whether an unverified account may
+>   finish a sign-in, at every endpoint.
+> - With the gate on, an unverified account is offered the ways to verify it that it can use. A
+>   mailed code is offered only when the account has an address and the realm can send mail. A
+>   passkey with user verification is offered where the transport can register one. With no way
+>   left, the sign-in is refused as `account_not_verified`, and the page names the operator's
+>   path. It never waits on a code that cannot arrive.
 
 ## Context
 
@@ -756,11 +775,14 @@ claim. Passwordless email-code sign-in is not offered.
 The maintainer decided this on 2026-10-09 (question 2). The per-client check after the password
 exists only at the FiPA endpoint, which stays experimental. The Interaction API never offers it.
 
-The code has a narrow job. A password account's identifier is its address (ADR-002), so for that
-account the mailbox proof is the proof of its primary identity. That makes the code one way to
-verify an account. It is not the definition of a verified account. An account is verified when its
-primary identity is proved securely, of whatever type; ADR-015 decision 8 lists the proof
-for each type. An email address is an attribute, and an account may have none. An account whose
+The code has a narrow job: it proves an address. A password account's identifier is its address
+(ADR-002), and since 2026-11-08 the code is one way to verify such an account, not the only one. A
+passkey with user verification, an upstream sign-in under ADR-020 §3's switch, a wallet
+presentation and an operator's audited verification are others (ADR-015 Decision 8). None of
+them proves the address; only the code does. It is not the definition of a verified account. An
+account is verified when QAuth proved a strong credential it holds, of whatever type and whenever
+added, or an operator verified it; ADR-015 decision 8 lists the proof for each type. An email
+address is an attribute, and an account may have none. An account whose
 primary identity is a passkey or a wallet has no address to prove and never meets this step.
 
 One exception is stated openly: a headless reset of a password-only account ends in a code after a
@@ -1150,10 +1172,17 @@ OpenID Connect 1.0, an OIDF specification. There is no path marker (question 14,
   revokes the user's session rows in Postgres and clears their Redis cache. It sends a back-channel
   logout to every app with a session. It also revokes every refresh family of the user, as
   `/auth/logout` does today. The portal and the hosted account page (F2a) both offer it.
-- Verification. At this endpoint, an account that is not yet verified (for a password account, its
-  address is unproved) is always verified after a correct password. This holds whatever
-  `REQUIRE_VERIFIED_ACCOUNT` says. So no code from this endpoint belongs to an account that is not
-  yet verified. This replaces `/auth/verify` for native clients.
+- Verification (amended 2026-11-08). The realm's `accounts.requireVerifiedAccount` decides whether
+  an unverified account may finish a sign-in here. With it on, no code from this endpoint belongs to
+  an account that is not yet verified. After a correct password, the account is offered the ways to
+  verify it that it can use:
+  - the mailed code, only when it has an address and the realm can send mail;
+  - a passkey with user verification, where the client lists the step.
+
+  With no way left, the answer is `account_not_verified`, which names the operator's audited
+  `users.verify`. The endpoint never asks for a code that cannot arrive. This replaces
+  `/auth/verify` for native clients.
+
 - `REQUIRE_VERIFIED_ACCOUNT` is today's `REQUIRE_EMAIL_VERIFIED` (default `false`), renamed. The old
   name stays as a deprecated alias. A separate code change makes the rename.
 
