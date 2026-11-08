@@ -1,5 +1,5 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
+import { and, eq, InferInsertModel, InferSelectModel, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 
 import type { RealmScopedRepository, UserCredential } from '../../types';
@@ -12,9 +12,14 @@ export type NewUser = InferInsertModel<typeof users>;
 /**
  * What an update may change. Not `notValidBefore`: the triggers of migration
  * 0044 set it when the account is disabled (#748), and no caller writes it.
+ * Nor an operator's verification (#1052): only
+ * {@link UsersRepository.recordOperatorVerification} records it.
  */
 export type UpdateUser = Partial<
-  Omit<NewUser, 'id' | 'createdAt' | 'realmId' | 'notValidBefore'>
+  Omit<
+    NewUser,
+    'id' | 'createdAt' | 'realmId' | 'notValidBefore' | 'operatorVerifiedAt' | 'operatorVerifiedBy'
+  >
 > & {
   updatedAt?: number;
 };
@@ -89,6 +94,21 @@ export interface UsersRepository extends Omit<
    * Update the last login timestamp for a user of the realm
    */
   updateLastLogin(realmId: string, id: string, tx?: DbClient): Promise<User>;
+  /**
+   * Record an operator's verification of an enabled account of the realm
+   * (ADR-015 Decision 8, amended 2026-11-08; #1052): `operator_verified_at`
+   * takes the time now and `operator_verified_by` the operator, in the form
+   * `operatorVerifiedBy` of shared-validation makes. Conditional: an account
+   * that is gone, disabled or already verified by an operator is left as it
+   * is, and `undefined` returned. Nothing else of the account changes, its
+   * credentials and their `email_verified` included.
+   */
+  recordOperatorVerification(
+    realmId: string,
+    id: string,
+    verifiedBy: string,
+    tx?: DbClient
+  ): Promise<User | undefined>;
 }
 
 /**
@@ -230,6 +250,25 @@ export function createUsersRepository(defaultDb: DbClient): UsersRepository {
         throw new NotFoundError('User', id);
       }
 
+      return user;
+    },
+
+    async recordOperatorVerification(
+      realmId: string,
+      id: string,
+      verifiedBy: string,
+      tx?: DbClient
+    ): Promise<User | undefined> {
+      if (!isUserIdShape(id)) return undefined;
+      const invoker = tx ?? defaultDb;
+      const now = Date.now();
+      const [user] = await invoker
+        .update(users)
+        .set({ operatorVerifiedAt: now, operatorVerifiedBy: verifiedBy, updatedAt: now })
+        .where(
+          and(userOfRealm(realmId, id), eq(users.enabled, true), isNull(users.operatorVerifiedAt))
+        )
+        .returning();
       return user;
     },
 

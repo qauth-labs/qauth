@@ -110,7 +110,8 @@ describe('the grants map (#498)', () => {
   });
 
   it('lets the event writers insert events and read none', () => {
-    for (const role of ['web', 'api'] as const) {
+    // `admin` writes the events of its operations (`user.verified`, #1052).
+    for (const role of ['web', 'api', 'admin'] as const) {
       for (const [table, privileges] of Object.entries(EVENTS_WRITER_GRANTS)) {
         expect(privilegesOf(role, table), `${role}: ${table}`).toEqual(privileges);
       }
@@ -118,9 +119,7 @@ describe('the grants map (#498)', () => {
         expect(FUNCTION_GRANTS[signature], signature).toContain(role);
       }
     }
-    for (const role of ['admin', 'signer'] as const) {
-      expect(privilegesOf(role, 'events'), role).toEqual([]);
-    }
+    expect(privilegesOf('signer', 'events')).toEqual([]);
   });
 
   it("gives delivery its outbox and the retention job's tables, and nothing beyond them", () => {
