@@ -119,6 +119,34 @@ describe('the bot challenge’s provider', () => {
  * The admin API's listener (#511) is a second server of the same process, so
  * it cannot share the public port.
  */
+describe('the hosted pages and the ceremony app', () => {
+  const issuesOf = (extra: Record<string, string>) => {
+    const result = envSchema.safeParse({
+      DATABASE_URL: 'postgresql://qauth@127.0.0.1:5432/qauth',
+      JWT_ISSUER: 'https://auth.example.com',
+      EMAIL_FROM_ADDRESS: 'no-reply@auth.example.com',
+      EMAIL_BASE_URL: 'https://auth.example.com',
+      ...extra,
+    });
+    return result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'));
+  };
+
+  it('refuses INTERACTION_UI_ENABLED without CEREMONY_APP_DEPLOYED: no page would serve the redirect', () => {
+    expect(issuesOf({ INTERACTION_UI_ENABLED: 'true' })).toContain('INTERACTION_UI_ENABLED');
+    expect(issuesOf({ INTERACTION_UI_ENABLED: 'true', CEREMONY_APP_DEPLOYED: 'false' })).toContain(
+      'INTERACTION_UI_ENABLED'
+    );
+  });
+
+  it('boots with the switch once the operator says a ceremony app serves /ui/*, and with the switch off', () => {
+    expect(
+      issuesOf({ INTERACTION_UI_ENABLED: 'true', CEREMONY_APP_DEPLOYED: 'true' })
+    ).not.toContain('INTERACTION_UI_ENABLED');
+    expect(issuesOf({})).not.toContain('INTERACTION_UI_ENABLED');
+    expect(issuesOf({ CEREMONY_APP_DEPLOYED: 'true' })).not.toContain('INTERACTION_UI_ENABLED');
+  });
+});
+
 describe('the admin listener port', () => {
   const issuesOf = (extra: Record<string, string>) => {
     const result = envSchema.safeParse({

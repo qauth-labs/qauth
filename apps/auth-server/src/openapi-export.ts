@@ -281,6 +281,7 @@ function setEphemeralEnv(surface: FlagSurface): void {
     PLUGIN_API_ENABLED: 'true',
     // The hosted pages, with which the account pages register (#844).
     INTERACTION_UI_ENABLED: 'true',
+    CEREMONY_APP_DEPLOYED: 'true',
   });
 }
 
