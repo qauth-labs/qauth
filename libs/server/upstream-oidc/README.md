@@ -151,7 +151,9 @@ a realm's admin, whose config for the generic client has none of it:
   chooses that value: whatever is made of it is an unverified claim.
 - **Identity claims** (`identityClaims`): claims set over the provider's from the response members
   and the preset's config. `sub` and the claims only the ID token may carry stay the validated
-  ones; a claim set to `undefined` is removed.
+  ones; a claim set to `undefined` is removed. A claim the provider vouches for (`email`,
+  `phone_number`) and its `*_verified` flag may be removed, never set, so a value the preset makes
+  up is never taken as verified.
 - **Attribute rules** (`attributes`, `UpstreamClaimAttribute`): the claims the identity maps to
   as attributes and the claim that marks each verified, in place of the standard rules
   (`UPSTREAM_STANDARD_ATTRIBUTES`).
