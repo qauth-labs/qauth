@@ -5,24 +5,25 @@ import { WEBAUTHN_PROVIDER_TYPE } from './webauthn.provider';
 import { webauthnCredentialDataSchema } from './webauthn-credential-data';
 
 /**
- * AN AGENT OWNER IS A VERIFIED ACCOUNT (ADR-015 Decision 8 and question 13,
- * amended 2026-11-08; #846).
+ * AN AGENT OWNER IS A VERIFIED ACCOUNT (ADR-015 Decision 8, #846).
  *
- * An account is verified when QAuth proved a strong credential it holds,
- * whenever that credential was added. The primary identity (the credential
- * that created the account, `user_credentials.is_primary`, never moved in
- * 1.0) records where the account came from; it does not limit which proof
- * counts. An email address is an attribute: no account needs one, and none
- * counts on its own. A key proves its holder, never an address, so an
- * account verified by a passkey keeps an unverified address unverified.
+ * An account is verified when its primary identity is proved: the credential
+ * that created the account, which `user_credentials.is_primary` marks and
+ * which never moves in 1.0 (question 13). Only that credential counts. A
+ * password account is found, reset and claimed by its address (ADR-017's
+ * unclaimed-account rule), so a later key proves its holder but not the
+ * identifier the account answers to: counting it would let someone who
+ * registered an address they do not control add a key of their own, pass,
+ * and keep the account from the address's owner (pre-hijacking; the rule was
+ * weighed again and kept on 2026-11-08). An email address is otherwise an
+ * attribute; no account needs one, and an account whose primary identity is
+ * a passkey, a wallet or an upstream identity never meets it. An operator's
+ * audited verification (#1052) is the other way an account is verified.
  *
  * Each type has its own proof, row by row of Decision 8's table:
  *
- * - `password`: the mailbox code for the credential's address was entered,
- *   which the credential records as `email_verified` (only the mailbox-code
- *   paths set it: the verification link, the engine's `email_code`, the
- *   registration after its code and the reset after its recovery code). The
- *   password alone proves nothing;
+ * - `password`: the mailbox code for the address was entered, so
+ *   `email_verified` is `true` on that credential;
  * - `webauthn`: the registration ceremony finished, and QAuth checked the
  *   user-verification flag in its authenticator data: `user_verified` is not
  *   `false` (a passkey registered before the flag was stored has none, and
@@ -30,74 +31,70 @@ import { webauthnCredentialDataSchema } from './webauthn-credential-data';
  * - `wallet`: QAuth's own verifier accepted the presentation, which is the
  *   only way a wallet credential is written;
  * - an upstream identity (`oidc_*`, or an AuthMethod plugin's type): QAuth
- *   checked the sign-in that created or linked it, the only way an upstream
- *   credential is written, and the provider's verified switch (ADR-020 §3,
+ *   checked the sign-in that created the account, the only way an upstream
+ *   account is created, and the provider's verified switch (ADR-020 §3,
  *   `marks_verified`) is on now. A provider the realm switched off, or no
  *   longer has, vouches for nothing. What QAuth asked of an account the
  *   switch left unverified (a mailbox code for the provider's address) proves
- *   an attribute, so the credential's own `verified` is not read.
+ *   an attribute, never the primary identity, so the credential's own
+ *   `verified` is not read.
  *
- * Any other type proves nothing. An operator's verification (#1052) is the
- * other way, recorded on the account. The rule never reads
- * `REQUIRE_VERIFIED_ACCOUNT`, and it asks that a credential is proved, not
- * how strongly: assurance (`acr`) is another question.
+ * Any other type proves nothing. The rule never reads
+ * `REQUIRE_VERIFIED_ACCOUNT`, which governs a password account's sign-in, not
+ * the ownership of an agent, and it asks that the identity is proved, not how
+ * strongly: assurance (`acr`) is another question.
  */
 
 /** Why an account is not a verified owner. */
 export const VERIFIED_OWNER_REFUSAL_REASONS = [
-  /** The account holds no credential: every one was removed. */
-  'no_credentials',
-  /** No credential the account holds is proved. */
+  /** The account has no primary credential: it was deleted, or none was ever marked. */
+  'no_primary_identity',
+  /**
+   * Its primary identity is not proved by its kind's rule: a password whose
+   * mailbox code was never entered, a passkey registered without user
+   * verification, an upstream identity its provider does not vouch for, or a
+   * type with no proof. The decision's `identity` says which kind.
+   */
   'account_not_verified',
 ] as const;
 
 export type VerifiedOwnerRefusalReason = (typeof VERIFIED_OWNER_REFUSAL_REASONS)[number];
 
-/** The kind of a credential, as Decision 8's table names it. */
-export const CREDENTIAL_KINDS = ['password', 'passkey', 'wallet', 'upstream', 'other'] as const;
+/** The kind of an account's primary identity, as Decision 8's table names it. */
+export const PRIMARY_IDENTITY_KINDS = [
+  'password',
+  'passkey',
+  'wallet',
+  'upstream',
+  'other',
+] as const;
 
-export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
+export type PrimaryIdentityKind = (typeof PRIMARY_IDENTITY_KINDS)[number];
 
-/** One credential of an account, as `user_credentials` stores it. */
-export interface AccountCredential {
+/** An account's primary credential, as `user_credentials` stores it. */
+export interface PrimaryIdentity {
   readonly providerType: string;
   readonly credentialData: unknown;
-  /** Whether this credential created the account (`is_primary`). */
-  readonly isPrimary: boolean;
 }
 
-/** The realm's upstream provider of a credential's type, while it is on. */
+/** The realm's upstream provider of the identity's type, while it is on. */
 export interface UpstreamProviderSwitch {
-  /** ADR-020 §3: whether an identity the provider proved counts as verified. */
+  /** ADR-020 §3: whether an account the provider created counts as verified. */
   readonly marksVerified: boolean;
 }
 
-/**
- * The realm's provider of an upstream `providerType` while it is on, or
- * `undefined` when the realm has none of that type, or it is off.
- */
-export type UpstreamProviderLookup = (providerType: string) => UpstreamProviderSwitch | undefined;
-
 /** Whether an account is a verified owner, and if not, why. */
 export type VerifiedOwnerDecision =
-  | {
-      readonly verified: true;
-      /** The kind of the credential whose proof counted. */
-      readonly proof: CredentialKind;
-      /** The kind of the credential that created the account, or `none`. */
-      readonly primaryIdentity: CredentialKind | 'none';
-    }
+  | { readonly verified: true; readonly identity: PrimaryIdentityKind }
   | {
       readonly verified: false;
+      readonly identity: PrimaryIdentityKind | 'none';
       readonly reason: VerifiedOwnerRefusalReason;
-      readonly primaryIdentity: CredentialKind | 'none';
     };
 
-/** The kind of a credential. An upstream identity is told apart by its data. */
-export function credentialKindOf(
-  credential: Pick<AccountCredential, 'providerType' | 'credentialData'>
-): CredentialKind {
-  switch (credential.providerType) {
+/** The kind of a primary credential. An upstream identity is told apart by its data. */
+export function primaryIdentityKindOf(primary: PrimaryIdentity): PrimaryIdentityKind {
+  switch (primary.providerType) {
     case PASSWORD_PROVIDER_TYPE:
       return 'password';
     case WEBAUTHN_PROVIDER_TYPE:
@@ -105,62 +102,56 @@ export function credentialKindOf(
     case WALLET_PROVIDER_TYPE:
       return 'wallet';
     default:
-      return isUpstreamCredentialData(credential.credentialData) ? 'upstream' : 'other';
+      return isUpstreamCredentialData(primary.credentialData) ? 'upstream' : 'other';
   }
 }
 
 /**
- * Whether QAuth proved `credential`, by its row of Decision 8's table.
- * `upstreamProvider` is the realm's provider of its type while it is on,
- * read only for an upstream identity.
- */
-export function credentialIsProved(
-  credential: Pick<AccountCredential, 'providerType' | 'credentialData'>,
-  upstreamProvider?: UpstreamProviderSwitch
-): boolean {
-  switch (credentialKindOf(credential)) {
-    case 'password': {
-      const data = passwordCredentialDataSchema.safeParse(credential.credentialData);
-      return data.success && data.data.email_verified === true;
-    }
-    case 'passkey': {
-      const data = webauthnCredentialDataSchema.safeParse(credential.credentialData);
-      return data.success && data.data.user_verified !== false;
-    }
-    case 'wallet':
-      return walletCredentialDataSchema.safeParse(credential.credentialData).success;
-    case 'upstream':
-      return (
-        upstreamCredentialDataSchema.safeParse(credential.credentialData).success &&
-        upstreamProvider?.marksVerified === true
-      );
-    case 'other':
-      return false;
-  }
-}
-
-/**
- * Decide whether the account that holds `credentials` is a verified owner
- * (ADR-015 Decision 8): one proved credential is enough, the primary one or
- * any added later. The primary one is tried first, so the decision names it
- * when it counts. `upstreamProviderOf` is read only for an upstream identity.
+ * Decide whether the account whose primary identity is `primary` is a
+ * verified owner (ADR-015 Decision 8). `upstreamProvider` is the realm's
+ * provider of the identity's type while it is on, read only for an upstream
+ * identity; `undefined` when the realm has none of that type, or it is off.
  */
 export function decideVerifiedOwner(
-  credentials: readonly AccountCredential[],
-  upstreamProviderOf: UpstreamProviderLookup = () => undefined
+  primary: PrimaryIdentity | undefined,
+  upstreamProvider?: UpstreamProviderSwitch
 ): VerifiedOwnerDecision {
-  const primary = credentials.find((credential) => credential.isPrimary);
-  const primaryIdentity = primary === undefined ? 'none' : credentialKindOf(primary);
-  if (credentials.length === 0) {
-    return { verified: false, reason: 'no_credentials', primaryIdentity };
+  if (primary === undefined) {
+    return { verified: false, identity: 'none', reason: 'no_primary_identity' };
   }
-  const ordered = [...credentials].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary));
-  for (const credential of ordered) {
-    const kind = credentialKindOf(credential);
-    const provider = kind === 'upstream' ? upstreamProviderOf(credential.providerType) : undefined;
-    if (credentialIsProved(credential, provider)) {
-      return { verified: true, proof: kind, primaryIdentity };
+  const identity = primaryIdentityKindOf(primary);
+  const refuse = (reason: VerifiedOwnerRefusalReason): VerifiedOwnerDecision => ({
+    verified: false,
+    identity,
+    reason,
+  });
+  switch (identity) {
+    case 'password': {
+      const data = passwordCredentialDataSchema.safeParse(primary.credentialData);
+      if (!data.success) return refuse('account_not_verified');
+      return data.data.email_verified === true
+        ? { verified: true, identity }
+        : refuse('account_not_verified');
     }
+    case 'passkey': {
+      const data = webauthnCredentialDataSchema.safeParse(primary.credentialData);
+      if (!data.success) return refuse('account_not_verified');
+      return data.data.user_verified !== false
+        ? { verified: true, identity }
+        : refuse('account_not_verified');
+    }
+    case 'wallet':
+      return walletCredentialDataSchema.safeParse(primary.credentialData).success
+        ? { verified: true, identity }
+        : refuse('account_not_verified');
+    case 'upstream':
+      if (!upstreamCredentialDataSchema.safeParse(primary.credentialData).success) {
+        return refuse('account_not_verified');
+      }
+      return upstreamProvider?.marksVerified === true
+        ? { verified: true, identity }
+        : refuse('account_not_verified');
+    case 'other':
+      return refuse('account_not_verified');
   }
-  return { verified: false, reason: 'account_not_verified', primaryIdentity };
 }

@@ -25,8 +25,8 @@ import { softPasskey } from '../testing/soft-passkey';
  * ADR-020 §3, #846), end to end against real Postgres and Redis.
  *
  * A dynamic registration of an agent client with a developer's token makes
- * that developer the agent's owner, and only an account QAuth proved a
- * credential of may be one. The suite registers agent clients with
+ * that developer the agent's owner, and only an account whose primary
+ * identity is proved may be one. The suite registers agent clients with
  * `POST /oauth/register` for accounts of every kind Decision 8's table names
  * that QAuth creates today:
  *
@@ -42,13 +42,10 @@ import { softPasskey } from '../testing/soft-passkey';
  * - an upstream account, while its provider's verified switch is on, off,
  *   and once the realm switched the provider off.
  *
- * A later credential counts as the first one does (ADR-015 question 13,
- * amended 2026-11-08): a passkey with UV that an unverified password account
- * adds makes it a verified owner and leaves its address unverified, one
- * without UV does not, and an account whose primary credential was removed
- * is decided by the credentials it still holds. An account that holds none is
- * refused. An anonymous registration has no owner and is not checked, nor is
- * a client that is no agent.
+ * A passkey an unverified password account adds later does not make it a
+ * verified owner; an account whose primary credential was removed is none.
+ * An anonymous registration has no owner and is not checked, nor is a client
+ * that is no agent.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -374,64 +371,44 @@ describe('an agent owner is a verified account (#846, real containers)', () => {
     });
   });
 
-  describe('a later credential counts (question 13, amended 2026-11-08)', () => {
-    /** Add a passkey to `userId` as an enrolment stores it, its UV flag as given. */
-    async function addPasskey(userId: string, userVerified: boolean): Promise<void> {
+  describe('only the primary identity counts', () => {
+    it('an unverified account that adds a passkey later is still no verified owner', async () => {
+      const { userId, token } = await unverifiedPasswordAccount();
+      // A passkey whose registration checked the UV flag, stored as an
+      // enrolment stores it.
       const passkey = softPasskey(RP_ID);
       const added = await app().repositories.userCredentials.create({
         realmId: await realmId(),
         userId,
         providerType: 'webauthn',
         externalSub: passkey.credentialId,
-        credentialData: { ...passkey.credentialData, user_verified: userVerified },
+        credentialData: passkey.credentialData,
       });
       expect(added.isPrimary).toBe(false);
-    }
-
-    it('an unverified account that adds a passkey with UV becomes a verified owner, and its address stays unverified', async () => {
-      const { userId, token } = await unverifiedPasswordAccount();
-      await addPasskey(userId, true);
-
-      const response = await registerClient(token);
-
-      expect(response.statusCode, response.body).toBe(201);
-      expect(await clientsOf(userId)).toEqual([{ is_agent: true }]);
-      expect(await refusals()).toEqual([]);
-      const password = await app().repositories.userCredentials.findPrimaryByUserId(
-        await realmId(),
-        userId
-      );
-      if (!password) throw new Error('the account has no primary credential');
-      expect(password.providerType).toBe('password');
-      expect((password.credentialData as { email_verified?: boolean }).email_verified).toBe(false);
-    });
-
-    it('a passkey whose registration did not check UV proves nothing', async () => {
-      const { userId, token } = await unverifiedPasswordAccount();
-      await addPasskey(userId, false);
 
       await expectRefused(await registerClient(token), userId);
-      expect((await refusals()).map((row) => row.data['reason'])).toEqual(['account_not_verified']);
+      await expectRefused(await registerClient(await developerToken(userId)), userId);
+      expect((await refusals()).map((row) => row.data['reason'])).toEqual([
+        'account_not_verified',
+        'account_not_verified',
+      ]);
     });
 
-    it('an account whose primary credential was removed is decided by the credentials it still holds', async () => {
+    it('an account whose primary credential was removed is no verified owner', async () => {
       const userId = await passkeyAccount();
       const realm = await realmId();
       const primary = await app().repositories.userCredentials.findPrimaryByUserId(realm, userId);
       if (!primary) throw new Error('the account has no primary credential');
       // A second passkey, then the first one removed.
-      await addPasskey(userId, true);
+      const passkey = softPasskey(RP_ID);
+      await app().repositories.userCredentials.create({
+        realmId: realm,
+        userId,
+        providerType: 'webauthn',
+        externalSub: passkey.credentialId,
+        credentialData: passkey.credentialData,
+      });
       await app().dbPool.query('DELETE FROM user_credentials WHERE id = $1', [primary.id]);
-
-      const response = await registerClient(await developerToken(userId));
-
-      expect(response.statusCode, response.body).toBe(201);
-      expect(await clientsOf(userId)).toEqual([{ is_agent: true }]);
-    });
-
-    it('an account that holds no credential is no verified owner', async () => {
-      const userId = await passkeyAccount();
-      await app().dbPool.query('DELETE FROM user_credentials WHERE user_id = $1', [userId]);
 
       await expectRefused(await registerClient(await developerToken(userId)), userId);
       expect(await refusals()).toEqual([
@@ -439,7 +416,7 @@ describe('an agent owner is a verified account (#846, real containers)', () => {
           subject_id: userId,
           data: {
             action: 'client_registration',
-            reason: 'no_credentials',
+            reason: 'no_primary_identity',
             primaryIdentity: 'none',
           },
         },

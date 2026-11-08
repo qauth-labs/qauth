@@ -503,7 +503,10 @@ export const AGENT_OWNERSHIP_ACTIONS = ['client_registration'] as const;
  * Why an account is not a verified owner (`VERIFIED_OWNER_REFUSAL_REASONS` of
  * `@qauth-labs/server-federation`, which holds the rule).
  */
-export const AGENT_OWNERSHIP_REFUSAL_REASONS = ['no_credentials', 'account_not_verified'] as const;
+export const AGENT_OWNERSHIP_REFUSAL_REASONS = [
+  'no_primary_identity',
+  'account_not_verified',
+] as const;
 
 /** The kind of an account's primary identity, or `none`. */
 export const PRIMARY_IDENTITIES = [
@@ -516,8 +519,8 @@ export const PRIMARY_IDENTITIES = [
 ] as const;
 
 /**
- * An account refused the ownership of an agent (ADR-015 Decision 8, amended
- * 2026-11-08; #846): QAuth proved none of the credentials it holds. The
+ * An account refused the ownership of an agent (ADR-015 Decision 8, #846):
+ * its primary identity, the credential that created it, is not proved. The
  * subject is that account.
  */
 export const userAgentOwnershipRefused = defineEventType({
@@ -525,7 +528,7 @@ export const userAgentOwnershipRefused = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'QAuth refused to make an account the owner of an agent, because the account is not verified: QAuth proved none of the credentials it holds (ADR-015 Decision 8, amended 2026-11-08). A credential counts whenever it was added: a password once the code mailed to its address was entered, a passkey whose registration checked user verification, a wallet presentation QAuth verified, and an upstream identity while the provider’s verified switch is on. A passkey that verifies the account leaves its address unverified, and the setting that makes sign-in ask for a verified account does not change the rule.',
+    'QAuth refused to make an account the owner of an agent, because the account is not verified: its primary identity, the credential that created it, is not proved (ADR-015 Decision 8). A password account proves it with the code mailed to its address, a passkey account with a registration that checked user verification, a wallet account with the presentation QAuth verified, and an upstream account with the sign-in that created it while the provider’s verified switch is on. A credential added later never counts, and the setting that makes password sign-in ask for a confirmed address does not change the rule.',
   category: 'user',
   severity: 'warning',
   since: FIRST_RELEASE,
@@ -535,10 +538,10 @@ export const userAgentOwnershipRefused = defineEventType({
       '`client_registration`: an RFC 7591 dynamic registration of an agent client (`is_agent: true`) with the account’s developer access token, which would have made the account the client’s owner. The set may grow in a minor release.'
     ),
     reason: extensibleEnum(AGENT_OWNERSHIP_REFUSAL_REASONS).describe(
-      '`no_credentials`: the account holds no credential (every one was removed). `account_not_verified`: QAuth proved none of the credentials the account holds. The set may grow in a minor release.'
+      '`no_primary_identity`: the account has no primary credential (it was removed). `account_not_verified`: its primary identity is not proved by its kind’s rule (a password whose mailbox code was never entered, a passkey registered without user verification, an upstream identity whose provider’s verified switch is off or that the realm no longer offers, or a type with no proof); `primaryIdentity` says which kind. The set may grow in a minor release.'
     ),
     primaryIdentity: extensibleEnum(PRIMARY_IDENTITIES).describe(
-      'The kind of the credential that created the account: `password`, `passkey`, `wallet`, `upstream`, `other`, or `none` when it was removed. It says where the account came from; any credential may verify it. The set may grow in a minor release.'
+      'The kind of the account’s primary identity: `password`, `passkey`, `wallet`, `upstream`, `other`, or `none` when it has none. The set may grow in a minor release.'
     ),
   }),
 });

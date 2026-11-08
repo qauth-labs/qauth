@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **An agent's owner is a verified account** ([#846], ADR-015 Decision 8
-  and question 13 as amended 2026-11-08, ADR-020 §3). Every account now marks
-  its primary identity, the credential it was created with: `user_credentials.is_primary` (migration 0068) is set on the
+  and question 13, ADR-020 §3). Every account now marks its primary
+  identity: `user_credentials.is_primary` (migration 0068) is set on the
   credential that created the account, in the same call that creates it, at
   most one per account; it never moves to another credential, and an
   authenticator app is never one. The migration marks the credential each
@@ -19,22 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   creation time, and no other: an account that removed it before the upgrade
   has none. A database trigger marks the credential an older release writes
   with a new account during a rolling upgrade, and no credential written
-  later. An account whose primary credential is deleted has none. The mark
-  records where the account came from; it does not limit which proof counts.
-  An account is a verified owner when QAuth proved any credential it holds,
-  the first one or one added later: a password whose mailbox code was
-  entered, a passkey whose registration checked user verification (now
-  stored as `user_verified`; a passkey registered before has no such key, and
-  every such registration required the flag), a wallet credential, or an
-  upstream identity whose provider the realm still offers with its verified
-  switch on. A passkey that verifies an account leaves its address
-  unverified, and `REQUIRE_VERIFIED_ACCOUNT` is not read. `POST
-  /oauth/register` refuses an agent client (`is_agent: true`) registered with
-  the token of a developer whose account is not a verified owner, with `403
-  access_denied`, and records the new user event
-  `user.agent_ownership_refused` with the reason (`account_not_verified`, or
-  `no_credentials` for an account that holds none). An anonymous registration
-  is unchanged.
+  later. An account whose primary
+  credential is deleted has none. An account is a verified owner when that
+  identity is proved: a password whose mailbox code was entered, a passkey
+  whose registration checked user verification (now stored as
+  `user_verified`; a passkey registered before has no such key, and every
+  such registration required the flag), a wallet credential, or an upstream
+  account whose provider the realm still offers with its verified switch
+  on. No later credential counts, and
+  `REQUIRE_VERIFIED_ACCOUNT` is not read. `POST /oauth/register` refuses an
+  agent client (`is_agent: true`) registered with the token of a developer
+  whose account is not a verified owner, with `403 access_denied`, and
+  records the new user event `user.agent_ownership_refused` with the reason
+  (`account_not_verified`, or `no_primary_identity`) and the primary
+  identity's kind. An anonymous registration is unchanged.
 
 ## [0.2.0] - 2026-11-07
 

@@ -100,18 +100,16 @@ export const userCredentials = pgTable(
     disabledAt: bigint('disabled_at', { mode: 'number' }),
     /**
      * Whether this credential is the account's primary identity: the one that
-     * created the account (ADR-015 Decision 8 and question 13, #846). It
-     * records where the account came from. Since the amendment of 2026-11-08
-     * any credential QAuth proved, this one or a later one, makes the account
-     * a verified owner of an agent.
+     * created the account (ADR-015 Decision 8 and question 13, #846). An
+     * account is a verified owner of an agent only when this credential is
+     * proved, whatever any later credential proves.
      *
      * Migration 0068 holds the rule. At most one per user (the partial unique
      * index below). The database marks a user's first credential, unless it
      * is an authenticator app, whatever the writer passed, and refuses a
      * later credential that claims the mark. The mark never moves in 1.0: no
      * update sets or clears it, and a marked row never changes its user.
-     * Deleting the primary credential leaves the account with none; the
-     * credentials it still holds decide whether it is verified.
+     * Deleting the primary credential leaves the account with none.
      */
     isPrimary: boolean('is_primary').notNull().default(false),
   },

@@ -1,10 +1,8 @@
 -- The primary identity of each account (ADR-015 Decision 8 and question 13, #846).
 --
--- The primary identity is the credential that created the account; this
--- migration marks it, `user_credentials.is_primary`, and holds the rule. It
--- records where the account came from. Since the amendment of 2026-11-08 it does
--- not limit which proof makes an account a verified owner of an agent: any
--- credential QAuth proved counts, whenever it was added.
+-- An account is a verified owner of an agent only when its primary identity is
+-- proved. The primary identity is the credential that created the account; this
+-- migration marks it, `user_credentials.is_primary`, and holds the rule:
 --
 -- 1. At most one primary credential per user (the partial unique index).
 -- 2. The backfill marks, for every user, the credential that created the
@@ -17,8 +15,7 @@
 --    A user whose creating credential is gone (a passkey removed, or an
 --    upstream identity unlinked, after the next was added), whose only
 --    credential is an authenticator app, or who has none, gets no primary
---    credential: a credential added later never becomes the primary identity,
---    though it may still verify the account.
+--    credential: a credential added later never becomes the primary identity.
 -- 3. From now on a credential is the primary identity only when it is written
 --    with the account: it is the user's first credential, it is no
 --    authenticator app, and it carries the account's own `created_at`, which
@@ -31,8 +28,8 @@
 --    one written later to an account that has none is not marked.
 -- 4. The mark never moves in 1.0: an update that sets or clears it, or moves a
 --    primary credential to another user, is refused. Deleting the primary
---    credential leaves the account with none; the credentials it still holds
---    decide whether it is a verified owner.
+--    credential leaves the account with none, and then it is not a verified
+--    owner: no later credential makes an account verified.
 ALTER TABLE "user_credentials" ADD COLUMN "is_primary" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "idx_user_credentials_primary_unique" ON "user_credentials" USING btree ("user_id") WHERE "user_credentials"."is_primary";
 --> statement-breakpoint

@@ -60,26 +60,19 @@
 > Decision 8's table, its reason, its test and the negative consequence now
 > say so.
 >
-> **Amended 2026-11-08, decision 8 and question 13**: the maintainer
-> decided two things that day. Accounts need ways to be verified other than
-> by email. And a strong credential added later, which QAuth itself proved,
-> makes the account verified. That covers a passkey whose registration
-> checked user verification, a sign-in through an upstream provider whose
-> ADR-020 §3 switch is on, and a wallet presentation QAuth's verifier
-> accepted. Part of question 13's answer no longer holds: "only the primary
-> identity counts". Its reason was framed around email. The marker stays,
-> and records which credential created the account.
->
-> The check reads every credential the account holds, the first one and
-> every later one, and the account counts as verified when one of them is
-> proved. An operator may also verify it, through an audited admin
-> operation recorded on the account. A password credential's
-> `email_verified` says only that the mailbox code for its address was
-> entered, which is that credential's proof. A passkey that verifies the
-> account leaves the address unverified, and the `email` claim says so.
-> Decision 8's rule, table, reason and test, and question 13, now say so. 0.2's sign-in had made an
-> unverified account's sign-in wait on mail delivery; this record does not
-> govern sign-in, and ADR-017's amendment of the same date covers it.
+> **Amended 2026-11-08, decision 8 and question 13**: 0.2's sign-in asked every
+> unverified account for a mailed code, so a deployment that cannot send mail
+> left an unverified account no way in. The maintainer decided that accounts
+> need a way to be verified other than by email. An operator may now verify
+> an account (below). Question 13 was weighed again that day and kept: a
+> credential added later does not verify an account. The reason, restated
+> without email: a password account is found, reset and claimed by its
+> address (ADR-017's unclaimed-account rule). A key added later proves who
+> holds the account, but not that the identifier it answers to is theirs.
+> Counting it would let someone who registered another person's address add
+> a key, pass, and keep the account from the address's owner: account
+> pre-hijacking. A refusal now carries one of two reasons, and neither names
+> an address.
 
 ## Context
 
@@ -362,42 +355,34 @@ _Decided 2026-10-06 (maintainer), with question 7. Amended 2026-10-23
 - binding an agent to a platform;
 - registering an agent-side transmitter, an approval channel or a passkey.
 
-**An account is verified when QAuth proved a strong credential it holds, or
-an operator verified it** (amended 2026-11-08). The check reads every
-credential the account holds, and one proved credential is enough. A password
-credential's `email_verified` records only that the mailbox code for its
-address was entered: that is the password row's proof, and it proves the
-address, not the holder of a key. The primary identity is the credential that created the
-account. An explicit marker names it, set at account creation and not
-movable in 1.0 (question 13). The marker records where the account came
-from; it no longer limits which proof counts. An email address is one
-attribute an account may have. No account needs one, and no address counts
-on its own. Each type has its own proof, as ADR-002 and ADR-003 place it,
-whether the credential created the account or was added later:
+**An account is verified when its primary identity is proved.** The primary
+identity is the credential that created the account. An explicit marker names
+it, set at account creation and not movable in 1.0 (question 13). It can be
+of any type. An email address is one attribute an account may have. No
+account needs one, and no address counts on its own. Each type has its own
+proof, as ADR-002 and ADR-003 place it:
 
-| Credential (`provider_type`)          | Proved when                                                                                                       | On main, 2026-10-06                                              |
+| Primary identity (`provider_type`)    | Proved when                                                                                                       | On main, 2026-10-06                                              |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Password with an address (`password`) | The mailbox code for that address was entered. The password alone proves nothing                                  | Yes. `/auth/verify` sets it                                      |
+| Password with an address (`password`) | The mailbox code for that address was entered, and `email_verified` is `true` on the credential                   | Yes. `/auth/verify` sets it                                      |
 | Passkey (`webauthn`)                  | The registration ceremony finished, and QAuth checked the user-verification flag in the signed authenticator data | No. ADR-017 specifies the provider                               |
 | Wallet presentation (`wallet`)        | QAuth's own verifier accepted the presentation                                                                    | Behind `WALLET_FEDERATION_ENABLED`, on its own seam              |
 | Upstream sign-in (`oidc_*`)           | QAuth itself checked the sign-in that created the account, and ADR-020 §3's switch for that provider is on        | Not built. It counts once built (decided 2026-10-23, question 7) |
 
 The rule asks that the identity is proved, not how strongly. Assurance
 (`acr`) is another question: the password credential stays `low` (ADR-003),
-and this rule does not change that. A later credential counts as the first
-one does (amended 2026-11-08, question 13). Its proof shows that the
-account's holder controls the key, the upstream account or the
-presentation. It says nothing about an address the account carries: that
-address stays unverified until its own mailbox code is entered, and the
-`email` claim says so. So someone who registers an address they do not
-control and adds a key of their own owns a verified account, but the
-address is still not theirs. Nothing that shows an owner or looks one up
-uses an unverified address.
+and this rule does not change that. Only the primary identity counts. If a
+later credential could make an account verified, someone who registers an
+address they do not control could add a key of their own and pass the check
+(question 13).
 
-An operator may also verify an account, through the audited admin security
-operation `users.verify`, or the server's CLI where no admin API is set up.
-The account then records `operator` as its proof. This is the path for a
-deployment that cannot send mail.
+An operator may also verify an account (amended 2026-11-08). The audited admin
+security operation `users.verify` does it, with approval like every security
+operation; so does a server-side CLI where no admin API is set up (#1052). The
+verification is recorded on the account with the operator who made it, and it
+counts beside the table. It is the operator's attestation, so it also claims an
+unclaimed account: the first mailbox proof of another person no longer ends it.
+It is the way out for a deployment that cannot send mail.
 
 An upstream account's primary identity is the provider's subject identifier,
 never an address the provider reports. QAuth checks it itself at the sign-in
@@ -416,11 +401,7 @@ does not change it.
 **Why.** The owner is the name on a public profile and the party answerable
 for a transmitter's events (ADR-014 §7, §13, T7). An identity nobody proved is
 a claim. A password account can be registered by anyone for an address they do
-not control, and an offer to that account would reach the squatter. Since the
-2026-11-08 amendment, the account's proof and the address's proof are kept
-apart. An offer, a profile or a lookup by address uses only a verified
-address, so a squatter's verified account never answers for an address it
-did not prove. A passkey
+not control, and an offer to that account would reach the squatter. A passkey
 or wallet account has no such gap: creating it already proves control of the
 key or of the presentation. An upstream account has none either: creating it
 proves control of the upstream account. Whoever later takes that account over
@@ -571,13 +552,10 @@ test that proves it.
 - **7 — P5:** a delta above the mode cap, outside the node's `aud` or naming
   a bearer-leaf resource is refused and notifies no one.
 - **8 — P0c**, then P3 and P5: whatever `REQUIRE_VERIFIED_ACCOUNT` says, an
-  unverified account cannot create an agent. One case per row of decision
-  8's table that exists, one for an account with no email address, and one
-  for an upstream account whose provider's switch is off. Since 2026-11-08:
-  an unverified password account that adds a passkey with user verification
-  becomes verified, and its address stays unverified. An account an
-  operator verified is verified. A password account whose `email_verified`
-  is set by any other path is not.
+  account whose primary identity is not proved cannot create an agent. One
+  case per row of decision 8's table that exists, one for an account with
+  no email address, and one for an upstream account whose provider's switch
+  is off.
 - **9 — P2:** an unaccepted offer changes nothing, and an acceptance cuts
   every live tree in its own transaction.
 - **10 — P5:** the approval page carries the separate-device notice.
@@ -764,11 +742,10 @@ question below.
     moving it. The last option lets someone who registers an address they
     do not control add a key of their own and pass the check. _Decided
     2026-10-09 (maintainer): an explicit marker._ It is set at account
-    creation and cannot move in 1.0. Decision 8 says so. _Amended
-    2026-11-08 (maintainer): a later credential QAuth proved counts too._
-    The reason given against it was framed around email. A key proves its
-    holder, never an address, and the address stays unverified. The marker
-    stays and records which credential created the account.
+    creation and cannot move in 1.0. Decision 8 says so. _Weighed again
+    2026-11-08 (maintainer): kept._ A later key proves the account's holder,
+    not the identifier a password account answers to; counting it reopens
+    account pre-hijacking against ADR-017's unclaimed-account rule.
 
 ## Related
 
