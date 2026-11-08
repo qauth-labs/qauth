@@ -31,6 +31,7 @@ import errorHandler from '../plugins/error-handler';
 import { requestIdPlugin } from '../plugins/request-id';
 import { securityHeadersPlugin } from '../plugins/security-headers';
 import { approvalRoutes } from './approvals/routes';
+import { adminHandlerRepositories } from './handler-scope';
 import { adminOpenapiOptions } from './openapi-options';
 import { AdminCallsInFlight, adminDpopService, adminPipeline } from './pipeline';
 import { pluginRoutes } from './plugins/routes';
@@ -275,7 +276,9 @@ export async function installAdminApi(
 ): Promise<void> {
   admin.decorate('db', source.db);
   admin.decorate('dbPool', source.dbPool);
-  admin.decorate('repositories', source.repositories);
+  // Inside a handler, each refuses a call that does not pass the handler's
+  // transaction (`./handler-scope.ts`): one connection per call, audited.
+  admin.decorate('repositories', adminHandlerRepositories(source.repositories));
   admin.decorate('redis', source.redis);
   admin.decorate('signer', source.signer);
   // Its own DPoP service, whose proofs name ADMIN_API_BASE_URL (#520): the

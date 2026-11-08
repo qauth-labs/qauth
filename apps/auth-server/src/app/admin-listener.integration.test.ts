@@ -137,8 +137,15 @@ async function fixtureAdminApi() {
     permissions: ['realms.policies.write'],
     description: 'Create an account, then return a body its response schema refuses (fixture).',
   });
+  const stray = operations.defineOperation({
+    id: 'fixtureStrays.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account, then read it outside the admin transaction (fixture).',
+  });
   const registry = operations.createAdminOperationRegistry(
-    [read, create, fail, rotate, send, held, unwrapped, early, misanswer],
+    [read, create, fail, rotate, send, held, unwrapped, early, misanswer, stray],
     { reserved: [] }
   );
 
@@ -270,6 +277,27 @@ async function fixtureAdminApi() {
             adminTransaction(request)
           );
           return { id: 'not-a-uuid' };
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-strays',
+        {
+          config: { operation: stray.id },
+          // Hidden from the document: the refusal is the fixture's point.
+          schema: { ...schemaOf(stray), hide: true },
+        },
+        async (request) => {
+          runs.push(stray.id);
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          const account = await request.server.repositories.users.create(
+            { realmId },
+            testPrimaryCredential(),
+            adminTransaction(request)
+          );
+          // Outside the admin transaction: a second connection, committed on
+          // its own. Inside a handler the repositories refuse it.
+          await request.server.repositories.users.findById(realmId, account.id);
+          return { id: account.id };
         }
       );
       // A module whose own `onRoute` hook, which runs after the pipeline's,
@@ -1133,6 +1161,23 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         outcome: 'failed',
         masked_diff: null,
       });
+    });
+
+    // The second point of the #887 review (#517): a handler reaches the
+    // database only through its transaction.
+    it('refuses a repository call outside the admin transaction: no change, a 500, and one failed row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-strays'), token);
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ code: 'internal_error' });
+      expect(runs).toEqual(['fixtureStrays.create']);
+      // The account the handler created in its transaction rolled back.
+      expect(await accountsIn(realmId)).toBe(0);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureStrays.create', outcome: 'failed', masked_diff: null },
+      ]);
     });
 
     it('refuses a handler that sends its own reply: no change, a 500, and one failed row', async () => {
