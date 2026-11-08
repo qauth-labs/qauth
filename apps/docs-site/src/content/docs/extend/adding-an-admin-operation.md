@@ -72,7 +72,10 @@ in `apps/auth-server/src/app/helpers/admin-operations.ts`. A definition says:
 - `description`: one sentence, shown on the generated pages and in OpenAPI.
 - `loadState` and `stateVersion`, for an operation on a resource with a version: the resource as
   the request finds it, and the version a client names in `If-Match`. The pipeline answers 428
-  without `If-Match` and 412 when it names another version, before the handler runs.
+  without `If-Match` and 412 when it names another version, before the handler runs. An operation
+  with no `classify` may read state too, to show it to the approver and bind its approval to that
+  version: `users.verify` shows the account and its credentials, and every request needs its
+  declaration whatever the state.
 - `secretMembers`: the JSON Pointers of the body members that carry a secret. The body schema
   holds each to a sealed value, and the handler opens it with `openRequestSealedValue`
   (`apps/auth-server/src/app/admin/secrets/sealed-values.ts`), for its own operation only.
