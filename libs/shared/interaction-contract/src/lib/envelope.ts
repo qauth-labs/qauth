@@ -271,6 +271,14 @@ export const interactionSchema = object(
       items: localeTag,
     },
     expiresAt: dateTime('When the interaction expires.'),
+    formAction: {
+      type: 'string',
+      minLength: 2,
+      maxLength: 2048,
+      pattern: '^(?:[a-z][a-z0-9+.-]*://[A-Za-z0-9.\\-\\[\\]:]+|[a-z][a-z0-9+.-]*:)$',
+      description:
+        "The CSP source a page that answers this interaction with a form must allow in `form-action`, beside its own origin: the origin of the client’s `redirect_uri` (`https://app.example.com`), or a native app’s scheme (`com.example.app:`). An answer that finishes the authorization is a `303` to that URI, and Chromium and WebKit apply `form-action` to the redirects after a form post, so a page whose policy allows only `'self'` would block it. Present on an authorization’s interaction; absent when every answer stays on the realm origin.",
+    },
     upstreamLink: object(
       {
         provider: {

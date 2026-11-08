@@ -1169,8 +1169,9 @@ describe('the hosted account pages (#844, real containers)', () => {
     });
     expect(locationOf(changed)).toBe(`${ACCOUNT}?notice=password_changed`);
 
-    // A passkey: a fresh sign-in with the new password, the mailbox code of
-    // the account's first factor beyond it, the passkey, the recovery codes.
+    // A passkey: a fresh sign-in with the new password, the passkey, the
+    // recovery codes. The account is verified, so no mailed code comes
+    // between (ADR-017 Decision 8, amended 2026-11-08).
     let added: SoftPasskey | undefined;
     const addition = await submit(browser, `${ACCOUNT}/passkeys/add`);
     expect(
@@ -1205,8 +1206,7 @@ describe('the hosted account pages (#844, real containers)', () => {
     const removed = await submit(browser, `${ACCOUNT}/passkeys/${passkeyId}/remove`);
     expect(locationOf(removed)).toBe(`${ACCOUNT}?notice=passkey_removed`);
 
-    // An authenticator app: a fresh sign-in, the app's first code, and the
-    // mailbox again: each binding proves it in its own sign-in.
+    // An authenticator app: a fresh sign-in and the app's first code.
     let secret: Buffer | undefined;
     const setup = await submit(browser, `${ACCOUNT}/totp/setup`);
     expect(

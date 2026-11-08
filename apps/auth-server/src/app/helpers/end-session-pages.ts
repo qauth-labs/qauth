@@ -1,8 +1,11 @@
 import type { ClientDisplay } from '@qauth-labs/shared-interaction-client';
 import type { FastifyReply } from 'fastify';
 
+import { allowFormActionTo, formActionSourceOf } from './form-action';
 import { html, render, safe, type SafeHtml } from './html';
 import { uiStylesheetLink } from './ui-assets';
+
+export { formActionSourceOf } from './form-action';
 
 /**
  * The pages of RP-initiated logout (#675, `graphs/flows/core/logout`): what
@@ -172,27 +175,6 @@ export function endSessionPage(page: EndSessionPage, cspNonce: string): string {
   );
 }
 
-/** A CSP source expression of a URL's origin, or of a native app's scheme; `undefined` for anything else. */
-const CSP_SOURCE = /^(?:[a-z][a-z0-9+.-]*:\/\/[A-Za-z0-9.\-[\]:]+|[a-z][a-z0-9+.-]*:)$/;
-
-/**
- * The CSP source a form whose answer may redirect to `uri` must allow: its
- * origin for a web URI, its scheme for a native app's. Chromium and WebKit
- * apply `form-action` to the redirects that follow a form post, so the
- * confirm form's `form-action 'self'` would block the redirect back to the
- * app. `undefined` when the URI yields no source this module can write safely.
- */
-export function formActionSourceOf(uri: string): string | undefined {
-  let url: URL;
-  try {
-    url = new URL(uri);
-  } catch {
-    return undefined;
-  }
-  const source = url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : url.protocol;
-  return CSP_SOURCE.test(source) ? source : undefined;
-}
-
 /**
  * Send a page with the headers every answer of these pages carries: HTML,
  * `Cache-Control: no-store` (the confirm form holds a CSRF value) and
@@ -214,14 +196,7 @@ export function sendEndSessionPage(
   reply.header('Content-Type', 'text/html; charset=utf-8');
   reply.header('Cache-Control', 'no-store');
   reply.header('Referrer-Policy', 'no-referrer');
-  const source = returnTo === undefined ? undefined : formActionSourceOf(returnTo);
-  const csp = reply.getHeader('content-security-policy');
-  if (source !== undefined && typeof csp === 'string') {
-    reply.header(
-      'Content-Security-Policy',
-      csp.replace("form-action 'self'", `form-action 'self' ${source}`)
-    );
-  }
+  allowFormActionTo(reply, returnTo === undefined ? undefined : formActionSourceOf(returnTo));
   reply.code(statusCode);
   return reply.send(endSessionPage(page, reply.cspNonce.style));
 }

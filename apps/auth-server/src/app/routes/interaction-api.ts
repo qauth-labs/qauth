@@ -256,6 +256,9 @@ function stepRead(view: InteractionView) {
     ...(view.client === undefined ? {} : { client: view.client }),
     // The sign-in links an upstream account (#670): the screens say which.
     ...(view.upstreamLink === undefined ? {} : { upstreamLink: view.upstreamLink }),
+    // Where a form answer that finishes sends the browser: the page allows it
+    // in `form-action` (helpers/form-action.ts).
+    ...(view.formAction === undefined ? {} : { formAction: view.formAction }),
     brand: DEFAULT_BRAND,
     expiresAt: new Date(view.deadline).toISOString(),
   };

@@ -45,8 +45,8 @@ import type { InteractionEngines } from './helpers/interaction-engines';
  *
  * - Under an MFA policy, an account with no second factor gets the
  *   `totp_setup` step and no code is mailed for it; the secret is bound only
- *   after a first valid code (and, for a password-only account, the mailbox
- *   proved by a mailed code), and the sign-in completes with
+ *   after a first valid code (a verified account needs nothing more: the
+ *   account decides, never a channel), and the sign-in completes with
  *   `amr: ["pwd","otp","mfa"]` after the recovery set.
  * - An unclaimed account never binds one: the sign-in verifies its address
  *   first, and a binding that finds the account unclaimed is refused.
@@ -681,16 +681,11 @@ describe('TOTP as a second factor on the hosted pages (#653, real containers)', 
     // The same secret is shown again.
     expect((await shownSecret(signIn)).equals(secret)).toBe(true);
 
-    // A valid one: the first second factor of a password-only account needs
-    // its mailbox proved in this sign-in, by a mailed code.
+    // A valid one binds it: the account is verified, and the account
+    // decides, never a channel (ADR-017 Decision 8, amended 2026-11-08), so
+    // no mailed code comes between.
     const valid = await answer(signIn, TOTP_SETUP, { otp: codeAt(secret, Date.now()) });
     expect(valid.statusCode, valid.body).toBe(303);
-    const mailbox = await read(signIn.id);
-    expect(mailbox.step).toBe(EMAIL_CODE);
-    expect(await totpRow(userId)).toBeUndefined();
-    const [mailed] = await mailedWith(EMAIL, 'code', 1);
-    const proved = await answer(signIn, EMAIL_CODE, { otp: mailed?.code ?? '' });
-    expect(proved.statusCode, proved.body).toBe(303);
 
     // Bound now, sealed: the stored secret is the signer's ciphertext.
     const row = await totpRow(userId);

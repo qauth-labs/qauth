@@ -119,7 +119,7 @@ context:
       passkey: 'the account holds a passkey, which ranks above an upstream sign-in, so the engine asks for it'
       verification: >-
         the account is not verified yet: the provider's verified switch was off when it was created, so QAuth
-        verifies the address the provider gave with an emailed code, whatever REQUIRE_VERIFIED_ACCOUNT says
+        verifies the address the provider gave with an emailed code under the realm's gate, where a code can arrive
   engineAnswer:
     values: [accepts, refuses]
     initial: any

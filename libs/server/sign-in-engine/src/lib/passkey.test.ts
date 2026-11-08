@@ -98,7 +98,11 @@ interface Built {
 
 function build(
   account: FakeAccount = passkeyAccount(),
-  options: Partial<SignInEngineDependencies> & { readonly disabledPasskey?: boolean } = {}
+  options: Partial<SignInEngineDependencies> & {
+    readonly disabledPasskey?: boolean;
+    /** Whether the realm's mail reaches anyone (#1051); absent, it does. */
+    readonly deliverable?: boolean;
+  } = {}
 ): Built {
   const clock = manualClock();
   const directory = new FakeDirectory(
@@ -127,13 +131,19 @@ function build(
   const codes = createMemoryRecoveryCodes(clock.now);
   const deps: Partial<SignInEngineDependencies> = { ...options };
   delete (deps as { disabledPasskey?: boolean }).disabledPasskey;
+  delete (deps as { deliverable?: boolean }).deliverable;
+  const { deliverable } = options;
   const engine = createSignInEngine({
     accounts: directory,
     passwords: new FakePasswords(),
     policy: new FakePolicy(),
     identifierDigest: fakeIdentifierDigest,
     requireVerifiedAccount: true,
-    emailCodes: { digest: fakeEmailCodeDigest, addresses: new FakeAddresses(directory) },
+    emailCodes: {
+      digest: fakeEmailCodeDigest,
+      addresses: new FakeAddresses(directory),
+      ...(deliverable === undefined ? {} : { deliverable: async () => deliverable }),
+    },
     recoveryCodes: codes,
     passkeys,
     clock,
@@ -584,28 +594,20 @@ describe('the passkey enrolment', () => {
     expect(reported).toEqual([expect.objectContaining({ port: 'passkeys' })]);
   });
 
-  it('binds the passkey after a mailed code, tells the user, and shows the first set', async () => {
+  it('binds the passkey of a verified account after its fresh password, with no mailed code, tells the user, and shows the first set', async () => {
     const built = build(passwordOnly());
     const ctx = context(built);
     const offered = await signInWithPassword(built, ctx);
-    const registered = await built.engine.advance(
+    // The account decides, never a channel (ADR-017 Decision 8, amended
+    // 2026-11-08): a verified account binds after its fresh password.
+    const coded = await built.engine.advance(
       kept(offered),
       answer('webauthn_create', {
         webauthn_response: fakeRegistration('credential-new', paramsOf(offered, 'webauthn_create')),
       }),
       ctx
     );
-    // The mailbox first: an 8-digit code, as a reset asks.
-    expect(registered).toMatchObject({
-      kind: 'step',
-      offer: { current: { step: 'email_code', params: { purpose: 'recovery', length: 8 } } },
-    });
-    expect(built.passkeys.passkeys.has('credential-new')).toBe(false);
-    const coded = await built.engine.advance(
-      kept(registered),
-      answer('email_code', { otp: built.sender.last }),
-      ctx
-    );
+    expect(built.sender.sent).toEqual([]);
     expect(built.passkeys.passkeys.get('credential-new')).toMatchObject({ userId: USER });
     expect(built.passkeys.notices).toEqual([{ realmId: REALM, userId: USER }]);
     expect(ctx.records).toContainEqual({
@@ -622,6 +624,17 @@ describe('the passkey enrolment', () => {
     );
     // The new passkey adds no amr value: the password's alone.
     expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER, amr: ['pwd'] } });
+  });
+
+  it('offers no passkey to an unclaimed account: the account decides, never a channel', async () => {
+    const noMail = build(passwordAccount(USER, PASSWORD, { verified: false }), {
+      requireVerifiedAccount: false,
+    });
+    const ctx = context(noMail);
+    const done = await signInWithPassword(noMail, ctx);
+    expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER, amr: ['pwd'] } });
+    expect(noMail.passkeys.calls).not.toContain('startRegistration');
+    expect(noMail.sender.sent).toEqual([]);
   });
 
   it('needs no second code when the transaction proved the mailbox already', async () => {
@@ -651,17 +664,12 @@ describe('the passkey enrolment', () => {
     const built = build(passwordOnly());
     const ctx = context(built);
     const offered = await signInWithPassword(built, ctx);
-    const registered = await built.engine.advance(
+    built.clock.advance(PASSKEY_BINDING_MAX_AUTH_AGE_MS + MINUTE);
+    const done = await built.engine.advance(
       kept(offered),
       answer('webauthn_create', {
         webauthn_response: fakeRegistration('credential-new', paramsOf(offered, 'webauthn_create')),
       }),
-      ctx
-    );
-    built.clock.advance(PASSKEY_BINDING_MAX_AUTH_AGE_MS + MINUTE);
-    const done = await built.engine.advance(
-      kept(registered),
-      answer('email_code', { otp: built.sender.last }),
       ctx
     );
     expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
@@ -713,16 +721,11 @@ describe('the passkey enrolment', () => {
     built.passkeys.bindRefusal = 'account_disabled';
     const ctx = context(built);
     const offered = await signInWithPassword(built, ctx);
-    const registered = await built.engine.advance(
+    const ended = await built.engine.advance(
       kept(offered),
       answer('webauthn_create', {
         webauthn_response: fakeRegistration('credential-new', paramsOf(offered, 'webauthn_create')),
       }),
-      ctx
-    );
-    const ended = await built.engine.advance(
-      kept(registered),
-      answer('email_code', { otp: built.sender.last }),
       ctx
     );
     expect(ended).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
@@ -807,7 +810,7 @@ describe('the passkey the person asked for (#844)', () => {
     expect([...built.passkeys.passkeys.keys()]).toEqual([PASSKEY, OTHER_PASSKEY]);
   });
 
-  it('asks a password-only account for its mailbox first, as the offer does', async () => {
+  it('binds it to a verified password-only account with no mailed code, as the offer does', async () => {
     const built = build(passwordAccount(USER, PASSWORD));
     const ctx = context(built, { enrol: 'passkey' });
     const offered = await signInWithPassword(built, ctx);
@@ -818,9 +821,8 @@ describe('the passkey the person asked for (#844)', () => {
       }),
       ctx
     );
-    expect(registered).toMatchObject({
-      kind: 'step',
-      offer: { current: { step: 'email_code', params: { purpose: 'recovery' } } },
-    });
+    expect(built.passkeys.passkeys.get('credential-new')).toMatchObject({ userId: USER });
+    expect(built.sender.sent).toEqual([]);
+    expect(registered).not.toMatchObject({ offer: { current: { step: 'email_code' } } });
   });
 });

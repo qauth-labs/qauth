@@ -86,6 +86,8 @@ async function build(
     readonly account?: Partial<FakeAccount>;
     readonly totp?: 'bound' | 'disabled';
     readonly deps?: Partial<SignInEngineDependencies>;
+    /** Whether the realm's mail reaches anyone (#1051); absent, it does. */
+    readonly deliverable?: boolean;
   } = {}
 ): Promise<Built & { secret: Uint8Array | null; set: readonly string[] }> {
   const clock = manualClock();
@@ -125,7 +127,13 @@ async function build(
     policy,
     identifierDigest: fakeIdentifierDigest,
     requireVerifiedAccount: true,
-    emailCodes: { digest: fakeEmailCodeDigest, addresses: new FakeAddresses(directory) },
+    emailCodes: {
+      digest: fakeEmailCodeDigest,
+      addresses: new FakeAddresses(directory),
+      ...(options.deliverable === undefined
+        ? {}
+        : { deliverable: async () => options.deliverable === true }),
+    },
     recoveryCodes: codes,
     totp,
     hooks: { ladder },
@@ -497,7 +505,18 @@ describe('the TOTP set-up under an MFA policy', () => {
     expect(kept(offered).totpEnrolment?.sealed).toMatch(/^v1\.memory\./);
   });
 
-  it('binds only after a first valid code, then the mailbox, and shows the first set of recovery codes', async () => {
+  it('binds a verified password-only account’s first TOTP where the realm cannot send mail either (#1051)', async () => {
+    const built = await build({ deliverable: false });
+    built.policy.policy = { realm: 'off', client: 'required' };
+    const ctx = context(built);
+    const offered = await signIn(built, ctx);
+    const bound = await firstCode(built, offered, ctx);
+    expect(stepOf(bound)).toBe('recovery_codes');
+    expect(built.totp.rows.get(`${REALM}:${USER}`)).toMatchObject({ disabled: false });
+    expect(built.sender.sent).toEqual([]);
+  });
+
+  it('binds a verified account’s TOTP after a first valid code, with no mailed code, and shows the first set of recovery codes', async () => {
     const built = await build();
     built.policy.policy = { realm: 'off', client: 'required' };
     const ctx = context(built);
@@ -516,18 +535,10 @@ describe('the TOTP set-up under an MFA policy', () => {
       personal: { secret },
     });
     expect(built.totp.rows.size).toBe(0);
-    // The right one: the password-only account's mailbox next, still nothing bound.
-    const checked = await firstCode(built, refused, ctx);
-    expect(checked).toMatchObject({
-      kind: 'step',
-      offer: { current: { step: 'email_code', params: { purpose: 'recovery', length: 8 } } },
-    });
-    expect(built.totp.rows.size).toBe(0);
-    const bound = await built.engine.advance(
-      kept(checked),
-      answer('email_code', { otp: built.sender.last }),
-      ctx
-    );
+    // The right one binds it: the account is verified, and the account
+    // decides, never a channel (ADR-017 Decision 8, amended 2026-11-08).
+    const bound = await firstCode(built, refused, ctx);
+    expect(built.sender.sent).toEqual([]);
     expect(built.totp.rows.get(`${REALM}:${USER}`)).toMatchObject({
       lastStep: totpStep(built.clock.now()),
       disabled: false,
@@ -579,12 +590,7 @@ describe('the TOTP set-up under an MFA policy', () => {
     built.totp.bindRefusal = 'account_unclaimed';
     const ctx = context(built);
     const offered = await signIn(built, ctx);
-    const checked = await firstCode(built, offered, ctx);
-    const done = await built.engine.advance(
-      kept(checked),
-      answer('email_code', { otp: built.sender.last }),
-      ctx
-    );
+    const done = await firstCode(built, offered, ctx);
     expect(done).toMatchObject({ kind: 'refused', transaction: null });
     expect(built.totp.rows.size).toBe(0);
     expect(ctx.records).toContainEqual({
@@ -698,22 +704,13 @@ describe('the TOTP set-up under an MFA policy', () => {
 });
 
 describe('the TOTP set-up the person asked for (#844)', () => {
-  it('sets one up after the password with no MFA policy, the mailbox, then the first set', async () => {
+  it('sets one up after the password with no MFA policy, then the first set, with no mailed code', async () => {
     const built = await build();
     const ctx = context(built, { enrol: 'totp' });
     const offered = await signIn(built, ctx);
     expect(stepOf(offered)).toBe('totp_setup');
-    const checked = await firstCode(built, offered, ctx);
-    // A password-only account's first second factor: its mailbox first.
-    expect(checked).toMatchObject({
-      kind: 'step',
-      offer: { current: { step: 'email_code', params: { purpose: 'recovery' } } },
-    });
-    const bound = await built.engine.advance(
-      kept(checked),
-      answer('email_code', { otp: built.sender.last }),
-      ctx
-    );
+    const bound = await firstCode(built, offered, ctx);
+    expect(built.sender.sent).toEqual([]);
     expect(built.totp.rows.get(`${REALM}:${USER}`)).toMatchObject({ disabled: false });
     expect(stepOf(bound)).toBe('recovery_codes');
     const done = await built.engine.advance(

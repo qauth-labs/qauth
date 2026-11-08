@@ -18,6 +18,7 @@ import {
   readFlowSecrets,
   setFlowCookie,
 } from './flow-cookie';
+import { formActionSourceOf } from './form-action';
 import { interactionCsrf, matchesInteractionCsrf, mintCsrfKey } from './interaction-csrf';
 import { InteractionExpiredError } from './interaction-expired';
 import {
@@ -143,6 +144,15 @@ export interface InteractionView {
    * display data the interaction started with. Absent for any other step.
    */
   readonly client?: ClientDisplay;
+  /**
+   * The CSP source a page that answers this interaction with a form must
+   * allow in `form-action`: an authorization's answer that finishes sends the
+   * browser `303` to the client's `redirect_uri`, and Chromium and WebKit
+   * check `form-action` on that redirect too (helpers/form-action.ts). The
+   * URI's origin, or a native app's scheme. Absent when every answer stays on
+   * the realm origin (an account page, a logout).
+   */
+  readonly formAction?: string;
   /**
    * The absolute expiry, in epoch milliseconds. An interaction nobody has
    * answered yet ends sooner (`INTERACTION_UNANSWERED_TTL_MS` after it was
@@ -431,6 +441,18 @@ function lifetimeMs(): number {
 }
 
 /** The step view of a record. */
+/**
+ * Where a form answer of `record` may send the browser off the realm origin,
+ * as a CSP source ({@link InteractionView.formAction}): an authorization's
+ * `redirect_uri`, which the authorization endpoint checked against the
+ * client's registration before the interaction began.
+ */
+function formActionOf(record: InteractionRecord): { readonly formAction?: string } {
+  if (record.purpose !== 'authorization') return {};
+  const source = formActionSourceOf(record.request.redirect_uri);
+  return source === undefined ? {} : { formAction: source };
+}
+
 function viewOf(record: InteractionRecord): InteractionView {
   const clientId = requestClientIdOf(record);
   return {
@@ -438,6 +460,7 @@ function viewOf(record: InteractionRecord): InteractionView {
     ...(clientId === undefined ? {} : { clientId }),
     // Written only by `createInteraction`, from `clientDisplay`'s output.
     ...(record.client === undefined ? {} : { client: record.client as unknown as ClientDisplay }),
+    ...formActionOf(record),
     expiresAt: record.expiresAt,
     deadline: interactionDeadline(record),
     revision: record.revision,
