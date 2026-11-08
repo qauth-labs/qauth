@@ -147,9 +147,11 @@ await store.seedRealms(tx); // at boot: fill realms with no policies, complete m
 
 ## Versions
 
-`REALM_POLICY_SCHEMA_VERSION` is `1-rc.0`. Before QAuth 1.0.0 a breaking change raises the rc
+`REALM_POLICY_SCHEMA_VERSION` is `1-rc.1`. Before QAuth 1.0.0 a breaking change raises the rc
 number; from 1.0.0 it is `1`, and every change inside it is additive: a new field with a default,
-never a removal.
+never a removal. `1-rc.1` (#517) bounds `bruteForce.windowSeconds` and
+`bruteForce.lockoutSeconds` at 86400 (a day); a realm that stored more under `1-rc.0` reads the
+bound.
 
 A release that changes the version ships an upgrade from the one before it, appended to
 `REALM_POLICY_UPGRADES` (`src/lib/upgrades.ts`): a function from a stored document of the old

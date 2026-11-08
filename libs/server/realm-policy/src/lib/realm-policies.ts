@@ -25,6 +25,7 @@ import {
   type PolicyDiffOptions,
   type PolicyEnvReader,
   type PolicyGroupShape,
+  type PolicyPatchDiff,
   type PolicyRegistry,
   type PolicySeedEnv,
   type PolicyView,
@@ -147,6 +148,21 @@ export function diffPolicies(
   options?: PolicyDiffOptions
 ): PolicyDiff {
   return REALM_POLICY_REGISTRY.diffPolicies(before, after, options);
+}
+
+/**
+ * The changes a JSON Merge Patch of a stored policy document makes, judged on
+ * the merged document, with the document it merges to: what a policy update
+ * with that patch changes, computed without a write (#517). A secret member
+ * is a change whatever it holds, and is never read
+ * (`PolicyRegistry.diffPatch`).
+ */
+export function diffPolicyPatch(
+  before: unknown,
+  patch: unknown,
+  options?: PolicyDiffOptions
+): PolicyPatchDiff {
+  return REALM_POLICY_REGISTRY.diffPatch(before, patch, options);
 }
 
 /**

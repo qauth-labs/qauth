@@ -1,6 +1,22 @@
 import { z } from 'zod';
 
 /**
+ * The longest window, in seconds, over which failed logins may be counted: one
+ * day. The bound came with the admin API's realm policy update (#517, decided
+ * 2026-11-01), the first path that lets a realm admin set it: a window that
+ * reaches back further keeps one identifier's failures counting for days.
+ */
+export const MAX_FAILED_LOGIN_WINDOW_SECONDS = 86_400;
+
+/**
+ * The longest lockout, in seconds, after repeated failed logins: one day. The
+ * bound came with the admin API's realm policy update (#517, decided
+ * 2026-11-01): a lockout is started by anyone who knows an identifier, so a
+ * long one lets them keep its account out for as long as it lasts.
+ */
+export const MAX_FAILED_LOGIN_LOCKOUT_SECONDS = 86_400;
+
+/**
  * Observability environment configuration schema.
  *
  * Covers structured logging presentation, request-id propagation, the Prometheus
@@ -58,16 +74,26 @@ export const observabilityEnvSchema = z.object({
   /**
    * Sliding window, in seconds, over which failed attempts are counted. The
    * counter key expires after this window with no further failures, giving a
-   * natural decay/reset.
+   * natural decay/reset. At most {@link MAX_FAILED_LOGIN_WINDOW_SECONDS}.
    */
-  FAILED_LOGIN_WINDOW: z.coerce.number().int().min(1).default(900),
+  FAILED_LOGIN_WINDOW: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_FAILED_LOGIN_WINDOW_SECONDS)
+    .default(900),
 
   /**
    * Lockout duration in seconds once `FAILED_LOGIN_MAX_ATTEMPTS` is reached.
    * During the lockout, login attempts for the identifier are rejected before
-   * any credential verification.
+   * any credential verification. At most {@link MAX_FAILED_LOGIN_LOCKOUT_SECONDS}.
    */
-  FAILED_LOGIN_LOCKOUT_DURATION: z.coerce.number().int().min(1).default(900),
+  FAILED_LOGIN_LOCKOUT_DURATION: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_FAILED_LOGIN_LOCKOUT_SECONDS)
+    .default(900),
 });
 
 /**

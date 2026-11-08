@@ -5,6 +5,7 @@ import { policyField } from './field';
 import {
   defaultsFromEnv,
   diffPolicies,
+  diffPolicyPatch,
   parseRealmPolicies,
   REALM_POLICY_REGISTRY,
   type RealmPolicies,
@@ -525,6 +526,111 @@ describe('diffPolicies', () => {
     expect(issues.map((issue) => issue.path)).toEqual(['password']);
     expect(JSON.stringify(issues)).toContain('maxAgeDays');
     expect(JSON.stringify(issues)).not.toContain('hunter2');
+  });
+});
+
+describe('the brute-force bounds (#517)', () => {
+  // Acceptance criterion of #517: a lockout or a window above a day is
+  // refused, with the field's path.
+  it('refuses a lockout or a window above 86400 seconds, naming the path', () => {
+    for (const name of ['lockoutSeconds', 'windowSeconds']) {
+      const refused = (() => {
+        try {
+          diffPolicyPatch(TABLE_DEFAULTS, { bruteForce: { [name]: 86_401 } });
+        } catch (error) {
+          return error;
+        }
+        return undefined;
+      })();
+      expect(refused).toBeInstanceOf(PolicyValidationError);
+      expect((refused as PolicyValidationError).issues.map((issue) => issue.path)).toEqual([
+        `bruteForce.${name}`,
+      ]);
+      expect(() => parseRealmPolicies(withPolicies({ bruteForce: { [name]: 86_401 } }))).toThrow(
+        PolicyValidationError
+      );
+      expect(
+        parseRealmPolicies(withPolicies({ bruteForce: { [name]: 86_400 } })).bruteForce
+      ).toMatchObject({ [name]: 86_400 });
+    }
+  });
+
+  it('refuses to seed a realm from an environment that sets more', () => {
+    expect(() => defaultsFromEnv({ FAILED_LOGIN_LOCKOUT_DURATION: '86401' })).toThrow(
+      PolicySeedError
+    );
+    expect(() => defaultsFromEnv({ FAILED_LOGIN_WINDOW: '86401' })).toThrow(PolicySeedError);
+    expect(defaultsFromEnv({ FAILED_LOGIN_LOCKOUT_DURATION: '86400' }).bruteForce).toMatchObject({
+      lockoutSeconds: 86_400,
+    });
+  });
+});
+
+describe('diffPolicyPatch (#517)', () => {
+  it('diffs the merged document: a member left out keeps its value', () => {
+    const diff = diffPolicyPatch(TABLE_DEFAULTS, { password: { minScore: 4 } });
+
+    expect(diff.changes.map((change) => [change.path, change.class])).toEqual([
+      ['password.minScore', 'write'],
+    ]);
+    expect(diff.class).toBe('write');
+    expect(diff.document).toEqual(withPolicies({ password: { minScore: 4 } }));
+  });
+
+  it('judges a null by the default it gives, which may be a loosening', () => {
+    const strict = withPolicies({ registration: { cimd: { trustPolicy: 'allowlist' } } });
+
+    const diff = diffPolicyPatch(strict, { registration: { cimd: { trustPolicy: null } } });
+
+    expect(diff.changes).toEqual([
+      expect.objectContaining({
+        path: 'registration.cimd.trustPolicy',
+        before: 'allowlist',
+        after: 'accept-any-https',
+        direction: 'loosening',
+        class: 'security',
+        effects: ['token-content'],
+      }),
+    ]);
+  });
+
+  it('counts a secret member as a change whatever it holds, and never reads it', () => {
+    const sealed = { opaque: 'not a string the field would take' };
+
+    const diff = diffPolicyPatch(
+      TABLE_DEFAULTS,
+      { mail: { smtp: { password: sealed }, resend: { apiKey: null } } },
+      { setSecrets: ['mail.resend.apiKey'] }
+    );
+
+    expect(diff.changes).toEqual([
+      expect.objectContaining({ path: 'mail.smtp.password', before: false, after: true }),
+      expect.objectContaining({ path: 'mail.resend.apiKey', before: true, after: false }),
+    ]);
+    expect(diff.class).toBe('security');
+    expect(JSON.stringify(diff)).not.toContain('opaque');
+    expect(diff.document).toEqual(TABLE_DEFAULTS);
+  });
+
+  it('takes the representation back unchanged: its <name>Set flags change nothing', () => {
+    const representation = toRealmPoliciesRepresentation(TABLE_DEFAULTS, ['mail.smtp.password']);
+
+    const diff = diffPolicyPatch(TABLE_DEFAULTS, representation, {
+      setSecrets: ['mail.smtp.password'],
+    });
+
+    expect(diff.changes).toEqual([]);
+    expect(diff.class).toBe('write');
+  });
+
+  it('refuses a member the policies do not have, __proto__ and a patch that is no object', () => {
+    expect(() => diffPolicyPatch(TABLE_DEFAULTS, { password: { maxAgeDays: 30 } })).toThrow(
+      PolicyValidationError
+    );
+    expect(() =>
+      diffPolicyPatch(TABLE_DEFAULTS, JSON.parse('{"password":{"__proto__":{"minScore":0}}}'))
+    ).toThrow(PolicyValidationError);
+    expect(() => diffPolicyPatch(TABLE_DEFAULTS, [])).toThrow(PolicyValidationError);
   });
 });
 

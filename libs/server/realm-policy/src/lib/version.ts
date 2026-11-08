@@ -1,6 +1,10 @@
 /**
  * The version of the realm policy schema (ADR-018 §5, issue #514).
  *
+ * - `1-rc.0`: the first stored documents (#516).
+ * - `1-rc.1`: `bruteForce.windowSeconds` and `bruteForce.lockoutSeconds` are
+ *   at most 86400 (a day, #517).
+ *
  * The admin API's realm representation carries it as `policySchemaVersion`,
  * the realm row stores it beside the policies, and the realm file names it
  * through its format. It is a string:
@@ -32,7 +36,11 @@
  *    the change touches read, updated and written under the new version, and
  *    never looser than stored: a renamed field keeps its value, a narrowed one
  *    takes the nearest value the new schema accepts that is as strict or
- *    stricter, and a removed one is deleted rather than carried over.
+ *    stricter, and a removed one is deleted rather than carried over. A bound
+ *    on the strict end of a field (an upper bound where higher is stricter)
+ *    leaves no such value: the stored value then reads as the bound, which is
+ *    a loosening, and the release note names the field and what a realm that
+ *    stored more gets (1-rc.1, #517).
  * 3. For one of the four column-backed fields (`REALM_POLICY_COLUMNS` of
  *    `@qauth-labs/infra-db`): the storage joins a column at this release's
  *    path whatever version the document follows, so a change that moves one
@@ -56,7 +64,7 @@
  *    release boots; only a change the previous release reads as strictly
  *    may roll.
  */
-export const REALM_POLICY_SCHEMA_VERSION = '1-rc.0';
+export const REALM_POLICY_SCHEMA_VERSION = '1-rc.1';
 
 /**
  * The schema version of the first stored policy documents (migration 0046,
