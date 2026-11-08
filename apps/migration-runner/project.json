@@ -59,6 +59,10 @@
         "command": "vitest run --config vitest.integration.config.mts {projectRoot}",
         "cwd": "{workspaceRoot}"
       },
+      "inputs": ["integration", "^default", { "dependentTasksOutputFiles": "**/*" }],
+      "metadata": {
+        "description": "The suite runs the built runner, dist/apps/migration-runner/main.js, so the build's outputs are inputs beside the shared `integration` ones (nx.json): a change that only the build reads, such as pnpm-workspace.yaml, rebuilds the runner and runs the suite. CI selects this target by its inputs (#1044)."
+      },
       "description": "Run the built migration runner against testcontainers Postgres (#474): a fresh database, a second run, two runners at once and --check. Requires a running Docker daemon."
     }
   }

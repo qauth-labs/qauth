@@ -150,12 +150,13 @@ Locally, an integration suite skips when Docker is not running. On CI it does no
 a GitHub-hosted runner, which ships a Docker daemon, so the throw is unreachable in practice — it
 exists so that a runner _without_ one fails loudly instead of reporting success.
 
-The job is affected-scoped like the `affected` job, so a schema, migration, or repository change
-runs it. A pull request that changes only docs runs no suite: the checks that compare the docs with
-the libraries' code live in the `docs-checks` project (`apps/docs-checks`), which nothing depends
-on, so a docs edit affects no project that has an integration suite. The exception is one of the
-seven reference pages a project writes or checks itself, which
-`apps/docs-checks/src/docs-inputs.test.ts` lists.
+The job is affected-scoped by task: it runs each `test-integration` task whose inputs a change
+reaches (`NX_LEGACY_AFFECTED=false`), so a schema, migration, or repository change runs it. A pull
+request that changes only docs runs no suite, since no `test-integration` input names a docs file.
+The inputs are the `integration` named input in `nx.json`, plus what a project's suite reads beyond
+it, named in that project's `project.json`. A suite that starts reading a file outside them, such as
+a published document or another app's source, must name the file there too, or a change to that
+file alone will not run the suite.
 
 Three runners share the suites. Each runs every affected project's `test-integration` with its own
 shard of the files (`QAUTH_INTEGRATION_SHARD`, which `vitest.integration.config.mts` reads), so

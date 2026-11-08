@@ -37,7 +37,17 @@
         "command": "vitest run --config vitest.integration.config.mts {projectRoot}",
         "cwd": "{workspaceRoot}"
       },
-      "description": "Run the Docker-backed wallet-federation E2E suite (testcontainers Postgres + Redis). Requires a running Docker daemon."
+      "inputs": [
+        "integration",
+        "^default",
+        "{workspaceRoot}/stable-surface/openapi.json",
+        "{workspaceRoot}/apps/docs-site/public/openapi.json",
+        "{workspaceRoot}/apps/developer-portal/src/**/*"
+      ],
+      "description": "Run the Docker-backed wallet-federation E2E suite (testcontainers Postgres + Redis). Requires a running Docker daemon.",
+      "metadata": {
+        "description": "Besides the shared `integration` inputs (nx.json), the admin-listener and egress-allowlist suites read the published OpenAPI documents stable-surface/openapi.json and apps/docs-site/public/openapi.json, and the account and developer API suite imports the developer portal's auth-server client from apps/developer-portal/src by path. CI selects this target by its inputs (#1044), so each is named here."
+      }
     },
     "typecheck": {
       "executor": "nx:run-commands",

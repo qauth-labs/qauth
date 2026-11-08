@@ -178,16 +178,13 @@
     }
   ],
   "targetDefaults": {
-    // Every `test-integration` target runs the root vitest.integration.config.mts,
-    // which holds the shared-container global setup, the worker count and the
-    // include and exclude globs. A root file belongs to no project, so without
-    // this input a change to that file alone affects no `test-integration`
-    // target and no suite runs. `test-kms` runs the same config.
+    // See the `integration` named input. A target that reads more names it
+    // beside `integration` in its project.json.
     "test-integration": {
-      "inputs": ["default", "^default", "{workspaceRoot}/vitest.integration.config.mts"]
+      "inputs": ["integration", "^default"]
     },
     "test-kms": {
-      "inputs": ["default", "^default", "{workspaceRoot}/vitest.integration.config.mts"]
+      "inputs": ["integration", "^default"]
     },
     "@nx/esbuild:esbuild": {
       "cache": true,
@@ -238,7 +235,25 @@
     // cached green `test` result was replayed even after a failing spec was
     // added. Keep `{projectRoot}/**/*` first — it is what makes a source edit
     // invalidate the task.
-    "default": ["{projectRoot}/**/*", "sharedGlobals"]
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    // What every integration run reads (#1044). CI selects `test-integration`
+    // tasks by these inputs (`NX_LEGACY_AFFECTED=false` in the integration
+    // job), so a file a suite reads and its inputs do not name would let the
+    // suite drop out of a pull request that changes that file.
+    // - The project's files; a target adds its dependencies' as `^default`,
+    //   which a named input cannot hold.
+    // - The root vitest.integration.config.mts, which belongs to no project.
+    // - The global setup in libs/shared/testing, which that config loads by
+    //   path in every run, reference-proxy's too, which imports nothing of it.
+    // - The migrations in libs/infra/db/drizzle, which the global setup
+    //   applies to a template database in every run, also in projects that do
+    //   not depend on infra-db.
+    "integration": [
+      "default",
+      "{workspaceRoot}/vitest.integration.config.mts",
+      "{workspaceRoot}/libs/shared/testing/**/*",
+      "{workspaceRoot}/libs/infra/db/drizzle/**/*"
+    ]
   },
   "sync": {
     "disabledTaskSyncGenerators": ["@nx/js:typescript-sync"]

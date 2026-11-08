@@ -343,19 +343,25 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - uses: nrwl/nx-set-shas@v5
 
-      # Affected-scoped like the `affected` job: a change to the schema, the
-      # migrations or the repositories marks infra-db affected and runs this.
-      # A pull request that changes only docs (the docs site's content,
-      # docs/ or CHANGELOG.md) runs no suite: the checks that read the docs
-      # live in apps/docs-checks, which nothing depends on. The exception is
-      # one of the seven pages a project writes or checks itself, listed in
-      # apps/docs-checks/src/docs-inputs.test.ts, which affects that project.
+      # Affected-scoped, by task: NX_LEGACY_AFFECTED=false selects each
+      # `test-integration` task whose inputs a change reaches (#1044), where
+      # the `affected` job's whole-project selection (`affected.legacy`,
+      # nx.json) also runs every target of a project that another of its
+      # targets' inputs mark touched. A change to the schema, the migrations or
+      # the repositories reaches infra-db and its dependents. A pull request
+      # that changes only docs (the docs site's content, docs/ or CHANGELOG.md)
+      # runs no suite: no `test-integration` input names a docs file. The
+      # inputs are the `integration` named input in nx.json, plus what a
+      # project's suite reads beyond it, named in its project.json
+      # (auth-server, migration-runner); a file a suite reads that its inputs
+      # do not name would drop the suite out of a change to that file.
       # `auth-server` carries the same target since #240 — its wallet-federation
       # E2E boots the real server against testcontainers Postgres + Redis, and
       # it is the only place the OID4VP flow, `acr` propagation and the
       # password-login invariant are asserted end to end.
       - run: pnpm exec nx affected -t test-integration
         env:
+          NX_LEGACY_AFFECTED: 'false'
           QAUTH_INTEGRATION_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
 
   # The check named `integration`, as it was before the suites were split: it
