@@ -105,11 +105,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `account_not_verified`** ([#966], ADR-017 Decision 5). The verified-account
   gate (`accounts.requireVerifiedAccount`) is about the account, which may
   have no email address, so `POST /auth/login`, `POST /ui/login` and the
-  sign-in engine record its refusal with the reason `account_not_verified`
-  in the `user.login.failure` log line and in the `user.sign_in_failed`
-  event; it was `email_not_verified`. The answer is unchanged: the same `401
-  invalid_credentials` as a wrong password. Events recorded before the
-  upgrade keep `email_not_verified`. The event type stays
+  sign-in engine record its refusal in the `user.sign_in_failed` event with
+  the reason `account_not_verified`, and `POST /auth/login` writes the same
+  reason in its `user.login.failure` log line; it was `email_not_verified`.
+  The answer is unchanged: the same `401 invalid_credentials` as a wrong
+  password. Events recorded before the upgrade keep `email_not_verified`. The event type stays
   `urn:qauth:event:user.sign_in_failed:v1-rc.0`: its schema publishes
   `reason` as an open `snake_case` code and lists no values. The problem
   type `email_not_verified` (`403`, "Email address not verified"), which no
@@ -117,8 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   password, is removed from the OpenAPI documents and the problem types
   page, with its class `EmailNotVerifiedError` in
   `@qauth-labs/shared-errors`. **Upgrading:** a log query, alert or event
-  consumer that matches `email_not_verified` matches `account_not_verified`
-  too.
+  consumer that matches `email_not_verified` must match `account_not_verified`
+  as well, and keep the old value for the events recorded before.
 
 ## [0.2.0] - 2026-11-07
 
