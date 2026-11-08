@@ -12,6 +12,8 @@ export type * from './lib/hosted-flows';
 export * from './lib/hosted-flows';
 export type * from './lib/not-valid-before';
 export * from './lib/not-valid-before';
+export type * from './lib/operator-verification';
+export * from './lib/operator-verification';
 export type * from './lib/password';
 export * from './lib/password';
 export type * from './lib/public-jwk';
