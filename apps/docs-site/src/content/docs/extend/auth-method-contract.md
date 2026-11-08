@@ -362,10 +362,13 @@ plugin from the plain config an older version stored, and leaves it at the next 
 URLs among the plain members, and only their origins. A plugin whose destination depends on
 another member, such as a tenant that shapes an issuer's path, or on a URL's path, names it with
 `secretDestination(config)`, and is held to that too: once the new config passes the plugin's
-schema, the handler calls it for the stored config and for the new one, each parsed with the
-secret values the realm will hold, and a configure that keeps a stored secret while the two
-differ is refused with the same `400`. So is one for which either cannot be told: a stored config
-the plugin's schema no longer takes, or a hook that throws or answers no string. The hook only
+schema, the handler calls it for the stored config, parsed with the secrets it was stored with,
+and for the new one, parsed with those the realm will hold, and a configure that keeps a stored
+secret while the two differ is refused with the same `400`. So a secret member the plugin routes
+by, replaced while another is kept, moves the kept one too; a stored value the configure replaces
+or clears is opened for this comparison alone. A configure for which either destination cannot
+be told is refused as well: a stored value that does not open, a stored config the plugin's
+schema no longer takes, or a hook that throws or answers no string. The hook only
 adds a refusal; it never lifts the URL rule. Its result is compared, never logged, stored or
 answered. It is a check made at each configure: the stored secret's context does not name the
 destination, as the upstream OpenID Connect client's does, so a new version of a plugin that maps

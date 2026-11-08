@@ -61,10 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `plugin-api`, ADR-019 Decision 12). The AuthMethod contract has a new
   optional member, `secretDestination(config)`: a stable string that names
   where a parsed config sends the secret members. `plugins.update` calls it
-  for the stored config and for the new one, each with the secret values the
-  realm will hold, and refuses with 400 a configure that keeps a stored
-  secret while the two differ, or while either cannot be told (a stored
-  config the plugin's schema no longer takes, a hook that throws): the
+  for the stored config, with the secrets it was stored with, and for the
+  new one, with those the realm will hold, and refuses with 400 a configure
+  that keeps a stored secret while the two differ, or while either cannot be
+  told (a stored value that does not open, a stored config the plugin's
+  schema no longer takes, a hook that throws): the
   secret is sealed again with `secrets.seal`. Every plugin is still held to
   the rule as before, which compares the origins of the URLs among its plain
   members: the member only adds a refusal. A preset on the generic upstream OpenID Connect client

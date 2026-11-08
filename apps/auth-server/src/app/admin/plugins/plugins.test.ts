@@ -7,6 +7,7 @@ import {
 } from '@qauth-labs/fastify-plugin-federation/src/testing/upstream-oidc-fixtures';
 import { BadRequestError } from '@qauth-labs/shared-errors';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { fixturePluginImporter, fixturePluginMethod } from '../../../testing/auth-method-plugins';
 import { OPERATION_REGISTRY } from '../../helpers/admin-operations';
@@ -272,7 +273,16 @@ describe("a configure that changes where a plugin's own hook says its secrets go
   const REALM_ID = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b';
   const STORED = { tenant: 'alpha', clientId: 'qauth' };
   const TOKEN = `${exampleTenantIssuer('alpha')}/oauth/token`;
-  const KEPT = new Map([['clientSecret', SECRET]]);
+  /**
+   * The secret values the realm will hold (the client secret kept), and a
+   * store whose values the request replaces: none here, so it never opens.
+   */
+  const KEPT = {
+    after: new Map([['clientSecret', SECRET]]),
+    openStored: async (): Promise<string> => {
+      throw new Error('a kept secret is not opened again');
+    },
+  };
 
   async function tenantPreset() {
     const runtime = await loadDeploymentAuthMethodPlugins(
@@ -306,9 +316,9 @@ describe("a configure that changes where a plugin's own hook says its secrets go
     };
   }
 
-  function refusal(run: () => void): unknown {
+  async function refusal(run: () => unknown): Promise<unknown> {
     try {
-      run();
+      await run();
     } catch (error) {
       return error;
     }
@@ -326,7 +336,7 @@ describe("a configure that changes where a plugin's own hook says its secrets go
       ],
       [{ ...STORED, tokenEndpoint: TOKEN }, STORED],
     ]) {
-      const error = refusal(() =>
+      const error = await refusal(() =>
         requireKeptSecretsAtDestination(plugin, rowWith(stored), config, {}, KEPT)
       );
       expect(error).toBeInstanceOf(BadRequestError);
@@ -340,7 +350,7 @@ describe("a configure that changes where a plugin's own hook says its secrets go
   it('keeps the stored secret when neither the issuer nor the token endpoint changes, or the secret is set again', async () => {
     const plugin = await tenantPreset();
     const withToken = { ...STORED, tokenEndpoint: TOKEN };
-    expect(() =>
+    await expect(
       requireKeptSecretsAtDestination(
         plugin,
         rowWith(withToken),
@@ -348,21 +358,21 @@ describe("a configure that changes where a plugin's own hook says its secrets go
         {},
         KEPT
       )
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     // A secret the request sets is not kept, wherever the config now sends it.
-    expect(() =>
+    await expect(
       requireKeptSecretsAtDestination(
         plugin,
         rowWith(STORED),
         { ...STORED, tenant: 'beta' },
         { clientSecret: { sealed: SEALED } },
-        new Map([['clientSecret', 'a-new-secret']])
+        { after: new Map([['clientSecret', 'a-new-secret']]), openStored: async () => SECRET }
       )
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     // Nothing stored, nothing kept.
-    expect(() =>
+    await expect(
       requireKeptSecretsAtDestination(plugin, undefined, { ...STORED, tenant: 'beta' }, {}, KEPT)
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
   /** The fixture plugin `corp` with `secretDestination` set to `hook`, loaded. */
@@ -402,7 +412,7 @@ describe("a configure that changes where a plugin's own hook says its secrets go
     const plugin = await tenantPreset();
     // A stored config the schema no longer takes.
     expect(
-      refusal(() =>
+      await refusal(() =>
         requireKeptSecretsAtDestination(
           plugin,
           rowWith({ ...STORED, tenant: 'Not A Tenant' }),
@@ -415,9 +425,9 @@ describe("a configure that changes where a plugin's own hook says its secrets go
     // The same config with a hook that answers a string is kept, so the
     // refusals below are the hook's own.
     const answering = await corpWithHook(() => 'same');
-    expect(() =>
+    await expect(
       requireKeptSecretsAtDestination(answering, corpRow(CORP_CONFIG), CORP_CONFIG, {}, KEPT)
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     // A hook that throws, or answers no string.
     for (const hook of [
       () => {
@@ -427,11 +437,79 @@ describe("a configure that changes where a plugin's own hook says its secrets go
     ]) {
       const corp = await corpWithHook(hook);
       expect(
-        refusal(() =>
+        await refusal(() =>
           requireKeptSecretsAtDestination(corp, corpRow(CORP_CONFIG), CORP_CONFIG, {}, KEPT)
         )
       ).toBeInstanceOf(BadRequestError);
     }
+  });
+
+  // Review of #1056: the stored config's destination is read with the secret
+  // values it was stored with, so a secret member the plugin routes by,
+  // replaced while another secret is kept, is seen to move the kept one.
+  it('reads the stored destination with the stored secrets, so a replaced routing secret moves a kept one', async () => {
+    const schema = z.object({
+      issuer: z.url(),
+      clientId: z.string().min(1),
+      clientSecret: z.string().min(1).meta({ writeOnly: true }),
+      routingKey: z.string().min(1).meta({ writeOnly: true }),
+    });
+    const runtime = await loadDeploymentAuthMethodPlugins(
+      { info: () => undefined, warn: () => undefined },
+      { packages: ['@example/corp'], pluginApiEnabled: true, nodeEnv: 'test' },
+      {
+        importPackage: fixturePluginImporter({
+          '@example/corp': {
+            authMethod: {
+              ...fixturePluginMethod({ type: 'corp_sso', id: 'corp' }),
+              configSchema: schema,
+              secretDestination: (config: z.output<typeof schema>) =>
+                `${config.issuer}|${config.routingKey}`,
+            },
+          },
+        }),
+      }
+    );
+    const [routed] = runtime.installed;
+    if (routed === undefined) throw new Error('the fixture did not load');
+    expect(routed.secretPaths).toEqual(['clientSecret', 'routingKey']);
+    const row = {
+      ...corpRow(CORP_CONFIG),
+      secrets: { clientSecret: SEALED, routingKey: SEALED },
+    };
+    const replaced = { routingKey: { sealed: SEALED } };
+    const after = new Map([
+      ['clientSecret', SECRET],
+      ['routingKey', 'routing-key-the-admin-chose'],
+    ]);
+    // The routing key replaced with another value, the client secret kept.
+    const error = await refusal(() =>
+      requireKeptSecretsAtDestination(routed, row, CORP_CONFIG, replaced, {
+        after,
+        openStored: async (path) => (path === 'routingKey' ? 'the-stored-routing-key' : SECRET),
+      })
+    );
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect((error as Error).message).not.toContain('routing-key');
+    // Replaced with the value it held: the kept secret goes nowhere new.
+    await expect(
+      requireKeptSecretsAtDestination(routed, row, CORP_CONFIG, replaced, {
+        after,
+        openStored: async (path) =>
+          path === 'routingKey' ? 'routing-key-the-admin-chose' : SECRET,
+      })
+    ).resolves.toBeUndefined();
+    // A stored value that does not open: the stored destination cannot be told.
+    expect(
+      await refusal(() =>
+        requireKeptSecretsAtDestination(routed, row, CORP_CONFIG, replaced, {
+          after,
+          openStored: async () => {
+            throw new Error('the ciphertext does not open');
+          },
+        })
+      )
+    ).toBeInstanceOf(BadRequestError);
   });
 
   it('holds a plugin with the hook to the URL rule too, which the hook never lifts', async () => {
@@ -441,13 +519,15 @@ describe("a configure that changes where a plugin's own hook says its secrets go
     // A hook that names the same destination whatever the config: the URL
     // rule still refuses an issuer on another origin.
     const hooked = await corpWithHook(() => 'same');
-    expect(() =>
+    await expect(
       requireKeptSecretsAtDestination(hooked, corpRow(CORP_CONFIG), moved, {}, KEPT)
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     const [plain] = await installed();
     expect(plain.method.secretDestination).toBeUndefined();
     for (const plugin of [hooked, plain]) {
-      const error = refusal(() => requireKeptSecretsStay(plugin, corpRow(CORP_CONFIG), moved, {}));
+      const error = await refusal(() =>
+        requireKeptSecretsStay(plugin, corpRow(CORP_CONFIG), moved, {})
+      );
       expect(error).toBeInstanceOf(BadRequestError);
       expect((error as Error).message).toBe(urlRule);
       // Nothing moved, or the secret set again: kept, or not kept at all.
@@ -461,9 +541,9 @@ describe("a configure that changes where a plugin's own hook says its secrets go
       ).not.toThrow();
     }
     // A plugin without the hook is left to the URL rule alone.
-    expect(() =>
+    await expect(
       requireKeptSecretsAtDestination(plain, corpRow(CORP_CONFIG), moved, {}, KEPT)
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 });
 
