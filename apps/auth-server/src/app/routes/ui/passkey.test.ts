@@ -118,6 +118,33 @@ describe('the passkey pages (#651)', () => {
   describe('GET /ui/passkey/:id', () => {
     const get = () => app.inject({ method: 'GET', url: `/ui/passkey/${ID}` });
 
+    it("allows the client's return in form-action: the finishing answer is a 303 there (Chromium and WebKit check it)", async () => {
+      await app.close();
+      app = Fastify({ logger: false });
+      app.setValidatorCompiler(validatorCompiler);
+      app.setSerializerCompiler(serializerCompiler);
+      app.decorateReply('cspNonce', null as never);
+      app.addHook('onRequest', async (_request, reply) => {
+        reply.cspNonce = { script: 'script-nonce', style: 'style-nonce' };
+        // What the security-headers plugin sets on every page.
+        reply.header('Content-Security-Policy', "default-src 'self'; form-action 'self'");
+      });
+      supplyRequestRealm(app, REALM);
+      await app.register(passkeyRoutes, { prefix: '/ui' });
+      await app.ready();
+      vi.mocked(readInteractionStep).mockResolvedValue({
+        ...(viewOf({ name: WEBAUTHN_GET, params: REQUEST_OPTIONS }) as object),
+        formAction: 'cursor:',
+      } as never);
+
+      const response = await get();
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-security-policy']).toBe(
+        "default-src 'self'; form-action 'self' cursor:"
+      );
+    });
+
     it('runs the current step’s ceremony, posting to the answer endpoint, never cached', async () => {
       vi.mocked(readInteractionStep).mockResolvedValue(
         viewOf({ name: WEBAUTHN_GET, params: REQUEST_OPTIONS, alternatives: [PASSWORD] })

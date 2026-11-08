@@ -7,6 +7,7 @@ import { env } from '../../../config/env';
 import { engineClientIdOf } from '../../helpers/account-interaction';
 import { accountPoliciesOf } from '../../helpers/account-policies';
 import { createBackgroundTasks } from '../../helpers/background-tasks';
+import { allowFormActionTo } from '../../helpers/form-action';
 import {
   answerInteraction,
   type InteractionAnswerResult,
@@ -271,6 +272,8 @@ export default async function (fastify: FastifyInstance) {
       try {
         if (!isInteractionId(id)) throw new InteractionExpiredError();
         const view = await readInteractionStep(request, id);
+        // A finishing answer may 303 to the client: allow it (helpers/form-action.ts).
+        allowFormActionTo(reply, view.formAction);
         if (view.step.name !== UPSTREAM_LINK_STEP) {
           reply.header('Cache-Control', 'no-store');
           return reply.redirect(buildRealmUrl(realm, ceremonyPagePath(id)), 303);

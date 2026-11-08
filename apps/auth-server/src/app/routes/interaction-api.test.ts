@@ -392,7 +392,7 @@ afterEach(async () => {
 });
 
 describe('the step read (#616)', () => {
-  it('returns the step, its CSRF value, the brand and the expiry, and no personal data', async () => {
+  it('returns the step, its CSRF value, where a finishing answer goes, the brand and the expiry, and no personal data', async () => {
     const browser = new Browser();
     const id = await browser.start();
     const response = await app.inject({ method: 'GET', url: `${INTERACTION_API_PREFIX}/${id}` });
@@ -403,6 +403,9 @@ describe('the step read (#616)', () => {
       alternatives: [],
       params: { [IDENTIFIER]: {} },
       csrf: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      // The origin of the request's redirect_uri: a form answer that finishes
+      // is a 303 there, which the page allows in `form-action`.
+      formAction: 'https://notes.example.com',
       brand: { font: 'system', darkMode: 'enabled' },
       expiresAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });

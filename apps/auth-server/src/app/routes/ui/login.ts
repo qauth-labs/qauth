@@ -16,10 +16,12 @@ import { createBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
+import { allowFormActionTo, formActionSourceOf } from '../../helpers/form-action';
 import { html, render } from '../../helpers/html';
 import { ladderEndUserIp } from '../../helpers/password-attempts';
 import {
   normalizeInternalAuthorizeUrl,
+  peekPendingAuthorization,
   RESUME_PATH_PREFIX,
 } from '../../helpers/pending-authorization';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
@@ -218,6 +220,26 @@ export default async function (fastify: FastifyInstance) {
     returnTo.startsWith(RESUME_PATH_PREFIX) || normalizeInternalAuthorizeUrl(returnTo) !== null
       ? upstreamCatalog.offered(realmId)
       : [];
+  /**
+   * Where the sign-in may send the browser off the realm origin, as a CSP
+   * source: the `redirect_uri` of the parked authorization request
+   * (`return_to` a `/ui/resume/` handle), which `/oauth/authorize` checked
+   * against the client's registration before it parked the request. A
+   * successful sign-in redirects through it to the client, and Chromium and
+   * WebKit check the page's `form-action` on those redirects
+   * (helpers/form-action.ts). Any other `return_to` stays on the realm origin
+   * or was never checked, so it widens nothing.
+   */
+  const formActionFor = async (returnTo: string): Promise<string | undefined> => {
+    if (!returnTo.startsWith(RESUME_PATH_PREFIX)) return undefined;
+    const parked = await peekPendingAuthorization(
+      fastify,
+      returnTo.slice(RESUME_PATH_PREFIX.length)
+    );
+    if (parked === null) return undefined;
+    const redirectUri = new URL(parked, 'https://realm.invalid').searchParams.get('redirect_uri');
+    return redirectUri === null ? undefined : formActionSourceOf(redirectUri);
+  };
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/login',
     {
@@ -238,6 +260,7 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const q = request.query as { return_to?: string };
       const returnTo = isSafeReturnTo(q.return_to) ? q.return_to : '/';
+      allowFormActionTo(reply, await formActionFor(returnTo));
 
       // Login CSRF defence (signed double-submit). Reuse an already-valid CSRF
       // cookie if the browser sent one (keeps a refreshed/multi-tab login page
@@ -289,6 +312,8 @@ export default async function (fastify: FastifyInstance) {
       const startTime = Date.now();
       const body = request.body as LoginForm;
       const returnTo = isSafeReturnTo(body.return_to) ? body.return_to : '/';
+      // A refusal renders the form again, which posts with the same policy.
+      allowFormActionTo(reply, await formActionFor(returnTo));
 
       // Login CSRF defence (signed double-submit). Verify the __Host- cookie's
       // signature, then timing-compare its token against the submitted field.

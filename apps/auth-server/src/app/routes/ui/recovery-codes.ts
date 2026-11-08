@@ -8,6 +8,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
+import { allowFormActionTo } from '../../helpers/form-action';
 import {
   readInteractionPersonalData,
   readInteractionStep,
@@ -128,6 +129,8 @@ export default async function (fastify: FastifyInstance) {
         const shown = shownCodesSchema.safeParse(personal.data);
         if (!shown.success) throw new Error('the recovery_codes step holds no set of codes');
         const view = await readInteractionStep(request, id);
+        // A finishing answer may 303 to the client: allow it (helpers/form-action.ts).
+        allowFormActionTo(reply, view.formAction);
         if (view.step.name !== RECOVERY_CODES_STEP) return reply.redirect(urls.ceremony, 303);
         return sendPage(
           reply,
@@ -161,6 +164,8 @@ export default async function (fastify: FastifyInstance) {
       return expiredOr(reply, async () => {
         if (!isInteractionId(id)) throw new InteractionExpiredError();
         const view = await readInteractionStep(request, id);
+        // A finishing answer may 303 to the client: allow it (helpers/form-action.ts).
+        allowFormActionTo(reply, view.formAction);
         const urls = urlsOf(request, id);
         // Current, or offered beside the factor or the sign-in's first steps
         // (#655: a passkey-only account's lost passkey).

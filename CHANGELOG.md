@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A sign-in that finishes on a QAuth page returns to the client in
+  Chromium and WebKit.** The server-rendered sign-in, consent, passkey, TOTP,
+  recovery-code and upstream-link pages carried `form-action 'self'`, and a
+  form answer that finishes the authorization redirects the browser to the
+  client's `redirect_uri`. Chromium and WebKit check `form-action` on the
+  redirects after a form post, so the browser stayed on QAuth's page instead
+  of returning to the app (Firefox does not check them). With the hosted
+  pages on, every client sign-in of an account that holds a passkey ended
+  there. Each of these pages now allows the one client the checked
+  authorization request names: its `redirect_uri`'s origin, or a native app's
+  scheme. The Interaction API's step read carries the same source as
+  `formAction`, so a ceremony app's page can allow it too.
+
 ## [0.2.1] - 2026-11-08
 
 A patch release that carries breaking changes, as a 0.x release may (see
