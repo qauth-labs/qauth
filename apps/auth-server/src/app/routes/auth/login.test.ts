@@ -868,13 +868,14 @@ describe('POST /auth/login', () => {
       emitUserEventMock.mockClear();
 
       const reply = createReply();
+      const log = requestLog();
       const error = await ctx
         .handler(
           {
             body: { email: 'user@example.com', password: 'p' },
             ip: '127.0.0.1',
             headers: { 'user-agent': 'vitest' },
-            log: requestLog(),
+            log,
           },
           reply
         )
@@ -888,6 +889,8 @@ describe('POST /auth/login', () => {
       return {
         fastify,
         sessionService,
+        // The `user.login.failure` log line: only operators read it.
+        logged: log.warn.mock.calls.map(([payload]) => (payload as { reason?: string }).reason),
         observed: {
           error: error && {
             name: error.name,
@@ -933,6 +936,9 @@ describe('POST /auth/login', () => {
       });
       expect(fresh.observed).toEqual(taken.observed);
       expect(fresh.observed.floorBeforeEvent).toBe(true);
+      // Only the log line tells them apart (#966).
+      expect(fresh.logged).toEqual(['account_not_verified']);
+      expect(taken.logged).toEqual(['invalid_credentials']);
       expect(fresh.fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
       expect(fresh.sessionService.create).not.toHaveBeenCalled();
     });
