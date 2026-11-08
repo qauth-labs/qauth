@@ -174,19 +174,24 @@ import {
  *    verified and cannot be guessed, on the limiters alone.
  * 8. After a first factor: the downgrade rule (the account's strongest bound
  *    factor, a disabled one included), then the MFA policy just read, then,
- *    with `emailCodes`, the inline verification of an address not proved yet
- *    (#638): an emailed code, never a factor, whatever
- *    `REQUIRE_VERIFIED_ACCOUNT` says, before the second factor the policy
- *    asks for. An account that lacks the second factor the policy requires
+ *    with `emailCodes` and under the realm's gate (`REQUIRE_VERIFIED_ACCOUNT`),
+ *    the inline verification of an unverified account's address (#638): an
+ *    emailed code, never a factor, before the second factor the policy asks
+ *    for, and only where a code can arrive (#1051); where none can, the
+ *    first factor already refused the account, and with the gate off it
+ *    signs in unverified. An account that lacks the second factor the policy requires
  *    gets the set-up step first, never a code. Then the forced password
  *    update (#635): a password on the realm's breach list, or an
  *    `update_password` required action, asks for a new password before the
  *    sign-in completes, after a factor beyond the password (the account's
  *    second factor or passkey) or, on an account whose only factor is its
- *    password, a code mailed to its address. Then, with `passkeys`, an
- *    optional passkey (#651) for an account whose only factor is the password
- *    it just proved, on a transport that can also show the first set of
- *    recovery codes it owes; and that set (#649).
+ *    password, a code mailed to its address, where one can arrive. Then, with
+ *    `passkeys`, an optional passkey (#651) for a verified account whose only
+ *    factor is the password it just proved, on a transport that can also
+ *    show the first set of recovery codes it owes; and that set (#649). A
+ *    first passkey or TOTP binds to a verified account with no mailed code:
+ *    the account decides, never a channel (ADR-017 Decision 8, amended
+ *    2026-11-08); an unclaimed account binds none.
  * 9. Complete: the transport mints the session or the code.
  *
  * A registration (#640; `RoundContext.flow` `register`, from `prompt=create`)
@@ -236,6 +241,17 @@ export interface EmailCodeDependencies {
   readonly digest: EmailCodeDigest;
   /** Marks the address verified once its code is answered right: the engine's one write to an account. */
   readonly addresses: AddressVerifier;
+  /**
+   * Whether a code mailed in `realmId` now can reach anyone (#1051): the
+   * realm has a mail transport that sends. Absent, every code can. A realm
+   * that cannot send mail is never asked for a code: a code that cannot
+   * arrive would only lock the account out. So under the realm's gate the
+   * first factor refuses an unverified account instead of asking, and a
+   * forced password update, which the code would allow, and a reset, which
+   * needs the mail, are not offered. Binding a factor never asks for a code
+   * at all: the account's verified state decides.
+   */
+  readonly deliverable?: (realmId: string) => Promise<boolean>;
 }
 
 /** What the engine is built from. */
@@ -253,11 +269,13 @@ export interface SignInEngineDependencies {
    */
   readonly requireVerifiedAccount: boolean;
   /**
-   * The email codes of the inline verification (#638). With them, a correct
-   * password proves an account whose address is not verified yet, and rule 8
-   * mails it a code before the sign-in completes. Without them, an unverified
-   * account is refused like a wrong password while `requireVerifiedAccount`
-   * is on, and signs in while it is off.
+   * The email codes of the inline verification (#638). With them, while
+   * `requireVerifiedAccount` is on, a correct password proves an account
+   * whose address is not verified yet, and rule 8 mails it a code before the
+   * sign-in completes, where a code can arrive (`deliverable`, #1051).
+   * Without them, or where none can arrive, an unverified account is refused
+   * like a wrong password while `requireVerifiedAccount` is on. With it off,
+   * it signs in unverified either way.
    */
   readonly emailCodes?: EmailCodeDependencies;
   /**
@@ -921,6 +939,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const found = state.transaction;
     const realmId = context.realm.id;
     const clientId = context.client.id;
+    /** Whether a code mailed now can arrive ({@link EmailCodeDependencies.deliverable}, #1051). */
+    const mailReaches = async (): Promise<boolean> => {
+      const deliverable = emailCodes?.deliverable;
+      if (emailCodes === undefined) return false;
+      if (deliverable === undefined) return true;
+      return (await fromStore('mail', () => deliverable(realmId))) === true;
+    };
     // ADR-008 §5: only `development` relaxes the limiters; anything else is production.
     const environment = roundEnvironmentOf(context.environment ?? 'production');
     const served = new Set<StepName>(context.serves ?? STEP_NAMES);
@@ -1368,7 +1393,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (!account.enabled) {
         return refuseAnswer(offer, read.step, 'invalid_credentials', 'account_disabled');
       }
-      if (!account.verified && deps.requireVerifiedAccount && emailCodes === undefined) {
+      // Under the realm's gate, an unverified account is verified inline by a
+      // mailed code (#638); where no code can arrive, it is refused as an
+      // engine without codes refuses it (#1051).
+      if (
+        !account.verified &&
+        deps.requireVerifiedAccount &&
+        (emailCodes === undefined || !(await mailReaches()))
+      ) {
         return refuseAnswer(offer, read.step, 'invalid_credentials', 'account_not_verified');
       }
       state.transaction = {
@@ -1585,7 +1617,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (params === null)
         throw new Error('sign-in engine: a proof outside the upstream step’s schema');
       if (!proof.account.enabled) return refuse('account_disabled');
-      if (!proof.account.verified && deps.requireVerifiedAccount && emailCodes === undefined) {
+      if (
+        !proof.account.verified &&
+        deps.requireVerifiedAccount &&
+        (emailCodes === undefined || !(await mailReaches()))
+      ) {
         return refuse('account_not_verified');
       }
       const address = proof.address === undefined ? undefined : readIdentifier(proof.address);
@@ -2117,6 +2153,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       subject: string,
       purpose: SignInCodePurpose
     ): Promise<RoundResult | null> => {
+      // The inline verification runs only under the realm's gate (ADR-017
+      // Decision 8, amended 2026-11-08): with the gate off, an unverified
+      // account signs in unverified. Under it, the first factor already
+      // refused an account no code can reach (#1051).
+      if (purpose === VERIFY_ACCOUNT && (!deps.requireVerifiedAccount || !(await mailReaches()))) {
+        return null;
+      }
       const length = emailCodeLength(purpose, { afterPassword: true });
       // The address is the identifier; for an account an upstream provider
       // proved (#639), the address that provider gave.
@@ -2600,6 +2643,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (!RESET_STEPS.every((step) => served.has(step)) || context.freshSignIn === true) {
         return false;
       }
+      // A reset starts with a mailed code: none is offered where none can arrive (#1051).
+      if (!(await mailReaches())) return false;
       return resetAllowed(resets);
     };
 
@@ -3452,7 +3497,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           throw new Error('sign-in engine: a forced update before the factor beyond the password');
         }
       } else if (!provedMailbox()) {
-        if (emailCodes === undefined) return redirect('step_not_available');
+        // The mailbox proves the owner of a password-only account before its
+        // password is replaced: where no code can arrive, nothing proves it,
+        // so the update is not offered (#1051).
+        if (emailCodes === undefined || !(await mailReaches())) {
+          return redirect('step_not_available');
+        }
         const result = await verifyAddress(emailCodes, subject, RECOVERY);
         if (result !== null) return result;
       }
@@ -3515,6 +3565,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       ) {
         return null;
       }
+      // An unclaimed account binds no passkey, so none is offered to it.
+      if (!current.verified && !provedMailbox()) return null;
       /**
        * The account's first factor beyond its password: its mailbox is proved
        * before the binding (ADR-017 Decision 8). The optional offer is only
@@ -3598,10 +3650,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
       // The first passkey of a password-only account: its mailbox, proved in
       // this transaction (ADR-017 Decision 8). The code adds no amr value.
-      if (passwordOnly && !provedMailbox()) {
-        if (emailCodes === undefined) return redirect('step_not_available');
-        const result = await verifyAddress(emailCodes, subject, RECOVERY);
-        if (result !== null) return result;
+      // The account decides, never a channel (ADR-017 Decision 8, amended
+      // 2026-11-08): a verified account binds its first passkey after the
+      // fresh factor below; an unclaimed one (never verified) binds none, or
+      // someone who registered another person's identifier could keep the
+      // account from them.
+      if (passwordOnly && !current.verified && !provedMailbox()) {
+        return redirect('step_not_available');
       }
       // A binding needs a fresh factor: past it, nothing is bound, and the
       // account page binds one after a fresh sign-in.
@@ -3846,10 +3901,9 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
       // The first second factor of a password-only account: its mailbox,
       // proved in this transaction (ADR-017 Decision 8). The code adds no amr.
-      if (!boundBeyondPassword(current) && !provedMailbox()) {
-        if (emailCodes === undefined) return redirect('step_not_available');
-        const result = await verifyAddress(emailCodes, subject, RECOVERY);
-        if (result !== null) return result;
+      // As for a first passkey: the account decides, never a channel.
+      if (!boundBeyondPassword(current) && !current.verified && !provedMailbox()) {
+        return redirect('step_not_available');
       }
       if (!fresh()) return stale();
       const at = step;
@@ -4030,8 +4084,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       account = reread;
     }
 
-    // Rule 8: an address not proved yet is verified inline with an emailed
-    // code, whatever REQUIRE_VERIFIED_ACCOUNT says (ADR-017 Decision 8). Here
+    // Rule 8: under the realm's gate, an address not proved yet is verified
+    // inline with an emailed code (ADR-017 Decision 8, amended 2026-11-08). Here
     // when no second factor is asked for; an account the MFA policy needs one
     // of verified it before that factor, above, or was redirected to the
     // set-up step: never a code in its place.

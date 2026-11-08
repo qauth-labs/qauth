@@ -32,8 +32,8 @@ summary: >-
   right one proves its account with ["pop","mfa"]. A password on a passkey-bound account proves nothing that completes
   the sign-in: the next step is the passkey, a disabled one still counting as bound, and a transport that cannot serve
   it is sent to the hosted pages. After a sign-in that proved only a password, the hosted pages offer a passkey; a
-  password-only account proves its mailbox with an emailed code before the passkey is bound, the user is told, and the
-  first set of recovery codes is shown.
+  verified account's passkey is bound after the fresh factor with no emailed code (the account decides, never a
+  channel), an unclaimed account's never, the user is told, and the first set of recovery codes is shown.
 
 scope:
   shows: >-
@@ -50,8 +50,6 @@ scope:
     - 'a recovery code in place of the passkey, drawn by flows/core/recovery-code: offered beside webauthn_get on the
       hosted pages, and alone when every passkey of the account is disabled; and the set shown once after the first
       enrolment'
-    - 'the rounds of the emailed code that proves the mailbox before a binding, drawn by
-      flows/core/account-verification with the purpose recovery and 8 digits'
     - 'registration of an account whose only factor is a passkey, with no address, and the new passkey its recovery
       code binds, drawn by flows/core/passkey-sign-up (#655); and the passkeys of the account page: adding, renaming
       and removing one (ACC-02)'
@@ -136,8 +134,9 @@ context:
         user verification, an allowed algorithm and attestation "none"
       refused: 'anything else, the ceremony taken already included'
       bound: 'a valid passkey whose credential id the realm holds already'
-  # A code mailed to the account's address was answered right in this transaction, for any purpose.
-  mailboxProved:
+  # The account is verified: its identifier proved, or an operator's word. It alone decides a binding (ADR-017
+  # Decision 8, amended 2026-11-08); an unclaimed account binds nothing.
+  accountVerified:
     values: [false, true]
     initial: any
   # this round reserved the assertion on the limiters, which count it until it settles
@@ -179,10 +178,10 @@ guards:
   passkeyAskable: 'servesGet and passkeyUsable'
   enrolmentOffered: >-
     hostedPages and passwordProved and not passkeyProved and not passkeyBound and not enrolmentDeclined and authAge ==
-    'fresh'
+    'fresh' and accountVerified
   badRegistration: "registration == 'refused'"
   alreadyBound: "registration == 'bound'"
-  mailboxOwed: 'not mailboxProved'
+  unclaimed: 'not accountVerified'
   stale: "authAge == 'stale'"
 
 effects:
@@ -201,7 +200,6 @@ effects:
   provePassword: { set: { passwordProved: true } }
   readAccount: { set: { accountRead: true } }
   declineEnrolment: { set: { enrolmentDeclined: true } }
-  proveMailbox: { set: { mailboxProved: true } }
   storePasskey: { set: { passkeyStored: true, bindingNoticed: true } }
   audit: { set: { audited: true } }
   waitFloor: { set: { floorWaited: true } }
@@ -219,12 +217,6 @@ failures:
   startingDowngrade: { from: webauthnCeremonies, store: [unavailable] }
   startingRegistration: { from: webauthnCeremonies, store: [unavailable] }
   verifyingRegistration: { from: webauthnProvider, store: [unavailable] }
-  provingMailbox:
-    from: core.account-verification
-    throttled: [sendCapped, lockedOut]
-    ended: [burned, ended]
-    invalid: [answerRefused]
-    store: [unavailable]
   storingPasskey:
     from: userCredentials
     bound: [credential_exists]
@@ -246,7 +238,7 @@ main:
     passkeyUsable: true
     authAge: fresh
     registration: valid
-    mailboxProved: false
+    accountVerified: true
   events: [DONE, ASSERTION, DONE, DONE, DONE]
 
 initial: firstRound
@@ -478,13 +470,13 @@ states:
   checkingBinding:
     title: Ask what the binding still needs
     description: >-
-      Binding the first passkey of a password-only account needs a code mailed to its address in the same
-      transaction, unless the transaction proved that mailbox already, and a factor proved at most 5 minutes ago
-      (ADR-017 Decision 8).
+      Binding a first passkey needs a verified account and a factor proved at most 5 minutes ago, never an emailed code
+      (ADR-017 Decision 8, amended 2026-11-08: the account decides, never a channel).
     always:
-      - guard: mailboxOwed
-        target: provingMailbox
-        say: 'the mailbox is not proved in this transaction: a code is mailed'
+      - guard: unclaimed
+        target: bindingRefused
+        effect: [waitFloor]
+        say: 'the account was never verified: an unclaimed account binds no passkey'
       - guard: stale
         target: completed
         effect: [declineEnrolment, waitFloor]
@@ -493,35 +485,6 @@ states:
           binds one after a fresh sign-in
       - target: storingPasskey
         say: 'the binding may go ahead'
-
-  provingMailbox:
-    title: Prove the account's mailbox with an emailed code
-    description: >-
-      The code rounds of flows/core/account-verification, with the purpose recovery and 8 digits: the send caps, the
-      email-code ladder, the 10 minutes, the burn at the 5th wrong answer. A right code proves the mailbox and adds no
-      amr value.
-    invoke: { flow: core.account-verification }
-    on:
-      DONE:
-        target: checkingBinding
-        effect: [proveMailbox, timePasses]
-        say: 'the code is right: the mailbox is proved'
-      FAIL.throttled:
-        target: throttled
-        effect: [audit, waitFloor]
-        say: "the send caps or the email-code ladder's wait refuse the round"
-      FAIL.ended:
-        target: ended
-        effect: [waitFloor]
-        say: 'the fifth wrong code burned the code, or the account changed: the transaction ends'
-      FAIL.invalid:
-        target: answerRefused
-        effect: [audit, waitFloor]
-        say: 'the code is not of the offered length'
-      FAIL.store:
-        target: unavailable
-        effect: [waitFloor]
-        say: 'the send caps, the ladder or the database fail'
 
   storingPasskey:
     title: Bind the passkey to the account
@@ -718,6 +681,17 @@ states:
           next: 'flows/core/recovery-code, from readingCodes; else a redirect with step_not_available',
         }
 
+  bindingRefused:
+    type: final
+    title: Bind nothing to an unclaimed account
+    description: >-
+      An account whose identifier was never verified binds no passkey, or someone who registered another person's
+      identifier could keep the account from them (ADR-017's unclaimed-account rule): the engine answers a redirect
+      with step_not_available, which the hosted pages answer with the end of the interaction.
+    response:
+      kind: continue
+      body: { next: 'a redirect with step_not_available' }
+
   passwordOnlyOffer:
     type: final
     title: Ask for the password and the identifier
@@ -815,9 +789,9 @@ assertions:
     say: >-
       A sign-in of a passkey-bound account completes only after its passkey, a disabled one counting as bound; a
       password or an emailed code never completes it
-  - id: a-mailbox-before-the-first-passkey
-    never: 'passkeyStored and not mailboxProved'
-    say: 'The first passkey of a password-only account is bound only after a code mailed to its address'
+  - id: a-verified-account-before-the-first-passkey
+    never: 'passkeyStored and not accountVerified'
+    say: 'A passkey is bound only to a verified account, with no emailed code: the account decides, never a channel'
   - id: a-fresh-factor-before-a-binding
     never: "passkeyStored and authAge == 'stale'"
     say: 'A passkey is bound only within 5 minutes of the factor the transaction proved'

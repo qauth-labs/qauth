@@ -69,21 +69,29 @@ interface Built {
 
 function build(
   account: FakeAccount = passwordAccount(USER, PASSWORD, { verified: false }),
-  options: Partial<SignInEngineDependencies> & { readonly ladder?: LadderHook } = {}
+  options: Partial<SignInEngineDependencies> & {
+    readonly ladder?: LadderHook;
+    /** Whether the realm's mail reaches anyone (#1051); absent, it does. */
+    readonly deliverable?: boolean;
+  } = {}
 ): Built {
   const directory = new FakeDirectory(new Map([[IDENTIFIER, account]]));
   const clock = manualClock();
   const ladder = createMemoryLadder(() => clock.now());
   const addresses = new FakeAddresses(directory);
   const policy = new FakePolicy();
-  const { ladder: ladderHook, ...rest } = options;
+  const { ladder: ladderHook, deliverable, ...rest } = options;
   const engine = createSignInEngine({
     accounts: directory,
     passwords: new FakePasswords(),
     policy,
     identifierDigest: fakeIdentifierDigest,
     requireVerifiedAccount: true,
-    emailCodes: { digest: fakeEmailCodeDigest, addresses },
+    emailCodes: {
+      digest: fakeEmailCodeDigest,
+      addresses,
+      ...(deliverable === undefined ? {} : { deliverable: async () => deliverable }),
+    },
     hooks: { ladder: ladderHook ?? ladder },
     clock,
     ...rest,
@@ -129,8 +137,8 @@ const wrongCode = (right: string) => (right === '000000' ? '111111' : '000000');
 const interaction = createInteractionMapper();
 
 describe('the code step after a correct password', () => {
-  it.each([true, false])(
-    'offers email_code with verify_account to an unverified account, with REQUIRE_VERIFIED_ACCOUNT %s',
+  it.each([true])(
+    'offers email_code with verify_account to an unverified account under the realm’s gate (REQUIRE_VERIFIED_ACCOUNT %s)',
     async (requireVerifiedAccount) => {
       const built = build(undefined, { requireVerifiedAccount });
       const ctx = context(built);
@@ -169,6 +177,25 @@ describe('the code step after a correct password', () => {
       ]);
     }
   );
+
+  it('signs an unverified account in with no code while the realm’s gate is off (ADR-017 Decision 8, amended)', async () => {
+    const built = build(undefined, { requireVerifiedAccount: false });
+    const result = await toCode(built);
+    expect(result).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
+    expect(built.sender.sent).toEqual([]);
+    expect(built.addresses.calls).toEqual([]);
+  });
+
+  it('refuses an unverified account under the gate where no code can arrive, and mails nothing (#1051)', async () => {
+    const built = build(undefined, { requireVerifiedAccount: true, deliverable: false });
+    const ctx = context(built);
+    const result = await toCode(built, ctx);
+    expect(result).toMatchObject({
+      kind: 'step',
+      offer: { current: { error: 'invalid_credentials' } },
+    });
+    expect(built.sender.sent).toEqual([]);
+  });
 
   it('mails no code to a verified account', async () => {
     const built = build(passwordAccount(USER, PASSWORD));

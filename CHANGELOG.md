@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A sign-in never waits on a mailed code that cannot arrive, and binding a
+  factor never asks for one** ([#1051], ADR-017 Decision 8 amended
+  2026-11-08). The account decides, never a channel.
+  - The first passkey or TOTP of a verified password-only account binds
+    after the fresh sign-in the binding needs, with no mailed code. Until
+    now a code to the account's address came first, so a deployment with no
+    mail transport could bind neither. An unclaimed account (its identifier
+    never verified) binds none, as before.
+  - The realm's `accounts.requireVerifiedAccount` decides again whether an
+    unverified account may finish a sign-in. With it off, the account signs
+    in with no code. With it on, the code is mailed only where the realm can
+    send mail. Where it cannot (no transport, or `mock` in production), the
+    correct password is refused as a wrong one, as an engine without codes
+    refuses it.
+  - A password reset is not offered, and a forced password update of a
+    password-only account is not available, where no code can arrive.
+  - **Upgrading:** a deployment with the gate off no longer verifies an
+    unverified account's address at sign-in. The case the binding's mailed
+    code guarded, someone who knows only the password binding a factor of
+    their own, is closed through the account's own channels in [#1064].
+
 ## [0.2.1] - 2026-11-08
 
 A patch release that carries breaking changes, as a 0.x release may (see
@@ -3694,6 +3717,8 @@ It adds migrations 0068 and 0069.
 [#984]: https://github.com/qauth-labs/qauth/issues/984
 [#1009]: https://github.com/qauth-labs/qauth/issues/1009
 [#1012]: https://github.com/qauth-labs/qauth/issues/1012
+[#1051]: https://github.com/qauth-labs/qauth/issues/1051
+[#1064]: https://github.com/qauth-labs/qauth/issues/1064
 
 ### Deprecated
 

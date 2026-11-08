@@ -641,14 +641,20 @@ describe('the flow of a transaction', () => {
 });
 
 describe('the session epoch', () => {
-  /** A password sign-in of an unverified account: its correct password, then its verification code's step. */
+  /**
+   * A password sign-in of an unverified account under the realm's gate: its
+   * correct password, then its verification code's step (with the gate off
+   * an unverified account signs in with no code, ADR-017 Decision 8 amended).
+   */
   async function provedSignIn(built: Built, ctx: Ctx): Promise<RoundResult> {
     const first = await passwordStep(built, ctx);
     return built.engine.advance(kept(first), answer('password', { password: PASSWORD }), ctx);
   }
 
   it('ends a transaction that proved the account before its last reset', async () => {
-    const built = build([[ADDRESS, passwordAccount(USER, PASSWORD, { verified: false })]]);
+    const built = build([[ADDRESS, passwordAccount(USER, PASSWORD, { verified: false })]], {
+      requireVerifiedAccount: true,
+    });
     const ctx = context(built);
     const proved = await provedSignIn(built, ctx);
     expect(kept(proved).subject).toBe(USER);
@@ -662,7 +668,9 @@ describe('the session epoch', () => {
   });
 
   it('lets a transaction that began after the reset go on', async () => {
-    const built = build([[ADDRESS, passwordAccount(USER, PASSWORD, { verified: false })]]);
+    const built = build([[ADDRESS, passwordAccount(USER, PASSWORD, { verified: false })]], {
+      requireVerifiedAccount: true,
+    });
     built.epochs.advance(USER, built.clock.now() - 1);
     const ctx = context(built);
     const proved = await provedSignIn(built, ctx);
@@ -688,7 +696,9 @@ describe('the session epoch', () => {
   });
 
   it('refuses the round when the epoch cannot be read', async () => {
-    const built = build([[ADDRESS, passwordAccount(USER, PASSWORD, { verified: false })]]);
+    const built = build([[ADDRESS, passwordAccount(USER, PASSWORD, { verified: false })]], {
+      requireVerifiedAccount: true,
+    });
     const ctx = context(built);
     const proved = await provedSignIn(built, ctx);
     vi.spyOn(built.epochs, 'notBefore').mockRejectedValueOnce(new Error('redis and postgres down'));
