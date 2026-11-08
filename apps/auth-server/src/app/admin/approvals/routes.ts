@@ -13,6 +13,7 @@ import {
   type AdminOperation,
   OPERATION_ID_PATTERN,
   operationSchemaExtensions,
+  operationStateVersion,
 } from '../../helpers/admin-operations';
 import { ApprovalStateError } from '../../helpers/approval-required';
 import { requestClassification } from '../../plugins/admin-operations';
@@ -308,17 +309,32 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
         );
       }
       const realmId = caller.targetRealm.id;
+      const filed = {
+        method: route.method,
+        params: parsedPart(route.params, { ...params, realmId }, 'path parameters'),
+        query: parsedPart(route.querystring, query, 'query'),
+        body: parsedPart(route.body, body, 'body'),
+      };
+
+      // An operation that reads state is filed against the state it meets
+      // now (#517): its renderer shows the values the request replaces, and
+      // the approval approves the request against that version only. A
+      // request the state makes invalid is refused here, never filed.
+      let state: unknown;
+      let stateVersion: string | null = null;
+      if (operation.loadState !== undefined) {
+        state = await operation.loadState(request, filed);
+        stateVersion = operationStateVersion(operation, state);
+      }
 
       let canonical;
       try {
         canonical = canonicalRequest({
           operationId: operation.id,
-          method: route.method,
-          params: parsedPart(route.params, { ...params, realmId }, 'path parameters'),
-          query: parsedPart(route.querystring, query, 'query'),
-          body: parsedPart(route.body, body, 'body'),
+          ...filed,
           realmId,
           requester: callerAccount(caller),
+          stateVersion,
         });
       } catch (error) {
         if (error instanceof CanonicalRequestError) throw new BadRequestError(error.message);
@@ -330,7 +346,12 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
       // rendered is what every reader of the approval is shown from now on;
       // the body itself is never stored (#901).
       const display = renderOperation(
-        { operationId: operation.id, request: canonical, reason: reason ?? null },
+        {
+          operationId: operation.id,
+          request: canonical,
+          reason: reason ?? null,
+          ...(operation.loadState === undefined ? {} : { state }),
+        },
         registry
       );
       const nonce = newApprovalNonce();

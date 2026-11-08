@@ -804,6 +804,53 @@ describe('the state version, If-Match and the authorization stage (#508)', () =>
     expect(seen).toHaveLength(1);
   });
 
+  // From the review of #887 (#517): a caller who holds none of the
+  // operation's permissions learns nothing of the resource. Without the
+  // check, a 404 or 412 from reading the state would answer before the 403.
+  it('runs the pre-authorization before reading the state, and a refusal reads nothing', async () => {
+    const order: string[] = [];
+    const loadState = vi.fn(async () => {
+      order.push('loadState');
+      return { minScore: 2 };
+    });
+    const authorize = vi.fn(() => {
+      order.push('authorize');
+    });
+    let refuse = true;
+    const preauthorize = vi.fn((_request: FastifyRequest, operation: AdminOperation) => {
+      order.push(`preauthorize ${operation.id}`);
+      if (refuse) throw Object.assign(new Error('forbidden'), { statusCode: 403 });
+    });
+    const operation = defineOperation({ ...PATCH_OPERATION, loadState });
+    app = Fastify({ logger: false });
+    await app.register(adminOperationsPlugin, {
+      registry: createOperationRegistry([operation] as AdminOperation[], { reserved: [] }),
+      authorize,
+      preauthorize,
+    });
+    const handler = vi.fn(async () => ({ ok: true }));
+    app.patch(
+      '/admin/v1-rc.0/widgets/policies',
+      { config: { operation: operation.id }, schema: schemaOf(operation as AdminOperation) },
+      handler
+    );
+
+    // A stale If-Match would be 412 once the state is read: the refusal comes first.
+    expect((await patch(app, { 'if-match': '"v1"' })).statusCode).toBe(403);
+    expect((await patch(app)).statusCode).toBe(403);
+    expect(loadState).not.toHaveBeenCalled();
+    expect(authorize).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    // Without If-Match the request is answered 428 before anything runs.
+    expect((await patch(app, {})).statusCode).toBe(428);
+    expect(preauthorize).toHaveBeenCalledTimes(2);
+
+    refuse = false;
+    order.length = 0;
+    expect((await patch(app)).statusCode).toBe(200);
+    expect(order).toEqual([`preauthorize ${operation.id}`, 'loadState', 'authorize']);
+  });
+
   it('carries the digest of a binary body, which cannot be frozen', async () => {
     const seen: OperationClassification[] = [];
     const instance = await patchListener(seen);

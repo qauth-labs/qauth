@@ -86,6 +86,7 @@ import { approvalOperationDefinitions } from '../admin/approvals/operations';
 import { PLUGIN_OPERATION_DEFINITIONS } from '../admin/plugins/operations';
 import { SECRET_OPERATION_DEFINITIONS } from '../admin/secrets/operations';
 import { isSecretMemberPattern } from '../admin/secrets/secret-members';
+import { classRank, isUnknownFieldError, strictestClass } from './admin-classification';
 import {
   RESERVED_OPERATIONS,
   type ReservedOperation,
@@ -146,6 +147,13 @@ export interface RenderInput {
   readonly params: unknown;
   readonly query: unknown;
   readonly body: unknown;
+  /**
+   * For an operation that reads state (`loadState`), the state it read when
+   * the approval was filed, which the approval is bound to (#517): what a
+   * renderer shows as the value a change replaces (`RenderedField.before`).
+   * Absent for any other operation.
+   */
+  readonly state?: unknown;
 }
 
 /** One line of a rendered operation: a label and its value, with the value it replaces. */
@@ -189,10 +197,17 @@ export interface AdminOperationDefinition<State = unknown> {
   classify?(request: ClassifyInput, currentState: State): Classification;
   /**
    * Reads the state `classify` compares the request with, such as the realm's
-   * current policies. The pipeline awaits it before `classify`; a rejection
-   * fails the request, which then runs nothing. Requires `stateVersion`.
+   * current policies. `input` holds the parts of the operation's request:
+   * the call's own, or those an approval is filed for (`approvals.create`,
+   * whose own request is another one). The pipeline awaits it before
+   * `classify`, once the caller holds at least one of the operation's
+   * permissions; a rejection fails the request, which then runs nothing.
+   * It may refuse a request that the state makes invalid, such as a policy
+   * patch whose merged document the schema refuses (422): such a request has
+   * no classification, and is never filed for an approval. Requires
+   * `stateVersion`.
    */
-  loadState?(request: FastifyRequest): Promise<State>;
+  loadState?(request: FastifyRequest, input: ClassifyInput): Promise<State>;
   /**
    * The version of a state `loadState` read, such as its row version or a
    * digest of it: an entity-tag's opaque value (`!` and `#` to `~`, at most
@@ -255,20 +270,6 @@ const DEFINITION_KEYS: ReadonlySet<string> = new Set([
 /** A definition refused by {@link defineOperation} or {@link createOperationRegistry}. */
 export class OperationDefinitionError extends Error {
   override readonly name = 'OperationDefinitionError';
-}
-
-const classRank = (operationClass: OperationClass): number =>
-  PERMISSION_CLASSES.indexOf(operationClass);
-
-/** The strictest of `classes`, or `undefined` for none. */
-function strictestClass(classes: Iterable<OperationClass>): OperationClass | undefined {
-  let strictest: OperationClass | undefined;
-  for (const candidate of classes) {
-    if (strictest === undefined || classRank(candidate) > classRank(strictest)) {
-      strictest = candidate;
-    }
-  }
-  return strictest;
 }
 
 const isOneLine = (text: unknown): text is string =>
@@ -769,36 +770,6 @@ export interface OperationClassification extends Classification {
   readonly bodyDigest: string | null;
 }
 
-const UNKNOWN_FIELD_BRAND = Symbol.for('qauth.adminOperations.unknownField');
-
-/**
- * Thrown by a `classify` that meets a field it has no rule for. The request
- * then fails closed, with the reason `unknown-field`. Branded with a
- * registered symbol, not checked with `instanceof`, so a copy of this module
- * loaded twice (the E2E harness resets modules) still recognizes it.
- */
-export class UnknownFieldError extends Error {
-  override readonly name = 'UnknownFieldError';
-  readonly [UNKNOWN_FIELD_BRAND] = true;
-
-  constructor(readonly field: string) {
-    super(`classify has no rule for the field ${JSON.stringify(field)}`);
-  }
-}
-
-/** Whether `error` is an {@link UnknownFieldError}; `false` for a value whose brand cannot be read. */
-function isUnknownFieldError(error: unknown): boolean {
-  try {
-    return (
-      typeof error === 'object' &&
-      error !== null &&
-      (error as Record<symbol, unknown>)[UNKNOWN_FIELD_BRAND] === true
-    );
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Freeze `value` in place, and every object and array it holds. A typed array
  * (a binary body) is left as it is: one with elements cannot be frozen, which
@@ -1041,100 +1012,14 @@ export function classifyRequest(
     : classificationOf(operation, checked.classification, null, bound);
 }
 
-/**
- * The classification of a request made of several changes: the strictest
- * class, and every effect and permission of any change. Pure;
- * {@link classifyRequest} checks the result.
- */
-export function mergeClassifications(parts: readonly Classification[]): Classification {
-  return {
-    class: strictestClass(parts.map((part) => part.class)) ?? 'read',
-    effects: [...new Set(parts.flatMap((part) => part.effects))],
-    permissions: [...new Set(parts.flatMap((part) => part.permissions))],
-  };
-}
-
-/** A JSON Pointer token (RFC 6901): `~` and `/` escaped. */
-const pointerToken = (key: string): string => key.replace(/~/g, '~0').replace(/\//g, '~1');
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
-
-/**
- * The fields a JSON Merge Patch (RFC 7396) changes, as JSON Pointers
- * (`/passwordPolicy/minLength`), walked from the BODY's own keys, never from a
- * list of fields the classifier expects: so a field the classifier has no
- * rule for still comes out, and {@link classifyByField} fails it closed.
- *
- * - A member whose value is a non-empty plain object is walked into.
- * - Every other member is a changed field: a primitive, an array (an array
- *   replaces the target's array whole, so it is one leaf), `null` (which
- *   removes the member) and an empty object (which may replace a non-object
- *   member).
- * - A body that is not a plain object replaces the whole target: `['']`.
- *   An absent body changes nothing: `[]`.
- *
- * The canonical `changedFields` of a request-dependent operation whose
- * request is a merge patch.
- */
-export function mergePatchLeafPaths(body: unknown): string[] {
-  if (body === undefined) return [];
-  if (!isPlainObject(body)) return [''];
-  const paths: string[] = [];
-  const pending: Array<[string, Record<string, unknown>]> = [['', body]];
-  while (pending.length > 0) {
-    const [prefix, object] = pending.pop() as [string, Record<string, unknown>];
-    for (const key of Object.keys(object)) {
-      const path = `${prefix}/${pointerToken(key)}`;
-      const value = object[key];
-      if (isPlainObject(value) && Object.keys(value).length > 0) {
-        pending.push([path, value]);
-      } else {
-        paths.push(path);
-      }
-    }
-  }
-  return paths.sort();
-}
-
-/** A field's classification, fixed or computed from the request and the state. */
-export type FieldRule<State> =
-  | Classification
-  | ((request: ClassifyInput, currentState: State) => Classification);
-
-/** How {@link classifyByField} classifies a request. */
-export interface FieldClassifierSpec<State> {
-  /** The fields one request changes, such as the leaf paths of a merge patch. */
-  changedFields(request: ClassifyInput, currentState: State): Iterable<string>;
-  /** Each field's classification. A changed field without an entry fails the request closed. */
-  readonly fields: Readonly<Record<string, FieldRule<State>>>;
-  /** The classification of a request that changes no field. */
-  readonly unchanged: Classification;
-}
-
-/**
- * A `classify` built from a table of fields: each changed field is classified
- * by its entry, and the request needs what all of them need together
- * ({@link mergeClassifications}). A field the table does not hold, as an own
- * entry, throws {@link UnknownFieldError}, so the request fails closed: an
- * unknown field counts as a security change, never as a write.
- */
-export function classifyByField<State>(
-  spec: FieldClassifierSpec<State>
-): (request: ClassifyInput, currentState: State) => Classification {
-  return (request, currentState) => {
-    const parts: Classification[] = [];
-    for (const field of spec.changedFields(request, currentState)) {
-      if (!Object.hasOwn(spec.fields, field)) throw new UnknownFieldError(field);
-      const rule = spec.fields[field];
-      parts.push(typeof rule === 'function' ? rule(request, currentState) : rule);
-    }
-    return parts.length === 0 ? spec.unchanged : mergeClassifications(parts);
-  };
-}
+export {
+  classifyByField,
+  type FieldClassifierSpec,
+  type FieldRule,
+  mergeClassifications,
+  mergePatchLeafPaths,
+  UnknownFieldError,
+} from './admin-classification';
 
 /** The OpenAPI members a route of `operation` declares in its schema. */
 export interface OperationSchemaExtensions {
@@ -1190,14 +1075,14 @@ export function createAdminOperationRegistry(
 
 /**
  * Every admin operation, but the approval engine's own: sealing a secret for
- * a security operation (#984) and the plugin operations (#600). The
- * operations that read a realm and patch its policies (#517) register here
- * too.
+ * a security operation (#984), reading a realm and patching its policies
+ * (#517, the reference for every later one) and the plugin operations (#600).
  */
 export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
-  [...SECRET_OPERATION_DEFINITIONS, ...PLUGIN_OPERATION_DEFINITIONS].map((operation) =>
-    defineOperation(operation)
-  )
+  [
+    ...SECRET_OPERATION_DEFINITIONS,
+    ...PLUGIN_OPERATION_DEFINITIONS,
+  ].map((operation) => defineOperation(operation))
 );
 
 /** The registry the admin pipeline classifies against: {@link ADMIN_OPERATIONS} and the approval operations. */
