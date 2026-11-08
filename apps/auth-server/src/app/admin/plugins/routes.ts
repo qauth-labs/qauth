@@ -79,9 +79,12 @@ import { PLUGIN_OPERATION_IDS } from './operations';
  * approval bound is never what is stored. The body schema refuses any
  * installed plugin's secret member under `config`, however it is spelled. A configure that keeps a stored secret while a member that holds
  * a URL is added or changes origin is refused: the secret must be sealed
- * again, so it never follows a destination it was not set for. No response,
- * audit row or log line holds a value: the representation says only which
- * secret members hold one.
+ * again, so it never follows a destination it was not set for. A plugin that
+ * names where its secrets go (`secretDestination`, #1031) is held to that
+ * too: a configure that keeps a stored secret while the plugin names
+ * another destination for the new config than for the stored one is
+ * refused. No response, audit row or log line holds a value: the
+ * representation says only which secret members hold one.
  *
  * THE PLUGIN THAT WROTE THE STATE (#949). Every write records the package and
  * the type of the installed plugin it writes for, and a sealed value is bound
@@ -376,30 +379,154 @@ export function newUrlDestinations(
 }
 
 /**
+ * The stored secrets a configure keeps: those the realm's state of the
+ * plugin holds that the request neither sets nor clears. A state another
+ * package or type wrote holds none of this plugin's (#949).
+ */
+function keptSecretPaths(
+  plugin: InstalledAuthMethodPlugin,
+  row: RealmAuthMethodPlugin | undefined,
+  changes: Readonly<Record<string, unknown>>
+): string[] {
+  const { secrets } = stateOf(plugin, row);
+  return plugin.secretPaths.filter(
+    (path) => Object.hasOwn(secrets, path) && !Object.hasOwn(changes, path)
+  );
+}
+
+/**
+ * The 400 of a configure that would carry the kept secrets to a new
+ * destination, `why` saying how it is new. It names the secrets to seal
+ * again; it echoes no member value.
+ */
+function keptSecretsMoved(kept: readonly string[], why: string): BadRequestError {
+  const names = kept.map((path) => JSON.stringify(path)).join(', ');
+  return new BadRequestError(
+    `The configuration sends the plugin to a new destination (${why}), and the stored secret ${names} was set for the old one: seal ${kept.length === 1 ? 'it' : 'each'} again with secrets.seal and send ${kept.length === 1 ? 'it' : 'them'} under secrets`
+  );
+}
+
+/**
  * Refuse, with 400, a configure that keeps a stored secret (one it neither
  * sets nor clears) while it sends the plugin to a new destination: a member
  * whose value is an http(s) URL is added or changes origin. So an admin who
  * cannot read a write-only secret cannot send it elsewhere by changing, say,
- * `tokenEndpoint`. The error names the secrets to seal again; it echoes no
- * member value.
+ * `tokenEndpoint`.
+ *
+ * Every plugin is held to it. This rule reads no member that is not a URL,
+ * and no URL's path, so a plugin that names its own destination
+ * (`secretDestination`, #1031) is held to that too, once its config parses
+ * ({@link requireKeptSecretsAtDestination}): the hook adds a refusal, and
+ * never lifts this one.
  */
-function requireKeptSecretsStay(
+export function requireKeptSecretsStay(
   plugin: InstalledAuthMethodPlugin,
   row: RealmAuthMethodPlugin | undefined,
   config: Readonly<Record<string, unknown>>,
   changes: Readonly<Record<string, unknown>>
 ): void {
-  const state = stateOf(plugin, row);
-  const kept = plugin.secretPaths.filter(
-    (path) => Object.hasOwn(state.secrets, path) && !Object.hasOwn(changes, path)
-  );
+  const kept = keptSecretPaths(plugin, row, changes);
   if (kept.length === 0) return;
-  const before = withoutConfigMembers(state.config, plugin.secretPaths);
+  const before = withoutConfigMembers(stateOf(plugin, row).config, plugin.secretPaths);
   if (newUrlDestinations(before, config).length === 0) return;
-  const names = kept.map((path) => JSON.stringify(path)).join(', ');
-  throw new BadRequestError(
-    `The configuration sends the plugin to a new destination (a member that holds a URL is new or names another origin), and the stored secret ${names} was set for the old one: seal ${kept.length === 1 ? 'it' : 'each'} again with secrets.seal and send ${kept.length === 1 ? 'it' : 'them'} under secrets`
-  );
+  throw keptSecretsMoved(kept, 'a member that holds a URL is new or names another origin');
+}
+
+/**
+ * Where the plugin says its secrets go under the plain members `config`
+ * and the secret values `secrets` (`secretDestination`, #1031), or
+ * `undefined` when that cannot be told: the plugin has no hook, the config
+ * does not parse, or the hook throws or answers anything but a string. The
+ * result is compared, never logged, stored or answered.
+ */
+function secretDestinationOf(
+  plugin: InstalledAuthMethodPlugin,
+  config: Readonly<Record<string, unknown>>,
+  secrets: ReadonlyMap<string, string>
+): string | undefined {
+  if (plugin.method.secretDestination === undefined) return undefined;
+  try {
+    const parsed = parseAuthMethodConfig(
+      plugin.method,
+      withConfigMembers(withoutConfigMembers(config, plugin.secretPaths), secrets)
+    );
+    const destination: unknown = plugin.method.secretDestination(parsed);
+    return typeof destination === 'string' ? destination : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Refuse, with 400, a configure that keeps a stored secret while the
+ * plugin's own `secretDestination` (#1031) names another destination for the
+ * new config than for the stored one: a member that shapes an issuer's path,
+ * such as a tenant, or a token endpoint's path, moves the secret as surely
+ * as another host does.
+ *
+ * Each side is read with its own secret values: the stored config with the
+ * secrets it was stored with, the new one with those the realm will hold. So
+ * a secret member the plugin routes by, replaced or cleared while another is
+ * kept, moves the kept one as surely as a plain member does (review of
+ * #1056). Only then is a stored value the request replaces or clears opened
+ * (`openStored`), for this comparison alone. A side whose destination cannot
+ * be told (a stored value that does not open, a stored config the plugin's
+ * schema no longer takes, a hook that throws) counts as a new destination:
+ * the secret is sealed again, never kept on a guess.
+ */
+export async function requireKeptSecretsAtDestination(
+  plugin: InstalledAuthMethodPlugin,
+  row: RealmAuthMethodPlugin | undefined,
+  config: Readonly<Record<string, unknown>>,
+  changes: Readonly<Record<string, unknown>>,
+  secrets: {
+    /** The secret values the realm will hold: those kept, opened, and those set. */
+    readonly after: ReadonlyMap<string, string>;
+    /** Open the stored value of a secret member the request replaces or clears. */
+    readonly openStored: (path: string) => Promise<string>;
+  }
+): Promise<void> {
+  if (plugin.method.secretDestination === undefined) return;
+  const kept = keptSecretPaths(plugin, row, changes);
+  if (kept.length === 0) return;
+  const state = stateOf(plugin, row);
+  const stored = await storedSecretValues(plugin, state.secrets, kept, secrets);
+  const before =
+    stored === undefined ? undefined : secretDestinationOf(plugin, state.config, stored);
+  const after = secretDestinationOf(plugin, config, secrets.after);
+  if (before !== undefined && before === after) return;
+  throw keptSecretsMoved(kept, 'the plugin names another destination for its secrets');
+}
+
+/**
+ * The plaintext of every secret the state holds: a kept one as the realm will
+ * hold it (it is unchanged), any other opened from its stored value; or
+ * `undefined` when one does not open.
+ */
+async function storedSecretValues(
+  plugin: InstalledAuthMethodPlugin,
+  ciphertexts: Readonly<Record<string, string>>,
+  kept: readonly string[],
+  secrets: {
+    readonly after: ReadonlyMap<string, string>;
+    readonly openStored: (path: string) => Promise<string>;
+  }
+): Promise<Map<string, string> | undefined> {
+  const values = new Map<string, string>();
+  for (const path of plugin.secretPaths) {
+    if (!Object.hasOwn(ciphertexts, path)) continue;
+    const keptValue = kept.includes(path) ? secrets.after.get(path) : undefined;
+    if (keptValue !== undefined) {
+      values.set(path, keptValue);
+      continue;
+    }
+    try {
+      values.set(path, await secrets.openStored(path));
+    } catch {
+      return undefined;
+    }
+  }
+  return values;
 }
 
 /**
@@ -734,11 +861,14 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
           'config holds a secret member: seal it with secrets.seal and send it under secrets'
         );
       }
-      // A kept secret never follows a changed destination.
+      // A kept secret never follows a changed destination: here by the URL
+      // rule, for every plugin, and below, once the config parses, by the
+      // plugin's own secretDestination too when it has one (#1031).
       requireKeptSecretsStay(plugin, row, config, changes);
 
       // The secrets the realm will hold: those kept, and those set; a value
-      // this request replaces or clears is never opened. A state another
+      // this request replaces or clears is opened only to read where the
+      // stored config sent the secrets it keeps, below. A state another
       // package or type wrote keeps none (#949): its secrets were sealed for
       // that plugin, and are never opened for this one.
       const state = stateOf(plugin, row);
@@ -755,10 +885,14 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       }
       for (const [path, plaintext] of opened) plaintexts.set(path, plaintext);
       requireValidConfig(plugin, config, plaintexts);
+      const cipher = authMethodPluginSecretCipher(fastify);
+      await requireKeptSecretsAtDestination(plugin, row, config, changes, {
+        after: plaintexts,
+        openStored: (path) => cipher.open(realmId, plugin, path, stored[path]),
+      });
       // Each secret set is stored sealed again, under the plugin's own
       // context: the value sealed for the approval never opens as a stored
       // secret, nor a stored secret as a sealed value.
-      const cipher = authMethodPluginSecretCipher(fastify);
       for (const [path, plaintext] of opened) {
         ciphertexts[path] = await cipher.seal(realmId, plugin, path, plaintext);
       }

@@ -1,4 +1,13 @@
+import {
+  EXAMPLE_TENANT_PRESET_ID,
+  EXAMPLE_TENANT_PRESET_PACKAGE,
+  EXAMPLE_TENANT_PRESET_TYPE,
+  exampleTenantIssuer,
+  exampleTenantPresetPackage,
+} from '@qauth-labs/fastify-plugin-federation/src/testing/upstream-oidc-fixtures';
+import { BadRequestError } from '@qauth-labs/shared-errors';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { fixturePluginImporter, fixturePluginMethod } from '../../../testing/auth-method-plugins';
 import { OPERATION_REGISTRY } from '../../helpers/admin-operations';
@@ -13,6 +22,8 @@ import {
   pluginResource,
   pluginSecretMember,
   pluginStateBodySchema,
+  requireKeptSecretsAtDestination,
+  requireKeptSecretsStay,
 } from './routes';
 
 /**
@@ -255,6 +266,284 @@ describe('a configure that changes where the plugin sends (#600)', () => {
     expect(
       newUrlDestinations(before, { ...before, logo: 'data:image/png;base64,AA', note: 'see docs' })
     ).toEqual([]);
+  });
+});
+
+describe("a configure that changes where a plugin's own hook says its secrets go (#1031)", () => {
+  const REALM_ID = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b';
+  const STORED = { tenant: 'alpha', clientId: 'qauth' };
+  const TOKEN = `${exampleTenantIssuer('alpha')}/oauth/token`;
+  /**
+   * The secret values the realm will hold (the client secret kept), and a
+   * store whose values the request replaces: none here, so it never opens.
+   */
+  const KEPT = {
+    after: new Map([['clientSecret', SECRET]]),
+    openStored: async (): Promise<string> => {
+      throw new Error('a kept secret is not opened again');
+    },
+  };
+
+  async function tenantPreset() {
+    const runtime = await loadDeploymentAuthMethodPlugins(
+      { info: () => undefined, warn: () => undefined },
+      { packages: [EXAMPLE_TENANT_PRESET_PACKAGE], pluginApiEnabled: false, nodeEnv: 'test' },
+      {
+        importPackage: fixturePluginImporter({
+          [EXAMPLE_TENANT_PRESET_PACKAGE]: exampleTenantPresetPackage(),
+        }),
+        firstParty: [EXAMPLE_TENANT_PRESET_PACKAGE],
+      }
+    );
+    const [plugin] = runtime.installed;
+    if (plugin === undefined) throw new Error('the tenant preset did not load');
+    return plugin;
+  }
+
+  /** The realm's row of the tenant preset, its client secret stored. */
+  function rowWith(config: Record<string, unknown>) {
+    return {
+      realmId: REALM_ID,
+      pluginId: EXAMPLE_TENANT_PRESET_ID,
+      pluginPackage: EXAMPLE_TENANT_PRESET_PACKAGE,
+      pluginType: EXAMPLE_TENANT_PRESET_TYPE,
+      enabled: true,
+      config,
+      secrets: { clientSecret: SEALED },
+      version: 1,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+  }
+
+  async function refusal(run: () => unknown): Promise<unknown> {
+    try {
+      await run();
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  }
+
+  it('refuses a new tenant or token endpoint path while the stored secret is kept, naming it and no value', async () => {
+    const plugin = await tenantPreset();
+    for (const [stored, config] of [
+      [STORED, { ...STORED, tenant: 'beta' }],
+      [STORED, { ...STORED, tokenEndpoint: TOKEN }],
+      [
+        { ...STORED, tokenEndpoint: TOKEN },
+        { ...STORED, tokenEndpoint: `${TOKEN}-2` },
+      ],
+      [{ ...STORED, tokenEndpoint: TOKEN }, STORED],
+    ]) {
+      const error = await refusal(() =>
+        requireKeptSecretsAtDestination(plugin, rowWith(stored), config, {}, KEPT)
+      );
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect((error as Error).message).toBe(
+        'The configuration sends the plugin to a new destination (the plugin names another destination for its secrets), and the stored secret "clientSecret" was set for the old one: seal it again with secrets.seal and send it under secrets'
+      );
+      expect((error as Error).message).not.toContain(SECRET);
+    }
+  });
+
+  it('keeps the stored secret when neither the issuer nor the token endpoint changes, or the secret is set again', async () => {
+    const plugin = await tenantPreset();
+    const withToken = { ...STORED, tokenEndpoint: TOKEN };
+    await expect(
+      requireKeptSecretsAtDestination(
+        plugin,
+        rowWith(withToken),
+        { ...withToken, clientId: 'qauth-2' },
+        {},
+        KEPT
+      )
+    ).resolves.toBeUndefined();
+    // A secret the request sets is not kept, wherever the config now sends it.
+    await expect(
+      requireKeptSecretsAtDestination(
+        plugin,
+        rowWith(STORED),
+        { ...STORED, tenant: 'beta' },
+        { clientSecret: { sealed: SEALED } },
+        { after: new Map([['clientSecret', 'a-new-secret']]), openStored: async () => SECRET }
+      )
+    ).resolves.toBeUndefined();
+    // Nothing stored, nothing kept.
+    await expect(
+      requireKeptSecretsAtDestination(plugin, undefined, { ...STORED, tenant: 'beta' }, {}, KEPT)
+    ).resolves.toBeUndefined();
+  });
+
+  /** The fixture plugin `corp` with `secretDestination` set to `hook`, loaded. */
+  async function corpWithHook(hook: unknown) {
+    const runtime = await loadDeploymentAuthMethodPlugins(
+      { info: () => undefined, warn: () => undefined },
+      { packages: ['@example/corp'], pluginApiEnabled: true, nodeEnv: 'test' },
+      {
+        importPackage: fixturePluginImporter({
+          '@example/corp': {
+            authMethod: {
+              ...fixturePluginMethod({ type: 'corp_sso', id: 'corp' }),
+              secretDestination: hook,
+            },
+          },
+        }),
+      }
+    );
+    const [corp] = runtime.installed;
+    if (corp === undefined) throw new Error('the fixture did not load');
+    return corp;
+  }
+
+  const CORP_CONFIG = { issuer: 'https://idp.example', clientId: 'qauth' };
+
+  /** The realm's row of the fixture plugin `corp`, its client secret stored. */
+  function corpRow(config: Record<string, unknown>) {
+    return {
+      ...rowWith(config),
+      pluginId: 'corp',
+      pluginPackage: '@example/corp',
+      pluginType: 'corp_sso',
+    };
+  }
+
+  it('refuses to keep the secret when the stored destination cannot be told', async () => {
+    const plugin = await tenantPreset();
+    // A stored config the schema no longer takes.
+    expect(
+      await refusal(() =>
+        requireKeptSecretsAtDestination(
+          plugin,
+          rowWith({ ...STORED, tenant: 'Not A Tenant' }),
+          STORED,
+          {},
+          KEPT
+        )
+      )
+    ).toBeInstanceOf(BadRequestError);
+    // The same config with a hook that answers a string is kept, so the
+    // refusals below are the hook's own.
+    const answering = await corpWithHook(() => 'same');
+    await expect(
+      requireKeptSecretsAtDestination(answering, corpRow(CORP_CONFIG), CORP_CONFIG, {}, KEPT)
+    ).resolves.toBeUndefined();
+    // A hook that throws, or answers no string.
+    for (const hook of [
+      () => {
+        throw new Error('a hook bug');
+      },
+      () => 42,
+    ]) {
+      const corp = await corpWithHook(hook);
+      expect(
+        await refusal(() =>
+          requireKeptSecretsAtDestination(corp, corpRow(CORP_CONFIG), CORP_CONFIG, {}, KEPT)
+        )
+      ).toBeInstanceOf(BadRequestError);
+    }
+  });
+
+  // Review of #1056: the stored config's destination is read with the secret
+  // values it was stored with, so a secret member the plugin routes by,
+  // replaced while another secret is kept, is seen to move the kept one.
+  it('reads the stored destination with the stored secrets, so a replaced routing secret moves a kept one', async () => {
+    const schema = z.object({
+      issuer: z.url(),
+      clientId: z.string().min(1),
+      clientSecret: z.string().min(1).meta({ writeOnly: true }),
+      routingKey: z.string().min(1).meta({ writeOnly: true }),
+    });
+    const runtime = await loadDeploymentAuthMethodPlugins(
+      { info: () => undefined, warn: () => undefined },
+      { packages: ['@example/corp'], pluginApiEnabled: true, nodeEnv: 'test' },
+      {
+        importPackage: fixturePluginImporter({
+          '@example/corp': {
+            authMethod: {
+              ...fixturePluginMethod({ type: 'corp_sso', id: 'corp' }),
+              configSchema: schema,
+              secretDestination: (config: z.output<typeof schema>) =>
+                `${config.issuer}|${config.routingKey}`,
+            },
+          },
+        }),
+      }
+    );
+    const [routed] = runtime.installed;
+    if (routed === undefined) throw new Error('the fixture did not load');
+    expect(routed.secretPaths).toEqual(['clientSecret', 'routingKey']);
+    const row = {
+      ...corpRow(CORP_CONFIG),
+      secrets: { clientSecret: SEALED, routingKey: SEALED },
+    };
+    const replaced = { routingKey: { sealed: SEALED } };
+    const after = new Map([
+      ['clientSecret', SECRET],
+      ['routingKey', 'routing-key-the-admin-chose'],
+    ]);
+    // The routing key replaced with another value, the client secret kept.
+    const error = await refusal(() =>
+      requireKeptSecretsAtDestination(routed, row, CORP_CONFIG, replaced, {
+        after,
+        openStored: async (path) => (path === 'routingKey' ? 'the-stored-routing-key' : SECRET),
+      })
+    );
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect((error as Error).message).not.toContain('routing-key');
+    // Replaced with the value it held: the kept secret goes nowhere new.
+    await expect(
+      requireKeptSecretsAtDestination(routed, row, CORP_CONFIG, replaced, {
+        after,
+        openStored: async (path) =>
+          path === 'routingKey' ? 'routing-key-the-admin-chose' : SECRET,
+      })
+    ).resolves.toBeUndefined();
+    // A stored value that does not open: the stored destination cannot be told.
+    expect(
+      await refusal(() =>
+        requireKeptSecretsAtDestination(routed, row, CORP_CONFIG, replaced, {
+          after,
+          openStored: async () => {
+            throw new Error('the ciphertext does not open');
+          },
+        })
+      )
+    ).toBeInstanceOf(BadRequestError);
+  });
+
+  it('holds a plugin with the hook to the URL rule too, which the hook never lifts', async () => {
+    const moved = { ...CORP_CONFIG, issuer: 'https://attacker.example' };
+    const urlRule =
+      'The configuration sends the plugin to a new destination (a member that holds a URL is new or names another origin), and the stored secret "clientSecret" was set for the old one: seal it again with secrets.seal and send it under secrets';
+    // A hook that names the same destination whatever the config: the URL
+    // rule still refuses an issuer on another origin.
+    const hooked = await corpWithHook(() => 'same');
+    await expect(
+      requireKeptSecretsAtDestination(hooked, corpRow(CORP_CONFIG), moved, {}, KEPT)
+    ).resolves.toBeUndefined();
+    const [plain] = await installed();
+    expect(plain.method.secretDestination).toBeUndefined();
+    for (const plugin of [hooked, plain]) {
+      const error = await refusal(() =>
+        requireKeptSecretsStay(plugin, corpRow(CORP_CONFIG), moved, {})
+      );
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect((error as Error).message).toBe(urlRule);
+      // Nothing moved, or the secret set again: kept, or not kept at all.
+      expect(() =>
+        requireKeptSecretsStay(plugin, corpRow(CORP_CONFIG), CORP_CONFIG, {})
+      ).not.toThrow();
+      expect(() =>
+        requireKeptSecretsStay(plugin, corpRow(CORP_CONFIG), moved, {
+          clientSecret: { sealed: SEALED },
+        })
+      ).not.toThrow();
+    }
+    // A plugin without the hook is left to the URL rule alone.
+    await expect(
+      requireKeptSecretsAtDestination(plain, corpRow(CORP_CONFIG), moved, {}, KEPT)
+    ).resolves.toBeUndefined();
   });
 });
 

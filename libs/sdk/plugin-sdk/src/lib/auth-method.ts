@@ -104,6 +104,30 @@ export interface AuthMethod<TConfig = unknown, TTransaction = unknown> extends C
     request: UpstreamStartRequest,
     context: AuthMethodContext<TConfig>
   ): Promise<UpstreamStart<TTransaction>>;
+  /**
+   * Where the config's secret members are sent, as a stable string: equal
+   * for two configs that send them to the same place, and different when
+   * the place changes. An upstream OpenID Connect method names its issuer
+   * and a token endpoint set by hand, for example, as a digest. Optional.
+   *
+   * An admin API that keeps a stored secret across a configure compares it
+   * for the stored config and for the new one: when they differ, the secret
+   * must be sent again, so it never follows a destination it was not set
+   * for. It adds to the host's own rule, which holds every method and
+   * never lifts: that rule reads only the URLs among the plain members and
+   * compares their origins, so a method whose destination depends on any
+   * other member (a tenant that shapes the issuer's path) or on a URL's
+   * path needs the hook.
+   *
+   * The host calls it with a config `configSchema` parsed, its secret
+   * members in place, and never logs, stores or answers the result, which
+   * still should not hold a secret's value. It must be pure and must not
+   * throw for a parsed config; a call that throws or answers anything but
+   * a string counts as a new destination.
+   *
+   * @experimental
+   */
+  secretDestination?(config: TConfig): string;
 }
 
 /**
