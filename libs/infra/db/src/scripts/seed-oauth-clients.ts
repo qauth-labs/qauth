@@ -291,6 +291,18 @@ function reportCimdGrants(realm: string, granted: CimdGrantResult[]): void {
         '\n'
     );
   }
+
+  // #956: an entry without the list removes the row's, which closes the
+  // grant here but opens it on a node of an earlier release.
+  for (const g of granted) {
+    if (g.removedClientCredentialsScopes === undefined) continue;
+    console.error(
+      `${g.clientId}: removed client_credentials_scopes ${JSON.stringify(g.removedClientCredentialsScopes)}, ` +
+        'which the entry does not list. The client_credentials grant now issues this CIMD client no ' +
+        'token; a node of an earlier release issues it every scope of scopes. To keep the list, add ' +
+        'it to the entry and run the seed again.\n'
+    );
+  }
 }
 
 main().catch((err) => {

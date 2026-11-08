@@ -216,7 +216,7 @@ describe('applyCimdClientGrant (real Postgres)', () => {
       ...spec,
       client_credentials_scopes: ['ssf:stream'],
     });
-    expect(opened.status).toBe('updated');
+    expect(opened).toEqual({ clientId: CLIENT_ID, status: 'updated' });
     const after = await row(r.id);
     expect(after.clientCredentialsScopes).toEqual(['ssf:stream']);
     expect(withoutGrant(after)).toEqual(withoutGrant(before));
@@ -228,7 +228,11 @@ describe('applyCimdClientGrant (real Postgres)', () => {
     expect(again.status).toBe('unchanged');
 
     const closed = await applyCimdClientGrant(db(), r.id, spec);
-    expect(closed.status).toBe('updated');
+    expect(closed).toEqual({
+      clientId: CLIENT_ID,
+      status: 'updated',
+      removedClientCredentialsScopes: ['ssf:stream'],
+    });
     expect((await row(r.id)).clientCredentialsScopes).toBeNull();
   });
 

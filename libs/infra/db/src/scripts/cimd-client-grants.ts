@@ -35,6 +35,14 @@ export type CimdGrantStatus = 'created' | 'updated' | 'unchanged' | 'not_cimd';
 export interface CimdGrantResult {
   clientId: string;
   status: CimdGrantStatus;
+  /**
+   * The `client_credentials_scopes` list the row held and this run removed,
+   * because the entry has none (#956). Removing it closes the grant on this
+   * release, but a node of an earlier release reads NULL as any scope of
+   * `scopes`, and a list set by hand before the manifest could carry one is
+   * easy to lose this way, so the seed says so.
+   */
+  removedClientCredentialsScopes?: string[];
 }
 
 /** Any drizzle node-postgres database, whatever schema generic it was built with. */
@@ -153,6 +161,13 @@ export async function applyCimdClientGrant(
         updatedAt: sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`,
       })
       .where(eq(oauthClients.id, existing.id));
-    return { clientId: spec.client_id, status: 'updated' as const };
+    const removed = existing.clientCredentialsScopes;
+    return clientCredentialsScopes === null && Array.isArray(removed)
+      ? {
+          clientId: spec.client_id,
+          status: 'updated' as const,
+          removedClientCredentialsScopes: [...removed],
+        }
+      : { clientId: spec.client_id, status: 'updated' as const };
   });
 }
