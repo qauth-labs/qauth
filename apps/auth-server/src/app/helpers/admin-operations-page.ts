@@ -20,7 +20,7 @@ export const SECURITY_OPERATIONS_PAGE_PATH =
   'apps/docs-site/src/content/docs/reference/security-operations.md';
 
 /** The date the page's hand-written prose was last checked; change it with the prose. */
-export const SECURITY_OPERATIONS_PAGE_LAST_VERIFIED = '2026-10-31';
+export const SECURITY_OPERATIONS_PAGE_LAST_VERIFIED = '2026-11-08';
 
 /** Where the registry lives, as the page names it. */
 const REGISTRY_PATH = 'apps/auth-server/src/app/helpers/admin-operations.ts';
@@ -53,7 +53,11 @@ function effectTable(): string {
 
 function operationRow(operation: AdminOperation): string {
   const decided = operation.classify === undefined ? '' : ' Decided per request.';
-  return `| ${code(operation.id)} | ${operation.class} | ${codeList(operation.effects)} | ${codeList(operation.permissions)} | ${tableCell(operation.description + decided)} |`;
+  const sealed =
+    operation.secretMembers === undefined
+      ? ''
+      : ` Takes ${codeList(operation.secretMembers)} only sealed.`;
+  return `| ${code(operation.id)} | ${operation.class} | ${codeList(operation.effects)} | ${codeList(operation.permissions)} | ${tableCell(operation.description + decided + sealed)} |`;
 }
 
 /** The Operations section: a table, or a sentence when none is registered. */
@@ -204,6 +208,21 @@ operation of the OpenAPI document as \`x-qauth-effects\`
   Zod query schema if it has one. Its handler reads only the parsed path parameters, query and
   body, and those schemas are deterministic: no default a parse makes up anew, such as a random id
   or the current time, since the filed request and its retry are parsed apart.
+- A security operation takes a secret only sealed. An approval keeps \`op_hash\`, a digest of the
+  request it binds, with its nonce, and a copy of the approvals table taken while it is open (a
+  dump, a replica, a WAL archive) lets anyone test a guessed body against them; so a secret, such
+  as a password or a client secret, is never in a security operation's body in the clear. The
+  operation declares the members of its body that carry one (\`secretMembers\`, JSON Pointers in
+  which \`*\` stands for every member of a record or item of an array), each takes
+  \`{ "sealed": … }\` (\`SEALED_VALUE_SCHEMA\`), and the admin listener refuses to boot its route
+  when its body schema holds a declared member to any other schema. A caller seals the value first
+  with \`secrets.seal\`, which encrypts it with the realm's \`data_at_rest\` key for that
+  operation and member, changes nothing and records no value. The handler opens it only for its
+  own operation, that member and the realm, and refuses one sealed for any other with 400. The
+  operation's renderer names a secret member and never shows its sealed value: an approval whose
+  renderer does is never filed. The listener cannot tell a secret from a plain string by its
+  schema, so a member the operation does not declare is not checked: the operation that sets a
+  secret declares it.
 - A security operation's handler makes an effect outside the database, such as a KMS or KEK call,
   a mail or an outbound request, only through a record its transaction writes and that is acted
   on after the commit (an outbox), or after the commit itself. An operation that rolls back leaves

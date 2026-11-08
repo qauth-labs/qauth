@@ -3,7 +3,7 @@ title: API conventions
 description: The rules every route of the admin, account and developer APIs follows — paths, names, errors, paging, concurrency, OpenAPI extensions and versioning.
 sidebar:
   order: 3
-lastVerified: '2026-11-02'
+lastVerified: '2026-11-08'
 ---
 
 QAuth has three API families: admin, account and developer
@@ -283,15 +283,44 @@ path parameter, query, realm or requester finds no approval; and the challenge a
 factor signs is derived from it, so an approval given for one filing approves nothing else.
 
 **What an approval keeps.** The operation's method, path parameters and query, what its approver
-is shown (below), `op_hash` and the nonce, never the body, which may hold a secret such as a
-password the operation sets, and no hash of the request without the nonce, which would let anyone
-with a copy of the table test a guessed body against it. Once the approval is consumed, cancelled,
-denied or expired, its nonce is overwritten with random bytes, so neither its `op_hash` nor the
-audit log's copy of it can be tested against a guess any more. The overwrite is a new row version:
-a dump, replica or WAL archive taken while the approval was open still holds the old nonce beside
-`op_hash`, and with both a guessed body can still be tested. A secret that can be guessed, such as a
-short password, is therefore safe in a security operation's body only as long as those copies are;
-the plugin operations take theirs sealed (`plugins.secrets.seal`), which no guess reaches.
+is shown (below), `op_hash` and the nonce, never the body, and no hash of the request without the
+nonce, which would let anyone with a copy of the table test a guessed body against it. Once the
+approval is consumed, cancelled, denied or expired, its nonce is overwritten with random bytes, so
+neither its `op_hash` nor the audit log's copy of it can be tested against a guess any more. The
+overwrite is a new row version: a dump, replica or WAL archive taken while the approval was open
+still holds the old nonce beside `op_hash`, and with both a guessed body can still be tested. For a
+secret that residual is closed: a security operation takes a secret only sealed (below), so the
+body it binds holds a ciphertext, which no guess reaches, and never a password or a client secret
+in the clear. The rest of a body, such as a plain config value, can still be tested against those
+copies, and holds nothing secret.
+
+**Secrets in a security operation's request.** A security operation that sets a secret declares
+the members of its body that carry one, and each takes a sealed value, `{ "sealed": "v1.…" }`,
+never the secret: the admin listener refuses to boot a security operation whose body schema holds
+a declared secret member to any other schema. The [Security operations](/reference/security-operations/#operations)
+page lists each operation's secret members. The client seals each value first:
+
+1. `POST /admin/v1-rc.0/realms/{realmId}/secrets/seal` (`secrets.seal`) with the operation, the
+   member, a JSON Pointer into the operation's body that the operation declares secret, and the
+   value. It needs the write permission `secrets.seal`, changes nothing and records no value.
+2. The answer holds the value encrypted with the realm's `data_at_rest` key, bound to that
+   operation, that member and the realm. No response, audit row or log line holds the value.
+3. The request carries `{ "sealed": … }` at the member, and is filed, approved and sent as any
+   other.
+
+```http
+POST /admin/v1-rc.0/realms/{realmId}/secrets/seal
+{ "operation": "plugins.update", "member": "/secrets/clientSecret", "value": "…" }
+→ 200 { "operation": "plugins.update", "member": "/secrets/clientSecret", "sealed": "v1.…" }
+```
+
+The operation's handler opens a sealed value only for its own operation, that member and the
+realm: one sealed for another operation, another member or another realm, or changed, is refused
+with 400 `bad_request`. A handler that keeps the secret stores it sealed again under a context of
+its own, so the value the approval bound never opens as a stored secret. The operation's renderer
+names a secret member and never shows its sealed value; an approval whose renderer shows one is
+never filed. The listener cannot tell a secret from a plain string by its schema: the operation
+that sets a secret declares it.
 
 **What a security operation's route and handler must do.** The admin listener refuses to boot a
 security operation's route that cannot be bound this way: it needs a renderer, one method, a Zod

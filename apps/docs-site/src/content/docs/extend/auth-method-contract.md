@@ -3,7 +3,7 @@ title: The AuthMethod contract
 description: The experimental plugin API for sign-in methods — what an AuthMethod adds to CredentialProvider, the upstream step it serves, what a method is handed, where its routes mount, the test kit that checks a method against the contract, and how to write a plugin in its own repository with @qauth-labs/plugin-sdk.
 sidebar:
   order: 6
-lastVerified: '2026-11-07'
+lastVerified: '2026-11-08'
 experimental: true
 ---
 
@@ -175,12 +175,13 @@ request's logger with the plugin's name. The context signs and decrypts as `api`
 `signClientAssertion`, and among the stored secrets it may decrypt are a plugin secret's
 `auth-method-plugin:<plugin>:<package>:<type>:<path>` contexts, beside a realm's mail secrets and
 an upstream OpenID Connect client's secret. `web`, which serves a plugin's routes, may neither decrypt nor sign
-a client assertion, and `local` would open every stored secret. The admin API seals a plugin
-secret as `local`, as the realm secret store does, and opens a stored or sealed one as `api`. In a
-single deployment every role shares the signer's process. A deployment that runs the signer apart
-(#497) still needs a grant for the admin API, since the signer service takes the role from the
-caller's certificate and never accepts `local` from a peer; until then a process without the
-signer refuses the call.
+a client assertion, and `local` would open every stored secret. The admin API seals a value for a
+configure (`secrets.seal`) and opens it as `admin`, whose grant encrypts and decrypts only
+`admin-sealed-value:` contexts; it stores a plugin secret sealed again as `local`, as the realm
+secret store does, and opens a stored one as `api`. In a single deployment every role shares the
+signer's process. A deployment that runs the signer apart (#497) still needs a grant for the admin
+API's storing, since the signer service takes the role from the caller's certificate and never
+accepts `local` from a peer; until then a process without the signer refuses the call.
 
 ## Routes
 
@@ -316,7 +317,7 @@ are left out of the OpenAPI documents.
 
 **Per realm**, every plugin starts off. The admin API's plugin operations, under
 `/admin/v1-rc.0/realms/{realmId}/plugins`, list the installed plugins with the realm's state of
-each (`plugins.list`, `plugins.get`), seal a secret value (`plugins.secrets.seal`), replace a
+each (`plugins.list`, `plugins.get`), replace a
 plugin's config (`plugins.update`, `POST …/plugins/{plugin}/config`) and turn it on and off
 (`plugins.enable`, `plugins.disable`). `{plugin}` is the plugin's `id`. The three writes change
 which upstream credentials sign users in, so each is a
@@ -328,19 +329,25 @@ approval binds it and the approver sees it, and a state that moved since answers
 configures never overwrite each other unseen, and an approved enable never turns on a config its
 approver never saw. Each may carry `If-Match` too.
 
-**Secrets.** A secret's value reaches the server in one request only: `plugins.secrets.seal`
-(`POST …/plugins/{plugin}/secrets/seal`, `{ path, value }`), which encrypts it with the realm's
-`data_at_rest` key, bound to that plugin and member, and answers the ciphertext. It changes
-nothing, so it is a write under `plugins.write`. A configure request then sends the plain members
+**Secrets.** A plugin's secret members follow the rule of every security operation: the operation
+takes a secret only sealed ([API conventions](/reference/api-conventions/#approvals)). A secret's
+value reaches the server in one request only: `secrets.seal`
+(`POST /admin/v1-rc.0/realms/{realmId}/secrets/seal`), for the operation `plugins.update` and the
+member `/secrets/<path>`, which encrypts it with the realm's `data_at_rest` key, bound to that
+operation, member and realm, and answers the ciphertext. It changes nothing, so it is a write
+under `secrets.seal`. A configure request then sends the plain members
 under `config` and names each secret member under `secrets`, by path: `{ sealed }` sets one to the
 sealed value, `null` clears it, and one it does not name keeps its value, unless the configure
 sends the plugin somewhere new: a configure that keeps a stored secret while a member whose value
 is an http(s) URL is added or changes origin is refused with `400`, naming the secrets to seal
 again, so a kept secret never follows a destination it was not set for (as the upstream OpenID
 Connect client refuses a changed issuer or token endpoint). So the request an
-approval stores until it is used, and the digests it is bound by, hold a ciphertext, never the
-value. The handler checks that each sealed value opens for its member of this plugin in this
-realm, and the whole config, secrets included, must pass the plugin's own schema; a plugin is
+approval stores until it is used, and the digest it is bound by, hold a ciphertext, never the
+value. The handler opens each sealed value for `plugins.update`, its member and this realm (a
+value sealed for another operation, member or realm is refused with `400`), and stores it sealed
+again under the plugin's own context, bound to the plugin, its package and type, and the member:
+what the approval bound is never what is stored. The whole config, secrets included, must pass the
+plugin's own schema; a plugin is
 enabled only with a config that does. A secret member sent under `config`, however it is spelled,
 is refused. No response, audit row, event or log line holds a value: the representation says only
 which secret members hold one, and the audit row of a configure names the secrets it set or
@@ -348,9 +355,9 @@ cleared. A member that a newer version of a plugin marks secret is never shown o
 plugin from the plain config an older version stored, and leaves it at the next write.
 
 ```http
-POST /admin/v1-rc.0/realms/{realmId}/plugins/corp-sso/secrets/seal
-{ "path": "clientSecret", "value": "…" }
-→ 200 { "path": "clientSecret", "sealed": "v1.…" }
+POST /admin/v1-rc.0/realms/{realmId}/secrets/seal
+{ "operation": "plugins.update", "member": "/secrets/clientSecret", "value": "…" }
+→ 200 { "operation": "plugins.update", "member": "/secrets/clientSecret", "sealed": "v1.…" }
 
 POST /admin/v1-rc.0/realms/{realmId}/plugins/corp-sso/config
 QAuth-Approval: {approvalId}

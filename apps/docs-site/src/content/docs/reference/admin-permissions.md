@@ -57,18 +57,18 @@ grants reach that scope's class, through a client that lists the admin API's aud
 
 ## Permissions
 
-| Permission                 | Class    | Scope                  | Resource          | Description                                                                                                                     |
-| -------------------------- | -------- | ---------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `realms.read`              | read     | `qauth:admin:read`     | `realms`          | Read a realm's representation, with its settings and policies.                                                                  |
-| `realms.export`            | read     | `qauth:admin:read`     | `realms`          | Export a realm's configuration as a realm file, which holds no secret value.                                                    |
-| `realms.import.plan`       | read     | `qauth:admin:read`     | `realms`          | Compute the dry-run plan of a realm-file import: every change it would make and the permissions each needs. It applies nothing. |
-| `realms.policies.write`    | write    | `qauth:admin:write`    | `realms.policies` | Change a realm policy whose change is not a security operation, such as a token lifespan.                                       |
-| `realms.policies.security` | security | `qauth:admin:security` | `realms.policies` | Change a realm policy whose change is a security operation, such as loosening the sign-in methods or the password policy.       |
-| `plugins.read`             | read     | `qauth:admin:read`     | `plugins`         | Read the AuthMethod plugins installed in the deployment and a realm's state of each, never a secret value (#600).               |
-| `plugins.write`            | write    | `qauth:admin:write`    | `plugins`         | Seal a value for an AuthMethod plugin's secret member: it changes nothing until a security admin sets it (#600).                |
-| `plugins.security`         | security | `qauth:admin:security` | `plugins`         | Enable, configure and disable an AuthMethod plugin in a realm: each changes which upstream credentials sign users in (#600).    |
-| `approvals.read`           | read     | `qauth:admin:read`     | `approvals`       | Read the approval requests of security operations and where each one stands.                                                    |
-| `approvals.approve`        | security | `qauth:admin:security` | `approvals`       | Approve another admin's security operation, with a fresh passkey.                                                               |
+| Permission                 | Class    | Scope                  | Resource          | Description                                                                                                                                                                        |
+| -------------------------- | -------- | ---------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `realms.read`              | read     | `qauth:admin:read`     | `realms`          | Read a realm's representation, with its settings and policies.                                                                                                                     |
+| `realms.export`            | read     | `qauth:admin:read`     | `realms`          | Export a realm's configuration as a realm file, which holds no secret value.                                                                                                       |
+| `realms.import.plan`       | read     | `qauth:admin:read`     | `realms`          | Compute the dry-run plan of a realm-file import: every change it would make and the permissions each needs. It applies nothing.                                                    |
+| `realms.policies.write`    | write    | `qauth:admin:write`    | `realms.policies` | Change a realm policy whose change is not a security operation, such as a token lifespan.                                                                                          |
+| `realms.policies.security` | security | `qauth:admin:security` | `realms.policies` | Change a realm policy whose change is a security operation, such as loosening the sign-in methods or the password policy.                                                          |
+| `plugins.read`             | read     | `qauth:admin:read`     | `plugins`         | Read the AuthMethod plugins installed in the deployment and a realm's state of each, never a secret value (#600).                                                                  |
+| `plugins.security`         | security | `qauth:admin:security` | `plugins`         | Enable, configure and disable an AuthMethod plugin in a realm: each changes which upstream credentials sign users in (#600).                                                       |
+| `secrets.seal`             | write    | `qauth:admin:write`    | `secrets`         | Seal a value for a security operation's secret member in a realm: it changes nothing, and the operation that sets the value still needs its own permission and an approval (#984). |
+| `approvals.read`           | read     | `qauth:admin:read`     | `approvals`       | Read the approval requests of security operations and where each one stands.                                                                                                       |
+| `approvals.approve`        | security | `qauth:admin:security` | `approvals`       | Approve another admin's security operation, with a fresh passkey.                                                                                                                  |
 
 A permission has exactly one class. A permission that performs a security operation has an id of
 its own and the class `security`; it never shares an id with a write permission, so no custom
@@ -76,11 +76,11 @@ role reaches a security operation through `qauth:admin:write`.
 
 ## Built-in roles
 
-| Role             | Classes               | Permissions                                                                                                                                                                                           | Description                                                     |
-| ---------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `viewer`         | read                  | `realms.read`, `realms.export`, `realms.import.plan`, `plugins.read`, `approvals.read`                                                                                                                | Reads everything an admin can read.                             |
-| `editor`         | read, write           | `realms.read`, `realms.export`, `realms.import.plan`, `realms.policies.write`, `plugins.read`, `plugins.write`, `approvals.read`                                                                      | Reads, and makes every change that is not a security operation. |
-| `security-admin` | read, write, security | `realms.read`, `realms.export`, `realms.import.plan`, `realms.policies.write`, `realms.policies.security`, `plugins.read`, `plugins.write`, `plugins.security`, `approvals.read`, `approvals.approve` | Reads, makes every change, and performs security operations.    |
+| Role             | Classes               | Permissions                                                                                                                                                                                          | Description                                                     |
+| ---------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `viewer`         | read                  | `realms.read`, `realms.export`, `realms.import.plan`, `plugins.read`, `approvals.read`                                                                                                               | Reads everything an admin can read.                             |
+| `editor`         | read, write           | `realms.read`, `realms.export`, `realms.import.plan`, `realms.policies.write`, `plugins.read`, `secrets.seal`, `approvals.read`                                                                      | Reads, and makes every change that is not a security operation. |
+| `security-admin` | read, write, security | `realms.read`, `realms.export`, `realms.import.plan`, `realms.policies.write`, `realms.policies.security`, `plugins.read`, `plugins.security`, `secrets.seal`, `approvals.read`, `approvals.approve` | Reads, makes every change, and performs security operations.    |
 
 - Built-in roles are defined in code, by class, and cannot be edited. A permission added to the
   catalog joins every built-in role of its class.
@@ -94,7 +94,9 @@ role reaches a security operation through `qauth:admin:write`.
 
 ## Retired permissions
 
-No permission has been retired.
+| Permission      | Class | Retired in | Description                                                                                                                                  |
+| --------------- | ----- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugins.write` | write | v0.3.0     | Seal a value for an AuthMethod plugin's secret member (#600); secrets.seal, which seals for every security operation, took its place (#984). |
 
 ## Stability
 

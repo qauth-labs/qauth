@@ -13,6 +13,7 @@
     "plugins.read",
     "plugins.write",
     "plugins.security",
+    "secrets.seal",
     "approvals.read",
     "approvals.approve"
   ],
@@ -112,6 +113,12 @@
           "enum": [
             "write"
           ]
+        },
+        "retiredIn": {
+          "type": "string",
+          "enum": [
+            "v0.3.0"
+          ]
         }
       }
     },
@@ -125,6 +132,20 @@
           "type": "string",
           "enum": [
             "security"
+          ]
+        }
+      }
+    },
+    "secrets.seal": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "write"
           ]
         }
       }
