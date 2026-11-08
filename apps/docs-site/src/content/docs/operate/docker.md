@@ -3,7 +3,7 @@ title: Docker Guide
 description: Running QAuth with Docker Compose — production and development, service details, and troubleshooting.
 sidebar:
   order: 1
-lastVerified: '2026-11-03'
+lastVerified: '2026-11-08'
 ---
 
 This guide covers the Docker setup for QAuth: **production** (prod build, no watch) and **development** (dev image, Compose Watch + `nx serve --watch`).
@@ -615,13 +615,37 @@ A CIMD client starts with no scopes, so it is granted none of the scopes it asks
 ```
 
 - Write `client_id` exactly as the client sends it: an `https` URL of at most 255 ASCII characters, with a path beyond `/` and no fragment.
-- An entry sets only `scopes` and `audience`. `audience` is the token audience when the client names no `resource`. An empty `scopes` list withdraws the grant.
+- An entry sets only `scopes`, `audience` and `client_credentials_scopes` (below). `audience` is the token audience when the client names no `resource`. An empty `scopes` list withdraws the grant.
 - `audience` cannot hold a value in the reserved `urn:qauth:aud:` namespace, such as the developer API's `urn:qauth:aud:developer:v1-rc.0`: a CIMD client never gets an API family audience ([API conventions](/reference/api-conventions/#issuing-a-family-audience)). A `clients` entry may list one, and the token endpoint then issues it to that client.
 - An entry has no secret, so the seed prints none and `--rotate` does not apply. Every run sets the row to the entry's values and leaves the rest of it alone.
 - Until the client's first authorization, its row has no redirect URI. That authorization reads the document and fills the row in, and later re-resolutions never change the grant.
 - The grant is a ceiling: the user still consents, for each resource.
 - The seed refuses an entry whose `client_id` belongs to a client that is not a CIMD client, and changes nothing for it.
 - The client resolves only while its realm's CIMD policy is on and the realm's trust policy accepts its host.
+
+##### Tokens a CIMD client gets as itself
+
+A document that declares `token_endpoint_auth_method: private_key_jwt` and a key set (`jwks` or `jwks_uri`) may also declare the `client_credentials` grant. A token from that grant names no user: its `sub` is the client's `client_id`. The document's host chooses the grant, not you, while `scopes` holds what you granted the client for its users. So the grant issues a CIMD client no token until its entry lists the scopes it may get as itself, out of `scopes`, in `client_credentials_scopes`:
+
+```json
+{
+  "realm": "master",
+  "cimd_clients": [
+    {
+      "client_id": "https://client.example.com/oauth/metadata.json",
+      "scopes": ["notes:read", "ssf:stream"],
+      "client_credentials_scopes": ["ssf:stream"],
+      "audience": ["https://auth.example.com"]
+    }
+  ]
+}
+```
+
+- Without the list, the token endpoint refuses every `client_credentials` request of the client with `invalid_scope`; for a scope in `scopes`, the event reason is `scope_not_allowed_for_grant`. With it, the client gets a token of its own for the listed scopes only, and the scopes its users grant it, `notes:read` here, reach only the tokens a user granted.
+- List only scopes a token without a user may carry, such as `ssf:stream` for a relying party that manages its [SSF stream](/operate/ssf-transmitter/#register-a-receiver). A resource server that does not check `sub` may act on such a token for every user.
+- The seed refuses a scope that `scopes` does not hold and an empty list. It cannot check the grant: the document may add or drop `client_credentials` at any resolution, and the list applies whenever it does.
+- Each run writes the list to the row, without `--rotate`, as it writes `scopes`. An entry without the list removes it, which closes the grant again. A resolution of the document never changes the list.
+- The token endpoint reads the row on every request, so the next token request follows the list. A token issued before keeps its scopes until it expires.
 
 ### Redirect URI schemes for native apps
 

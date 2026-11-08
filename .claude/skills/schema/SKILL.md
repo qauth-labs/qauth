@@ -174,7 +174,8 @@ as `external_sub`; their `credential_data` shape belongs to
 `oauth_clients.webauthn_allowed_origins` is operator-set (seed manifest only).
 So is `oauth_clients.client_credentials_scopes` (migration 0051, #891): the
 scopes the `client_credentials` grant may issue, out of `scopes`; NULL means
-any of them, and `UpdateOAuthClient` excludes it.
+any of them, except on a CIMD client, where NULL means none (#956) and the
+`cimd_clients` entry sets the list, and `UpdateOAuthClient` excludes it.
 
 See `libs/infra/db/src/qauth-schema.dbml` for the full visual schema.
 

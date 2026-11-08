@@ -112,6 +112,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pnpm nx test docs-checks -- -u`, which replaces the libraries' own
   `test -- -u`. Run `pnpm install` once, for the new project.
 
+### Fixed
+
+- **A CIMD client gets no token without a user unless the operator allowed
+  it** ([#956]). A CIMD client's grant types are its metadata document's, so
+  a document with `private_key_jwt` and a key set gave its client
+  `client_credentials`, chosen by the document's host, while its `scopes` are
+  the operator's grant for its users. With no `client_credentials_scopes`
+  ([#891]) that grant issued any of them in a token whose `sub` is the
+  client's `client_id` and that names no user, and only a hand-written SQL
+  update could narrow it. For a CIMD client NULL now issues nothing: the
+  token endpoint refuses every scope on `client_credentials` with
+  `invalid_scope` (event reason `scope_not_allowed_for_grant`). A
+  `cimd_clients` entry of the seed manifest takes `client_credentials_scopes`,
+  a non-empty list out of its `scopes`, and every seeder run writes it, or
+  NULL for an entry without it; a CIMD resolution writes NULL on a new row and
+  never changes the list of an existing one. Other clients keep NULL as any
+  scope of `scopes`. The CIMD section of the Docker guide and the **SSF
+  transmitter** page say how to set the list.
+
+  **Action for operators**: a CIMD client that gets `client_credentials`
+  tokens today gets `invalid_scope` once a node runs this release. If it
+  should keep them, add the scopes it needs as itself to its `cimd_clients`
+  entry's `client_credentials_scopes` and run this release's
+  `db:seed-oauth-clients`, the first that accepts the field. A node of the
+  previous release already narrows a client's grant to its list ([#891]), so
+  the list holds on every node once it is written. Until every node runs
+  this release, a node of the previous release still issues every scope of
+  `scopes` to a CIMD client without the list.
+
 ## [0.2.2] - 2026-11-08
 
 A patch release that carries breaking changes, as a 0.x release may (see the
@@ -3930,6 +3959,7 @@ It adds migrations 0068 and 0069.
 [#933]: https://github.com/qauth-labs/qauth/issues/933
 [#949]: https://github.com/qauth-labs/qauth/issues/949
 [#951]: https://github.com/qauth-labs/qauth/issues/951
+[#956]: https://github.com/qauth-labs/qauth/issues/956
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
 [#964]: https://github.com/qauth-labs/qauth/issues/964
