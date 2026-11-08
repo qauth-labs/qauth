@@ -15,6 +15,7 @@ import {
   type UpstreamOidcConfigInput,
   upstreamOidcConfigSchema,
 } from './config';
+import { upstreamClientSecretDestination } from './stored-config';
 import { upstreamOidcClientMethod, type UpstreamOidcTransaction } from './upstream-oidc-method';
 
 /**
@@ -45,11 +46,16 @@ import { upstreamOidcClientMethod, type UpstreamOidcTransaction } from './upstre
  *   ones `upstreamConfig` makes for a config, checked when the config is
  *   parsed, and the ones the discovery document names, checked at every
  *   use. Whatever a realm's admin configures, the secret goes to that
- *   provider's origins and to no other host. Within them it is not bound to
- *   a tenant: a member that shapes the issuer's path (a tenant, a region)
- *   may change while the stored secret is kept, where the generic client
- *   asks for the secret again. A provider whose host an admin chooses is
- *   the generic client's, not a preset's.
+ *   provider's origins and to no other host. A provider whose host an admin
+ *   chooses is the generic client's, not a preset's;
+ * - **its destination** (#1031): within those origins, the method's
+ *   `secretDestination` names the issuer and the token endpoint set by hand
+ *   that `upstreamConfig` makes for a config, as the digest the generic
+ *   client binds its secret to (`upstreamClientSecretDestination`). The admin
+ *   API compares it for the stored config and the new one, so a configure
+ *   that changes either (a member that shapes the issuer's path, such as a
+ *   tenant or a region, or a token endpoint's path) must send the secret
+ *   again, as the generic client asks for it again.
  *
  * What it adds to the generic client, it checks when the config is parsed,
  * so the admin API refuses such a config at the configure: a config whose
@@ -303,7 +309,7 @@ export function createUpstreamOidcPresetMethod<TConfig>(
     return problems.length > 0 ? { problems } : { config: parsed.data };
   };
 
-  return upstreamOidcClientMethod({
+  const method = upstreamOidcClientMethod({
     id,
     type,
     display,
@@ -327,6 +333,22 @@ export function createUpstreamOidcPresetMethod<TConfig>(
         throw new Error(`The preset ${type} made a provider config that fails its checks`);
       }
       return resolved.config;
+    },
+  });
+  return Object.freeze({
+    ...method,
+    // Where the client secret goes (#1031): the issuer and the token
+    // endpoint set by hand that the config makes, as the generic client's
+    // stored secret is bound to them. A discovered token endpoint is not part
+    // of it: discovery reads the issuer's own document, on the origins.
+    secretDestination(config: TConfig): string {
+      const resolved = resolve(config);
+      if ('problems' in resolved) {
+        // As in providerConfig: the host passes only a config the schema
+        // above parsed. The host counts a throw as a new destination.
+        throw new Error(`The preset ${type} made a provider config that fails its checks`);
+      }
+      return upstreamClientSecretDestination(resolved.config);
     },
   });
 }

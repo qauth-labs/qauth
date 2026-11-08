@@ -10,7 +10,9 @@
  *   `realm_upstream_providers` row stores it, its client secret sealed with
  *   the server's signer, as the provider administration (#714) will write it;
  * - `examplePresetPackage`: a preset plugin on the generic client (#951), as
- *   a plugin package exports it, for the plugin runtime's suites.
+ *   a plugin package exports it, for the plugin runtime's suites, and
+ *   `exampleTenantPresetPackage`, one whose issuer a tenant member shapes
+ *   (#1031).
  */
 export {
   sealUpstreamOidcConfig,
@@ -23,7 +25,13 @@ export {
   EXAMPLE_PRESET_PACKAGE,
   EXAMPLE_PRESET_SECRET_PATH,
   EXAMPLE_PRESET_TYPE,
+  EXAMPLE_TENANT_PRESET_ID,
+  EXAMPLE_TENANT_PRESET_PACKAGE,
+  EXAMPLE_TENANT_PRESET_SECRET_PATH,
+  EXAMPLE_TENANT_PRESET_TYPE,
   examplePresetPackage,
+  exampleTenantIssuer,
+  exampleTenantPresetPackage,
 } from '@qauth-labs/server-upstream-oidc/src/testing/example-preset';
 export {
   createFakeProvider,

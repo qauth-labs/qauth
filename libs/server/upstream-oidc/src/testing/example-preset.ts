@@ -72,3 +72,77 @@ export function examplePresetPackage(): {
 } {
   return Object.freeze({ authMethod: examplePresetMethod() });
 }
+
+/**
+ * The package name a test loads the tenant preset under (#1031): a preset
+ * whose issuer a member of its config shapes, as a multi-tenant provider's
+ * does.
+ */
+export const EXAMPLE_TENANT_PRESET_PACKAGE = '@qauth-labs/plugin-example-tenant-idp';
+
+/** The tenant preset's AuthMethod id. */
+export const EXAMPLE_TENANT_PRESET_ID = 'example-tenant-idp';
+
+/** The tenant preset's AuthMethod type. */
+export const EXAMPLE_TENANT_PRESET_TYPE = 'example_tenant_idp';
+
+/** Where the tenant preset's secret member sits. */
+export const EXAMPLE_TENANT_PRESET_SECRET_PATH = 'clientSecret';
+
+/**
+ * The tenant preset's config: the tenant, which is no URL and shapes the
+ * issuer's path (`https://idp.example.com/<tenant>`), and a token endpoint an
+ * admin may set by hand on the provider's origin.
+ */
+export const exampleTenantPresetConfigSchema = z.strictObject({
+  tenant: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+  clientId: z.string().min(1).max(MAX_UPSTREAM_CLIENT_ID_LENGTH),
+  clientSecret,
+  /** The tenant's token endpoint, set by hand; discovered when absent. */
+  tokenEndpoint: z.url().max(2048).optional(),
+});
+
+export type ExampleTenantPresetConfig = z.output<typeof exampleTenantPresetConfigSchema>;
+
+/** The tenant's issuer: a path of the provider's one origin. */
+export function exampleTenantIssuer(tenant: string): string {
+  return `${EXAMPLE_PRESET_ISSUER}/${tenant}`;
+}
+
+/** A fresh method of the tenant preset. */
+export function exampleTenantPresetMethod() {
+  return createUpstreamOidcPresetMethod({
+    id: EXAMPLE_TENANT_PRESET_ID,
+    type: EXAMPLE_TENANT_PRESET_TYPE,
+    display: { name: 'Example Tenant IdP' },
+    origins: [EXAMPLE_PRESET_ISSUER],
+    configSchema: exampleTenantPresetConfigSchema,
+    upstreamConfig: (config: ExampleTenantPresetConfig) => {
+      const issuer = exampleTenantIssuer(config.tenant);
+      return {
+        issuer,
+        clientId: config.clientId,
+        clientAuthentication: {
+          method: 'client_secret_basic',
+          clientSecret: config.clientSecret,
+        },
+        ...(config.tokenEndpoint === undefined
+          ? {}
+          : {
+              endpoints: {
+                authorization: `${issuer}/authorize`,
+                token: config.tokenEndpoint,
+                jwks: `${issuer}/jwks`,
+              },
+            }),
+      };
+    },
+  });
+}
+
+/** The tenant preset's package, as `import()` answers it. */
+export function exampleTenantPresetPackage(): {
+  readonly authMethod: ReturnType<typeof exampleTenantPresetMethod>;
+} {
+  return Object.freeze({ authMethod: exampleTenantPresetMethod() });
+}
