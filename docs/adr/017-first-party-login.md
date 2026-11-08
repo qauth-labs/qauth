@@ -186,8 +186,9 @@
 > amendment of the same date). So does an operator's audited verification. Decisions 5 and 8
 > are edited in place:
 >
-> - The account's verified state is its own fact, never read from `email_verified`. A password
->   account's address is one thing the mailbox code proves, not the account's identity.
+> - An account is verified when QAuth proved one of the credentials it holds, whenever the
+>   credential was added, or when an operator verified it. The mailbox code is the password
+>   credential's proof and the address's; it is not the only way to verify the account.
 > - The realm's `accounts.requireVerifiedAccount` decides again whether an unverified account may
 >   finish a sign-in, at every endpoint.
 > - With the gate on, an unverified account is offered the ways to verify it that it can use. A

@@ -1,22 +1,22 @@
-# Dynamic client registration and the owner of an agent (#846; RFC 7591, ADR-015 Decision 8 and question 13, ADR-020
-# §3, ADR-007 §2): POST /oauth/register, from the request that passed its attribution to the response.
+# Dynamic client registration and the owner of an agent (#846; RFC 7591, ADR-015 Decision 8 and question 13 as amended
+# 2026-11-08, ADR-020 §3, ADR-007 §2): POST /oauth/register, from the request that passed its attribution to the response.
 #
 # - A registration that carries a developer's token makes the developer the client's owner (#374); an agent client
 #   (is_agent: true) so attributed makes the developer the owner of an agent, and only a verified account may own one.
-#   An account is verified when its primary identity is proved: the credential that created it, which
-#   user_credentials.is_primary marks and which never moves. Each kind has its own proof, row by row of Decision 8's
-#   table. A credential added later is never read, and REQUIRE_VERIFIED_ACCOUNT, which governs a password account's
-#   sign-in, is not either: no state of this graph depends on it.
+#   An account is verified when QAuth proved a credential it holds, whenever the credential was added: the one that
+#   created the account (user_credentials.is_primary) or any later one. Each kind has its own proof, row by row of
+#   Decision 8's table. REQUIRE_VERIFIED_ACCOUNT, which governs sign-in, is not read: no state of this graph depends on
+#   it.
 # - The rule is decideVerifiedOwner (libs/server/federation/src/providers/verified-owner.ts); the server reads what it
 #   needs for one account (apps/auth-server/src/app/helpers/verified-owner.ts). The agent routes of the Authority Tree
 #   (#721) call the same check.
 # - Exits are the endpoint's RFC 6749 §5.2 error bodies (an OAuth protocol endpoint, #513), named `<error>.<cause>`, one
-#   per distinct cause. The five refusals of an owner answer the same: the answer does not say which proof is missing;
-#   the event user.agent_ownership_refused does, with its reason.
+#   per distinct cause. Both refusals of an owner answer the same: the answer does not say which proof is missing; the
+#   event user.agent_ownership_refused does, with its reason.
 # - A named guard of delurio-graph/0 is a bare expression and cannot carry `source:`, so each guard's anchor is the
 #   `source:` of the transition it decides: the line of the check.
 # - `invoke: { external }` names a store the domain graph holds no entity for: the realm's upstream provider catalog,
-#   the client store and the event store. The read of the primary credential is a domain action (graphs/domain/).
+#   the client store and the event store. The read of the account's credentials is a domain action (graphs/domain/).
 schema: delurio-graph/0
 kind: flow
 id: core.client-registration
@@ -25,13 +25,12 @@ domain: qauth
 title: Register a client, and refuse an agent to an owner who is not verified
 summary: >-
   A client registers itself with POST /oauth/register. An anonymous registration has no owner. One that carries a
-  developer's token is the developer's client; if it is an agent client, QAuth reads the developer's primary
-  credential and refuses, recorded as user.agent_ownership_refused, an account whose primary identity is not proved: a
-  password whose mailbox code was never entered, a passkey whose registration did not check user verification, an
-  upstream account whose provider's verified switch is off or which the realm switched off, a primary credential of a
-  type that proves nothing, or none at all. A wallet credential, which only QAuth's verifier writes, is proved. Then
-  the developer's client count is checked, the client is stored, client.created is recorded and the client's metadata
-  is the answer.
+  developer's token is the developer's client; if it is an agent client, QAuth reads every credential of the
+  developer's account and refuses, recorded as user.agent_ownership_refused, an account none of whose credentials is
+  proved: no password whose mailbox code was entered, no passkey whose registration checked user verification, no
+  wallet credential, and no upstream identity whose provider's verified switch is on; or one that holds no credential
+  at all. Then the developer's client count is checked, the client is stored, client.created is recorded and the
+  client's metadata is the answer.
 
 scope:
   shows: POST /oauth/register past its attribution and its metadata checks, to the response
@@ -46,9 +45,10 @@ scope:
     - 'a failure to record user.agent_ownership_refused, which turns the refusal into a 500 server_error'
     - 'a store failure while the developer’s clients are counted or a client secret is hashed, which answers 500'
     - 'the per-address and per-realm rate limit (429) and the realm resolver (421), which answer before the flow runs'
-    - 'a primary credential whose data is malformed, which proves nothing and is refused as unproved_type'
+    - 'a credential whose data is malformed, or of a type that has no proof, which proves nothing'
     - "an AuthMethod plugin's identity on a process that did not load the plugin (one without the web or admin role):
-      the catalog has no provider of its type, and the identity is refused as upstream_unverified"
+      the catalog has no provider of its type, and the identity proves nothing"
+    - 'a credential of another realm, which is none of the account’s (#489)'
 
 context:
   caller:
@@ -63,36 +63,33 @@ context:
     say:
       agent: 'the metadata says is_agent: true'
       other: 'it does not: the client is no agent'
-  primary:
-    values: [password, passkey, wallet, upstream, other, none]
+  credentials:
+    values: [held, none]
     initial: any
     say:
-      password: "the developer's account was created with a password"
-      passkey: 'with a passkey'
-      wallet: 'with a wallet credential, written only by the verifier of an older release'
-      upstream: "by an upstream provider's sign-in: an oidc_* provider of the realm, or an AuthMethod plugin"
-      other: 'with a credential of a type that proves nothing'
-      none: 'the account holds no primary credential: it was removed, or the backfill had none to mark'
-  address:
-    values: [confirmed, unconfirmed]
+      held: "the developer's account holds at least one credential in the realm"
+      none: 'it holds none: every one was removed'
+  ownProof:
+    values: ['yes', 'no']
     initial: any
     say:
-      confirmed: "the password's mailbox code was entered: email_verified is true on that credential"
-      unconfirmed: 'it was never entered'
-  userVerification:
-    values: [checked, unchecked]
+      'yes':
+        "a credential that needs no provider is proved: a password whose mailbox code was entered (email_verified is
+        true on it), a passkey whose registration checked the UV flag (user_verified is not false on it), or a wallet
+        credential QAuth's verifier wrote; the one that created the account or a later one"
+      'no': 'none is'
+  upstreamHeld:
+    values: ['yes', 'no']
     initial: any
     say:
-      checked:
-        "the passkey's registration checked the UV flag: user_verified is not false on that credential (one
-        registered before the flag was stored has none, and every such registration required it)"
-      unchecked: 'user_verified is false: the registration did not set the flag'
+      'yes': "the account holds an upstream identity: an oidc_* provider's, or an AuthMethod plugin's"
+      'no': 'it holds none'
   providerSwitch:
     values: [on, off]
     initial: any
     say:
-      on: "the realm offers the provider of the identity's type, and its verified switch (marks_verified) is on"
-      off: 'the switch is off, or the realm switched the provider off or no longer has it'
+      on: "the realm offers the provider of an upstream identity's type, and its verified switch (marks_verified) is on"
+      off: 'for every upstream identity the switch is off, or the realm switched the provider off or no longer has it'
   clientCount:
     values: [below, reached]
     initial: any
@@ -104,19 +101,16 @@ context:
 guards:
   ownerless: "caller == 'anonymous' or client == 'other'"
   agentOwner: "caller == 'developer' and client == 'agent'"
-  noPrimary: "primary == 'none'"
-  unconfirmedPassword: "primary == 'password' and address == 'unconfirmed'"
-  uncheckedPasskey: "primary == 'passkey' and userVerification == 'unchecked'"
-  unprovedType: "primary == 'other'"
-  upstreamIdentity: "primary == 'upstream'"
-  switchOff: "providerSwitch == 'off'"
+  noCredentials: "credentials == 'none'"
+  upstreamIdentity: "credentials == 'held' and upstreamHeld == 'yes'"
+  provedAccount: "credentials == 'held' and (ownProof == 'yes' or (upstreamHeld == 'yes' and providerSwitch == 'on'))"
   limitReached: "caller == 'developer' and clientCount == 'reached'"
 
 effects:
   create: { set: { created: true } }
 
 failures:
-  readingPrimary: { from: UserCredential.findPrimaryByUserId, server: [server_error] }
+  readingCredentials: { from: UserCredential.findAllByUserId, server: [server_error] }
   readingProvider: { from: upstreamProviderCatalog, server: [server_error] }
   storingClient: { from: clientStore, server: [server_error] }
   recordingCreated: { from: eventStore, server: [server_error] }
@@ -125,9 +119,9 @@ main:
   given:
     caller: developer
     client: agent
-    primary: password
-    address: confirmed
-    userVerification: checked
+    credentials: held
+    ownProof: 'yes'
+    upstreamHeld: 'no'
     providerSwitch: on
     clientCount: below
   events: [REGISTER, DONE, DONE, DONE]
@@ -151,73 +145,61 @@ states:
         target: countingClients
         say: 'an anonymous registration has no owner, and a client that is no agent owns nothing: no owner is checked'
         source: apps/auth-server/src/app/routes/oauth/register.ts:114
-      - target: readingPrimary
+      - target: readingCredentials
         say: "an agent client of a developer: the developer's account must be a verified owner"
 
-  readingPrimary:
-    title: Read the developer's primary credential
-    source: apps/auth-server/src/app/helpers/verified-owner.ts:58
-    invoke: { action: UserCredential.findPrimaryByUserId }
+  readingCredentials:
+    title: Read every credential of the developer's account
+    source: apps/auth-server/src/app/helpers/verified-owner.ts:63
+    invoke: { action: UserCredential.findAllByUserId }
     on:
       DONE:
-        target: decidingOwner
-        say: 'the credential that created the account, or none'
+        target: sortingCredentials
+        say: "the account's credentials, of its realm only"
       FAIL.server:
-        target: server_error.primary
+        target: server_error.credentials
         say: 'the database fails; nothing is written'
 
-  decidingOwner:
-    title: Ask the proof of the primary identity's kind
-    source: libs/server/federation/src/providers/verified-owner.ts:115
+  sortingCredentials:
+    title: Read a provider only for an account that holds an upstream identity
+    source: apps/auth-server/src/app/helpers/verified-owner.ts:70
     always:
-      - guard: noPrimary
-        target: access_denied.no_primary_identity
-        say: 'the account has no primary credential'
-        source: libs/server/federation/src/providers/verified-owner.ts:115
-      - guard: unconfirmedPassword
-        target: access_denied.address_unverified
-        say: 'a password account whose address was never confirmed, whatever REQUIRE_VERIFIED_ACCOUNT says'
-        source: libs/server/federation/src/providers/verified-owner.ts:128
-      - guard: uncheckedPasskey
-        target: access_denied.passkey_unverified
-        say: 'a passkey whose registration says the UV flag was not set'
-        source: libs/server/federation/src/providers/verified-owner.ts:135
-      - guard: unprovedType
-        target: access_denied.unproved_type
-        say: 'a type with no proof'
-        source: libs/server/federation/src/providers/verified-owner.ts:150
       - guard: upstreamIdentity
         target: readingProvider
-        say: "an upstream identity: its provider's switch decides"
-        source: libs/server/federation/src/providers/verified-owner.ts:143
-      - target: countingClients
-        say:
-          "a confirmed password, a passkey registered with user verification, or a wallet credential QAuth's verifier
-          wrote: a verified owner"
-        source: libs/server/federation/src/providers/verified-owner.ts:140
+        say: "an upstream identity: its provider's switch decides whether it counts"
+        source: apps/auth-server/src/app/helpers/verified-owner.ts:70
+      - target: decidingOwner
+        say: 'no upstream identity: no provider is read'
 
   readingProvider:
-    title: Read the realm's provider of the identity's type
-    source: apps/auth-server/src/app/helpers/verified-owner.ts:65
+    title: Read the realm's provider of each upstream identity's type
+    source: apps/auth-server/src/app/helpers/verified-owner.ts:75
     invoke: { external: upstreamProviderCatalog }
     on:
       DONE:
-        target: decidingProvider
-        say: 'the provider while the realm offers it, or none'
+        target: decidingOwner
+        say: 'each provider while the realm offers it, or none'
       FAIL.server:
         target: server_error.provider
         say: 'the database fails; nothing is written'
 
-  decidingProvider:
-    title: Count an upstream identity only while its provider vouches for it
-    source: libs/server/federation/src/providers/verified-owner.ts:147
+  decidingOwner:
+    title: Count the account verified when one credential it holds is proved
+    source: libs/server/federation/src/providers/verified-owner.ts:148
     always:
-      - guard: switchOff
-        target: access_denied.upstream_unverified
-        say: "the provider's verified switch is off, or the realm switched the provider off"
-        source: libs/server/federation/src/providers/verified-owner.ts:147
-      - target: countingClients
-        say: 'QAuth checked the sign-in that created the account, and the switch is on: a verified owner'
+      - guard: noCredentials
+        target: access_denied.no_credentials
+        say: 'the account holds no credential'
+        source: libs/server/federation/src/providers/verified-owner.ts:154
+      - guard: provedAccount
+        target: countingClients
+        say:
+          'a confirmed password, a passkey registered with user verification, a wallet credential or an upstream
+          identity its provider vouches for, whenever it was added: a verified owner'
+        source: libs/server/federation/src/providers/verified-owner.ts:161
+      - target: access_denied.account_not_verified
+        say: 'no credential the account holds is proved, whatever REQUIRE_VERIFIED_ACCOUNT says'
+        source: libs/server/federation/src/providers/verified-owner.ts:165
 
   countingClients:
     title: Refuse a developer who owns the maximum of clients
@@ -272,45 +254,28 @@ states:
         the client information response (RFC 7591 §3.2.1): client_id, client_id_issued_at, the registered metadata with
         is_agent, and a confidential client's client_secret
 
-  access_denied.no_primary_identity:
+  access_denied.no_credentials:
     type: final
-    title: Refuse an agent to an account with no primary identity
-    description: user.agent_ownership_refused is recorded with the reason no_primary_identity and the identity none.
-    source: apps/auth-server/src/app/helpers/verified-owner.ts:100
+    title: Refuse an agent to an account that holds no credential
+    description: user.agent_ownership_refused is recorded with the reason no_credentials and the primary identity none.
+    source: apps/auth-server/src/app/helpers/verified-owner.ts:104
     response: &ownerRefused
       status: 403
       headers:
         Content-Type: application/json; charset=utf-8
       body:
         error: access_denied
-        error_description: 'Only a verified account can own an agent: confirm the identity this account was created with'
+        error_description:
+          'Only a verified account can own an agent: add a passkey to this account, or confirm one of its sign-in
+          methods'
 
-  access_denied.address_unverified:
+  access_denied.account_not_verified:
     type: final
-    title: Refuse an agent to a password account whose address is unconfirmed
-    description: user.agent_ownership_refused is recorded with the reason address_unverified and the identity password.
-    source: apps/auth-server/src/app/helpers/verified-owner.ts:100
-    response: *ownerRefused
-
-  access_denied.passkey_unverified:
-    type: final
-    title: Refuse an agent to a passkey account whose registration did not check user verification
-    description: user.agent_ownership_refused is recorded with the reason passkey_unverified and the identity passkey.
-    source: apps/auth-server/src/app/helpers/verified-owner.ts:100
-    response: *ownerRefused
-
-  access_denied.upstream_unverified:
-    type: final
-    title: Refuse an agent to an upstream account its provider does not vouch for
-    description: user.agent_ownership_refused is recorded with the reason upstream_unverified and the identity upstream.
-    source: apps/auth-server/src/app/helpers/verified-owner.ts:100
-    response: *ownerRefused
-
-  access_denied.unproved_type:
-    type: final
-    title: Refuse an agent to an account whose primary identity is of a type with no proof
-    description: user.agent_ownership_refused is recorded with the reason unproved_type and the identity other.
-    source: apps/auth-server/src/app/helpers/verified-owner.ts:100
+    title: Refuse an agent to an account none of whose credentials is proved
+    description: >-
+      user.agent_ownership_refused is recorded with the reason account_not_verified and the kind of the credential that
+      created the account.
+    source: apps/auth-server/src/app/helpers/verified-owner.ts:104
     response: *ownerRefused
 
   access_denied.client_limit:
@@ -325,9 +290,9 @@ states:
         error: access_denied
         error_description: 'Client limit reached: a developer may own at most MAX_CLIENTS_PER_DEVELOPER clients'
 
-  server_error.primary:
+  server_error.credentials:
     type: final
-    title: Fail on a database error while the primary credential is read
+    title: Fail on a database error while the account's credentials are read
     response: &serverError
       status: 500
       headers:
@@ -352,10 +317,8 @@ states:
 
 assertions:
   - id: an-agent-owner-is-verified
-    never: >-
-      created and agentOwner and (noPrimary or unconfirmedPassword or uncheckedPasskey or unprovedType or
-      (upstreamIdentity and switchOff))
-    say: 'An agent client is never registered to a developer whose primary identity is not proved'
+    never: 'created and agentOwner and not provedAccount'
+    say: 'An agent client is never registered to a developer none of whose credentials is proved'
     source: apps/auth-server/src/app/routes/oauth/register.ts:114
   - id: no-client-beyond-the-maximum
     never: 'created and limitReached'

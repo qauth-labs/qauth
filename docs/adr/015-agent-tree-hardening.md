@@ -70,11 +70,14 @@
 > identity counts". Its reason was framed around email. The marker stays,
 > and records which credential created the account.
 >
-> The account's verified state is now its own fact. It is set by the first
-> of these proofs, or by an operator through an audited admin operation. It
-> is never read from `email_verified`, which stays a fact about the address
-> attribute and feeds only the `email` claim. Decision 8's rule, table,
-> reason and test, and question 13, now say so. 0.2's sign-in had made an
+> The check reads every credential the account holds, the first one and
+> every later one, and the account counts as verified when one of them is
+> proved. An operator may also verify it, through an audited admin
+> operation recorded on the account. A password credential's
+> `email_verified` says only that the mailbox code for its address was
+> entered, which is that credential's proof. A passkey that verifies the
+> account leaves the address unverified, and the `email` claim says so.
+> Decision 8's rule, table, reason and test, and question 13, now say so. 0.2's sign-in had made an
 > unverified account's sign-in wait on mail delivery; this record does not
 > govern sign-in, and ADR-017's amendment of the same date covers it.
 
@@ -360,9 +363,11 @@ _Decided 2026-10-06 (maintainer), with question 7. Amended 2026-10-23
 - registering an agent-side transmitter, an approval channel or a passkey.
 
 **An account is verified when QAuth proved a strong credential it holds, or
-an operator verified it** (amended 2026-11-08). The account's verified state
-is its own fact, recorded with the proof that set it. It is never read from
-`email_verified`. The primary identity is the credential that created the
+an operator verified it** (amended 2026-11-08). The check reads every
+credential the account holds, and one proved credential is enough. A password
+credential's `email_verified` records only that the mailbox code for its
+address was entered: that is the password row's proof, and it proves the
+address, not the holder of a key. The primary identity is the credential that created the
 account. An explicit marker names it, set at account creation and not
 movable in 1.0 (question 13). The marker records where the account came
 from; it no longer limits which proof counts. An email address is one

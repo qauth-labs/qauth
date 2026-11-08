@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildPasswordCredentialData } from './password.provider';
-import { decideVerifiedOwner, primaryIdentityKindOf } from './verified-owner';
+import { credentialIsProved, credentialKindOf, decideVerifiedOwner } from './verified-owner';
 
 /** A passkey's `credential_data` as a registration stores it. */
 function passkeyData(userVerified: boolean | undefined): Record<string, unknown> {
@@ -34,152 +34,202 @@ const WALLET_DATA = {
 
 const UPSTREAM_DATA = { kind: 'upstream', iss: 'https://idp.example.com', verified: true };
 
-describe('decideVerifiedOwner (ADR-015 Decision 8, #846)', () => {
-  describe('a password account', () => {
-    it('is verified once the mailbox code set email_verified on the credential', () => {
-      expect(
-        decideVerifiedOwner({
-          providerType: 'password',
-          credentialData: buildPasswordCredentialData('$argon2id$h', true, 'nfc'),
-        })
-      ).toEqual({ verified: true, identity: 'password' });
+const CONFIRMED_PASSWORD = {
+  providerType: 'password',
+  credentialData: buildPasswordCredentialData('$argon2id$h', true, 'nfc'),
+};
+const UNCONFIRMED_PASSWORD = {
+  providerType: 'password',
+  credentialData: buildPasswordCredentialData('$argon2id$h', false, 'nfc'),
+};
+
+/** `credential` as the account's primary one, or as one added later. */
+const primary = <T extends object>(credential: T) => ({ ...credential, isPrimary: true });
+const later = <T extends object>(credential: T) => ({ ...credential, isPrimary: false });
+
+describe('credentialIsProved (ADR-015 Decision 8, amended 2026-11-08; #846)', () => {
+  describe('a password', () => {
+    it('is proved once the mailbox code set email_verified on the credential', () => {
+      expect(credentialIsProved(CONFIRMED_PASSWORD)).toBe(true);
     });
 
-    it('is not verified while the address is unconfirmed', () => {
-      expect(
-        decideVerifiedOwner({
-          providerType: 'password',
-          credentialData: buildPasswordCredentialData('$argon2id$h', false, 'nfc'),
-        })
-      ).toEqual({ verified: false, identity: 'password', reason: 'address_unverified' });
+    it('proves nothing while the address is unconfirmed: the password alone is no proof', () => {
+      expect(credentialIsProved(UNCONFIRMED_PASSWORD)).toBe(false);
     });
 
     it('proves nothing with malformed data', () => {
       expect(
-        decideVerifiedOwner({ providerType: 'password', credentialData: { email_verified: true } })
-      ).toEqual({ verified: false, identity: 'password', reason: 'unproved_type' });
+        credentialIsProved({ providerType: 'password', credentialData: { email_verified: true } })
+      ).toBe(false);
+    });
+
+    it('never reads an upstream provider', () => {
+      expect(credentialIsProved(UNCONFIRMED_PASSWORD, { marksVerified: true })).toBe(false);
     });
   });
 
-  describe('a passkey account', () => {
-    it('is verified when its registration checked the user-verification flag', () => {
+  describe('a passkey', () => {
+    it('is proved when its registration checked the user-verification flag', () => {
       expect(
-        decideVerifiedOwner({ providerType: 'webauthn', credentialData: passkeyData(true) })
-      ).toEqual({ verified: true, identity: 'passkey' });
+        credentialIsProved({ providerType: 'webauthn', credentialData: passkeyData(true) })
+      ).toBe(true);
     });
 
-    it('is verified when it was registered before the flag was stored, which every such registration required', () => {
+    it('is proved when it was registered before the flag was stored, which every such registration required', () => {
       expect(
-        decideVerifiedOwner({ providerType: 'webauthn', credentialData: passkeyData(undefined) })
-      ).toEqual({ verified: true, identity: 'passkey' });
+        credentialIsProved({ providerType: 'webauthn', credentialData: passkeyData(undefined) })
+      ).toBe(true);
     });
 
-    it('is not verified when its registration says the flag was not set', () => {
+    it('proves nothing when its registration says the flag was not set', () => {
       expect(
-        decideVerifiedOwner({ providerType: 'webauthn', credentialData: passkeyData(false) })
-      ).toEqual({ verified: false, identity: 'passkey', reason: 'passkey_unverified' });
+        credentialIsProved({ providerType: 'webauthn', credentialData: passkeyData(false) })
+      ).toBe(false);
     });
   });
 
-  describe('a wallet account', () => {
-    it("is verified: only QAuth's verifier writes a wallet credential", () => {
-      expect(decideVerifiedOwner({ providerType: 'wallet', credentialData: WALLET_DATA })).toEqual({
-        verified: true,
-        identity: 'wallet',
-      });
+  describe('a wallet credential', () => {
+    it("is proved: only QAuth's verifier writes one", () => {
+      expect(credentialIsProved({ providerType: 'wallet', credentialData: WALLET_DATA })).toBe(
+        true
+      );
     });
 
     it('proves nothing with data no verifier wrote', () => {
-      expect(decideVerifiedOwner({ providerType: 'wallet', credentialData: {} })).toEqual({
-        verified: false,
-        identity: 'wallet',
-        reason: 'unproved_type',
-      });
+      expect(credentialIsProved({ providerType: 'wallet', credentialData: {} })).toBe(false);
     });
   });
 
-  describe('an upstream account', () => {
-    const primary = { providerType: 'oidc_corp', credentialData: UPSTREAM_DATA };
+  describe('an upstream identity', () => {
+    const upstream = { providerType: 'oidc_corp', credentialData: UPSTREAM_DATA };
 
-    it("is verified while the provider's verified switch is on", () => {
-      expect(decideVerifiedOwner(primary, { marksVerified: true })).toEqual({
-        verified: true,
-        identity: 'upstream',
-      });
+    it("is proved while the provider's verified switch is on", () => {
+      expect(credentialIsProved(upstream, { marksVerified: true })).toBe(true);
     });
 
-    it('is not verified with the switch off, whatever the credential says', () => {
-      expect(decideVerifiedOwner(primary, { marksVerified: false })).toEqual({
-        verified: false,
-        identity: 'upstream',
-        reason: 'upstream_unverified',
-      });
+    it('proves nothing with the switch off, whatever the credential says', () => {
+      expect(credentialIsProved(upstream, { marksVerified: false })).toBe(false);
     });
 
-    it('is not verified once the realm no longer offers the provider', () => {
-      expect(decideVerifiedOwner(primary, undefined)).toEqual({
-        verified: false,
-        identity: 'upstream',
-        reason: 'upstream_unverified',
-      });
+    it('proves nothing once the realm no longer offers the provider', () => {
+      expect(credentialIsProved(upstream, undefined)).toBe(false);
     });
 
     it("counts a plugin's identity as one, and proves nothing without its issuer form", () => {
       expect(
-        decideVerifiedOwner(
+        credentialIsProved(
           { providerType: 'corp_sso', credentialData: UPSTREAM_DATA },
           { marksVerified: true }
         )
-      ).toEqual({ verified: true, identity: 'upstream' });
+      ).toBe(true);
       expect(
-        decideVerifiedOwner(
+        credentialIsProved(
           { providerType: 'oidc_corp', credentialData: { kind: 'upstream' } },
           { marksVerified: true }
         )
-      ).toEqual({ verified: false, identity: 'upstream', reason: 'unproved_type' });
+      ).toBe(false);
     });
   });
 
-  it('refuses an account with no primary identity', () => {
-    expect(decideVerifiedOwner(undefined)).toEqual({
-      verified: false,
-      identity: 'none',
-      reason: 'no_primary_identity',
-    });
-  });
-
-  it('refuses a primary credential of a type with no proof', () => {
+  it('proves nothing for a type with no proof', () => {
     for (const providerType of ['totp', 'did', 'test']) {
-      expect(decideVerifiedOwner({ providerType, credentialData: {} })).toEqual({
-        verified: false,
-        identity: 'other',
-        reason: 'unproved_type',
-      });
+      expect(credentialIsProved({ providerType, credentialData: {} })).toBe(false);
     }
   });
+});
 
-  it('never reads the upstream provider for an identity that is not upstream', () => {
-    // An unconfirmed password stays unconfirmed, whatever a provider says.
-    expect(
-      decideVerifiedOwner(
-        {
-          providerType: 'password',
-          credentialData: buildPasswordCredentialData('$argon2id$h', false, null),
-        },
-        { marksVerified: true }
-      )
-    ).toEqual({ verified: false, identity: 'password', reason: 'address_unverified' });
+describe('decideVerifiedOwner (ADR-015 Decision 8, amended 2026-11-08; #846)', () => {
+  it('verifies an account by its primary credential', () => {
+    expect(decideVerifiedOwner([primary(CONFIRMED_PASSWORD)])).toEqual({
+      verified: true,
+      proof: 'password',
+      primaryIdentity: 'password',
+    });
   });
 
-  it('tells the kind of a primary credential by its type, and an upstream one by its data', () => {
-    expect(primaryIdentityKindOf({ providerType: 'password', credentialData: {} })).toBe(
-      'password'
-    );
-    expect(primaryIdentityKindOf({ providerType: 'webauthn', credentialData: {} })).toBe('passkey');
-    expect(primaryIdentityKindOf({ providerType: 'wallet', credentialData: {} })).toBe('wallet');
+  it('verifies an unconfirmed password account by a passkey added later (question 13, amended)', () => {
     expect(
-      primaryIdentityKindOf({ providerType: 'oidc_corp', credentialData: UPSTREAM_DATA })
-    ).toBe('upstream');
-    expect(primaryIdentityKindOf({ providerType: 'oidc_corp', credentialData: {} })).toBe('other');
+      decideVerifiedOwner([
+        primary(UNCONFIRMED_PASSWORD),
+        later({ providerType: 'webauthn', credentialData: passkeyData(true) }),
+      ])
+    ).toEqual({ verified: true, proof: 'passkey', primaryIdentity: 'password' });
+  });
+
+  it("verifies an account by an upstream identity linked later, while the provider's switch is on", () => {
+    const credentials = [
+      primary(UNCONFIRMED_PASSWORD),
+      later({ providerType: 'oidc_corp', credentialData: UPSTREAM_DATA }),
+    ];
+    expect(decideVerifiedOwner(credentials, () => ({ marksVerified: true }))).toEqual({
+      verified: true,
+      proof: 'upstream',
+      primaryIdentity: 'password',
+    });
+    expect(decideVerifiedOwner(credentials, () => ({ marksVerified: false }))).toEqual({
+      verified: false,
+      reason: 'account_not_verified',
+      primaryIdentity: 'password',
+    });
+  });
+
+  it('names the primary credential when it counts, whatever the order', () => {
+    expect(
+      decideVerifiedOwner([
+        later({ providerType: 'webauthn', credentialData: passkeyData(true) }),
+        primary({ providerType: 'wallet', credentialData: WALLET_DATA }),
+      ])
+    ).toEqual({ verified: true, proof: 'wallet', primaryIdentity: 'wallet' });
+  });
+
+  it('refuses an account none of whose credentials is proved', () => {
+    expect(
+      decideVerifiedOwner([
+        primary(UNCONFIRMED_PASSWORD),
+        later({ providerType: 'webauthn', credentialData: passkeyData(false) }),
+        later({ providerType: 'totp', credentialData: {} }),
+      ])
+    ).toEqual({ verified: false, reason: 'account_not_verified', primaryIdentity: 'password' });
+  });
+
+  it('refuses an account that holds no credential', () => {
+    expect(decideVerifiedOwner([])).toEqual({
+      verified: false,
+      reason: 'no_credentials',
+      primaryIdentity: 'none',
+    });
+  });
+
+  it('still decides for an account whose primary credential was removed', () => {
+    expect(
+      decideVerifiedOwner([later({ providerType: 'webauthn', credentialData: passkeyData(true) })])
+    ).toEqual({ verified: true, proof: 'passkey', primaryIdentity: 'none' });
+  });
+
+  it('reads the upstream provider only for an upstream identity', () => {
+    const lookups: string[] = [];
+    decideVerifiedOwner(
+      [
+        primary(UNCONFIRMED_PASSWORD),
+        later({ providerType: 'oidc_corp', credentialData: UPSTREAM_DATA }),
+      ],
+      (providerType) => {
+        lookups.push(providerType);
+        return undefined;
+      }
+    );
+    expect(lookups).toEqual(['oidc_corp']);
+  });
+});
+
+describe('credentialKindOf', () => {
+  it('tells the kind of a credential by its type, and an upstream one by its data', () => {
+    expect(credentialKindOf({ providerType: 'password', credentialData: {} })).toBe('password');
+    expect(credentialKindOf({ providerType: 'webauthn', credentialData: {} })).toBe('passkey');
+    expect(credentialKindOf({ providerType: 'wallet', credentialData: {} })).toBe('wallet');
+    expect(credentialKindOf({ providerType: 'oidc_corp', credentialData: UPSTREAM_DATA })).toBe(
+      'upstream'
+    );
+    expect(credentialKindOf({ providerType: 'oidc_corp', credentialData: {} })).toBe('other');
   });
 });

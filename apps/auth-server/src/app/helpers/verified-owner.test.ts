@@ -14,26 +14,60 @@ vi.mock('./user-events', () => ({ emitUserEvent: emit }));
 import { assertVerifiedOwner, checkVerifiedOwner, isVerifiedOwner } from './verified-owner';
 
 const REALM = '0199fa20-0000-7000-8000-00000000aaaa';
+const OTHER_REALM = '0199fa20-0000-7000-8000-00000000bbbb';
 const USER = '0199fa20-5e1a-7000-8000-000000000001';
 const ACCOUNT = { realmId: REALM, userId: USER };
 const REFUSED = 'urn:qauth:event:user.agent_ownership_refused:v1-rc.0';
 
-/** A server whose account `USER` has `primary` as its primary credential. */
-function serverWith(primary: unknown) {
-  const findPrimaryByUserId = vi.fn(async () => primary);
-  const fastify = {
-    repositories: { userCredentials: { findPrimaryByUserId } },
-  } as unknown as FastifyInstance;
-  return { fastify, findPrimaryByUserId };
+interface StoredCredential {
+  readonly realmId: string;
+  readonly providerType: string;
+  readonly credentialData: unknown;
+  readonly isPrimary: boolean;
 }
 
-const UNCONFIRMED_PASSWORD = {
+/** A server whose account `USER` holds `credentials`. */
+function serverWith(...credentials: StoredCredential[]) {
+  const findAllByUserId = vi.fn(async () => credentials);
+  const fastify = {
+    repositories: { userCredentials: { findAllByUserId } },
+  } as unknown as FastifyInstance;
+  return { fastify, findAllByUserId };
+}
+
+const UNCONFIRMED_PASSWORD: StoredCredential = {
+  realmId: REALM,
   providerType: 'password',
   credentialData: { password_hash: '$argon2id$h', email_verified: false },
+  isPrimary: true,
 };
-const UPSTREAM = {
+const UPSTREAM: StoredCredential = {
+  realmId: REALM,
   providerType: 'oidc_corp',
   credentialData: { kind: 'upstream', iss: 'https://idp.example.com', verified: true },
+  isPrimary: true,
+};
+/** A passkey whose registration checked user verification, added after the account. */
+const LATER_PASSKEY: StoredCredential = {
+  realmId: REALM,
+  providerType: 'webauthn',
+  credentialData: {
+    public_key: 'pQECAyYgASFYIK_voW-Xypst',
+    algorithm: -7,
+    sign_count: 0,
+    transports: ['internal'],
+    backup_eligible: false,
+    backed_up: false,
+    aaguid: '00000000-0000-0000-0000-000000000000',
+    user_verified: true,
+    rp_id: 'auth.example.com',
+    user_handle: 'dXNlci1oYW5kbGU',
+    nickname: null,
+    created_at: 1,
+    last_used_at: null,
+    sign_counter_regressed_at: null,
+  },
+  isPrimary: false,
 };
 
 beforeEach(() => {
@@ -41,16 +75,37 @@ beforeEach(() => {
   emit.mockClear();
 });
 
-describe('checkVerifiedOwner (ADR-015 Decision 8, #846)', () => {
-  it("reads the account's primary credential in the account's realm", async () => {
-    const { fastify, findPrimaryByUserId } = serverWith(undefined);
+describe('checkVerifiedOwner (ADR-015 Decision 8, amended 2026-11-08; #846)', () => {
+  it('reads every credential of the account', async () => {
+    const { fastify, findAllByUserId } = serverWith();
     expect(await checkVerifiedOwner(fastify, ACCOUNT)).toEqual({
       verified: false,
-      identity: 'none',
-      reason: 'no_primary_identity',
+      reason: 'no_credentials',
+      primaryIdentity: 'none',
     });
-    expect(findPrimaryByUserId).toHaveBeenCalledWith(REALM, USER);
+    expect(findAllByUserId).toHaveBeenCalledWith(USER);
     expect(find).not.toHaveBeenCalled();
+  });
+
+  it("counts a passkey added after the account was created, and names the primary's kind", async () => {
+    const { fastify } = serverWith(UNCONFIRMED_PASSWORD, LATER_PASSKEY);
+    expect(await checkVerifiedOwner(fastify, ACCOUNT)).toEqual({
+      verified: true,
+      proof: 'passkey',
+      primaryIdentity: 'password',
+    });
+  });
+
+  it('ignores a credential of another realm (#489), even a proved one', async () => {
+    const { fastify } = serverWith(UNCONFIRMED_PASSWORD, {
+      ...LATER_PASSKEY,
+      realmId: OTHER_REALM,
+    });
+    expect(await checkVerifiedOwner(fastify, ACCOUNT)).toEqual({
+      verified: false,
+      reason: 'account_not_verified',
+      primaryIdentity: 'password',
+    });
   });
 
   it("reads the realm's provider of an upstream identity, and its verified switch", async () => {
@@ -62,19 +117,25 @@ describe('checkVerifiedOwner (ADR-015 Decision 8, #846)', () => {
     find.mockResolvedValueOnce({ marksVerified: false });
     expect(await checkVerifiedOwner(fastify, ACCOUNT)).toMatchObject({
       verified: false,
-      reason: 'upstream_unverified',
+      reason: 'account_not_verified',
     });
     // Off, or gone: the catalog has no provider of that type.
     expect(await checkVerifiedOwner(fastify, ACCOUNT)).toMatchObject({
       verified: false,
-      reason: 'upstream_unverified',
+      reason: 'account_not_verified',
     });
   });
 
-  it('reads no provider for an identity that is not upstream', async () => {
-    const { fastify } = serverWith(UNCONFIRMED_PASSWORD);
-    expect(await isVerifiedOwner(fastify, ACCOUNT)).toBe(false);
+  it('reads no provider for a credential that is not upstream', async () => {
+    const { fastify } = serverWith(UNCONFIRMED_PASSWORD, LATER_PASSKEY);
+    expect(await isVerifiedOwner(fastify, ACCOUNT)).toBe(true);
     expect(find).not.toHaveBeenCalled();
+  });
+
+  it('reads one provider per upstream type', async () => {
+    const { fastify } = serverWith(UPSTREAM, { ...UPSTREAM, isPrimary: false });
+    expect(await isVerifiedOwner(fastify, ACCOUNT)).toBe(false);
+    expect(find).toHaveBeenCalledOnce();
   });
 });
 
@@ -85,7 +146,7 @@ describe('assertVerifiedOwner', () => {
 
   it('lets a verified owner through and records nothing', async () => {
     const { fastify } = serverWith({
-      providerType: 'password',
+      ...UNCONFIRMED_PASSWORD,
       credentialData: { password_hash: '$argon2id$h', email_verified: true },
     });
     await expect(
@@ -103,7 +164,11 @@ describe('assertVerifiedOwner', () => {
     expect(emit).toHaveBeenCalledExactlyOnceWith(
       request,
       REFUSED,
-      { action: 'client_registration', reason: 'address_unverified', primaryIdentity: 'password' },
+      {
+        action: 'client_registration',
+        reason: 'account_not_verified',
+        primaryIdentity: 'password',
+      },
       { realmId: REALM, userId: USER, actor: 'user' }
     );
   });

@@ -104,19 +104,22 @@ A registration that carries a developer's access token (the developer portal's
 token, with `qauth:developer:write`) makes the developer the client's owner.
 For an agent client that makes the developer the owner of an agent, and only a
 **verified account** may own one (ADR-015 Decision 8). An account is verified
-when the identity it was created with — its primary identity — is proved:
+when QAuth proved one of the credentials it holds, the one it was created with
+or one added later:
 
-| The account was created with | It is verified when                                                                               |
-| ---------------------------- | ------------------------------------------------------------------------------------------------- |
-| a password                   | the code mailed to its address was entered                                                        |
-| a passkey                    | its registration checked the authenticator's user-verification flag                               |
-| a wallet credential          | always: only QAuth's own verifier writes one                                                      |
-| an upstream provider         | the realm still offers the provider, and the provider's "accounts count as verified" switch is on |
+| The account holds    | It is verified when                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------- |
+| a password           | the code mailed to its address was entered                                                        |
+| a passkey            | its registration checked the authenticator's user-verification flag                               |
+| a wallet credential  | always: only QAuth's own verifier writes one                                                      |
+| an upstream provider | the realm still offers the provider, and the provider's "accounts count as verified" switch is on |
 
-A credential added later never counts: an account created with an unconfirmed
-address stays unverified after it adds a passkey. `REQUIRE_VERIFIED_ACCOUNT`,
-which only decides whether an unconfirmed password account may sign in, plays
-no part. Otherwise the registration is refused with `403`
+A credential added later counts as the first one does: an account created with
+an unconfirmed address becomes verified when it adds a passkey whose
+registration checked user verification. Its address stays unconfirmed, and the
+`email` claim still says so; a key proves who holds the account, never an
+address. `REQUIRE_VERIFIED_ACCOUNT`, which decides whether an unverified account
+may sign in, plays no part. Otherwise the registration is refused with `403`
 `{"error": "access_denied"}`, no client is created, and the refusal is recorded
 as the `user.agent_ownership_refused` event on the account, with the reason. A
 registration with no token has no owner and is not checked.

@@ -45,7 +45,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          "OAuth 2.0 Dynamic Client Registration (RFC 7591). Open-mode — no initial_access_token required. Scope requests are capped to the realm's dynamic_registration_allowed_scopes list, which never holds a scope in QAuth's reserved qauth: namespace. A registration with a developer's access token makes the developer the client's owner; an agent client (is_agent: true) so registered needs an owner whose account is verified, its primary identity proved, and is otherwise refused with 403 access_denied.",
+          "OAuth 2.0 Dynamic Client Registration (RFC 7591). Open-mode — no initial_access_token required. Scope requests are capped to the realm's dynamic_registration_allowed_scopes list, which never holds a scope in QAuth's reserved qauth: namespace. A registration with a developer's access token makes the developer the client's owner; an agent client (is_agent: true) so registered needs an owner whose account is verified (a credential QAuth proved, whenever it was added), and is otherwise refused with 403 access_denied.",
         tags: ['OAuth', 'Registration'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [400, 401, 403],
