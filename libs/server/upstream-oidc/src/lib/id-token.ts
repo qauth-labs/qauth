@@ -9,7 +9,13 @@ import {
   type ProtectedHeaderParameters,
 } from 'jose';
 
-import { UPSTREAM_ID_TOKEN_ALGORITHMS, type UpstreamIdTokenAlgorithm } from './config';
+import {
+  UPSTREAM_ID_TOKEN_ALGORITHMS,
+  UPSTREAM_TENANT_ID_PATTERN,
+  UPSTREAM_TENANT_PLACEHOLDER,
+  type UpstreamIdTokenAlgorithm,
+  type UpstreamTenantIssuer,
+} from './config';
 import { invalidResponse } from './errors';
 
 /**
@@ -40,8 +46,12 @@ const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/;
 
 /** What the ID token must say. */
 export interface IdTokenExpectations {
-  /** The configured issuer: `iss`, byte for byte. */
-  readonly issuer: string;
+  /**
+   * The configured issuer: `iss`, byte for byte. For a multi-tenant
+   * provider, its issuer template: `iss` is the template with the token's
+   * own tenant id in place ({@link tenantIssuerOf}).
+   */
+  readonly issuer: string | UpstreamTenantIssuer;
   /** QAuth's client id at the provider: in `aud`, and `azp` when present. */
   readonly clientId: string;
   /** The `nonce` the authorization request sent. */
@@ -66,7 +76,8 @@ export type IdTokenKeys = (
  *   puts in `expected.algorithms`. A secret (`oct`) key is never used.
  * - The signature must verify under a key of the provider's key set that
  *   fits the algorithm (and the header's `kid` when it names one).
- * - `iss` equals the configured issuer; `aud` holds the client id; a token
+ * - `iss` equals the configured issuer, or for an issuer template the
+ *   template with the token's tenant claim in place; `aud` holds the client id; a token
  *   with more than one audience carries `azp`, and `azp`, when present,
  *   is the client id; `exp` has not passed; `iat` is at most
  *   {@link ID_TOKEN_MAX_AGE_SECONDS} old and not in the future; `nbf`, when
@@ -125,7 +136,8 @@ export async function validateIdToken(
     try {
       const verified = await jwtVerify(token, key, {
         algorithms: [algorithm],
-        issuer: expected.issuer,
+        // A template's issuer is checked below, against the token's tenant.
+        ...(typeof expected.issuer === 'string' ? { issuer: expected.issuer } : {}),
         audience: expected.clientId,
         clockTolerance: ID_TOKEN_CLOCK_TOLERANCE_SECONDS,
         maxTokenAge: ID_TOKEN_MAX_AGE_SECONDS,
@@ -143,6 +155,15 @@ export async function validateIdToken(
     throw invalidResponse("id_token: the signature does not verify under the provider's keys");
   }
 
+  if (typeof expected.issuer !== 'string') {
+    // The tenant claim names the tenant; the issuer must name the same one.
+    const issuer = tenantIssuerOf(expected.issuer, payload);
+    if (issuer === undefined || payload['iss'] !== issuer) {
+      throw invalidResponse(
+        "id_token: the iss is not the issuer template's for the token's tenant"
+      );
+    }
+  }
   const { sub, aud, azp, nonce } = payload;
   if (
     typeof sub !== 'string' ||
@@ -163,6 +184,37 @@ export async function validateIdToken(
     throw invalidResponse("id_token: the nonce is not the authorization request's");
   }
   return payload;
+}
+
+/**
+ * The issuer `claims` must carry under `template`: the template with the
+ * value of its tenant claim in place, or `undefined` when that value is no
+ * tenant id ({@link UPSTREAM_TENANT_ID_PATTERN}).
+ */
+export function tenantIssuerOf(
+  template: UpstreamTenantIssuer,
+  claims: Readonly<Record<string, unknown>>
+): string | undefined {
+  const tenant = Object.hasOwn(claims, template.tenantClaim)
+    ? claims[template.tenantClaim]
+    : undefined;
+  if (typeof tenant !== 'string' || !UPSTREAM_TENANT_ID_PATTERN.test(tenant)) return undefined;
+  return template.template.replace(UPSTREAM_TENANT_PLACEHOLDER, tenant);
+}
+
+/**
+ * Whether `issuer` is `template` with some tenant id in place: the check of
+ * an authorization response's `iss` (RFC 9207), which names no tenant claim.
+ */
+export function isTenantIssuer(template: UpstreamTenantIssuer, issuer: string): boolean {
+  const at = template.template.indexOf(UPSTREAM_TENANT_PLACEHOLDER);
+  const prefix = template.template.slice(0, at);
+  const suffix = template.template.slice(at + UPSTREAM_TENANT_PLACEHOLDER.length);
+  if (issuer.length <= prefix.length + suffix.length) return false;
+  if (!issuer.startsWith(prefix) || !issuer.endsWith(suffix)) return false;
+  return UPSTREAM_TENANT_ID_PATTERN.test(
+    issuer.slice(prefix.length, issuer.length - suffix.length)
+  );
 }
 
 /** Which check a jose error failed, without the token's content. */

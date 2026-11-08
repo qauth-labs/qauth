@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import type { AuthMethodContext, AuthMethodEgressResponse } from '@qauth-labs/server-federation';
 
-import type { UpstreamOidcConfig } from './config';
+import type { UpstreamOidcClientConfig } from './config';
 import { invalidResponse, UpstreamOidcError } from './errors';
 import type { UpstreamProviderMetadata } from './metadata';
 import {
@@ -52,17 +52,22 @@ export function formEncode(value: string): string {
 /**
  * The client's credentials for the token endpoint, by the configured method:
  * an `Authorization` header for `client_secret_basic`, form members for
- * `client_secret_post` and `private_key_jwt`.
+ * `client_secret_post`, `private_key_jwt` and `signed_client_secret`.
  *
  * For `private_key_jwt` the signer role signs the assertion (ADR-019
  * Decision 9): `iss` and `sub` are the client id the realm's configuration
- * of the provider names, `aud` the provider's issuer identifier (the
+ * of the provider names (`iss` its assertion issuer when it names one, as
+ * Apple's Team ID), `aud` the provider's issuer identifier (the
  * assertion's sole audience, draft-ietf-oauth-rfc7523bis), with a fresh
  * `jti` and an `exp` {@link CLIENT_ASSERTION_LIFETIME_SECONDS} away. The
  * library sends the signed string and never sees the key.
+ *
+ * A `signed_client_secret` (#671) is the same signed JWT, with the same
+ * claims and lifetime, sent as the `client_secret` of a `client_secret_post`
+ * request, as Sign in with Apple takes it.
  */
 export async function clientCredentials(
-  context: AuthMethodContext<UpstreamOidcConfig>,
+  context: AuthMethodContext<UpstreamOidcClientConfig>,
   metadata: UpstreamProviderMetadata
 ): Promise<{ headers: Record<string, string>; form: [string, string][] }> {
   const { config } = context;
@@ -83,27 +88,52 @@ export async function clientCredentials(
           ['client_secret', authentication.clientSecret],
         ],
       };
-    case 'private_key_jwt': {
-      const now = Math.floor(Date.now() / 1000);
-      const assertion = await context.signer.signClientAssertion({
-        audience: metadata.issuer,
-        claims: {
-          jti: randomBytes(16).toString('base64url'),
-          iat: now,
-          exp: now + CLIENT_ASSERTION_LIFETIME_SECONDS,
-        },
-        algorithm: authentication.signingAlgorithm,
-      });
+    case 'private_key_jwt':
       return {
         headers: {},
         form: [
           ['client_id', config.clientId],
           ['client_assertion_type', JWT_BEARER_ASSERTION_TYPE],
-          ['client_assertion', assertion],
+          [
+            'client_assertion',
+            await signedAssertion(context, metadata, authentication.signingAlgorithm),
+          ],
         ],
       };
-    }
+    case 'signed_client_secret':
+      return {
+        headers: {},
+        form: [
+          ['client_id', config.clientId],
+          [
+            'client_secret',
+            await signedAssertion(context, metadata, authentication.signingAlgorithm),
+          ],
+        ],
+      };
   }
+}
+
+/**
+ * A client assertion the signer role signs: `aud` the provider's issuer,
+ * a fresh `jti`, `exp` {@link CLIENT_ASSERTION_LIFETIME_SECONDS} away. The
+ * signer sets `iss` and `sub` from the realm's configuration of the provider.
+ */
+function signedAssertion(
+  context: AuthMethodContext<UpstreamOidcClientConfig>,
+  metadata: UpstreamProviderMetadata,
+  algorithm: 'RS256' | 'ES256' | 'EdDSA'
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  return context.signer.signClientAssertion({
+    audience: metadata.issuer,
+    claims: {
+      jti: randomBytes(16).toString('base64url'),
+      iat: now,
+      exp: now + CLIENT_ASSERTION_LIFETIME_SECONDS,
+    },
+    algorithm,
+  });
 }
 
 /**
@@ -115,7 +145,7 @@ export async function clientCredentials(
  *   `429` or `5xx`, `invalid_response` for anything else that fails a check
  */
 export async function redeemCode(
-  context: AuthMethodContext<UpstreamOidcConfig>,
+  context: AuthMethodContext<UpstreamOidcClientConfig>,
   metadata: UpstreamProviderMetadata,
   exchange: CodeExchange
 ): Promise<UpstreamTokens> {
@@ -169,7 +199,7 @@ export async function redeemCode(
  * @throws UpstreamOidcError as {@link redeemCode} does
  */
 export async function readUserinfo(
-  context: AuthMethodContext<UpstreamOidcConfig>,
+  context: AuthMethodContext<UpstreamOidcClientConfig>,
   metadata: UpstreamProviderMetadata,
   accessToken: string,
   sub: string

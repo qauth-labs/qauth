@@ -130,6 +130,32 @@ export const authMethod = createUpstreamOidcPresetMethod({
 - `src/testing/example-preset.ts` is a preset on the fake provider, its client secret inside a
   discriminated union of client authentication methods; it passes the contract test kit.
 
+What a named provider needs beyond the generic client, a preset sets in its own code (#671), never
+a realm's admin, whose config for the generic client has none of it:
+
+- **A signed client secret** (`clientAuthentication: { method: 'signed_client_secret' }`, ES256
+  unless it names another algorithm): the signer role signs a JWT with the realm's
+  `upstream_client_assertion` key for the plugin's type, with the claims and the 60-second
+  lifetime of a client assertion, and the client sends it as the `client_secret` of a
+  `client_secret_post` request, as Sign in with Apple takes it. Its `iss` is the signer's
+  configuration of the provider: the client id, or the assertion issuer it names (Apple's Team ID).
+- **An issuer template** (`tenantIssuer: { template, tenantClaim }`) for a multi-tenant provider
+  whose shared endpoint serves many tenants: the discovery document names the template (e.g.
+  `https://login.microsoftonline.com/{tenantid}/v2.0`), and an ID token is accepted only when its
+  `iss` is the template with the token's own tenant claim in place. The tenant id is letters,
+  digits and `-` (`UPSTREAM_TENANT_ID_PATTERN`), so it never reaches past its path segment, and
+  the template's origin must be among the preset's origins.
+- **Response members** (`responseMembers`): members of the authorization response besides the
+  protocol's own that the callback reads, such as Apple's `user`, each mapped to the value the
+  `form_post` bounce carries on in the callback's URL (at most 1024 characters). The browser
+  chooses that value: whatever is made of it is an unverified claim.
+- **Identity claims** (`identityClaims`): claims set over the provider's from the response members
+  and the preset's config. `sub` and the claims only the ID token may carry stay the validated
+  ones; a claim set to `undefined` is removed.
+- **Attribute rules** (`attributes`, `UpstreamClaimAttribute`): the claims the identity maps to
+  as attributes and the claim that marks each verified, in place of the standard rules
+  (`UPSTREAM_STANDARD_ATTRIBUTES`).
+
 ## Registration check
 
 `checkUpstreamOidcProvider(egressClient, realmName, config)` runs discovery and the egress

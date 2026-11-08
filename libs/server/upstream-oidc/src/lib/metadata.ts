@@ -2,8 +2,9 @@ import type { AuthMethodEgress } from '@qauth-labs/server-federation';
 
 import {
   discoveryUrl,
+  UPSTREAM_SIGNED_CLIENT_SECRET,
   type UpstreamIdTokenAlgorithm,
-  type UpstreamOidcConfig,
+  type UpstreamOidcClientConfig,
   upstreamUrlProblem,
 } from './config';
 import { invalidResponse } from './errors';
@@ -59,7 +60,7 @@ const DISCOVERED_URL_MEMBERS = [
  * @throws UpstreamOidcError when discovery fails or the document fails a check
  */
 export async function resolveProviderMetadata(
-  config: UpstreamOidcConfig,
+  config: UpstreamOidcClientConfig,
   loadDocument: () => Promise<Record<string, unknown>>
 ): Promise<UpstreamProviderMetadata> {
   const metadata =
@@ -70,9 +71,9 @@ export async function resolveProviderMetadata(
 }
 
 /** The metadata of a provider whose endpoints the config sets by hand. */
-function configuredProviderMetadata(config: UpstreamOidcConfig): UpstreamProviderMetadata {
+function configuredProviderMetadata(config: UpstreamOidcClientConfig): UpstreamProviderMetadata {
   // The schema has checked every URL; `endpoints` is set on this path.
-  const endpoints = config.endpoints as NonNullable<UpstreamOidcConfig['endpoints']>;
+  const endpoints = config.endpoints as NonNullable<UpstreamOidcClientConfig['endpoints']>;
   return Object.freeze({
     issuer: config.issuer,
     authorizationEndpoint: endpoints.authorization,
@@ -121,7 +122,9 @@ export async function fetchDiscoveryDocument(
  * The checks:
  *
  * - `issuer` equals the configured issuer byte for byte (Discovery §4.3),
- *   which also stops one provider's document answering for another;
+ *   which also stops one provider's document answering for another; for a
+ *   multi-tenant provider, the configured issuer template (`tenantIssuer`),
+ *   which the document names in place of an issuer;
  * - `authorization_endpoint`, `token_endpoint` and `jwks_uri` are present,
  *   and every URL the client calls is an absolute `https` URL with no
  *   credentials and no fragment; the egress client checks its addresses at
@@ -129,7 +132,8 @@ export async function fetchDiscoveryDocument(
  * - when the document lists `code_challenge_methods_supported`, it holds
  *   `S256`: QAuth sends PKCE with S256 only;
  * - when it lists `token_endpoint_auth_methods_supported`, it holds the
- *   configured method; when it lists `response_modes_supported`, it holds
+ *   configured method (`client_secret_post` for a signed client secret,
+ *   which goes as one); when it lists `response_modes_supported`, it holds
  *   the configured mode;
  * - for `private_key_jwt`, when it lists
  *   `token_endpoint_auth_signing_alg_values_supported`, it holds the
@@ -140,13 +144,13 @@ export async function fetchDiscoveryDocument(
  */
 export function parseDiscoveryDocument(
   document: Record<string, unknown>,
-  config: UpstreamOidcConfig
+  config: UpstreamOidcClientConfig
 ): UpstreamProviderMetadata {
   const purpose = UPSTREAM_OIDC_PURPOSES.discovery;
   const member = (name: string): unknown =>
     Object.hasOwn(document, name) ? document[name] : undefined;
 
-  if (member('issuer') !== config.issuer) {
+  if (member('issuer') !== (config.tenantIssuer?.template ?? config.issuer)) {
     throw invalidResponse(`${purpose}: the document's issuer is not the configured issuer`);
   }
   for (const name of DISCOVERED_URL_MEMBERS) {
@@ -174,10 +178,13 @@ export function parseDiscoveryDocument(
     throw invalidResponse(`${purpose}: the provider does not support PKCE with S256`);
   }
   const authMethods = listed('token_endpoint_auth_methods_supported');
-  if (authMethods !== undefined && !authMethods.includes(config.clientAuthentication.method)) {
-    throw invalidResponse(
-      `${purpose}: the provider does not support ${config.clientAuthentication.method}`
-    );
+  // A signed client secret reaches the provider as a client_secret_post one.
+  const authMethod =
+    config.clientAuthentication.method === UPSTREAM_SIGNED_CLIENT_SECRET
+      ? 'client_secret_post'
+      : config.clientAuthentication.method;
+  if (authMethods !== undefined && !authMethods.includes(authMethod)) {
+    throw invalidResponse(`${purpose}: the provider does not support ${authMethod}`);
   }
   const authentication = config.clientAuthentication;
   if (authentication.method === 'private_key_jwt') {
@@ -224,7 +231,7 @@ export function parseDiscoveryDocument(
 /** The checks between the metadata and the rest of the config. */
 function checkedForConfig(
   metadata: UpstreamProviderMetadata,
-  config: UpstreamOidcConfig
+  config: UpstreamOidcClientConfig
 ): UpstreamProviderMetadata {
   if (metadata.idTokenSigningAlgorithms.length === 0) {
     throw invalidResponse(
