@@ -208,8 +208,9 @@ export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   '"events_admin_chain_head"(uuid)': ['web', 'api', 'admin'],
   '"events_own_row"(uuid)': ['web', 'api', 'admin'],
   // The event store's lag, which every process that builds the events
-  // repository reports on its metrics.
-  '"events_oldest_unread_time"()': ['web', 'api', 'delivery'],
+  // repository reports on its metrics: `admin` builds it too since it writes
+  // the events of its operations (#1052).
+  '"events_oldest_unread_time"()': ['web', 'api', 'admin', 'delivery'],
   // Whether an event about a user can still reach an SSF stream (migration
   // 0055): the subject sweep, an `api` job.
   '"ssf_subject_events_pending"(uuid, text)': ['api'],
