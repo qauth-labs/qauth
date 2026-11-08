@@ -5,7 +5,7 @@
  * table, every existing account reads as one no operator verified, and a
  * release before this one keeps writing users during a rolling upgrade. Its
  * behaviour against a real Postgres is held by
- * `scripts/account-verification.integration.test.ts`.
+ * `lib/account-verification/verify-account.integration.test.ts`.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
