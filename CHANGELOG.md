@@ -46,7 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field a looser default) needs `realms.policies.security`,
   `qauth:admin:security` and an approval, which shows each changed field
   beside the value it replaces; any other needs `realms.policies.write`, and
-  a patch of both needs both and one approval. A member the policies do not
+  a patch of both needs both and one approval. Every patch needs
+  `realms.read` too, since it answers the realm. A member the policies do not
   have, or `null` on a whole group, is 400 `validation_error`; a merged
   document the policy schema or a rule refuses is 422
   `unprocessable_content` naming each field, before an approval is filed
@@ -61,7 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the operation's permissions is refused with 403 before the resource is
   read, so it can no longer tell 404 or 412 from 403. An approval for such
   an operation binds the state version it was filed against: a call after
-  the state moved does not run on it.
+  the state moved does not run on it. Filing or withdrawing an approval
+  needs the security permissions the operation declares, no longer every
+  permission it declares: what else a call needs is checked when it runs.
 
 ### Changed
 

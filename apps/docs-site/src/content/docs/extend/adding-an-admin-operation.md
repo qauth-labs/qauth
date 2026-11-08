@@ -21,10 +21,10 @@ new operation does not add a stage. It adds five things, in this order:
 
 The two realm operations are the reference, and every later admin operation follows them:
 
-| Operation                | Route                                            | Class    | Permissions                                         |
-| ------------------------ | ------------------------------------------------ | -------- | --------------------------------------------------- |
-| `realms.get`             | `GET /admin/v1-rc.0/realms/{realmId}`            | read     | `realms.read`                                       |
-| `realms.policies.update` | `PATCH /admin/v1-rc.0/realms/{realmId}/policies` | security | `realms.policies.write`, `realms.policies.security` |
+| Operation                | Route                                            | Class    | Permissions                                                        |
+| ------------------------ | ------------------------------------------------ | -------- | ------------------------------------------------------------------ |
+| `realms.get`             | `GET /admin/v1-rc.0/realms/{realmId}`            | read     | `realms.read`                                                      |
+| `realms.policies.update` | `PATCH /admin/v1-rc.0/realms/{realmId}/policies` | security | `realms.policies.write`, `realms.policies.security`, `realms.read` |
 
 Both are listed with their effects on [Security operations](/reference/security-operations/#operations),
 which is generated from the registry. Their code is in `apps/auth-server/src/app/admin/realms/`:
@@ -48,7 +48,10 @@ Reuse a permission when the new operation acts on the same resource the same way
 operations needed none of their own: `realms.read`, `realms.policies.write` and
 `realms.policies.security` were in the catalog before them. An operation whose change can be
 either a write or a security change, field by field, declares both, and each request needs only
-the ones its change needs ([Classify](#3-classify)).
+the ones its change needs ([Classify](#3-classify)). An operation that answers the resource also
+needs its read permission: the scopes are independent, so `realms.policies.update`, which answers
+the realm, needs `realms.read` on every request. Filing or withdrawing an approval needs the
+security permissions the operation declares; the rest is checked when the call runs with it.
 
 ## 2. Define the operation
 
@@ -117,7 +120,7 @@ never on the patch alone: `null` gives a field its default, which may be looser 
 value, so a `null` that loosens is a security change. A secret field is a security change whatever
 the patch does with it. A patch that shortens the access-token lifetime is a write; one that
 lowers the password score is a security change; a patch of both needs both permissions, both
-scopes and one approval.
+scopes and one approval. Every patch needs `realms.read` besides.
 
 `loadState` runs once the caller is known to hold at least one of the operation's permissions:
 a caller who holds none is refused with 403 before anything is read, so it learns nothing of the

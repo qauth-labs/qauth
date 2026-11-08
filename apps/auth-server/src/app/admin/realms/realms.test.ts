@@ -58,7 +58,13 @@ const operation = () => {
   return found;
 };
 
-const WRITE = { class: 'write', effects: [], permissions: ['realms.policies.write'] };
+/** Every patch reads the realm it answers (realms.read), whatever it changes. */
+const WRITE = {
+  class: 'write',
+  effects: [],
+  permissions: ['realms.read', 'realms.policies.write'],
+};
+const SECURITY_PERMISSIONS = ['realms.read', 'realms.policies.security'];
 
 describe('the realm operations in the registry (#517)', () => {
   it('reads with realms.read, and patches the policies as a security operation that may need either permission', () => {
@@ -72,7 +78,11 @@ describe('the realm operations in the registry (#517)', () => {
     const update = operation();
     expect(update.id).toBe('realms.policies.update');
     expect(update.class).toBe('security');
-    expect(update.permissions).toEqual(['realms.policies.write', 'realms.policies.security']);
+    expect(update.permissions).toEqual([
+      'realms.policies.write',
+      'realms.policies.security',
+      'realms.read',
+    ]);
     expect(update.effects).toEqual(
       expect.arrayContaining(['credential-path', 'token-content', 'posture-loosening'])
     );
@@ -101,12 +111,12 @@ describe('the classification of a policy patch (#517)', () => {
     expect(classify({ password: { minScore: 1 } })).toEqual({
       class: 'security',
       effects: ['credential-path'],
-      permissions: ['realms.policies.security'],
+      permissions: SECURITY_PERMISSIONS,
     });
     expect(classify({ tokens: { accessTokenLifespanSeconds: 3600 } })).toMatchObject({
       class: 'security',
       effects: ['posture-loosening'],
-      permissions: ['realms.policies.security'],
+      permissions: SECURITY_PERMISSIONS,
     });
   });
 
@@ -120,6 +130,7 @@ describe('the classification of a policy patch (#517)', () => {
     expect([...classification.permissions].sort()).toEqual([
       'realms.policies.security',
       'realms.policies.write',
+      'realms.read',
     ]);
   });
 
@@ -163,7 +174,7 @@ describe('the classification of a policy patch (#517)', () => {
       expect(classify(body, state), JSON.stringify(body)).toEqual({
         class: 'security',
         effects: ['credential-path'],
-        permissions: ['realms.policies.security'],
+        permissions: SECURITY_PERMISSIONS,
       });
     }
   });
@@ -183,6 +194,7 @@ describe('the classification of a policy patch (#517)', () => {
       expect([...classification.permissions].sort()).toEqual([
         'realms.policies.security',
         'realms.policies.write',
+        'realms.read',
       ]);
     }
   });
@@ -195,16 +207,22 @@ describe('the classification of a policy patch (#517)', () => {
       stateOf(),
       '4'
     );
-    expect(classification).toMatchObject({ ...WRITE, failedClosed: null, stateVersion: '4' });
+    expect(classification).toMatchObject({
+      class: 'write',
+      effects: [],
+      failedClosed: null,
+      stateVersion: '4',
+    });
+    expect([...classification.permissions].sort()).toEqual([...WRITE.permissions].sort());
   });
 });
 
 describe('the state a policy patch is checked against (#517)', () => {
   /** A request behind the pipeline, for `realms.policies.update`'s `loadState`. */
-  function requestFor(state: RealmPolicyState, secretStore: unknown = null) {
+  function requestFor(state: RealmPolicyState, secretStore: unknown = null, transaction?: unknown) {
     const document = structuredClone(defaultsFromEnv({}));
     return {
-      adminPipeline: { authority: { targetRealm: { id: REALM } } },
+      adminPipeline: { authority: { targetRealm: { id: REALM } }, transaction },
       server: {
         realmSecretStore: secretStore,
         policyStore: {
@@ -246,6 +264,22 @@ describe('the state a policy patch is checked against (#517)', () => {
     await expect(load({ password: { minScore: 3 } })).resolves.toEqual(
       expect.objectContaining({ version: 4 })
     );
+  });
+
+  // From the reviews of #887 and #517: inside a handler, as when
+  // approvals.create files a patch, the read holds no second connection
+  // beside the handler's transaction.
+  it("reads in the handler's transaction when it runs inside one", async () => {
+    const tx = { id: 'handler-tx' };
+    const loadState = operation().loadState;
+    if (loadState === undefined) throw new Error('realms.policies.update reads no state');
+    const outside = requestFor(stateOf());
+    await loadState(outside, patchOf({}));
+    expect(outside.server.policyStore.get).toHaveBeenCalledWith(REALM, undefined);
+
+    const inside = requestFor(stateOf(), { isSet: vi.fn(async () => false) }, tx);
+    await loadState(inside, patchOf({}));
+    expect(inside.server.policyStore.representation).toHaveBeenCalledWith(REALM, tx);
   });
 
   // d-1102-02: a lockout or window longer than a day is refused, by field.
@@ -525,7 +559,7 @@ describe('the realm routes in the admin OpenAPI document (#517)', () => {
       expect(patch).toMatchObject({
         operationId: 'realms.policies.update',
         'x-qauth-class': 'security',
-        'x-qauth-permission': ['realms.policies.write', 'realms.policies.security'],
+        'x-qauth-permission': ['realms.policies.write', 'realms.policies.security', 'realms.read'],
         'x-qauth-effects': expect.arrayContaining(['credential-path']),
       });
       const report = checkApiConventions(document, { operations: OPERATION_REGISTRY });

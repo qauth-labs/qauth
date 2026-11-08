@@ -272,8 +272,10 @@ describe('the realm operations of the admin API (#517, real containers)', () => 
     return rows.map((row) => row.row).join('\n');
   }
 
-  // Scenario 1, and the review of #887: a viewer reads, and a patch is
-  // refused before anything is read, so a stale If-Match is 403 too.
+  // Scenario 1. A caller who holds none of the patch's permissions is refused
+  // before the state is read (review of #887): the unit test of the
+  // classification stage shows it; a viewer holds realms.read, which the
+  // patch needs too, so it is refused at the authorization stage.
   it('lets a viewer with qauth:admin:read read the realm, and refuses its patch with 403', async () => {
     const realm = await tenant('alpha');
     const viewer = await adminWith(realm.id, 'viewer', 'qauth:admin:read');
@@ -292,16 +294,14 @@ describe('the realm operations of the admin API (#517, real containers)', () => 
     expect(body.policies.mail.smtp).toHaveProperty('passwordSet', false);
     expect(body.policies.mail.smtp).not.toHaveProperty('password');
 
-    for (const ifMatch of [etag, '"999"']) {
-      const refused = await patch(
-        realm.id,
-        viewer.token,
-        { tokens: { accessTokenLifespanSeconds: 300 } },
-        ifMatch
-      );
-      expect(refused.statusCode, ifMatch).toBe(403);
-      expect(refused.json()).toMatchObject({ code: 'forbidden' });
-    }
+    const refused = await patch(
+      realm.id,
+      viewer.token,
+      { tokens: { accessTokenLifespanSeconds: 300 } },
+      etag
+    );
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json()).toMatchObject({ code: 'forbidden' });
     expect((await read(realm.id, viewer.token)).etag).toBe(etag);
   });
 
@@ -367,7 +367,13 @@ describe('the realm operations of the admin API (#517, real containers)', () => 
     expect(byEditor.statusCode).toBe(403);
     expect(byEditor.json()).toMatchObject({ code: 'forbidden' });
 
-    const securityAdmin = await adminWith(realm.id, 'security-admin');
+    // A token without qauth:admin:write: a security-only change needs
+    // realms.policies.security, never realms.policies.write, to be filed and run.
+    const securityAdmin = await adminWith(
+      realm.id,
+      'security-admin',
+      'qauth:admin:read qauth:admin:security'
+    );
     const unapproved = await patch(realm.id, securityAdmin.token, lowered, etag);
     expect(unapproved.statusCode).toBe(403);
     expect(unapproved.json()).toMatchObject({ code: 'approval_required' });

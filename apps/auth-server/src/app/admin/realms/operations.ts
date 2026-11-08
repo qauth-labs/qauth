@@ -13,6 +13,7 @@ import type { FastifyRequest } from 'fastify';
 import {
   classifyByField,
   type FieldRule,
+  mergeClassifications,
   mergePatchLeafPaths,
   UnknownFieldError,
 } from '../../helpers/admin-classification';
@@ -143,6 +144,18 @@ const WRITE: Classification = Object.freeze({
   permissions: Object.freeze(['realms.policies.write']),
 });
 
+/**
+ * What every patch needs besides its change: reading the realm, since it
+ * answers the realm's representation. The admin scopes are independent, so
+ * without it a token with `qauth:admin:write` alone would read every policy
+ * through a patch that changes nothing.
+ */
+const READ: Classification = Object.freeze({
+  class: 'read',
+  effects: Object.freeze([]),
+  permissions: Object.freeze(['realms.read']),
+});
+
 /** What one changed field needs: its annotation decides (CFG-02). */
 function classificationOfChange(change: PolicyChange): Classification {
   return change.class === 'security'
@@ -151,7 +164,8 @@ function classificationOfChange(change: PolicyChange): Classification {
 }
 
 /**
- * The classification of a policy patch (API-03). The fields it changes are
+ * The classification of a policy patch (API-03), which always needs
+ * `realms.read` too: it answers the realm. The fields it changes are
  * the leaf paths of its body (`mergePatchLeafPaths`), so a member the table
  * does not hold fails the request closed; each is classified by its change in
  * the merged document. A change the leaves do not account for (a group set
@@ -183,11 +197,14 @@ export function classifyPolicyPatch(
       throw new UnknownFieldError(change.path);
     }
   }
-  return classifyByField<RealmPolicyState>({
-    changedFields: () => leaves,
-    fields,
-    unchanged: WRITE,
-  })(request, state);
+  return mergeClassifications([
+    READ,
+    classifyByField<RealmPolicyState>({
+      changedFields: () => leaves,
+      fields,
+      unchanged: WRITE,
+    })(request, state),
+  ]);
 }
 
 /**
@@ -228,7 +245,8 @@ export async function readPolicyState(
  * schema refuses is answered 422 here, before it is classified or authorized
  * further, and is never filed for an approval: the fields it names are what
  * it would change, and there is no change to approve. So is one that sets or
- * clears a secret on a server with no secret store.
+ * clears a secret on a server with no secret store. Inside an admin handler
+ * it reads in the handler's transaction.
  *
  * @throws UnprocessableContentError naming each refused field
  */
@@ -242,7 +260,14 @@ async function loadPolicyState(
   if (caller === undefined) {
     throw new Error('realms.policies.update reads its realm only behind the admin pipeline');
   }
-  const state = await readPolicyState(request, caller.targetRealm.id);
+  // Inside a handler (approvals.create files the patch from its own), the
+  // read takes the handler's transaction: a second connection from the pool
+  // would be held beside it, outside the audited transaction (#887).
+  const state = await readPolicyState(
+    request,
+    caller.targetRealm.id,
+    request.adminPipeline?.transaction
+  );
   if (request.server.realmSecretStore === null) {
     const named = secretMembersNamed(input.body);
     if (named.length > 0) {
@@ -359,9 +384,9 @@ export const REALM_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] = 
         ...POLICY_EFFECTS,
       ] as const),
     ],
-    permissions: ['realms.policies.write', 'realms.policies.security'],
+    permissions: ['realms.policies.write', 'realms.policies.security', 'realms.read'],
     description:
-      "Change a realm's policies with a JSON Merge Patch against the version it names; each field it changes needs what its annotation says, a security change an approval, and a secret field only sealed.",
+      "Change a realm's policies with a JSON Merge Patch against the version it names; each field it changes needs what its annotation says, a security change an approval, and a secret field only sealed; it answers the realm, so it needs realms.read too.",
     loadState: loadPolicyState,
     stateVersion: (state: unknown) => String((state as RealmPolicyState).version),
     classify: (request: ClassifyInput, state: unknown) =>

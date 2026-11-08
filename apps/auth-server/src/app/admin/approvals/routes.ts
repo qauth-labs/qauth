@@ -282,7 +282,7 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
         ...operationSchemaExtensions(operations.create),
         ...common,
         summary: 'File an approval for one request of a security operation',
-        'x-qauth-errors': [400, 401, 403, 404],
+        'x-qauth-errors': [400, 401, 403, 404, 422],
         params: realmParams,
         body: createBody,
         response: { 201: approvalSchema },

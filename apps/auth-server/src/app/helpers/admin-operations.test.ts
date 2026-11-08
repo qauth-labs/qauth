@@ -1111,7 +1111,12 @@ const unless =
   (request: ClassifyInput, state: unknown): Classification =>
     safe(at(request.body, path), at(state, path)) ? WRITE : securityWith(effect);
 
-const REQUEST_DEPENDENT_PERMISSIONS = ['realms.policies.write', 'realms.policies.security'];
+// realms.read: a policy patch answers the realm it changes (#517).
+const REQUEST_DEPENDENT_PERMISSIONS = [
+  'realms.policies.write',
+  'realms.policies.security',
+  'realms.read',
+];
 
 /** A correct classify for each request-dependent reserved entry, as its issue would write it. */
 const CORRECT_CLASSIFY: Record<string, AdminOperationDefinition['classify']> = {

@@ -389,7 +389,7 @@ export const realmRoutes: FastifyPluginAsync = async (fastify) => {
         summary: "Change a realm's policies",
         description:
           'A JSON Merge Patch (RFC 7396) of the policies, judged on the merged document: a change a field’s annotation makes a security change needs realms.policies.security and an approval, any other realms.policies.write. If-Match names the ETag of the realm (428 without it, 412 when the policies moved). A secret field takes a value secrets.seal sealed for this operation and its member, or null to clear it.',
-        'x-qauth-errors': [400, 401, 403, 404, 412, 415, 422, 428],
+        'x-qauth-errors': [400, 401, 403, 404, 412, 415, 422, 428, 503],
         consumes: [MERGE_PATCH_MEDIA_TYPE],
         params: realmParams,
         headers: ifMatchHeadersSchema,

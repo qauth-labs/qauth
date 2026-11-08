@@ -64,6 +64,46 @@ describe('the approval operations (#512)', () => {
     }
   });
 
+  // #517: a patch that changes only security fields needs only the security
+  // permission, and must be fileable by a caller who holds no other.
+  it('file an approval for an operation that also declares write permissions with its security permissions alone', () => {
+    const mixed = defineOperation({
+      id: 'fixturePolicies.update',
+      class: 'security',
+      effects: ['credential-path'],
+      permissions: ['realms.policies.write', 'realms.policies.security', 'realms.read'],
+      description: 'A request-dependent security operation (fixture).',
+      render: () => ({ title: 'Change the policies' }),
+    });
+    const registry = createAdminOperationRegistry([mixed] as AdminOperation[], { reserved: [] });
+    const create = registry.get('approvals.create');
+    if (create === undefined) throw new Error('no approvals.create');
+    expect(
+      classifyRequest(registry, create, {
+        method: 'POST',
+        params: {},
+        query: {},
+        body: { operation: mixed.id },
+      })
+    ).toMatchObject({
+      class: 'security',
+      effects: ['credential-path'],
+      permissions: ['realms.policies.security'],
+      failedClosed: null,
+    });
+    // The server's own: the realm policy patch is fileable with realms.policies.security.
+    const serverCreate = OPERATION_REGISTRY.get('approvals.create');
+    if (serverCreate === undefined) throw new Error('no approvals.create');
+    expect(
+      classifyRequest(OPERATION_REGISTRY, serverCreate, {
+        method: 'POST',
+        params: {},
+        query: {},
+        body: { operation: 'realms.policies.update' },
+      }).permissions
+    ).toEqual(['realms.policies.security']);
+  });
+
   it('file an approval with the classification of the operation it is for', () => {
     expect(filing({ operation: ROTATE.id })).toMatchObject({
       class: 'security',

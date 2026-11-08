@@ -462,6 +462,8 @@ describe('the API conventions check — fixture document (#506)', () => {
       const { violations } = checkApiConventions(fixture);
       expect(violations.map((violation) => [violation.operation, violation.rule])).toEqual([
         ['GET /admin/v1-rc.0/realms', 'registry'],
+        // Its effects, and its permissions: the server's also hold realms.read.
+        ['PATCH /admin/v1-rc.0/realms/{realmId}/policies', 'registry'],
         ['PATCH /admin/v1-rc.0/realms/{realmId}/policies', 'registry'],
       ]);
     });
