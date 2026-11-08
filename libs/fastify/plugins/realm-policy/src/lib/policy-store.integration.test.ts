@@ -307,29 +307,32 @@ describe('policy store over the realms table (integration)', () => {
     });
   });
 
-  it("writes no policy column through the repository's plain update", async () => {
+  it("refuses a policy column in the repository's plain update, writing nothing", async () => {
     const realms = createRealmsRepository(db().db, {
       seeds: { policies: { document: SEEDS, schemaVersion: REALM_POLICY_SCHEMA_VERSION } },
     });
     const realm = await realms.create({ name: 'plain-update' });
     const before = await row(realm.id);
 
-    // A caller the types do not bind: every policy column is dropped, the
-    // rest is written.
-    await realms.update(realm.id, {
-      enabled: false,
-      accessTokenLifespan: 0,
-      refreshTokenLifespan: 0,
-      dynamicRegistrationAllowedScopes: ['openid', 'openid', 'a scope'],
-      maxEnvironmentLaxity: 'development',
-      policies: { password: { minScore: 0 } },
-      policySchemaVersion: '9',
-      policiesVersion: 0,
-    } as never);
+    // A caller the types do not bind: a policy column is a programming
+    // error (#517), and nothing of the call is written.
+    for (const policyColumn of [
+      { accessTokenLifespan: 0 },
+      { refreshTokenLifespan: 0 },
+      { dynamicRegistrationAllowedScopes: ['openid', 'openid', 'a scope'] },
+      { maxEnvironmentLaxity: 'development' },
+      { policies: { password: { minScore: 0 } } },
+      { policySchemaVersion: '9' },
+      { policiesVersion: 0 },
+    ]) {
+      await expect(
+        realms.update(realm.id, { enabled: false, ...policyColumn } as never)
+      ).rejects.toThrow(TypeError);
+    }
 
     const after = await row(realm.id);
     expect(after).toMatchObject({
-      enabled: false,
+      enabled: before.enabled,
       access_token_lifespan: before.access_token_lifespan,
       refresh_token_lifespan: before.refresh_token_lifespan,
       dynamic_registration_allowed_scopes: before.dynamic_registration_allowed_scopes,

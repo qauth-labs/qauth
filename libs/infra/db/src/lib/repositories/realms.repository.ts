@@ -134,7 +134,7 @@ export interface RealmPoliciesWrite {
 /** The policy columns of a realm row, which only the repository's seed and `writePolicies` set. */
 type RealmPolicyColumnsOfRow = Pick<InferInsertModel<typeof realms>, RealmPolicyColumnKey>;
 
-/** The keys of {@link RealmPolicyColumnKey}, which `seeded` and `update` drop from their input. */
+/** The keys of {@link RealmPolicyColumnKey}: `seeded` drops them from its input, and `update` refuses them. */
 const REALM_POLICY_COLUMN_KEYS: readonly RealmPolicyColumnKey[] = Object.freeze([
   'policies',
   'policySchemaVersion',
@@ -151,6 +151,25 @@ function withoutPolicyColumns<T extends object>(data: T): T {
   const copy = { ...data } as Record<string, unknown>;
   for (const key of REALM_POLICY_COLUMN_KEYS) delete copy[key];
   return copy as T;
+}
+
+/**
+ * Refuse a plain realm write that names a policy column (review of #910,
+ * #517): the policies are the policy store's alone, and a caller that writes
+ * one through `update` made a programming error, which dropping the column
+ * would hide. Names the members, never their values.
+ *
+ * @throws TypeError when `data` holds a policy column
+ */
+function refusePolicyColumns(data: object): void {
+  const named = REALM_POLICY_COLUMN_KEYS.filter(
+    (key) => Object.hasOwn(data, key) && (data as Record<string, unknown>)[key] !== undefined
+  );
+  if (named.length > 0) {
+    throw new TypeError(
+      `A realm's policies are written through the policy store, not realms.update: ${named.join(', ')}`
+    );
+  }
 }
 
 /** The database constraint behind each rule (migration 0056). */
@@ -1097,13 +1116,17 @@ export function createRealmsRepository(
      * database (trigger `realms_issuer_permanent`, SQLSTATE 23514). The
      * operator flag is `setOperator`'s to write. The realm's policies, the
      * four column-backed fields among them, are the policy store's
-     * (`writePolicies`, #516): `update` drops them from `data`.
+     * (`writePolicies`, #516).
+     *
+     * @throws TypeError when `data` names a policy column, before anything is
+     *   written (#517): a programming error, never dropped silently
      */
     async update(id: string, data: UpdateRealm, tx?: DbClient): Promise<Realm> {
       // The policies are the policy store's alone (#516), even for a caller
-      // the types do not bind.
+      // the types do not bind: naming one throws (#517).
+      refusePolicyColumns(data);
       // The sandbox pairing is set at creation alone (#554).
-      const changes = withoutSandboxPairing(withoutPolicyColumns(data));
+      const changes = withoutSandboxPairing(data);
       assertEventRetention(changes);
       assertSsoLimits(changes);
       const invoker = tx ?? defaultDb;
