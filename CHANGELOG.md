@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-08
+
+A patch release that carries breaking changes, as a 0.x release may (see the
+**Upgrading** notes below). A sign-in no longer waits on a mailed code that
+cannot arrive, and a first passkey or TOTP binds to a verified account with no
+mailed code, so a deployment without mail can add passkeys. The sign-in pages
+return the browser to the client in Chromium and WebKit. `INTERACTION_UI_ENABLED`
+needs `CEREMONY_APP_DEPLOYED`, and the realm's verified-account gate decides
+again. It adds the admin API's realm and policy operations.
+
 ### Added
 
 - **A plugin names where its secrets go, and a preset's kept secret is
@@ -4685,7 +4695,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/qauth-labs/qauth/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/qauth-labs/qauth/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/qauth-labs/qauth/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/qauth-labs/qauth/compare/v0.1.2...v0.1.3
