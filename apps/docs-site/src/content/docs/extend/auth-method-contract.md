@@ -657,7 +657,7 @@ release the plugin is for. A release is on npm's `latest` dist-tag, the first be
 and a release candidate is on `next`. Zod is a peer dependency, so install it beside the SDK:
 
 ```sh
-npm install @qauth-labs/plugin-sdk@0.2.0 zod
+npm install @qauth-labs/plugin-sdk@0.2.1 zod
 ```
 
 **Export the method.** The package's entry point exports its method as `authMethod`
@@ -712,7 +712,7 @@ the method's schema is built with the server's Zod ([secret members](#packaging-
   "type": "module",
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
   "files": ["dist"],
-  "dependencies": { "@qauth-labs/plugin-sdk": "0.2.0" },
+  "dependencies": { "@qauth-labs/plugin-sdk": "0.2.1" },
   "peerDependencies": { "zod": "^4.6.7" }
 }
 ```
