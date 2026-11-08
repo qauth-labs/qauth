@@ -8,6 +8,7 @@ import {
   PolicySchemaVersionError,
   PolicySecretStoreUnavailableError,
   PolicyVersionConflictError,
+  type RealmPolicyChange,
   RealmPolicyNotFoundError,
   type RealmPolicyRecord,
   RealmPolicySeedRefusedError,
@@ -23,6 +24,7 @@ import {
 import { createPolicyRegistry, PolicyValidationError } from './registry';
 import { createRealmSecretStore, type RealmSecretStore } from './secret-store';
 import type { PolicySchemaUpgrade } from './upgrades';
+import { REALM_POLICY_SCHEMA_VERSION } from './version';
 
 /**
  * The policy store (#516) over an in-memory storage: reads join the stored
@@ -140,7 +142,7 @@ function realmWithPolicies(overrides: Partial<MemoryRealm> = {}): MemoryRealm {
     id: 'realm-a',
     name: 'master',
     version: 3,
-    schemaVersion: '1-rc.0',
+    schemaVersion: REALM_POLICY_SCHEMA_VERSION,
     document: structuredClone(SEEDS) as unknown as Record<string, unknown>,
     keptOnFill: {},
     ...overrides,
@@ -186,7 +188,7 @@ describe('createPolicyStore — reading', () => {
       realmId: 'realm-a',
       version: 3,
       hasPolicies: true,
-      schemaVersion: '1-rc.0',
+      schemaVersion: REALM_POLICY_SCHEMA_VERSION,
       policies: SEEDS,
     });
     expect(snapshot?.policies.tokens.accessTokenLifespanSeconds).toBe(600);
@@ -851,7 +853,13 @@ describe('createPolicyStore — seedRealms', () => {
         doc: { summary: 'The lowest score.', link: 'https://docs.qauth.dev/' },
       }),
     });
-    const stored = { id: 'r', name: 'r', version: 2, schemaVersion: '1-rc.0', keptOnFill: {} };
+    const stored = {
+      id: 'r',
+      name: 'r',
+      version: 2,
+      schemaVersion: REALM_POLICY_SCHEMA_VERSION,
+      keptOnFill: {},
+    };
     const memory = memoryStorage([{ ...stored, document: { password: { minScore: 1 } } }]);
     const before = createPolicyStore({
       storage: memory.storage,
@@ -1772,7 +1780,7 @@ describe('createPolicyStore — the mail transport rule on every update (#529)',
       }),
     });
     const rule = vi.fn(() => [{ path: 'sample.size', message: 'is never right' }]);
-    const realm = realmWithPolicies({ document: { sample: { size: 1 } } });
+    const realm = realmWithPolicies({ schemaVersion: '1-rc.0', document: { sample: { size: 1 } } });
 
     const plain = createPolicyStore({
       storage: memoryStorage([structuredClone(realm)]).storage,
@@ -1838,5 +1846,137 @@ describe('createPolicyStore — the representation (#529)', () => {
     expect(mail['smtp']?.['passwordSet']).toBe(false);
     expect(mail['resend']).toEqual({ apiKeySet: false });
     expect(await withStore.store.representation('no-such-realm')).toBeUndefined();
+  });
+});
+
+describe('createPolicyStore — the brute-force bounds of 1-rc.1 (#517)', () => {
+  /** A realm whose 1-rc.0 policies hold the given brute-force values. */
+  function realmOfRc0(bruteForce: Record<string, unknown>): MemoryRealm {
+    const document = structuredClone(SEEDS) as unknown as Record<string, unknown>;
+    document['bruteForce'] = { ...(document['bruteForce'] as object), ...bruteForce };
+    return realmWithPolicies({ schemaVersion: '1-rc.0', document });
+  }
+
+  it('reads a lockout or window 1-rc.0 stored above a day as a day, and the boot stores it so', async () => {
+    const { store, rows } = storeOver([
+      realmOfRc0({ lockoutSeconds: 172_800, windowSeconds: 90_000 }),
+    ]);
+
+    const snapshot = await store.get('realm-a');
+    expect(snapshot?.schemaVersion).toBe(REALM_POLICY_SCHEMA_VERSION);
+    expect(snapshot?.policies.bruteForce).toMatchObject({
+      lockoutSeconds: 86_400,
+      windowSeconds: 86_400,
+    });
+
+    const report = await store.seedRealms();
+    expect(report.upgraded).toEqual([
+      { realmId: 'realm-a', realmName: 'master', from: '1-rc.0', paths: [] },
+    ]);
+    const row = rows.get('realm-a');
+    expect(row?.schemaVersion).toBe('1-rc.1');
+    expect(row?.document['bruteForce']).toMatchObject({
+      lockoutSeconds: 86_400,
+      windowSeconds: 86_400,
+    });
+  });
+
+  it('leaves a value within the bound as stored, and one the schema refuses refused', async () => {
+    const within = storeOver([realmOfRc0({ lockoutSeconds: 600, windowSeconds: 86_400 })]);
+    expect((await within.store.get('realm-a'))?.policies.bruteForce).toMatchObject({
+      lockoutSeconds: 600,
+      windowSeconds: 86_400,
+    });
+
+    const refused = storeOver([realmOfRc0({ lockoutSeconds: 'a day' })]);
+    await expect(refused.store.get('realm-a')).rejects.toBeInstanceOf(PolicyValidationError);
+  });
+
+  it('refuses an update that sets more than a day, naming the path, writing nothing', async () => {
+    const { store, writes } = storeOver([realmWithPolicies()]);
+
+    const refusal = await store
+      .update('realm-a', { bruteForce: { lockoutSeconds: 86_401 } }, { expectedVersion: 3 })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(PolicyValidationError);
+    expect((refusal as PolicyValidationError).issues.map((issue) => issue.path)).toEqual([
+      'bruteForce.lockoutSeconds',
+    ]);
+    expect(writes).toHaveLength(0);
+  });
+});
+
+describe('createPolicyStore — the update guard (#517)', () => {
+  const SMTP_PATCH = {
+    mail: {
+      provider: 'smtp',
+      fromAddress: 'no-reply@example.com',
+      smtp: { host: 'smtp.example.com', port: 587, user: 'mailer', password: SECRET },
+    },
+    password: { minScore: 1 },
+  };
+
+  it('hands the guard the change in the update’s transaction, before anything is written', async () => {
+    const { secrets, puts } = memorySecrets();
+    const { store, writes } = storeOver([realmWithPolicies()], secrets);
+    const seen: { change: RealmPolicyChange; written: number; put: number }[] = [];
+
+    await store.update('realm-a', SMTP_PATCH, {
+      expectedVersion: 3,
+      guard: (change) => {
+        seen.push({ change, written: writes.length, put: puts.length });
+      },
+    });
+
+    expect(seen).toHaveLength(1);
+    const [{ change, written, put }] = seen;
+    expect([written, put]).toEqual([0, 0]);
+    expect(change.realmId).toBe('realm-a');
+    expect(change.version).toBe(3);
+    expect(change.before['password']).toMatchObject({ minScore: 3 });
+    expect(change.after['password']).toMatchObject({ minScore: 1 });
+    expect(change.diff.changes.map((entry) => [entry.path, entry.class])).toEqual([
+      ['password.minScore', 'security'],
+      ['mail.provider', 'security'],
+      ['mail.fromAddress', 'security'],
+      ['mail.smtp.host', 'security'],
+      ['mail.smtp.port', 'security'],
+      ['mail.smtp.user', 'security'],
+      ['mail.smtp.password', 'security'],
+    ]);
+    expect(change.diff.changes.at(-1)).toMatchObject({ before: false, after: true, secret: true });
+    expect(stringsIn(change)).not.toContain(SECRET);
+    expect(Object.isFrozen(change.diff)).toBe(true);
+    expect(Object.isFrozen(change.after)).toBe(true);
+  });
+
+  it('writes nothing, and sets no secret, when the guard throws', async () => {
+    const { secrets, puts } = memorySecrets();
+    const { store, writes, rows } = storeOver([realmWithPolicies()], secrets);
+    const refusal = new Error('the change needs more than the request was authorized for');
+
+    await expect(
+      store.update('realm-a', SMTP_PATCH, {
+        expectedVersion: 3,
+        guard: async () => {
+          throw refusal;
+        },
+      })
+    ).rejects.toBe(refusal);
+
+    expect(writes).toHaveLength(0);
+    expect(puts).toHaveLength(0);
+    expect(rows.get('realm-a')?.version).toBe(3);
+  });
+
+  it('is not called for an update the schema refuses', async () => {
+    const { store } = storeOver([realmWithPolicies()]);
+    const guard = vi.fn();
+
+    await expect(
+      store.update('realm-a', { password: { minScore: 9 } }, { expectedVersion: 3, guard })
+    ).rejects.toBeInstanceOf(PolicyValidationError);
+    expect(guard).not.toHaveBeenCalled();
   });
 });

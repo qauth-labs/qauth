@@ -295,23 +295,42 @@ describe('createRealmsRepository — the policy seed (#516)', () => {
     }
   });
 
-  it('drops every policy column from a plain update, the four column-backed ones among them', async () => {
+  // Review of #910 (#517): a plain update that names a policy column is a
+  // programming error, refused before the database sees it, never dropped.
+  it('refuses a plain update that names a policy column, the four column-backed ones among them', async () => {
     const { db, queries } = createRecordingDb();
+    const realms = createRealmsRepository(db);
+    const id = '00000000-0000-7000-8000-000000000001';
+    const columns = {
+      accessTokenLifespan: 0,
+      refreshTokenLifespan: 0,
+      dynamicRegistrationAllowedScopes: ['qauth:admin:read'],
+      maxEnvironmentLaxity: 'development',
+      policies: { password: { minScore: 0 } },
+      policySchemaVersion: '9',
+      policiesVersion: 0,
+    };
 
-    // The recording database has no such realm, so the update finds none.
+    for (const [column, value] of Object.entries(columns)) {
+      await expect(
+        realms.update(id, { enabled: false, [column]: value } as unknown as UpdateRealm),
+        column
+      ).rejects.toThrow(
+        new RegExp(
+          `^A realm's policies are written through the policy store, not realms.update: ${column}$`
+        )
+      );
+    }
     await expect(
-      createRealmsRepository(db).update('00000000-0000-7000-8000-000000000001', {
-        enabled: false,
-        accessTokenLifespan: 0,
-        refreshTokenLifespan: 0,
-        dynamicRegistrationAllowedScopes: ['qauth:admin:read'],
-        maxEnvironmentLaxity: 'development',
-        policies: { password: { minScore: 0 } },
-        policySchemaVersion: '9',
-        policiesVersion: 0,
-      } as unknown as UpdateRealm)
-    ).rejects.toThrow('not found');
+      realms.update(id, { enabled: false, ...columns } as unknown as UpdateRealm)
+    ).rejects.toThrow(TypeError);
+    expect(queries).toEqual([]);
 
+    // A member left undefined names nothing: the recording database has no
+    // such realm, so the update finds none.
+    await expect(
+      realms.update(id, { enabled: false, policies: undefined } as unknown as UpdateRealm)
+    ).rejects.toThrow('not found');
     expect(queries).toHaveLength(1);
     expect(queries[0].text).toMatch(
       /^update "realms" set "enabled" = \$1, "updated_at" = \$2 where/

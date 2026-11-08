@@ -71,13 +71,20 @@ export function isApprovalEngineOperation(operation: AdminOperation | undefined)
 }
 
 /**
- * The classification of the operation `id` names: its declaration, which
- * holds for every request of it.
+ * The classification of filing or withdrawing an approval for the operation
+ * `id` names: its declaration, which holds for every request of it, with the
+ * declared permissions of class `security` when it has any. An approval is
+ * asked only for a security change, which needs those; what else a request
+ * of the operation needs, such as a write permission for the other fields of
+ * a mixed patch (#517), is checked when the request runs with the approval.
+ * Without this, a caller who may make a security-only change of an
+ * operation that declares a write permission too could never file it.
  *
  * @throws {Error} when `id` names no security operation of the registry, or
  *   one of the engine's own: the request then fails closed
  */
 function declarationOf(
+  permissions: PermissionRegistry,
   lookup: (id: string) => AdminOperation | undefined,
   id: unknown
 ): Classification {
@@ -89,10 +96,13 @@ function declarationOf(
   ) {
     throw new Error('the approval names no security operation of this server');
   }
+  const security = operation.permissions.filter(
+    (permission) => permissions.get(permission)?.class === 'security'
+  );
   return {
     class: operation.class,
     effects: [...operation.effects],
-    permissions: [...operation.permissions],
+    permissions: security.length > 0 ? security : [...operation.permissions],
   };
 }
 
@@ -149,9 +159,13 @@ export function approvalOperationDefinitions(
       id: APPROVAL_OPERATION_IDS.create,
       ...every,
       description:
-        'File an approval request for one request of a security operation: it needs what that operation needs.',
+        'File an approval request for one request of a security operation: it needs the security permissions that operation declares, or all it declares when it has none.',
       classify: engineClassify((request: { readonly body: unknown }) =>
-        declarationOf(lookup, (request.body as { operation?: unknown } | null)?.operation)
+        declarationOf(
+          permissions,
+          lookup,
+          (request.body as { operation?: unknown } | null)?.operation
+        )
       ),
     },
     {
@@ -166,11 +180,11 @@ export function approvalOperationDefinitions(
       id: APPROVAL_OPERATION_IDS.cancel,
       ...every,
       description:
-        'Withdraw an approval request the caller filed: it needs what the operation it is for needs.',
+        'Withdraw an approval request the caller filed: it needs the security permissions the operation it is for declares, or all it declares when it has none.',
       loadState: loadCancelState,
       stateVersion: (state: unknown) => (state as CancelState).version,
       classify: engineClassify((_request: unknown, state: unknown) =>
-        declarationOf(lookup, (state as CancelState).operationId)
+        declarationOf(permissions, lookup, (state as CancelState).operationId)
       ),
     } as AdminOperationDefinition,
   ];

@@ -12,7 +12,7 @@
  *   stops both and the process exits 0.
  * - With the admin port taken, the process exits 1 and never listens on the
  *   public port.
- * - With ADMIN_API_ENABLED unset (off by default until #517) or false, or
+ * - With ADMIN_API_ENABLED unset (off by default) or false, or
  *   without the admin role, nothing listens on the admin port.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
@@ -220,14 +220,16 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
       messages.indexOf(`Server listening on http://127.0.0.1:${server.port}`)
     );
 
-    // The admin listener answers its own OpenAPI document. No admin operation
-    // ships yet (#517), so the realm path is one no route serves; the
-    // pipeline's refusals are `app/admin-listener.integration.test.ts`'s.
+    // The admin listener answers its own OpenAPI document, and serves the
+    // realm route (#517) behind the pipeline, whose first stage refuses a call
+    // without a DPoP-bound admin token; its other refusals are
+    // `app/admin-listener.integration.test.ts`'s.
     const document = await fetch(`http://127.0.0.1:${server.adminPort}/admin/v1-rc.0/openapi.json`);
     expect(document.status).toBe(200);
     expect(await document.json()).toMatchObject({ info: { title: 'QAuth Admin API' } });
     const realm = await fetch(`http://127.0.0.1:${server.adminPort}${REALM_PATH}`);
-    expect(realm.status).toBe(404);
+    expect(realm.status).toBe(401);
+    expect(realm.headers.get('www-authenticate')).toMatch(/^DPoP /);
     // No route serves them there, so the answer comes before any realm.
     for (const pathname of [REALM_PATH, '/admin/v1-rc.0/openapi.json']) {
       const onPublic = await fetch(`http://127.0.0.1:${server.port}${pathname}`);

@@ -241,9 +241,9 @@ describe('policy store over the realms table (integration)', () => {
     const realm = await realms.create({ name: 'earlier' });
     await storeOn(db()).update(realm.id, { password: { minScore: 4 } }, { expectedVersion: 1 });
 
-    // The release that changes the version to 1-rc.1 and renames
+    // The release that changes the version to 1-rc.2 and renames
     // password.minScore, whose seed it reads as 0: looser than stored.
-    const registry = createPolicyRegistry({ version: '1-rc.1', env: REALM_POLICY_ENV });
+    const registry = createPolicyRegistry({ version: '1-rc.2', env: REALM_POLICY_ENV });
     for (const [name, shape] of Object.entries(BUILT_IN_POLICY_GROUPS)) {
       registry.registerPolicyGroup(
         name,
@@ -258,7 +258,7 @@ describe('policy store over the realms table (integration)', () => {
     }
     const rename: PolicySchemaUpgrade = {
       from: REALM_POLICY_SCHEMA_VERSION,
-      to: '1-rc.1',
+      to: '1-rc.2',
       upgrade(document) {
         const password = document['password'] as Record<string, unknown>;
         password['minimumScore'] = password['minScore'];
@@ -275,7 +275,7 @@ describe('policy store over the realms table (integration)', () => {
 
     expect(await next.get(realm.id)).toMatchObject({
       version: 2,
-      schemaVersion: '1-rc.1',
+      schemaVersion: '1-rc.2',
       policies: { password: { minimumScore: 4 } },
     });
     expect((await row(realm.id)).policy_schema_version).toBe(REALM_POLICY_SCHEMA_VERSION);
@@ -284,7 +284,7 @@ describe('policy store over the realms table (integration)', () => {
       { realmId: realm.id, realmName: 'earlier', from: REALM_POLICY_SCHEMA_VERSION, paths: [] },
     ]);
     const stored = await row(realm.id);
-    expect(stored).toMatchObject({ policy_schema_version: '1-rc.1', policies_version: 3 });
+    expect(stored).toMatchObject({ policy_schema_version: '1-rc.2', policies_version: 3 });
     expect((stored['policies'] as Record<string, unknown>)['password']).toEqual({
       minLength: 15,
       minimumScore: 4,
@@ -298,7 +298,7 @@ describe('policy store over the realms table (integration)', () => {
     const previous = storeOn(db());
     expect(await previous.get(realm.id)).toMatchObject({
       version: 3,
-      schemaVersion: '1-rc.1',
+      schemaVersion: '1-rc.2',
       policies: { password: { minScore: 3 } },
     });
     await expect(previous.update(realm.id, {}, { expectedVersion: 3 })).rejects.toMatchObject({
@@ -307,29 +307,32 @@ describe('policy store over the realms table (integration)', () => {
     });
   });
 
-  it("writes no policy column through the repository's plain update", async () => {
+  it("refuses a policy column in the repository's plain update, writing nothing", async () => {
     const realms = createRealmsRepository(db().db, {
       seeds: { policies: { document: SEEDS, schemaVersion: REALM_POLICY_SCHEMA_VERSION } },
     });
     const realm = await realms.create({ name: 'plain-update' });
     const before = await row(realm.id);
 
-    // A caller the types do not bind: every policy column is dropped, the
-    // rest is written.
-    await realms.update(realm.id, {
-      enabled: false,
-      accessTokenLifespan: 0,
-      refreshTokenLifespan: 0,
-      dynamicRegistrationAllowedScopes: ['openid', 'openid', 'a scope'],
-      maxEnvironmentLaxity: 'development',
-      policies: { password: { minScore: 0 } },
-      policySchemaVersion: '9',
-      policiesVersion: 0,
-    } as never);
+    // A caller the types do not bind: a policy column is a programming
+    // error (#517), and nothing of the call is written.
+    for (const policyColumn of [
+      { accessTokenLifespan: 0 },
+      { refreshTokenLifespan: 0 },
+      { dynamicRegistrationAllowedScopes: ['openid', 'openid', 'a scope'] },
+      { maxEnvironmentLaxity: 'development' },
+      { policies: { password: { minScore: 0 } } },
+      { policySchemaVersion: '9' },
+      { policiesVersion: 0 },
+    ]) {
+      await expect(
+        realms.update(realm.id, { enabled: false, ...policyColumn } as never)
+      ).rejects.toThrow(TypeError);
+    }
 
     const after = await row(realm.id);
     expect(after).toMatchObject({
-      enabled: false,
+      enabled: before.enabled,
       access_token_lifespan: before.access_token_lifespan,
       refresh_token_lifespan: before.refresh_token_lifespan,
       dynamic_registration_allowed_scopes: before.dynamic_registration_allowed_scopes,

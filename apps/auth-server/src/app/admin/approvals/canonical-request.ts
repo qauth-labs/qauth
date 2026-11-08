@@ -23,6 +23,12 @@ import { canonicalizeJson } from '@qauth-labs/fastify-plugin-db';
  * it may hold included, against it (#901). The approval never stores the
  * body, and its nonce is overwritten once it is closed or expired.
  *
+ * An operation that reads state to classify (`loadState`) is also bound to
+ * the version of the state it was filed against (`stateVersion`, #517), so an
+ * approval of "this value replaces that one" never approves the same body
+ * once the value it replaces has changed. Any other request has no such
+ * member, so its `op_hash` is the one it always had.
+ *
  * Values are compared after the route's own validation: the approval routes
  * parse the filed path parameters, query and body with the schemas of the
  * operation's route, as the retried call is parsed. The path's `realmId` is
@@ -60,6 +66,8 @@ export interface CanonicalRequest {
   /** The realm the operation acts on. */
   readonly realmId: string;
   readonly requester: ApprovalRequester;
+  /** The version of the state the request was filed against, for an operation that reads state. */
+  readonly stateVersion?: string;
 }
 
 /** The parts of a request {@link canonicalRequest} binds, as the route parsed them. */
@@ -71,6 +79,12 @@ export interface CanonicalRequestInput {
   readonly body: unknown;
   readonly realmId: string;
   readonly requester: ApprovalRequester;
+  /**
+   * The version of the state the operation read (`stateVersion` of its
+   * classification), for an operation that reads state; `null` or absent for
+   * any other one, which then has no `stateVersion` member.
+   */
+  readonly stateVersion?: string | null;
 }
 
 /** A request that has no canonical form: a value outside JSON, or one the approval store cannot keep. */
@@ -143,8 +157,8 @@ function assertStorable(value: unknown, path: string): void {
 /**
  * The canonical request of `input`: the method in upper case, the path
  * parameters and the query as plain objects of their own members, an absent
- * query as `{}`, an absent body as `null`, and the path's `realmId` replaced
- * by the realm's stored id.
+ * query as `{}`, an absent body as `null`, the path's `realmId` replaced by
+ * the realm's stored id, and the state version when there is one.
  *
  * @throws {CanonicalRequestError} when the parameters or the query are not
  *   objects, or any part holds a value outside the I-JSON model the
@@ -168,6 +182,7 @@ export function canonicalRequest(input: CanonicalRequestInput): CanonicalRequest
       realmId: input.requester.realmId,
       accountId: input.requester.accountId,
     },
+    ...(typeof input.stateVersion === 'string' ? { stateVersion: input.stateVersion } : {}),
   };
   assertStorable(request, 'the request');
   try {

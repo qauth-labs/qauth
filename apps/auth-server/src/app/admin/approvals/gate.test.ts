@@ -194,6 +194,29 @@ describe('the canonical request (#512)', () => {
     });
   });
 
+  // #517: an operation that reads state is approved against the version it
+  // read, so a call after the state moved does not run on that approval.
+  it('binds the state version an operation that reads state was filed against', () => {
+    const filed = { ...FILED, stateVersion: '7' };
+    expect(canonicalRequest(filed)).toMatchObject({ stateVersion: '7' });
+    const approval = {
+      opHash: opHashOf(canonicalRequest(filed), NONCE),
+      nonce: NONCE,
+      status: 'approved' as const,
+      expiresAt: NOW + 5 * 60_000,
+    };
+    expect(approvalRefusal(approval, canonicalRequest(filed), NOW + 1_000)).toBeNull();
+    for (const stateVersion of ['8', undefined, null]) {
+      expect(
+        approvalRefusal(approval, canonicalRequest({ ...FILED, stateVersion }), NOW + 1_000),
+        String(stateVersion)
+      ).toBe('request-mismatch');
+    }
+    // An operation that reads no state hashes as it did before.
+    expect('stateVersion' in canonicalRequest({ ...FILED, stateVersion: null })).toBe(false);
+    expect(decide({ ...FILED, stateVersion: undefined })).toBeNull();
+  });
+
   it("takes the router's and the query parser's null-prototype objects as the plain ones filed", () => {
     // What Fastify hands a route with no params or querystring schema: an
     // object whose prototype is itself a null-prototype object.

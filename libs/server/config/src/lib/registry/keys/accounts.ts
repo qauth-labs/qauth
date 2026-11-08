@@ -215,7 +215,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: '900',
     since: '0.1.0',
-    docs: "The window, in seconds, over which failed logins are counted, that seeds `bruteForce.windowSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
+    docs: "The window, in seconds, over which failed logins are counted, at most 86400 (a day), that seeds `bruteForce.windowSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'FAILED_LOGIN_LOCKOUT_DURATION',
@@ -225,7 +225,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: '900',
     since: '0.1.0',
-    docs: "How long, in seconds, a locked-out identifier is refused before any credential check, that seeds `bruteForce.lockoutSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
+    docs: "How long, in seconds, a locked-out identifier is refused before any credential check, at most 86400 (a day), that seeds `bruteForce.lockoutSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'SESSION_COOKIE_SECRET',

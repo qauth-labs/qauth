@@ -29,6 +29,7 @@ import {
   resolveAdminAuthority,
 } from '../helpers/admin-authority';
 import {
+  type AdminOperation,
   OPERATION_REGISTRY,
   type OperationClass,
   type OperationClassification,
@@ -55,6 +56,7 @@ import {
 } from './approvals/gate';
 import { isApprovalEngineOperation } from './approvals/operations';
 import { callerAccount } from './approvals/standing';
+import { runInAdminHandler } from './handler-scope';
 import { adminRealmRouteProblem } from './route-placement';
 import { secretMemberSchemaProblem } from './secrets/secret-members';
 
@@ -86,6 +88,8 @@ import { secretMemberSchemaProblem } from './secrets/secret-members';
  *    does not exist; the call is logged and NOT written to that realm's audit
  *    chain, so a stranger cannot add rows to it.
  * 6. Classification and permission check (#508, `adminOperationsPlugin`).
+ *    An operation that reads state first needs a caller that holds at least
+ *    one of its permissions, before the state is read (review of #887).
  * 7. Approval gate: a request classified `security` runs only with the
  *    approval its `QAuth-Approval` header names, filed for exactly this
  *    request by this caller, approved and unexpired (#512, `./approvals`);
@@ -654,6 +658,40 @@ function authorizeAdminRequest(
 }
 
 /**
+ * Stage 6's check before an operation's state is read (review of #887): the
+ * caller holds at least one of the permissions the operation declares. A
+ * caller that holds none could need nothing of it, so its state is never read
+ * for that caller: neither whether the realm's policies would take a patch,
+ * nor anything a failed read would say. The full check
+ * ({@link authorizeAdminRequest}) follows the classification. When the roles
+ * hold a declared permission, only the token's scopes withhold it, and the
+ * 403 names the scope a wider token needs.
+ */
+function preauthorizeAdminRequest(
+  request: FastifyRequest,
+  operation: AdminOperation,
+  permissions: PermissionRegistry
+) {
+  const caller = requestAdminCaller(request);
+  if (operation.permissions.some((id) => caller.permissions.has(id))) return;
+  const granted = tokenScopeSet(request.jwtPayload?.scope ?? '');
+  const scopes = [
+    ...new Set(
+      operation.permissions
+        .filter((id) => caller.rolePermissions.has(id))
+        .map((id) => permissions.get(id)?.class)
+        .filter((permissionClass) => permissionClass !== undefined)
+        .map((permissionClass) => ADMIN_SCOPES[permissionClass])
+        .filter((scope) => !granted.has(scope))
+    ),
+  ];
+  throw new ForbiddenError(
+    'The caller lacks a permission this admin operation needs',
+    scopes.length > 0 ? { requiredScope: scopes } : {}
+  );
+}
+
+/**
  * Whether `request` is a call of the approval engine's own `approvals.create`
  * or `approvals.cancel` on the very route that performs it
  * ({@link AdminApiContext.routeOf}): another route that names one of them,
@@ -725,6 +763,9 @@ function approvalGate(registry: OperationRegistry) {
         body: request.body,
         realmId: caller.targetRealm.id,
         requester: callerAccount(caller),
+        // The approval was filed against this version of the state: the
+        // values its approver saw replaced are the ones this call replaces.
+        stateVersion: classification.stateVersion,
       });
     } catch {
       throw refusedApproval(request, operationId, approvalId, 'uncanonical-request');
@@ -917,7 +958,9 @@ function prepareAnswer(
  * `reply.hijack()` throw ({@link refuseAnswering}). A body its response
  * schema refuses fails the call before the commit, so the change rolls back
  * and the call is `failed`: the answer and the row always agree. The answer
- * is sent after the commit.
+ * is sent after the commit. The handler runs in the scope of its
+ * transaction, where the admin listener's repositories refuse a call that
+ * does not pass it ({@link runInAdminHandler}).
  */
 function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry) {
   const wrapped = async function adminTransactionStage(
@@ -959,7 +1002,9 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
         refuseAnswering(reply);
         let result: unknown;
         try {
-          result = await handler.call(this, request, reply);
+          // In its transaction's scope: a repository call that does not pass
+          // it throws (`./handler-scope.ts`).
+          result = await runInAdminHandler(tx, () => handler.call(this, request, reply));
         } finally {
           allowAnswering(reply);
           state.transaction = undefined;
@@ -1359,6 +1404,8 @@ export async function adminPipeline(
     registry,
     authorize: (request, classification) =>
       authorizeAdminRequest(request, classification, registry.permissions),
+    preauthorize: (request, operation) =>
+      preauthorizeAdminRequest(request, operation, registry.permissions),
   });
 
   // Stage 7, after stage 6's `preHandler`.

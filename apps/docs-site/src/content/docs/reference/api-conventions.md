@@ -148,8 +148,7 @@ The admin API runs on its own internal listener, never on the public one
 ([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/), Decisions 7 and
 8). A process that holds the `admin` service role serves it on `ADMIN_API_HOST` and
 `ADMIN_API_PORT`, `127.0.0.1`, port `3002`, by default, while `ADMIN_API_ENABLED` is on
-([Configuration](/operate/configuration/)). It is off by default until the first admin operations
-(#517) ship. Where it runs, `ADMIN_API_BASE_URL`, the URL clients address the admin API at, and
+([Configuration](/operate/configuration/)). It is off by default. Where it runs, `ADMIN_API_BASE_URL`, the URL clients address the admin API at, and
 `DPOP_ENABLED=true` are required: every admin call carries a DPoP-bound admin token
 ([The DPoP check](#the-dpop-check-of-the-admin-listener)). The public listener
 answers 404 `not_found` for every admin path, except a CORS preflight (`OPTIONS`), which it

@@ -99,6 +99,12 @@ export interface PolicyDiff {
   readonly effects: readonly SecurityEffect[];
 }
 
+/** The changes of a merge patch ({@link PolicyRegistry.diffPatch}), and the document it merges to. */
+export interface PolicyPatchDiff extends PolicyDiff {
+  /** The merged document, parsed as the `input` view: every field set, no secret. */
+  readonly document: Readonly<Record<string, unknown>>;
+}
+
 /** What a diff needs to know about secrets, which no policy document holds. */
 export interface PolicyDiffOptions {
   /** The secret field paths that hold a value before the change. */
@@ -230,6 +236,23 @@ export interface PolicyRegistry {
    * and a clear whether or not a value was set.
    */
   diffPolicies(before: unknown, after: unknown, options?: PolicyDiffOptions): PolicyDiff;
+  /**
+   * The changes a JSON Merge Patch (RFC 7396) of `before`, a stored policy
+   * document, makes: what `RealmPolicyStore.update` changes with the same
+   * patch, computed without a write (#517). The diff is of the merged
+   * document, never of the patch's members alone: `null` gives a field its
+   * default, which may be looser than the stored value.
+   *
+   * A secret member of the patch is a change whatever it holds and is never
+   * read: any value sets it (the admin API's sealed value too, which the
+   * update opens and its field's type checks), `null` clears it, and leaving
+   * it out keeps it. `options.setSecrets` names the secrets set before.
+   *
+   * @throws PolicyValidationError when the patch is not an object, names a
+   *   member the `input` view does not have or `__proto__`, or the merged
+   *   document is refused; its issues name paths, never values
+   */
+  diffPatch(before: unknown, patch: unknown, options?: PolicyDiffOptions): PolicyPatchDiff;
   /** The JSON Schema (draft 2020-12) of a view, `representation` by default. */
   toJsonSchema(view?: PolicyView): JsonSchemaObject;
   /**
@@ -347,6 +370,37 @@ function issuesOf(error: z.ZodError): PolicyIssue[] {
     path: issue.path.map(String).join('.'),
     message: issue.message,
   }));
+}
+
+/**
+ * RFC 7396 JSON Merge Patch of `target` with `patch`, as the policy store's
+ * update and {@link PolicyRegistry.diffPatch} apply one. A copy; neither
+ * input changes. A member named `__proto__` is refused: as an own member of a
+ * parsed JSON object it is a name like any other, but assigning it would set
+ * the result's prototype.
+ *
+ * @throws PolicyValidationError naming the path of a `__proto__` member
+ */
+export function mergePolicyPatch(
+  target: unknown,
+  patch: unknown,
+  path: readonly string[] = []
+): unknown {
+  if (!isPlainObject(patch)) return structuredClone(patch);
+  const result: Record<string, unknown> = isPlainObject(target) ? structuredClone(target) : {};
+  for (const [name, value] of Object.entries(patch)) {
+    if (name === '__proto__') {
+      throw new PolicyValidationError('The policy patch is not valid', [
+        { path: [...path, name].join('.'), message: 'is not a member of the realm policies' },
+      ]);
+    }
+    if (value === null) {
+      delete result[name];
+    } else {
+      result[name] = mergePolicyPatch(result[name], value, [...path, name]);
+    }
+  }
+  return result;
 }
 
 /** Create an empty registry. `version` defaults to {@link REALM_POLICY_SCHEMA_VERSION}. */
@@ -668,37 +722,39 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
     return set;
   }
 
-  function diffPolicies(
-    before: unknown,
-    after: unknown,
-    options: PolicyDiffOptions = {}
+  /**
+   * The changes from `from`, a parsed document, to `to`, a parsed `input`
+   * view: `secretsAfter` says, for each secret the write sets or clears,
+   * whether it holds a value after it, and `setBefore` which held one before.
+   */
+  function changesBetween(
+    from: Record<string, unknown>,
+    to: Record<string, unknown>,
+    secretsAfter: ReadonlyMap<string, boolean>,
+    setBefore: ReadonlySet<string>
   ): PolicyDiff {
-    // The stored document holds no secret, so `before` cannot carry one to
-    // compare a value with.
-    const from = parse(before, 'document');
-    const to = parse(after, 'input');
-    const setBefore = secretPaths(options.setSecrets, 'setSecrets');
     const changes: PolicyChange[] = [];
     for (const entry of entries) {
       const { field } = entry;
-      const a = valueAt(from, entry.segments);
-      const b = valueAt(to, entry.segments);
       let change: Omit<PolicyChange, 'class' | 'effects'>;
       if (field.secret) {
         // A value sets a secret, null clears it, and leaving it out keeps it.
         // Only whether one is set is recorded, and a value is never compared
         // with another: giving the stored value again is a change too, so the
         // diff cannot confirm a guessed secret.
-        if (b === undefined) continue;
+        const after = secretsAfter.get(entry.path);
+        if (after === undefined) continue;
         change = {
           path: entry.path,
           before: setBefore.has(entry.path),
-          after: b !== null,
+          after,
           direction: 'neutral',
           secret: true,
           environmentBound: field.environmentBound,
         };
       } else {
+        const a = valueAt(from, entry.segments);
+        const b = valueAt(to, entry.segments);
         const unchanged =
           samePolicyValue(a, b) || (isSetDirection(field.direction) && sameEntries(a, b));
         if (unchanged) continue;
@@ -733,6 +789,57 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
       changes: Object.freeze(changes),
       class: changes.some((change) => change.class === 'security') ? 'security' : 'write',
       effects: Object.freeze(SECURITY_EFFECTS.filter((effect) => effects.has(effect))),
+    });
+  }
+
+  function diffPolicies(
+    before: unknown,
+    after: unknown,
+    options: PolicyDiffOptions = {}
+  ): PolicyDiff {
+    // The stored document holds no secret, so `before` cannot carry one to
+    // compare a value with.
+    const from = parse(before, 'document');
+    const to = parse(after, 'input');
+    const setBefore = secretPaths(options.setSecrets, 'setSecrets');
+    const secretsAfter = new Map<string, boolean>();
+    for (const entry of entries) {
+      if (!entry.field.secret) continue;
+      const value = valueAt(to, entry.segments);
+      if (value !== undefined) secretsAfter.set(entry.path, value !== null);
+    }
+    return changesBetween(from, to, secretsAfter, setBefore);
+  }
+
+  function diffPatch(
+    before: unknown,
+    patch: unknown,
+    options: PolicyDiffOptions = {}
+  ): PolicyPatchDiff {
+    const from = parse(before, 'document');
+    const setBefore = secretPaths(options.setSecrets, 'setSecrets');
+    if (!isPlainObject(patch)) {
+      throw new PolicyValidationError('The policy patch is not valid', [
+        { path: '', message: 'a policy patch is a JSON object' },
+      ]);
+    }
+    // The secrets the patch sets or clears come off a copy before the merge,
+    // unread: a set secret is never in a document.
+    const rest = structuredClone(patch);
+    const secretsAfter = new Map<string, boolean>();
+    for (const entry of entries) {
+      if (!entry.field.secret) continue;
+      const parent = valueAt(rest, entry.segments.slice(0, -1));
+      const name = entry.segments[entry.segments.length - 1];
+      if (!isPlainObject(parent) || !Object.hasOwn(parent, name)) continue;
+      const value = parent[name];
+      delete parent[name];
+      if (value !== undefined) secretsAfter.set(entry.path, value !== null);
+    }
+    const to = parse(mergePolicyPatch(from, rest), 'input');
+    return Object.freeze({
+      ...changesBetween(from, to, secretsAfter, setBefore),
+      document: to,
     });
   }
 
@@ -838,6 +945,7 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
     defaultsFromEnv,
     secretSeedsFromEnv,
     diffPolicies,
+    diffPatch,
     toJsonSchema,
     toRepresentation,
   });

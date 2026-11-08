@@ -30,8 +30,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract version stays `qauth-auth-method/1-rc.0`: a method without the
   member is unchanged.
 
+- **The admin API reads a realm and changes its policies** ([#517],
+  ADR-019 Decisions 7 and 10, experimental routes). `GET
+  /admin/v1-rc.0/realms/{realmId}` (`realms.get`, `realms.read`) answers the
+  realm: `id`, `name`, `enabled`, `operator`, `createdAt`, `updatedAt`, the
+  sandbox pairing (`sandboxOf`, `sandbox`), `policySchemaVersion` and every
+  policy group, each secret field only as `<name>Set`; its `ETag` is the
+  policy version. `PATCH /admin/v1-rc.0/realms/{realmId}/policies`
+  (`realms.policies.update`) takes a JSON Merge Patch
+  (`application/merge-patch+json`) against the version `If-Match` names (428
+  without it, 412 when the policies moved). Each changed field is judged on
+  the merged document by its policy annotation: a change the annotation
+  makes a security change (any change of a secret, or a loosening, such as a
+  lower password score or a longer token lifetime, or a `null` that gives a
+  field a looser default) needs `realms.policies.security`,
+  `qauth:admin:security` and an approval, which shows each changed field
+  beside the value it replaces; any other needs `realms.policies.write`, and
+  a patch of both needs both and one approval. Every patch needs
+  `realms.read` too, since it answers the realm. A member the policies do not
+  have, or `null` on a whole group, is 400 `validation_error`; a merged
+  document the policy schema or a rule refuses is 422
+  `unprocessable_content` naming each field, before an approval is filed
+  when the schema refuses it. A secret field takes only a value sealed with
+  `secrets.seal` for this operation and its member, or `null` to clear it,
+  and is refused with 422 on a server without a secret store. The policies,
+  their version and the audit row, which holds the changed fields with each
+  secret masked, commit together. The steps every later admin operation
+  follows are on the new docs page _Adding an admin operation_.
+- **An admin operation that reads state checks a permission first, and its
+  approval is bound to that state** ([#517]). A caller who holds none of
+  the operation's permissions is refused with 403 before the resource is
+  read, so it can no longer tell 404 or 412 from 403. An approval for such
+  an operation binds the state version it was filed against: a call after
+  the state moved does not run on it. Filing or withdrawing an approval
+  needs the security permissions the operation declares, no longer every
+  permission it declares: what else a call needs is checked when it runs.
+- **An admin handler reaches the database only through its transaction**
+  ([#517]). Inside the handler of an admin route, a call to
+  `request.server.repositories` that does not pass `adminTransaction(request)`
+  throws, so the call fails with 500 and rolls back, and its audit row is
+  `failed`: such a call took a second connection from the pool the public
+  listener serves from, and committed outside the audited transaction.
+
 ### Changed
 
+- **The brute-force window and lockout are at most a day** ([#517]).
+  `FAILED_LOGIN_WINDOW` and `FAILED_LOGIN_LOCKOUT_DURATION` above 86400 stop
+  the boot, and the realm policies `bruteForce.windowSeconds` and
+  `bruteForce.lockoutSeconds` refuse such a value with 422: anyone who knows
+  an identifier can lock it out, so a longer lockout kept an account out for
+  days. The realm policy schema version is now `1-rc.1`. **Upgrading:** the
+  first boot of this release stores every realm's policies upgraded from
+  `1-rc.0` ([#908]), and a realm that stores a longer window or lockout gets
+  86400 instead. A shorter lockout is a loosening, the one an upgrade of the
+  policies may make, as this bound asks; set the value you want, up to
+  86400, with `realms.policies.update`. Set the two environment keys to 86400
+  or less before you start this release.
 - **A sign-in never waits on a mailed code that cannot arrive, and binding a
   factor never asks for one** ([#1051], ADR-017 Decision 8 amended
   2026-11-08). The account decides, never a channel.

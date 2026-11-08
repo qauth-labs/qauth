@@ -847,10 +847,10 @@ release as the policies themselves: a deployment that upgrades from 0.1 stores
 those keys as they are at its first boot, and applies the stored values from
 then on.
 
-Changing a realm's stored policies is the admin API's realm policy update
-([#517](https://github.com/qauth-labs/qauth/issues/517)), which comes after
-this change: until it ships, no route changes them. To switch CIMD off for a
-realm meanwhile, or to hold it to an allowlist, see
+A realm's stored policies are changed with the admin API's realm policy
+update, `realms.policies.update`
+([#517](https://github.com/qauth-labs/qauth/issues/517)), on a process that
+runs the admin listener. On a deployment without it, see
 [Changing a realm's CIMD policy](/operate/docker/#changing-a-realms-cimd-policy).
 
 **A value the policy schema refuses stops the boot.** The schema is stricter
@@ -950,12 +950,14 @@ private address is named when a mail connects to it.
 `EMAIL_FROM_NAME <EMAIL_FROM_ADDRESS>` as the realm stores them (`QAuth
 <no-reply@example.com>` by default), where it used to carry the address alone.
 
-Until the admin API's realm policy update
-([#517](https://github.com/qauth-labs/qauth/issues/517)) ships, no route changes
-a realm's mail transport, sender or password, and the environment keys no longer
-do. To replace a leaked or rotated `SMTP_PASSWORD` or `RESEND_API_KEY` of the
-default realm meanwhile, set the new value in the environment, delete the
-realm's row for it, and restart every node:
+The admin API's realm policy update, `realms.policies.update`
+([#517](https://github.com/qauth-labs/qauth/issues/517)), changes a realm's mail
+transport, sender and password; the environment keys no longer do. It takes
+the password only sealed with `secrets.seal`, and with an approval. On a
+deployment that runs no admin listener, replace a leaked or rotated
+`SMTP_PASSWORD` or `RESEND_API_KEY` of the default realm by setting the new
+value in the environment, deleting the realm's row for it, and restarting
+every node:
 
 ```sql
 DELETE FROM realm_secrets

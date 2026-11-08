@@ -22,7 +22,8 @@ export const APPROVAL_HEADER = 'qauth-approval';
  * - `denied`, `cancelled`, `consumed`, `expired`: the approval is closed. Its
  *   nonce was overwritten then, so no call matches it any more.
  * - `request-mismatch`: the approval was filed for another request: another
- *   operation, method, path parameter, query, body, realm or requester.
+ *   operation, method, path parameter, query, body, realm or requester, or
+ *   against another version of the state the operation reads.
  * - `pending`: it still lacks an approval.
  * - `used-meanwhile`: it was approved when the gate read it, and used or
  *   withdrawn before the operation's transaction could consume it.

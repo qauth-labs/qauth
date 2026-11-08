@@ -183,6 +183,11 @@ export interface RenderableApproval {
     readonly body: unknown;
   };
   readonly reason: string | null;
+  /**
+   * For an operation that reads state, the state it read when the approval
+   * was filed (`RenderInput.state`); absent otherwise.
+   */
+  readonly state?: unknown;
 }
 
 const isString = (value: unknown): value is string => typeof value === 'string';
@@ -238,6 +243,7 @@ export function renderOperation(
       params: request.params,
       query: request.query,
       body: request.body,
+      ...(approval.state === undefined ? {} : { state: approval.state }),
     })
   ) as RenderInput;
 

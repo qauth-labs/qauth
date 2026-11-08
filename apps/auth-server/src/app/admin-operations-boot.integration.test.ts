@@ -33,8 +33,9 @@ import { adminOperationsPlugin, requestClassification } from './plugins/admin-op
  * with the classification stage (`plugins/admin-operations.ts`), the Zod
  * compilers and the server's OpenAPI options, and listens on a loopback port:
  *
- * - with the server's own registry, which holds no operation yet, any admin
- *   route refuses the boot, and nothing listens;
+ * - with the server's own registry, an admin route that names no operation,
+ *   or one only a fixture registry holds, refuses the boot, and nothing
+ *   listens;
  * - a route that names an unregistered operation, or whose schema disagrees
  *   with the registry, refuses it too;
  * - with a registry that holds the routes' operations, the listener boots,
@@ -53,7 +54,7 @@ const WRITE: Classification = {
 };
 
 const GET_OPERATION = defineOperation({
-  id: 'realms.get',
+  id: 'fixtureRealms.get',
   class: 'read',
   effects: [],
   permissions: ['realms.read'],
@@ -62,7 +63,7 @@ const GET_OPERATION = defineOperation({
 
 /** A policy patch: write unless it lowers `minScore` below the current value. */
 const PATCH_OPERATION = defineOperation<{ minScore: number }>({
-  id: 'realms.policies.update',
+  id: 'fixtureRealms.policies.update',
   class: 'security',
   effects: ['credential-path', 'token-content', 'posture-loosening', 'administration'],
   permissions: ['realms.policies.write', 'realms.policies.security'],
@@ -130,7 +131,7 @@ function referenceRoutes(instance: FastifyInstance): void {
   typed.get(
     '/admin/v1-rc.0/realms/:realmId',
     {
-      config: { operation: 'realms.get' },
+      config: { operation: 'fixtureRealms.get' },
       schema: {
         ...operationSchemaExtensions(GET_OPERATION),
         security: [{ bearerAuth: [] }],
@@ -144,7 +145,7 @@ function referenceRoutes(instance: FastifyInstance): void {
   typed.patch(
     '/admin/v1-rc.0/realms/:realmId/policies',
     {
-      config: { operation: 'realms.policies.update' },
+      config: { operation: 'fixtureRealms.policies.update' },
       schema: {
         ...operationSchemaExtensions(PATCH_OPERATION as AdminOperation),
         security: [{ bearerAuth: [] }],
@@ -178,9 +179,9 @@ describe('the admin listener boot check (#508)', () => {
     expect(listener?.server.listening).toBe(false);
   });
 
-  it('refuses to boot a route whose operation the server registry does not hold yet', async () => {
+  it('refuses to boot a route whose operation the server registry does not hold', async () => {
     await expect(startAdminListener(OPERATION_REGISTRY, referenceRoutes)).rejects.toThrow(
-      /names the admin operation "realms.get", which the operation registry does not hold/
+      /names the admin operation "fixtureRealms.get", which the operation registry does not hold/
     );
     expect(listener?.server.listening).toBe(false);
   });
@@ -191,13 +192,15 @@ describe('the admin listener boot check (#508)', () => {
         scope.get(
           '/admin/v1-rc.0/realms/:realmId',
           {
-            config: { operation: 'realms.get' },
+            config: { operation: 'fixtureRealms.get' },
             schema: { ...operationSchemaExtensions(GET_OPERATION), 'x-qauth-class': 'write' },
           },
           async () => ({})
         )
       )
-    ).rejects.toThrow(/x-qauth-class is "write", but the registry's realms.get gives "read"/);
+    ).rejects.toThrow(
+      /x-qauth-class is "write", but the registry's fixtureRealms.get gives "read"/
+    );
     expect(listener?.server.listening).toBe(false);
   });
 
@@ -232,7 +235,7 @@ describe('the admin listener boot check (#508)', () => {
       (document as unknown as { paths: Record<string, Record<string, Record<string, unknown>>> })
         .paths['/admin/v1-rc.0/realms/{realmId}/policies'].patch
     ).toMatchObject({
-      operationId: 'realms.policies.update',
+      operationId: 'fixtureRealms.policies.update',
       'x-qauth-class': 'security',
       'x-qauth-permission': ['realms.policies.write', 'realms.policies.security'],
       'x-qauth-effects': [

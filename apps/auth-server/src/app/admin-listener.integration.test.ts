@@ -74,7 +74,7 @@ async function fixtureAdminApi() {
     await import('./admin/pipeline');
 
   const read = operations.defineOperation({
-    id: 'realms.get',
+    id: 'fixtureRealms.get',
     class: 'read',
     effects: [],
     permissions: ['realms.read'],
@@ -137,8 +137,15 @@ async function fixtureAdminApi() {
     permissions: ['realms.policies.write'],
     description: 'Create an account, then return a body its response schema refuses (fixture).',
   });
+  const stray = operations.defineOperation({
+    id: 'fixtureStrays.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account, then read it outside the admin transaction (fixture).',
+  });
   const registry = operations.createAdminOperationRegistry(
-    [read, create, fail, rotate, send, held, unwrapped, early, misanswer],
+    [read, create, fail, rotate, send, held, unwrapped, early, misanswer, stray],
     { reserved: [] }
   );
 
@@ -270,6 +277,27 @@ async function fixtureAdminApi() {
             adminTransaction(request)
           );
           return { id: 'not-a-uuid' };
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-strays',
+        {
+          config: { operation: stray.id },
+          // Hidden from the document: the refusal is the fixture's point.
+          schema: { ...schemaOf(stray), hide: true },
+        },
+        async (request) => {
+          runs.push(stray.id);
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          const account = await request.server.repositories.users.create(
+            { realmId },
+            testPrimaryCredential(),
+            adminTransaction(request)
+          );
+          // Outside the admin transaction: a second connection, committed on
+          // its own. Inside a handler the repositories refuse it.
+          await request.server.repositories.users.findById(realmId, account.id);
+          return { id: account.id };
         }
       );
       // A module whose own `onRoute` hook, which runs after the pipeline's,
@@ -498,7 +526,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(onAdmin.statusCode).toBe(200);
       expect(onAdmin.json()).toEqual({ realm: realmId, operator: true, requestRealm: realmId });
       // The public listener ran nothing and wrote nothing.
-      expect(runs).toEqual(['realms.get']);
+      expect(runs).toEqual(['fixtureRealms.get']);
       expect(await auditRows(realmId)).toHaveLength(1);
     });
 
@@ -728,7 +756,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
 
       // The same token under the DPoP scheme, with a proof of its key, passes.
       expect((await call('GET', url, token)).statusCode).toBe(200);
-      expect(runs).toEqual(['realms.get']);
+      expect(runs).toEqual(['fixtureRealms.get']);
     });
 
     it('refuses a valid token with a proof signed by another key, or with no proof', async () => {
@@ -790,7 +818,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(replayed.statusCode).toBe(401);
       expect(replayed.json()).toMatchObject({ code: 'invalid_dpop_proof' });
       expect(replayed.headers['www-authenticate']).toMatch(/^DPoP error="invalid_dpop_proof"/);
-      expect(runs).toEqual(['realms.get']);
+      expect(runs).toEqual(['fixtureRealms.get']);
       expect(await auditRows(realmId)).toHaveLength(1);
     });
 
@@ -936,7 +964,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       // only the realm the issuer names decided which keys verify.
       const genuine = await signedWithOperatorKey(operator.issuer, ofOperator);
       expect((await call('GET', realmPath(alpha.id), genuine)).statusCode).toBe(200);
-      expect(runs).toEqual(['realms.get']);
+      expect(runs).toEqual(['fixtureRealms.get']);
     });
   });
 
@@ -980,7 +1008,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         actor_kind: 'human_admin',
         actor_id: userId,
         actor_realm_id: operator.id,
-        operation_id: 'realms.get',
+        operation_id: 'fixtureRealms.get',
         operation_class: 'read',
         effects: [],
         outcome: 'succeeded',
@@ -1133,6 +1161,23 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         outcome: 'failed',
         masked_diff: null,
       });
+    });
+
+    // The second point of the #887 review (#517): a handler reaches the
+    // database only through its transaction.
+    it('refuses a repository call outside the admin transaction: no change, a 500, and one failed row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-strays'), token);
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ code: 'internal_error' });
+      expect(runs).toEqual(['fixtureStrays.create']);
+      // The account the handler created in its transaction rolled back.
+      expect(await accountsIn(realmId)).toBe(0);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureStrays.create', outcome: 'failed', masked_diff: null },
+      ]);
     });
 
     it('refuses a handler that sends its own reply: no change, a 500, and one failed row', async () => {
@@ -1369,7 +1414,7 @@ describe('the request ceilings of the admin listener (#511, real containers)', (
     expect((await call({ authorization: 'DPoP not-a-token' })).statusCode).toBe(429);
     // A token under the Bearer scheme is no DPoP token: refused before the guard.
     expect((await call({ authorization: `Bearer ${token}` })).statusCode).toBe(429);
-    expect(runs).toEqual(['realms.get']);
+    expect(runs).toEqual(['fixtureRealms.get']);
   });
 
   it('counts the TCP peer, whatever X-Forwarded-For says, even from a proxy the public listener trusts', async () => {

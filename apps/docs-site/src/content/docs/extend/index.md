@@ -18,6 +18,8 @@ If you are about to change the codebase, read these in order:
    this repo has already had.
 4. [Adding a credential provider](/extend/adding-a-credential-provider/) — the ADR-003 extension
    point, which is the main way this server is meant to grow.
+5. [Adding an admin operation](/extend/adding-an-admin-operation/) — the five steps every admin API
+   operation takes, with the realm operations as the worked example.
 
 [Frontmatter contract](/extend/frontmatter/) covers this documentation site itself; read it before
 adding a page.

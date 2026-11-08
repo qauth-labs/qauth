@@ -32,7 +32,7 @@ is refused, and so is one that selects `smtp` or changes its host, port or TLS m
 the password again, or that names `localhost`, a non-public IP address or a cloud metadata address as
 its SMTP host when the operator's `SMTP_ALLOWED_HOSTS` does not list it (a metadata address never).
 
-Schema version: `1-rc.0`.
+Schema version: `1-rc.1`.
 
 ## How a change is classified
 
@@ -104,8 +104,8 @@ needs what its strictest change needs.
 | --------------------------- | ------- | ------------------------------- | ------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `bruteForce.enabled`        | `true`  | `FAILED_LOGIN_TRACKING_ENABLED` | `true`        | `security` when loosened (`credential-path`), else `write` | Whether repeated failed sign-ins for one identifier lock it out for a while; when off, failures are only logged. |
 | `bruteForce.maxAttempts`    | `5`     | `FAILED_LOGIN_MAX_ATTEMPTS`     | lower         | `security` when loosened (`credential-path`), else `write` | How many failed sign-ins within the window lock an identifier out.                                               |
-| `bruteForce.windowSeconds`  | `900`   | `FAILED_LOGIN_WINDOW`           | higher        | `security` when loosened (`credential-path`), else `write` | The window, in seconds, over which failed sign-ins are counted.                                                  |
-| `bruteForce.lockoutSeconds` | `900`   | `FAILED_LOGIN_LOCKOUT_DURATION` | higher        | `security` when loosened (`credential-path`), else `write` | How long, in seconds, a locked-out identifier is refused before any password check.                              |
+| `bruteForce.windowSeconds`  | `900`   | `FAILED_LOGIN_WINDOW`           | higher        | `security` when loosened (`credential-path`), else `write` | The window, in seconds, over which failed sign-ins are counted, at most 86400 (a day).                           |
+| `bruteForce.lockoutSeconds` | `900`   | `FAILED_LOGIN_LOCKOUT_DURATION` | higher        | `security` when loosened (`credential-path`), else `write` | How long, in seconds, a locked-out identifier is refused before any password check, at most 86400 (a day).       |
 
 ### `botChallenge`
 

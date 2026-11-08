@@ -50,6 +50,15 @@ export interface AdminOperationsPluginOptions extends FastifyPluginOptions {
    */
   authorize: (request: FastifyRequest, classification: OperationClassification) => unknown;
   /**
+   * The check before the state is read: refuses, by throwing, a caller that
+   * holds none of the permissions `operation` declares, before its
+   * `loadState` runs (review of #887). A caller with no business with the
+   * operation then learns nothing of the state, such as whether a patch
+   * would be valid against it, and costs no read. The admin pipeline passes
+   * it; an instance without it reads the state of every caller.
+   */
+  preauthorize?: (request: FastifyRequest, operation: AdminOperation) => unknown;
+  /**
    * The request ceiling of the admin listener when it has none of its own
    * (`@fastify/rate-limit` not registered before this stage). A listener
    * that registers the server's rate limit first keeps that one, and this is
@@ -154,8 +163,10 @@ export function requestClassification(request: FastifyRequest): OperationClassif
  *   nothing the OpenAPI document does not.
  * - ON EVERY REQUEST, a `preHandler` hook, after validation and before the
  *   handler, checks the route again as it was finally built (once per route;
- *   a later `onRoute` hook may have changed it), reads the operation's
- *   current state (`loadState`) and its version (`stateVersion`), answers
+ *   a later `onRoute` hook may have changed it), refuses a caller that holds
+ *   none of the operation's permissions (`preauthorize`) when it reads state,
+ *   reads the operation's current state (`loadState`) and its version
+ *   (`stateVersion`), answers
  *   428 when such a request has no `If-Match` and 412 when it names another
  *   version, and classifies
  *   the request (`classifyRequest`, which fails closed). The classification
@@ -272,7 +283,13 @@ export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
         if (request.headers['if-match'] === undefined) {
           throw new PreconditionRequiredError({ operation: operation.id });
         }
-        currentState = await operation.loadState(request);
+        await options.preauthorize?.(request, operation);
+        currentState = await operation.loadState(request, {
+          method: request.method,
+          params: request.params,
+          query: request.query,
+          body: request.body,
+        });
         stateVersion = operationStateVersion(operation, currentState);
         // The request was written against another version: what it would
         // change, and so its classification, may differ from this state's.

@@ -31,9 +31,11 @@ import errorHandler from '../plugins/error-handler';
 import { requestIdPlugin } from '../plugins/request-id';
 import { securityHeadersPlugin } from '../plugins/security-headers';
 import { approvalRoutes } from './approvals/routes';
+import { adminHandlerRepositories } from './handler-scope';
 import { adminOpenapiOptions } from './openapi-options';
 import { AdminCallsInFlight, adminDpopService, adminPipeline } from './pipeline';
 import { pluginRoutes } from './plugins/routes';
+import { realmRoutes } from './realms/routes';
 import { secretRoutes } from './secrets/routes';
 
 /**
@@ -65,13 +67,14 @@ export const ADMIN_OPENAPI_PATH = `${API_FAMILY_PREFIXES.admin}/openapi.json`;
  * The route modules of the admin API, each registered behind the pipeline:
  * the approval routes (#512), which every registry built with
  * `createAdminOperationRegistry` holds the operations of, the seal route of a
- * security operation's secrets (#984) and the AuthMethod plugin routes
- * (#600), whose operations `ADMIN_OPERATIONS` holds. The operations that read
- * a realm and update its policies arrive with #517.
+ * security operation's secrets (#984), the realm routes that read a realm and
+ * update its policies (#517) and the AuthMethod plugin routes (#600), whose
+ * operations `ADMIN_OPERATIONS` holds.
  */
 export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze([
   approvalRoutes,
   secretRoutes,
+  realmRoutes,
   pluginRoutes,
 ]);
 
@@ -273,7 +276,9 @@ export async function installAdminApi(
 ): Promise<void> {
   admin.decorate('db', source.db);
   admin.decorate('dbPool', source.dbPool);
-  admin.decorate('repositories', source.repositories);
+  // Inside a handler, each refuses a call that does not pass the handler's
+  // transaction (`./handler-scope.ts`): one connection per call, audited.
+  admin.decorate('repositories', adminHandlerRepositories(source.repositories));
   admin.decorate('redis', source.redis);
   admin.decorate('signer', source.signer);
   // Its own DPoP service, whose proofs name ADMIN_API_BASE_URL (#520): the
@@ -285,6 +290,11 @@ export async function installAdminApi(
   // The AuthMethod plugins the process loaded (#600), which the plugin
   // operations list, enable and configure.
   admin.decorate('authMethodPlugins', source.authMethodPlugins);
+  // The realm policy store and whether a realm secret is set (#516, #529),
+  // which the realm operations read and write a realm's policies through
+  // (#517). The secret store's values stay with the app's mail sender.
+  admin.decorate('policyStore', source.policyStore);
+  admin.decorate('realmSecretStore', source.realmSecretStore);
   // The realm of a request: the one its token's issuer names while the token
   // guard runs, then the one its path names. Never a host's.
   admin.decorateRequest('realm', null);

@@ -227,8 +227,8 @@ and its spec under `/docs`.
 ## The admin listener
 
 A process holding `admin` runs the admin API on a second listener, beside the
-public one, while `ADMIN_API_ENABLED` is on. It is off by default until the
-first admin operations (#517) ship. The listener binds to loopback by default.
+public one, while `ADMIN_API_ENABLED` is on. It is off by default. The listener
+binds to loopback by default.
 Every admin call carries a DPoP-bound admin token and a proof for
 `ADMIN_API_BASE_URL` followed by the call's path (#520), so where the listener
 runs, the boot requires `ADMIN_API_BASE_URL`, the URL clients address the admin

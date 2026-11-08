@@ -1,6 +1,8 @@
 import { isSetDirection } from './field';
 import { REALM_POLICY_REGISTRY, REALM_POLICY_RULES, type RealmPolicies } from './realm-policies';
 import {
+  mergePolicyPatch,
+  type PolicyDiff,
   type PolicyIssue,
   type PolicyRegistry,
   PolicyValidationError,
@@ -144,6 +146,32 @@ export interface RealmPolicyUpdateOptions<Tx> {
   readonly expectedVersion: number;
   /** The transaction to write in, such as the one of the change's audit record. */
   readonly tx?: Tx;
+  /**
+   * Called in the update's transaction with the change it is about to store,
+   * once the patch, the merged document and the rules passed, before anything
+   * is written (#517): the caller's last word on it. The admin API checks
+   * there that the change needs no more than the request was classified and
+   * authorized for, and keeps it for the audit record. A throw stops the
+   * update: nothing is written, and the error reaches the caller.
+   */
+  readonly guard?: (change: RealmPolicyChange) => void | Promise<void>;
+}
+
+/**
+ * The change an update is about to store, as its `guard` sees it. Frozen, and
+ * never a secret's value: a secret appears in `diff` only as whether it is
+ * set before and after.
+ */
+export interface RealmPolicyChange {
+  readonly realmId: string;
+  /** The counter the update read the policies at, which the write is conditional on. */
+  readonly version: number;
+  /** The realm's policies before the update, every field set. */
+  readonly before: Readonly<Record<string, unknown>>;
+  /** The policies the update stores. */
+  readonly after: Readonly<Record<string, unknown>>;
+  /** The changed fields, judged on the merged document (`PolicyRegistry.diffPatch`). */
+  readonly diff: PolicyDiff;
 }
 
 /** A realm the boot's {@link RealmPolicyStore.seedRealms} wrote. */
@@ -449,30 +477,6 @@ function deepFreeze<T>(value: T): T {
     for (const member of Object.values(value)) deepFreeze(member);
   }
   return value;
-}
-
-/**
- * RFC 7396 JSON Merge Patch of `target` with `patch`. A copy; neither input
- * changes. A member named `__proto__` is refused: as an own member of a
- * parsed JSON object it is a name like any other, but assigning it would set
- * the result's prototype.
- */
-function mergePatch(target: unknown, patch: unknown, path: readonly string[]): unknown {
-  if (!isPlainObject(patch)) return structuredClone(patch);
-  const result: Record<string, unknown> = isPlainObject(target) ? structuredClone(target) : {};
-  for (const [name, value] of Object.entries(patch)) {
-    if (name === '__proto__') {
-      throw new PolicyValidationError('The policy patch is not valid', [
-        { path: [...path, name].join('.'), message: 'is not a member of the realm policies' },
-      ]);
-    }
-    if (value === null) {
-      delete result[name];
-    } else {
-      result[name] = mergePatch(result[name], value, [...path, name]);
-    }
-  }
-  return result;
 }
 
 /** Where the registry's groups and fields sit: what a stored document may hold. */
@@ -902,7 +906,7 @@ export function createPolicyStore<Row, Tx>(
     async update(
       realmId: string,
       patch: unknown,
-      { expectedVersion, tx }: RealmPolicyUpdateOptions<Tx>
+      { expectedVersion, tx, guard }: RealmPolicyUpdateOptions<Tx>
     ): Promise<RealmPolicySnapshot> {
       if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
         throw new TypeError('expectedVersion is a whole number, 0 or more');
@@ -937,11 +941,27 @@ export function createPolicyStore<Row, Tx>(
         // A document of an older version is patched as it reads upgraded,
         // and stored under this release's version below.
         const current = effective(readable(record, standing));
-        const merged = mergePatch(current.document, rest, []);
+        const merged = mergePolicyPatch(current.document, rest);
         // The `input` view takes the representation's `<name>Set` members and
         // drops them, so a representation sent back changes nothing.
         const next = registry.parse(merged, 'input');
         await checkRules(realmId, current.document, next, writes, inner);
+        if (guard !== undefined) {
+          const setBefore: string[] = [];
+          for (const entry of secretFields) {
+            if (await secrets?.isSet(realmId, entry.path, inner)) setBefore.push(entry.path);
+          }
+          const diff = registry.diffPatch(current.document, patch, { setSecrets: setBefore });
+          await guard(
+            deepFreeze({
+              realmId,
+              version: record.version,
+              before: structuredClone(current.document),
+              after: structuredClone(next),
+              diff,
+            })
+          );
+        }
         const written = await storage.write(
           realmId,
           {

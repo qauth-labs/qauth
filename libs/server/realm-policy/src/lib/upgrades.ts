@@ -1,3 +1,8 @@
+import {
+  MAX_FAILED_LOGIN_LOCKOUT_SECONDS,
+  MAX_FAILED_LOGIN_WINDOW_SECONDS,
+} from '@qauth-labs/server-config';
+
 import { PolicyDefinitionError } from './field';
 import { compareSchemaVersions, isPolicySchemaVersion } from './version';
 
@@ -38,14 +43,49 @@ export interface PolicySchemaUpgrade {
   readonly upgrade: (document: Record<string, unknown>) => Record<string, unknown>;
 }
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+
+/** The brute-force fields 1-rc.1 bounds, and their bounds. */
+const BRUTE_FORCE_BOUNDS: readonly (readonly [string, number])[] = [
+  ['windowSeconds', MAX_FAILED_LOGIN_WINDOW_SECONDS],
+  ['lockoutSeconds', MAX_FAILED_LOGIN_LOCKOUT_SECONDS],
+];
+
+/**
+ * 1-rc.0 to 1-rc.1 (#517): `bruteForce.windowSeconds` and
+ * `bruteForce.lockoutSeconds` are at most a day. A stored number above the
+ * bound reads as the bound. Higher is stricter for both, so no value the new
+ * schema accepts is as strict as the stored one: this is the one upgrade that
+ * loosens, named in the release note (`version.ts`, rule 2). Any other value
+ * is left as it is, so one the schema refuses is still refused.
+ */
+export const BRUTE_FORCE_BOUND_UPGRADE: PolicySchemaUpgrade = Object.freeze({
+  from: '1-rc.0',
+  to: '1-rc.1',
+  upgrade(document: Record<string, unknown>): Record<string, unknown> {
+    const group = document['bruteForce'];
+    if (!isPlainObject(group)) return document;
+    for (const [name, bound] of BRUTE_FORCE_BOUNDS) {
+      const value = group[name];
+      if (typeof value === 'number' && Number.isFinite(value) && value > bound) group[name] = bound;
+    }
+    return document;
+  },
+});
+
 /**
  * The upgrades of QAuth's realm policy registry, one per version change,
- * oldest first: none while the version is still the first one,
- * {@link FIRST_REALM_POLICY_SCHEMA_VERSION}. The release that changes
- * `REALM_POLICY_SCHEMA_VERSION` appends its upgrade here, and the contract
- * test holds it to that.
+ * oldest first, from {@link FIRST_REALM_POLICY_SCHEMA_VERSION}. The release
+ * that changes `REALM_POLICY_SCHEMA_VERSION` appends its upgrade here, and the
+ * contract test holds it to that.
  */
-export const REALM_POLICY_UPGRADES: readonly PolicySchemaUpgrade[] = Object.freeze([]);
+export const REALM_POLICY_UPGRADES: readonly PolicySchemaUpgrade[] = Object.freeze([
+  BRUTE_FORCE_BOUND_UPGRADE,
+]);
 
 /**
  * The upgrades that lead from each older version to `target`, in the order

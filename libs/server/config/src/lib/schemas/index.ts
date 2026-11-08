@@ -81,7 +81,12 @@ export {
   type KeyAttestationEnv,
   keyAttestationEnvSchema,
 } from './key-attestation';
-export { type ObservabilityEnv, observabilityEnvSchema } from './observability';
+export {
+  MAX_FAILED_LOGIN_LOCKOUT_SECONDS,
+  MAX_FAILED_LOGIN_WINDOW_SECONDS,
+  type ObservabilityEnv,
+  observabilityEnvSchema,
+} from './observability';
 export {
   type PasswordEnv,
   passwordEnvSchema,
