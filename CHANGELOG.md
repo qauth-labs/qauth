@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-08
+
+A patch release that carries breaking changes, as a 0.x release may (see
+the **Upgrading** notes below): `POST /auth/register` now follows the
+realm's sign-up switch, the plugin API takes secrets only sealed, and a
+realm's plugins are off after the upgrade until they are configured again.
+It adds migrations 0068 and 0069.
+
 ### Added
 
 - **An agent's owner is a verified account** ([#846], ADR-015 Decision 8
@@ -4546,7 +4554,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/qauth-labs/qauth/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/qauth-labs/qauth/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/qauth-labs/qauth/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/qauth-labs/qauth/compare/v0.1.1...v0.1.2
