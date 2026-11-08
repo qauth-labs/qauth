@@ -115,6 +115,7 @@ export class FakeDirectory implements AccountDirectory {
       enabled: account.enabled,
       admin: account.admin,
       verified: account.verified,
+      addressProved: account.addressProved ?? account.verified,
       factors: [
         ...(account.password === null
           ? []

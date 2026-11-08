@@ -113,9 +113,18 @@ export interface SignInAccount {
    * password credential's address is not proved yet is verified inline after
    * its password (#638). An account with no password credential (a passkey or
    * a wallet is its primary identity) has no address to prove and is
-   * verified.
+   * verified. An operator's verification (#1052) verifies it too.
    */
   readonly verified: boolean;
+  /**
+   * Whether its address is proved by its mailbox, apart from an operator's
+   * verification (#1052): every password credential's `email_verified` and
+   * every upstream identity's `verified`; `verified` when absent. A
+   * registration that proves the mailbox and then the password records the
+   * address when this is false, on an account an operator verified too, so
+   * a later reset by mail opens for it.
+   */
+  readonly addressProved?: boolean;
   /** Every authenticator bound to it, disabled ones included. */
   readonly factors: readonly BoundFactor[];
   /**

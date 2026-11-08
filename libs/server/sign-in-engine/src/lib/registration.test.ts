@@ -479,6 +479,25 @@ describe('after the code: an existing account', () => {
     // One code: the registration's proved the mailbox already.
     expect(built.sender.sent).toHaveLength(1);
   });
+
+  it('records the address of an account an operator verified once its mailbox and password are proved (#1052)', async () => {
+    // The operator's verification is not the address's proof: without this,
+    // a reset by mail would stay closed for good.
+    const built = build([
+      [ADDRESS, passwordAccount(USER, PASSWORD, { verified: true, addressProved: false })],
+    ]);
+    const ctx = context(built);
+    const code = await toCode(built, ctx);
+    const signIn = await built.engine.advance(kept(code), codeAnswer(built.sender.last), ctx);
+    const done = await built.engine.advance(
+      kept(signIn),
+      answer('password', { password: PASSWORD }),
+      ctx
+    );
+    expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER, amr: ['pwd'] } });
+    expect(built.addresses.calls).toEqual([{ realmId: REALM, userId: USER, identifier: ADDRESS }]);
+    expect(built.directory.accounts.get(ADDRESS)).toMatchObject({ addressProved: true });
+  });
 });
 
 describe('a disabled user', () => {

@@ -174,6 +174,7 @@ describe('the repository account directory', () => {
       enabled: true,
       admin: true,
       verified: true,
+      addressProved: true,
       // A passkey of another realm's row is not this account's.
       factors: [
         { type: 'password', disabled: false },
@@ -235,7 +236,10 @@ describe('the repository account directory', () => {
       verified: true,
       addressProved: false,
     });
-    expect(await directory.findByUserId(REALM, USER)).toMatchObject({ verified: true });
+    expect(await directory.findByUserId(REALM, USER)).toMatchObject({
+      verified: true,
+      addressProved: false,
+    });
   });
 
   it("reads an upstream provider's account as its credential's verified says (#639)", async () => {

@@ -227,29 +227,27 @@ export function createRepositoryAccountDirectory(
           disabled: row.disabledAt !== undefined && row.disabledAt !== null,
         })),
       ];
-      // An operator's verification (#1052) verifies the account whatever its
-      // credentials prove, and claims it if it was unclaimed.
-      const verified =
-        isOperatorVerified(user) ||
-        (passwords.every((row) => {
+      const addressProved =
+        passwords.every((row) => {
           const data = passwordCredentialDataSchema.safeParse(row.credentialData);
           return data.success && data.data.email_verified;
         }) &&
-          upstreams.every((row) => {
-            const data = upstreamCredentialDataSchema.safeParse(row.credentialData);
-            if (!data.success) {
-              log.error(
-                { credentialId: row.id },
-                'malformed credential_data on upstream credential'
-              );
-            }
-            return data.success && data.data.verified;
-          }));
+        upstreams.every((row) => {
+          const data = upstreamCredentialDataSchema.safeParse(row.credentialData);
+          if (!data.success) {
+            log.error({ credentialId: row.id }, 'malformed credential_data on upstream credential');
+          }
+          return data.success && data.data.verified;
+        });
       return Object.freeze({
         userId: user.id,
         enabled: user.enabled,
         admin: grants.length > 0,
-        verified,
+        // An operator's verification (#1052) verifies the account whatever its
+        // credentials prove, and claims it if it was unclaimed; the address
+        // stays unproved until its mailbox proves it.
+        verified: isOperatorVerified(user) || addressProved,
+        addressProved,
         factors: Object.freeze(factors),
         requiredActions: Object.freeze(requiredActions),
         // The address a sign-in a passkey proved goes on with (#651).
