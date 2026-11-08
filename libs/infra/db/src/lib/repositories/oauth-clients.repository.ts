@@ -321,6 +321,9 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
      * that is disabled when the statement runs stays disabled, whatever
      * `data.enabled` says. `provisioned_by_operator` is always written
      * `false`: the document, not an operator, decides the redirect URIs.
+     * The operator's grant (`scopes`, `audience`, `client_credentials_scopes`)
+     * is never named on conflict, and `client_credentials_scopes` is written
+     * NULL on insert (#956): only the seed's `cimd_clients` grant sets it.
      */
     async upsertCimdClient(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient> {
       const invoker = tx ?? defaultDb;
@@ -332,10 +335,15 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         // update below never names the first-party columns either.
         // Its back-channel logout URI is the document's, so the client's own
         // (#624): never one an admin set, which the egress allowlist may open.
+        // Nor does a resolution open `client_credentials` (#956): the list is
+        // the operator's, written by the seed's `cimd_clients` grant, and the
+        // conflict update below never names it, so a list the operator wrote
+        // into a pending row survives the first resolution.
         .values({
           ...data,
           provisionedByOperator: false,
           ...NOT_FIRST_PARTY,
+          clientCredentialsScopes: null,
           ...cimdBackchannelLogout(data),
         })
         .onConflictDoUpdate({

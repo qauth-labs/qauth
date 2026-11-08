@@ -33,10 +33,11 @@
  * boots, so start it once against the migrated database before running this.
  *
  * The manifest's optional `cimd_clients` section grants scopes to CIMD
- * clients (#770). Each entry sets only the client's `scopes` and `audience`;
- * its metadata document supplies the rest. It has no secret, so `--rotate`
- * does not apply: an entry always converges the row on the manifest. See
- * `cimd-client-grants.ts`.
+ * clients (#770). Each entry sets only the client's `scopes`, `audience` and
+ * `client_credentials_scopes` (#956), the scopes the `client_credentials`
+ * grant may issue it, which is none without the list; its metadata document
+ * supplies the rest. It has no secret, so `--rotate` does not apply: an entry
+ * always converges the row on the manifest. See `cimd-client-grants.ts`.
  *
  * A `clients` entry may set a first-party profile (ADR-017 Decision 2, #631):
  * `first_party_profile`, a native profile's `first_party_policy` and a
@@ -273,7 +274,9 @@ function warnPkceOff(clients: readonly ClientSpec[]): void {
 function reportCimdGrants(realm: string, granted: CimdGrantResult[]): void {
   if (granted.length === 0) return;
 
-  console.log(`\nCIMD clients in realm "${realm}" (scopes and audience only; no secret):`);
+  console.log(
+    `\nCIMD clients in realm "${realm}" (scopes, client_credentials_scopes and audience only; no secret):`
+  );
   for (const g of granted) {
     console.log(`  ${g.clientId}: ${g.status === 'not_cimd' ? 'REFUSED' : g.status}`);
   }

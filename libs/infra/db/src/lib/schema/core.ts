@@ -553,16 +553,19 @@ export const oauthClients = pgTable(
      * tokens a user granted.
      *
      * NULL (every row until an operator sets one) leaves the grant as it was:
-     * any scope of `scopes`. A list narrows it: the token endpoint refuses a
-     * scope outside the list with `invalid_scope`, and never issues one that
-     * `scopes` does not hold either. A stored value that is not a list of
-     * strings refuses every scope.
+     * any scope of `scopes`, except on a CIMD client (#956), whose grant types
+     * are its metadata document's: there NULL issues nothing. A list narrows
+     * it: the token endpoint refuses a scope outside the list with
+     * `invalid_scope`, and never issues one that `scopes` does not hold
+     * either. A stored value that is not a list of strings refuses every
+     * scope.
      *
      * OPERATOR-SET, like `id_jag_targets`: only the `db:seed-oauth-clients`
-     * manifest writes it. Dynamic registration, `/api/clients` and CIMD
-     * materialisation leave it NULL, `upsertCimdClient`'s conflict update does
-     * not name it, and `UpdateOAuthClient` excludes it, so no owner can take
-     * the operator's narrowing away.
+     * manifest writes it, from a `clients` entry or a `cimd_clients` entry.
+     * Dynamic registration, `/api/clients` and CIMD materialisation leave it
+     * NULL, `upsertCimdClient`'s conflict update does not name it, and
+     * `UpdateOAuthClient` excludes it, so no owner can take the operator's
+     * narrowing away.
      */
     clientCredentialsScopes: jsonb('client_credentials_scopes').$type<string[] | null>(),
     audience: jsonb('audience').$type<string[] | null>(),
