@@ -30,6 +30,7 @@ import {
 } from '../../helpers/consent';
 import { malformedDpopJktError, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
+import { allowFormActionTo, formActionSourceOf } from '../../helpers/form-action';
 import { html, render, safe } from '../../helpers/html';
 import {
   buildRedirectUrl,
@@ -438,6 +439,10 @@ export default async function (fastify: FastifyInstance) {
       ) {
         throw redirectUriNotPermittedError();
       }
+      // The consent form's answer redirects to the client's redirect_uri,
+      // checked above: Chromium and WebKit check `form-action` on that
+      // redirect too, so the page allows it (helpers/form-action.ts).
+      allowFormActionTo(reply, formActionSourceOf(query.redirect_uri));
 
       // RFC 9449 §10 (#480): the DPoP key the code will be bound to, carried
       // to the POST as a hidden field while DPoP is on. /oauth/authorize

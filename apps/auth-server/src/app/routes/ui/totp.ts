@@ -4,6 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
+import { allowFormActionTo } from '../../helpers/form-action';
 import {
   readInteractionPersonalData,
   readInteractionStep,
@@ -117,6 +118,8 @@ export default async function (fastify: FastifyInstance) {
       return expiredOr(reply, async () => {
         if (!isInteractionId(id)) throw new InteractionExpiredError();
         const view = await readInteractionStep(request, id);
+        // A finishing answer may 303 to the client: allow it (helpers/form-action.ts).
+        allowFormActionTo(reply, view.formAction);
         const urls = urlsOf(request, id);
         if (view.step.name !== TOTP_STEP) return reply.redirect(urls.ceremony, 303);
         const form = { action: urls.action, csrf: view.csrf };
@@ -165,6 +168,8 @@ export default async function (fastify: FastifyInstance) {
         const shown = setupPersonalSchema.safeParse(personal.data);
         if (!shown.success) throw new Error('the totp_setup step holds no secret');
         const view = await readInteractionStep(request, id);
+        // A finishing answer may 303 to the client: allow it (helpers/form-action.ts).
+        allowFormActionTo(reply, view.formAction);
         if (view.step.name !== TOTP_SETUP_STEP) return reply.redirect(urls.ceremony, 303);
         return sendPage(
           reply,

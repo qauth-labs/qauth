@@ -4,6 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
+import { allowFormActionTo } from '../../helpers/form-action';
 import {
   readInteractionPersonalData,
   readInteractionStep,
@@ -123,6 +124,8 @@ export default async function (fastify: FastifyInstance) {
       return expiredOr(reply, async () => {
         if (!isInteractionId(id)) throw new InteractionExpiredError();
         const view = await readInteractionStep(request, id);
+        // A finishing answer may 303 to the client: allow it (helpers/form-action.ts).
+        allowFormActionTo(reply, view.formAction);
         const urls = urlsOf(request, id);
         const current = view.step.name === WEBAUTHN_GET_STEP;
         const offered = current
@@ -176,6 +179,8 @@ export default async function (fastify: FastifyInstance) {
         const urls = urlsOf(request, id);
         if (personal.step !== WEBAUTHN_CREATE_STEP) return reply.redirect(urls.ceremony, 303);
         const view = await readInteractionStep(request, id);
+        // A finishing answer may 303 to the client: allow it (helpers/form-action.ts).
+        allowFormActionTo(reply, view.formAction);
         if (view.step.name !== WEBAUTHN_CREATE_STEP) return reply.redirect(urls.ceremony, 303);
         const step = creationParamsSchema.safeParse(view.step.params);
         const account = creationPersonalSchema.safeParse(personal.data);
