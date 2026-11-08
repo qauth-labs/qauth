@@ -231,9 +231,6 @@ const PROBLEM_CODE_MAP: Readonly<Record<string, string>> = {
   // An email verification token, not an access token.
   invalid_verification_token: 'INVALID_TOKEN',
   email_already_verified: 'EMAIL_ALREADY_VERIFIED',
-  // Login refuses an unverified account with `invalid_credentials`; a 403
-  // elsewhere is the generic refusal it always was here.
-  email_not_verified: 'FORBIDDEN',
   validation_error: 'VALIDATION_ERROR',
   bad_request: 'VALIDATION_ERROR',
   invalid_request: 'VALIDATION_ERROR',

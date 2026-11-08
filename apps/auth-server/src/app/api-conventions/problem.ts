@@ -266,12 +266,6 @@ export const PROBLEM_CODES = {
     title: 'Forbidden',
     description: 'The caller is authenticated but may not perform the operation.',
   },
-  email_not_verified: {
-    status: 403,
-    type: 'email-not-verified',
-    title: 'Email address not verified',
-    description: 'The account must verify its email address first.',
-  },
   approval_required: {
     status: 403,
     type: 'approval-required',

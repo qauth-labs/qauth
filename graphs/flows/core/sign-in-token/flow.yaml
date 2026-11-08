@@ -308,12 +308,12 @@ states:
     description: >-
       F-08: under the realm's accounts.requireVerifiedAccount (#528), a password account is used only once its address
       is confirmed. It is read from the credential, before the users row, so an unconfirmed disabled account is refused
-      here. It used to answer 403 with the code EMAIL_NOT_VERIFIED, which let anyone tell a free address from a
-      registered one (ANT-2026-SPEMY9GU).
+      here. It used to answer a 403 of its own, which let anyone tell a free address from a registered one
+      (ANT-2026-SPEMY9GU).
     source: apps/auth-server/src/app/routes/auth/login.ts:166
     always:
       - guard: unverifiedUnderTheGate
-        target: invalid_credentials.email_not_verified
+        target: invalid_credentials.account_not_verified
         effect: [waitFloor]
         say: 'the address is not confirmed, and the gate is on; the floor is waited out'
         source: apps/auth-server/src/app/routes/auth/login.ts:189
@@ -537,12 +537,12 @@ states:
     source: apps/auth-server/src/app/routes/auth/login.ts:236
     response: *invalidCredentials
 
-  invalid_credentials.email_not_verified:
+  invalid_credentials.account_not_verified:
     type: final
     title: Refuse an unconfirmed account under the gate, like a wrong password
     description: >-
-      user.sign_in_failed is recorded with the reason email_not_verified and the user as its subject, and the log line
-      says email_not_verified; the metric's label stays invalid_credentials, since /metrics is not authenticated. The
+      user.sign_in_failed is recorded with the reason account_not_verified and the user as its subject, and the log line
+      says account_not_verified; the metric's label stays invalid_credentials, since /metrics is not authenticated. The
       attempt stays counted, and the answer waits out the 500 ms floor.
     source: apps/auth-server/src/app/routes/auth/login.ts:236
     response: *invalidCredentials
@@ -664,7 +664,7 @@ assertions:
     never: >-
       state in ['too_many_requests.locked_out', 'too_many_requests.ladder_wait', 'service_unavailable.ladder',
       'invalid_credentials.unknown_identifier', 'invalid_credentials.wrong_password',
-      'invalid_credentials.email_not_verified', 'invalid_credentials.account_disabled', 'server_error.store'] and not
+      'invalid_credentials.account_not_verified', 'invalid_credentials.account_disabled', 'server_error.store'] and not
       floorWaited
     say: >-
       Every refused credential, the lockout, the ladder's refusals and a failure inside the handler answer only once

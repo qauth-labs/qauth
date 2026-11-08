@@ -3,7 +3,7 @@ title: Problem types
 description: Every problem type, code and status a QAuth route that is not an OAuth protocol endpoint answers an error with.
 sidebar:
   order: 3
-lastVerified: '2026-11-03'
+lastVerified: '2026-11-08'
 ---
 
 Every route that is not an OAuth protocol endpoint answers an error with an RFC 9457 problem
@@ -180,12 +180,6 @@ The operation needs fresh authentication and the sign-in behind the token is too
 **Code** `forbidden` · **Status** 403 · **Title** Forbidden
 
 The caller is authenticated but may not perform the operation.
-
-## `email-not-verified`
-
-**Code** `email_not_verified` · **Status** 403 · **Title** Email address not verified
-
-The account must verify its email address first.
 
 ## `approval-required`
 

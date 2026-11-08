@@ -962,7 +962,7 @@ describe('audit records', () => {
     }
     expect(reasons).toEqual({
       disabled: 'account_disabled:hmac',
-      unverified: 'email_not_verified:hmac',
+      unverified: 'account_not_verified:hmac',
       unknown: 'invalid_credentials:hmac',
       locked: 'invalid_credentials:hmac',
     });

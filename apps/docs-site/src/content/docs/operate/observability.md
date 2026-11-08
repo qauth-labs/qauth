@@ -408,8 +408,8 @@ each list as **open** — a new call site can add a value without a schema chang
   `invalid_credentials`, `locked_out`, `error`. A login refused because the
   account is not verified yet counts as `invalid_credentials`: a label of its
   own would tell whoever reads the metrics whether an address someone just
-  registered was free. The `user.login.failure` log line
-  and the audit row keep the reason `email_not_verified`.
+  registered was free. The `user.login.failure` log line and the
+  `user.sign_in_failed` event keep the reason `account_not_verified`.
 - `type` is e.g. `access`, `refresh`, or `id_jag` (the ID-JAG assertion minted by
   the token-exchange grant). `grant_type` is e.g. `password`,
   `authorization_code`, `refresh_token`, `client_credentials`, `token-exchange`,

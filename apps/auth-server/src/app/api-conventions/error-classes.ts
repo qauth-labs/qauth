@@ -2,7 +2,6 @@ import { SsfRequestError } from '@qauth-labs/fastify-plugin-ssf';
 import {
   BadRequestError,
   EmailAlreadyVerifiedError,
-  EmailNotVerifiedError,
   ForbiddenError,
   InvalidClientError,
   InvalidClientMetadataError,
@@ -150,7 +149,6 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
     code: 'email_already_verified',
     oauthError: 'invalid_request',
   },
-  { errorClass: EmailNotVerifiedError, code: 'email_not_verified', oauthError: 'access_denied' },
   { errorClass: InvalidClientError, code: 'invalid_client', oauthError: 'invalid_client' },
   {
     errorClass: InvalidClientMetadataError,

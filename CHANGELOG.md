@@ -101,6 +101,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the upgrade fails at its retry: configure plugins once every node runs the
   new release, and file such an approval again.
 
+- **An unverified account's refused sign-in is recorded as
+  `account_not_verified`** ([#966], ADR-017 Decision 5). The verified-account
+  gate (`accounts.requireVerifiedAccount`) is about the account, which may
+  have no email address, so `POST /auth/login`, `POST /ui/login` and the
+  sign-in engine record its refusal in the `user.sign_in_failed` event with
+  the reason `account_not_verified`, and `POST /auth/login` writes the same
+  reason in its `user.login.failure` log line; it was `email_not_verified`.
+  The answer is unchanged: the same `401 invalid_credentials` as a wrong
+  password. Events recorded before the upgrade keep `email_not_verified`. The event type stays
+  `urn:qauth:event:user.sign_in_failed:v1-rc.0`: its schema publishes
+  `reason` as an open `snake_case` code and lists no values. The problem
+  type `email_not_verified` (`403`, "Email address not verified"), which no
+  route has answered since 0.1.0 refused an unverified account like a wrong
+  password, is removed from the OpenAPI documents and the problem types
+  page, with its class `EmailNotVerifiedError` in
+  `@qauth-labs/shared-errors`. **Upgrading:** a log query, alert or event
+  consumer that matches `email_not_verified` must match `account_not_verified`
+  as well, and keep the old value for the events recorded before.
+
 ## [0.2.0] - 2026-11-07
 
 ### Added
@@ -3646,6 +3665,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
 [#964]: https://github.com/qauth-labs/qauth/issues/964
+[#966]: https://github.com/qauth-labs/qauth/issues/966
 [#968]: https://github.com/qauth-labs/qauth/issues/968
 [#969]: https://github.com/qauth-labs/qauth/issues/969
 [#982]: https://github.com/qauth-labs/qauth/issues/982

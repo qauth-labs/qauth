@@ -840,7 +840,7 @@ describe('audit events', () => {
       { outcome: 'passed', step: 'password', userId: USER },
       { outcome: 'refused', step: 'password', reason: 'invalid_credentials', identifierHmac: HMAC },
       { outcome: 'refused', step: 'password', reason: 'account_disabled', identifierHmac: HMAC },
-      { outcome: 'refused', step: 'password', reason: 'email_not_verified', userId: USER },
+      { outcome: 'refused', step: 'password', reason: 'account_not_verified', userId: USER },
       { outcome: 'refused', step: 'password', reason: 'locked_out', identifierHmac: HMAC },
       { outcome: 'ended', step: 'identifier', reason: 'subject_mismatch', identifierHmac: HMAC },
       { outcome: 'ended', step: 'password', reason: 'subject_mismatch', userId: USER },
@@ -882,7 +882,7 @@ describe('audit events', () => {
     });
     expect(signInAuditEvent(records[4])).toEqual({
       type: 'urn:qauth:event:user.sign_in_failed:v1-rc.0',
-      data: { method: 'password', reason: 'email_not_verified' },
+      data: { method: 'password', reason: 'account_not_verified' },
       userId: USER,
     });
     // A breach-list check that could not be made (#635).

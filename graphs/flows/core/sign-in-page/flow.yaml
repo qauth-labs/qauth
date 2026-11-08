@@ -532,7 +532,7 @@ states:
     source: apps/auth-server/src/app/routes/ui/login.ts:441
     always:
       - guard: unverifiedUnderTheGate
-        target: invalid_credentials.email_not_verified
+        target: invalid_credentials.account_not_verified
         effect: [waitFloor]
         say: 'the address is not confirmed, and the gate is on; the floor is waited out'
         source: apps/auth-server/src/app/routes/ui/login.ts:457
@@ -864,12 +864,12 @@ states:
     source: apps/auth-server/src/app/routes/ui/login.ts:488
     response: *invalidCredentials
 
-  invalid_credentials.email_not_verified:
+  invalid_credentials.account_not_verified:
     type: final
     title: Refuse an unconfirmed account under the gate, like a wrong password
     description: >-
-      user.sign_in_failed is recorded with the reason email_not_verified and the user as its subject; the answer is the
-      wrong password's (it was a 403 of its own until ANT-2026-SPEMY9GU, which let anyone tell a free address from a
+      user.sign_in_failed is recorded with the reason account_not_verified and the user as its subject; the answer is
+      the wrong password's (it was a 403 of its own until ANT-2026-SPEMY9GU, which let anyone tell a free address from a
       registered one). The attempt stays counted, and the answer waits out the 500 ms floor.
     source: apps/auth-server/src/app/routes/ui/login.ts:488
     response: *invalidCredentials
@@ -1076,7 +1076,7 @@ assertions:
     never: >-
       state in ['too_many_requests.locked_out', 'too_many_requests.ladder_wait', 'service_unavailable.ladder',
       'invalid_credentials.unknown_identifier', 'invalid_credentials.wrong_password',
-      'invalid_credentials.email_not_verified', 'invalid_credentials.account_disabled'] and not floorWaited
+      'invalid_credentials.account_not_verified', 'invalid_credentials.account_disabled'] and not floorWaited
     say: >-
       Every refused credential, the lockout and the ladder's refusals answer only once 500 ms have passed since the
       request arrived, so the time of the answer does not tell the causes apart

@@ -160,8 +160,8 @@ export default async function (fastify: FastifyInstance) {
         //
         // An unverified account is refused EXACTLY like a wrong password: the
         // same 401 and message, the same floor, the same order of work, the
-        // attempt left counted. A distinct answer (it used to be 403
-        // EMAIL_NOT_VERIFIED) is an enumeration oracle: anyone may register
+        // attempt left counted. A distinct answer (it used to be a 403 of its
+        // own) is an enumeration oracle: anyone may register
         // any address with a password of their choice, and logging in with it
         // then told a free address (the new, unverified account: 403) from a
         // registered one (the owner's password: 401). ANT-2026-SPEMY9GU.
@@ -219,7 +219,7 @@ export default async function (fastify: FastifyInstance) {
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'invalid_credentials' });
           logAuthEvent(request, 'user.login.failure', false, {
             emailHash,
-            reason: unverified ? 'email_not_verified' : 'invalid_credentials',
+            reason: unverified ? 'account_not_verified' : 'invalid_credentials',
           });
 
           // Ensure minimum response time to prevent timing attacks
@@ -232,7 +232,7 @@ export default async function (fastify: FastifyInstance) {
             'urn:qauth:event:user.sign_in_failed:v1-rc.0',
             {
               method: 'password',
-              reason: unverified ? 'email_not_verified' : 'invalid_credentials',
+              reason: unverified ? 'account_not_verified' : 'invalid_credentials',
             },
             {
               realmId: realm.id,

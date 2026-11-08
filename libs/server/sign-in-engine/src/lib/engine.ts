@@ -1369,7 +1369,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         return refuseAnswer(offer, read.step, 'invalid_credentials', 'account_disabled');
       }
       if (!account.verified && deps.requireVerifiedAccount && emailCodes === undefined) {
-        return refuseAnswer(offer, read.step, 'invalid_credentials', 'email_not_verified');
+        return refuseAnswer(offer, read.step, 'invalid_credentials', 'account_not_verified');
       }
       state.transaction = {
         ...state.transaction,
@@ -1586,7 +1586,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         throw new Error('sign-in engine: a proof outside the upstream step’s schema');
       if (!proof.account.enabled) return refuse('account_disabled');
       if (!proof.account.verified && deps.requireVerifiedAccount && emailCodes === undefined) {
-        return refuse('email_not_verified');
+        return refuse('account_not_verified');
       }
       const address = proof.address === undefined ? undefined : readIdentifier(proof.address);
       state.transaction = {

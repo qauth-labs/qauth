@@ -609,7 +609,7 @@ export const SIGN_IN_AUDIT_REASONS = [
    * The password was right, and the account is unverified while
    * `REQUIRE_VERIFIED_ACCOUNT` is on, in an engine built without email codes.
    */
-  'email_not_verified',
+  'account_not_verified',
   /** A wrong email code (#638): refused and counted, in the transaction and on its ladder. */
   'invalid_code',
   /** An email code answered after its 10 minutes: nothing was compared or counted. */
