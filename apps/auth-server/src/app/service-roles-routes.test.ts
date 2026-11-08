@@ -201,7 +201,7 @@ const PINNED_OPERATIONS: ReadonlySet<string> = new Set(
 
 /** The keys a boot sets or clears, restored after the file. */
 const BOOT_KEYS =
-  /^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|SSF_|JWT_|KEK|SERVICE_ROLES$|SIGNER_URL$|INTERNAL_|INTERACTION_UI_ENABLED$)/;
+  /^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|SSF_|JWT_|KEK|SERVICE_ROLES$|SIGNER_URL$|INTERNAL_|INTERACTION_UI_ENABLED$|CEREMONY_APP_DEPLOYED$)/;
 
 /** The environment of a deployment with every route-registering switch on. */
 function maximalEnvironment(serviceRoles: string): Record<string, string> {
@@ -253,6 +253,7 @@ function maximalEnvironment(serviceRoles: string): Record<string, string> {
     METRICS_ENABLED: 'true',
     SSF_TRANSMITTER_ENABLED: 'true',
     INTERACTION_UI_ENABLED: 'true',
+    CEREMONY_APP_DEPLOYED: 'true',
     WALLET_FEDERATION_ENABLED: 'true',
     OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
     OID4VP_SUBJECT_RESOLUTION: 'asserted-lookup',
