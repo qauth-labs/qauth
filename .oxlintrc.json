@@ -192,6 +192,13 @@
                 "sourceTag": "*",
                 "notDependOnLibsWithTags": ["scope:wire-suite"]
               },
+              // The docs checks (#1044, apps/docs-checks) read the docs, so a
+              // docs edit marks them affected. Nothing may depend on them, or
+              // that edit would mark the dependent affected too.
+              {
+                "sourceTag": "*",
+                "notDependOnLibsWithTags": ["scope:docs-checks"]
+              },
               {
                 "sourceTag": "type:testing",
                 "onlyDependOnLibsWithTags": [

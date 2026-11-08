@@ -1,13 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
 import * as config from '@qauth-labs/server-config';
 import { isSecurityEffect } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 
 import { ANNOTATION_KEYS, DIRECTION_KINDS, directionKind, SECURITY_WHEN } from './field';
-import { renderRealmPoliciesPage } from './page';
 import { REALM_POLICY_ENV, REALM_POLICY_REGISTRY } from './realm-policies';
 import { PolicySeedError } from './registry';
 
@@ -18,7 +14,6 @@ import { PolicySeedError } from './registry';
  * path they seed.
  */
 
-const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..');
 const FIELDS = REALM_POLICY_REGISTRY.fields();
 
 /**
@@ -186,32 +181,6 @@ describe('every field in every group', () => {
       if (field.securityWhen !== 'never')
         expect(field.effects, path).toEqual(FIELD_EFFECTS[path] ?? GROUP_EFFECTS[segments[0]]);
       expect(field.environmentBound, path).toBe(ENVIRONMENT_BOUND(path));
-    }
-  });
-
-  it('links to a page of the docs site, and to a heading on it', () => {
-    const generated = renderRealmPoliciesPage(REALM_POLICY_REGISTRY);
-    for (const { path, field } of FIELDS) {
-      const [, page, anchor] =
-        /^https:\/\/docs\.qauth\.dev\/([^#]*?)\/?(?:#(.+))?$/.exec(field.doc.link) ?? [];
-      const base = join(REPO_ROOT, 'apps/docs-site/src/content/docs', page ?? '');
-      const file = [
-        `${base}.md`,
-        `${base}.mdx`,
-        join(base, 'index.md'),
-        join(base, 'index.mdx'),
-      ].find(existsSync);
-      expect(file, `${path}: ${field.doc.link}`).toBeDefined();
-      if (anchor === undefined || file === undefined) continue;
-      const body = page === 'reference/realm-policies' ? generated : readFileSync(file, 'utf8');
-      const anchors = [...body.matchAll(/^#{2,6} (.+)$/gm)].map((match) =>
-        match[1]
-          .replace(/`/g, '')
-          .toLowerCase()
-          .replace(/[^a-z0-9 _-]/g, '')
-          .replace(/ /g, '-')
-      );
-      expect(anchors, `${path}: #${anchor}`).toContain(anchor);
     }
   });
 });

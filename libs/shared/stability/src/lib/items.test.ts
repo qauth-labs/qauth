@@ -1,12 +1,12 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-
 import { describe, expect, it } from 'vitest';
 
 import { EXPERIMENTAL_ITEMS } from './items';
-import { missingEvidencePaths, repositoryPathCheck } from './status';
 
-const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..');
+/*
+ * The checks of the registry against the repository (the decision records,
+ * the docs pages and the evidence paths) live in the `docs-checks` project
+ * (apps/docs-checks), beside the files they read (#1044).
+ */
 
 describe('the experimental-feature registry', () => {
   // The task list of #476: the six items of ADR-018 §4, the unbuilt ones
@@ -57,61 +57,5 @@ describe('the experimental-feature registry', () => {
   ])('lists the discovery members of %s', (id, members) => {
     const item = EXPERIMENTAL_ITEMS.find((candidate) => candidate.id === id);
     expect(item?.discoveryMembers).toEqual(members);
-  });
-
-  it('documents the pilot on the wallet sign-in page', () => {
-    const pilot = EXPERIMENTAL_ITEMS.find((item) => item.id === 'oid4vp-1.0-base');
-    expect(pilot?.docsPage).toBe('/integrate/wallet-login/');
-    expect(
-      existsSync(join(REPO_ROOT, 'apps/docs-site/src/content/docs/integrate/wallet-login.md'))
-    ).toBe(true);
-  });
-
-  // Where a decision record already names an item's switch, the registry uses
-  // that name, so the area that builds the item does not invent another.
-  it.each([
-    ['fipa-challenge-endpoint', 'docs/adr/017-first-party-login.md', 'FIRST_PARTY_LOGIN_ENABLED'],
-    ['pass-through-leg', 'docs/adr/016-agent-platform-bindings.md', 'PASS_THROUGH_LEG_ENABLED'],
-  ])('names the switch of %s as its record does', (id, adr, key) => {
-    const item = EXPERIMENTAL_ITEMS.find((candidate) => candidate.id === id);
-    expect(item?.adr).toBe(adr);
-    expect(item?.switchKey).toBe(key);
-    expect(readFileSync(join(REPO_ROOT, adr), 'utf8')).toContain(`\`${key}\``);
-  });
-
-  it.each(EXPERIMENTAL_ITEMS.map((item) => [item.id, item.adr] as const))(
-    '%s links a decision record that exists (%s)',
-    (_id, adr) => {
-      expect(existsSync(join(REPO_ROOT, adr))).toBe(true);
-    }
-  );
-
-  it('names, in ADR-018 §4, every record the items link', () => {
-    const adr018 = readFileSync(join(REPO_ROOT, 'docs/adr/018-1-0-scope-and-stability.md'), 'utf8');
-    const section = adr018.slice(
-      adr018.indexOf('### 4. Experimental in 1.0'),
-      adr018.indexOf('### 5. The stability contract')
-    );
-    expect(section).toContain('ADR-017');
-    expect(section).toContain('ADR-016 §4');
-    expect(section).toContain('`oid4vp-1.0-base`');
-    expect(section).toContain('`/first-party` subpath of `@qauth-labs/node`');
-    expect(section).toContain('draft-ietf-oauth-attestation-based-client-auth');
-    expect(section).toContain('The plugin API');
-  });
-
-  // Evidence is a link or a path that must exist (#476): a file, and a
-  // section of it when one is named. The same check the script runs.
-  it('names only files and sections that exist as evidence', () => {
-    const pathExists = repositoryPathCheck({
-      isFile: (path) =>
-        existsSync(join(REPO_ROOT, path)) && statSync(join(REPO_ROOT, path)).isFile(),
-      readText: (path) => readFileSync(join(REPO_ROOT, path), 'utf8'),
-    });
-    expect(
-      EXPERIMENTAL_ITEMS.flatMap((item) =>
-        missingEvidencePaths(item, pathExists).map((missing) => `${item.id} ${missing}`)
-      )
-    ).toEqual([]);
   });
 });

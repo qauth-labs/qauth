@@ -55,7 +55,7 @@ export const SERVER_CONFIG_KEYS: readonly ConfigKey[] = [
  *
  * A pull request that adds, renames or removes a key changes this registry in
  * the same pull request: the key goes into the file for its area, and
- * `pnpm nx test server-config -- -u` regenerates the configuration page.
+ * `pnpm nx test docs-checks -- -u` regenerates the configuration page.
  */
 export const CONFIG_KEY_REGISTRY: readonly ConfigKey[] = [
   ...SERVER_CONFIG_KEYS,

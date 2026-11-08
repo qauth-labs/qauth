@@ -226,6 +226,12 @@ own.
 Postgres servers start). The default is 3 on CI and half the cores, at most 4,
 locally.
 
+`QAUTH_INTEGRATION_SHARD=<index>/<count>` runs one shard of the files: Vitest
+sorts a run's files by a hash of their path and gives each shard one contiguous
+slice, so the shards of one tree together run every file exactly once. CI's
+`integration` job runs three (#1044). A shard that gets no file of a project
+passes.
+
 #### `startPostgresContainer(options?): Promise<StartedPostgres>`
 
 A new database for the suite on its slot's shared server, or a container of its

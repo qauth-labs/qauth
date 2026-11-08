@@ -3,7 +3,7 @@ title: Testing
 description: The five tiers — unit, testcontainers integration, the repo-wide coverage gate, the documentation invariants, and the black-box wire suite — what each can and cannot catch, how to run them, and the two caching lessons this repo learned the hard way.
 sidebar:
   order: 4
-lastVerified: '2026-11-02'
+lastVerified: '2026-11-08'
 ---
 
 QAuth has three test tiers, a fourth that guards this documentation site, and a fifth that tests
@@ -11,14 +11,15 @@ the built server from outside, over HTTP. Knowing what each one **cannot** catch
 worst incidents in this repo's history came from: a suite that passed while running zero tests,
 and a schema change no unit test could see.
 
-| Tier                 | Command                                      | Runs in CI                | Catches                                                 |
-| -------------------- | -------------------------------------------- | ------------------------- | ------------------------------------------------------- |
-| Unit                 | `pnpm exec nx run-many -t test --all`        | the `affected (test)` job | Handler and helper logic, in isolation                  |
-| Integration          | `pnpm exec nx run infra-db:test-integration` | the `integration` job     | Real Postgres DDL, migrations, repositories             |
-| Repo-wide coverage   | `pnpm exec vitest run --coverage`            | the `coverage` job        | Coverage regression across the whole fast suite         |
-| Documentation guards | `pnpm exec nx test docs-site`                | part of the unit tier     | Drift between this site and the tree it describes       |
-| Wire suite           | `pnpm nx run wire-suite:run`                 | the `wire-suite` job      | What a client sees over HTTP from the built image       |
-| Stable surface       | `pnpm stable-surface`                        | the `stable-surface` job  | A surface out of step with the code or the last release |
+| Tier                 | Command                                      | Runs in CI                | Catches                                                       |
+| -------------------- | -------------------------------------------- | ------------------------- | ------------------------------------------------------------- |
+| Unit                 | `pnpm exec nx run-many -t test --all`        | the `affected (test)` job | Handler and helper logic, in isolation                        |
+| Integration          | `pnpm exec nx run infra-db:test-integration` | the `integration` job     | Real Postgres DDL, migrations, repositories                   |
+| Repo-wide coverage   | `pnpm exec vitest run --coverage`            | the `coverage` job        | Coverage regression across the whole fast suite               |
+| Documentation guards | `pnpm exec nx test docs-site`                | part of the unit tier     | Drift between this site and the tree it describes             |
+| Docs checks          | `pnpm exec nx test docs-checks`              | part of the unit tier     | Generated pages and docs links out of step with the libraries |
+| Wire suite           | `pnpm nx run wire-suite:run`                 | the `wire-suite` job      | What a client sees over HTTP from the built image             |
+| Stable surface       | `pnpm stable-surface`                        | the `stable-surface` job  | A surface out of step with the code or the last release       |
 
 ## Tier 1 — unit
 
@@ -149,8 +150,18 @@ Locally, an integration suite skips when Docker is not running. On CI it does no
 a GitHub-hosted runner, which ships a Docker daemon, so the throw is unreachable in practice — it
 exists so that a runner _without_ one fails loudly instead of reporting success.
 
-The job is affected-scoped like the `affected` job, so a schema, migration, or
-repository change runs it and a docs-only pull request pays nothing.
+The job is affected-scoped by task: like every `nx affected` run, it runs each `test-integration`
+task whose inputs a change reaches, so a schema, migration, or repository change runs it. A pull
+request that changes only docs runs no suite, since no `test-integration` input names a docs file.
+The inputs are the `integration` named input in `nx.json`, plus what a project's suite reads beyond
+it, named in that project's `project.json`. A suite that starts reading a file outside them, such as
+a published document or another app's source, must name the file there too, or a change to that
+file alone will not run the suite.
+
+Three runners share the suites. Each runs every affected project's `test-integration` with its own
+shard of the files (`QAUTH_INTEGRATION_SHARD`, which `vitest.integration.config.mts` reads), so
+every file runs exactly once, and the `integration` check passes when all three shards do. To run
+one shard locally, set the variable: `QAUTH_INTEGRATION_SHARD=2/3 pnpm exec nx run auth-server:test-integration`.
 
 ## Tier 3 — the repo-wide coverage gate
 

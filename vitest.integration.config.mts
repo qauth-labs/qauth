@@ -32,6 +32,28 @@ function integrationWorkers(): number {
 }
 
 /**
+ * The share of the integration files this run takes, from
+ * `QAUTH_INTEGRATION_SHARD` (`<index>/<count>`, #1044), or every file when it
+ * is unset. CI's `integration` job runs the suites on several runners at once,
+ * each with the same shard of every project's files. Vitest sorts a run's
+ * files by a hash of their path and gives each shard one contiguous slice of
+ * that list, so every file runs on exactly one runner.
+ */
+function integrationShard(): string | undefined {
+  const shard = process.env['QAUTH_INTEGRATION_SHARD'];
+  if (shard === undefined || shard === '') return undefined;
+  const match = /^([1-9][0-9]*)\/([1-9][0-9]*)$/.exec(shard);
+  if (match === null || Number(match[1]) > Number(match[2])) {
+    throw new Error(
+      `QAUTH_INTEGRATION_SHARD must read <index>/<count>, with 1 <= index <= count; got ${shard}`
+    );
+  }
+  return shard;
+}
+
+const shard = integrationShard();
+
+/**
  * Integration test config (#167).
  *
  * Runs ONLY the Docker-backed `*.integration.test.ts` suites (testcontainers
@@ -77,5 +99,8 @@ export default defineConfig({
     maxWorkers: integrationWorkers(),
     testTimeout: 60_000,
     hookTimeout: 180_000,
+    // A project with fewer files than there are shards leaves some shards
+    // without a file, and a shard without one has nothing to fail on.
+    ...(shard === undefined ? {} : { shard, passWithNoTests: true }),
   },
 });

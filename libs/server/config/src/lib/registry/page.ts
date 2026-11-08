@@ -6,8 +6,9 @@ import { KEY_TIERS } from './types';
 export const CONFIGURATION_PAGE_PATH = 'apps/docs-site/src/content/docs/operate/configuration.md';
 
 /**
- * The page's `lastVerified` date. The registry test regenerates and checks the
- * page on every run, so this changes only when the page's own prose does.
+ * The page's `lastVerified` date. The `docs-checks` project's test
+ * regenerates and checks the page on every run, so this changes only when the
+ * page's own prose does.
  */
 const LAST_VERIFIED = '2026-11-01';
 
@@ -187,7 +188,7 @@ export function renderConfigurationPage(
     `lastVerified: '${LAST_VERIFIED}'`,
     '---',
     '',
-    '<!-- Generated from libs/server/config/src/lib/registry by its tests. Do not edit by hand: change the registry and run `pnpm nx test server-config -- -u`. -->',
+    '<!-- Generated from libs/server/config/src/lib/registry by its tests. Do not edit by hand: change the registry and run `pnpm nx test docs-checks -- -u`. -->',
     '',
     'QAuth reads its configuration from environment variables. This page lists every QAuth key the auth server and the developer portal read, generated from the configuration key registry in `libs/server/config/src/lib/registry/`. A test fails when the page, the registry and the env schemas disagree. Variables of the Node.js runtime itself, such as `UV_THREADPOOL_SIZE`, are not listed.',
     '',

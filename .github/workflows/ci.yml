@@ -226,6 +226,11 @@ jobs:
   # `*.integration.test.ts`) is excluded here, so no Postgres/Redis is
   # needed — the `integration` job below runs it instead.
   #
+  # Not affected-scoped, so the docs checks of apps/docs-checks (#1044) run on
+  # every pull request, a docs-only one included: the generated pages, the
+  # realm policy docs links, the pages flagged experimental and the evidence
+  # paths, compared with the libraries' code.
+  #
   # Its own job, beside the `affected` legs rather than after them: nothing in
   # it reads build output (every workspace package resolves to its sources) or
   # git history (none of it is affected-scoped), so it needs neither a build
@@ -301,8 +306,23 @@ jobs:
   #
   # GitHub-hosted runners ship a Docker daemon, and `requireDockerOrSkip()`
   # fails rather than skips when `CI` is set, so this job cannot pass vacuously.
-  integration:
+  #
+  # Three runners share the suites (#1044). Each leg runs every affected
+  # project's `test-integration` with QAUTH_INTEGRATION_SHARD=<leg>/<legs>, and
+  # vitest.integration.config.mts gives the leg its slice of each project's
+  # files: Vitest sorts a project's files by a hash of their path and cuts the
+  # list into contiguous slices, so every file runs on exactly one leg. On one
+  # runner the job took 8 to 12 minutes whenever the auth server's suite ran,
+  # the longest of CI; by the measured file times the longest of its three
+  # slices holds about 3.3 minutes of tests. `fail-fast: false`, so a red leg
+  # does not cancel the others and one run reports every failing file.
+  integration-shard:
+    name: integration (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -323,14 +343,41 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - uses: nrwl/nx-set-shas@v5
 
-      # Affected-scoped like the `affected` job: a change to the schema, the
-      # migrations or the repositories marks infra-db affected and runs this;
-      # a docs-only PR pays nothing. `auth-server` carries the same target since
-      # #240 — its wallet-federation E2E boots the real server against
-      # testcontainers Postgres + Redis, and it is the only place the OID4VP
-      # flow, `acr` propagation and the password-login invariant are asserted
-      # end to end.
+      # Affected-scoped, by task like the `affected` job: `nx affected` runs
+      # each `test-integration` task whose inputs a change reaches (#1044,
+      # `affected` in nx.json). A change to the schema, the migrations or
+      # the repositories reaches infra-db and its dependents. A pull request
+      # that changes only docs (the docs site's pages under src/content/docs,
+      # docs/ or CHANGELOG.md) runs no suite: no `test-integration` input names
+      # a docs file. The OpenAPI documents auth-server generates
+      # (stable-surface/openapi.json, apps/docs-site/public/openapi.json) are
+      # not docs pages: auth-server's suites read them, so they are its inputs.
+      # The inputs are the `integration` named input in nx.json, plus what a
+      # project's suite reads beyond it, named in its project.json
+      # (auth-server, migration-runner); a file a suite reads that its inputs
+      # do not name would drop the suite out of a change to that file.
+      # `auth-server` carries the same target since #240 — its wallet-federation
+      # E2E boots the real server against testcontainers Postgres + Redis, and
+      # it is the only place the OID4VP flow, `acr` propagation and the
+      # password-login invariant are asserted end to end.
       - run: pnpm exec nx affected -t test-integration
+        env:
+          QAUTH_INTEGRATION_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  # The check named `integration`, as it was before the suites were split: it
+  # passes only when every shard did. `always()`, so the job runs and fails
+  # when a shard failed or the run was cancelled: a job its condition skips
+  # reports success, and a required check that was skipped does not block a
+  # merge.
+  integration:
+    needs: integration-shard
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every shard passed
+        run: test "$SHARDS" = success
+        env:
+          SHARDS: ${{ needs.integration-shard.result }}
 
   # Stable-surface guard (#451, ADR-018 §5): a stable surface must not change
   # by accident. `scripts/stable-surface/check.mjs` reads the registry

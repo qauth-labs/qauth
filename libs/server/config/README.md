@@ -302,7 +302,7 @@ that adds it.** That pull request:
    `since` set to the next release and the tier the pull request proposes for
    review;
 3. adds a stable key to `.env.example`;
-4. regenerates the page with `pnpm nx test server-config -- -u`.
+4. regenerates the page with `pnpm nx test docs-checks -- -u`.
 
 To rename a key, change `name`, rename the schema field, and add the old name to
 `aliases` with the release that deprecates it. A stable key's old name stays for

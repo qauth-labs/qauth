@@ -1,11 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-
 import { describe, expect, it } from 'vitest';
 
 import { headingAnchor, markdownHeadingAnchors, RESERVED_ANCHORS } from './anchor';
-
-const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..');
 
 describe('headingAnchor', () => {
   // The values the docs site renders, checked against its built HTML for this
@@ -53,11 +48,6 @@ describe('markdownHeadingAnchors', () => {
       [`# a${' '.repeat(100_000)}b`, `## ${'[\\'.repeat(50_000)}`].join('\n')
     );
     expect(anchors.size).toBe(2);
-  });
-
-  it('finds the section a fixture names in ADR-018', () => {
-    const adr = readFileSync(join(REPO_ROOT, 'docs/adr/018-1-0-scope-and-stability.md'), 'utf8');
-    expect(markdownHeadingAnchors(adr).has('8-assurance-before-10')).toBe(true);
   });
 });
 

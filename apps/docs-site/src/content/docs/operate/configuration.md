@@ -6,7 +6,7 @@ sidebar:
 lastVerified: '2026-11-01'
 ---
 
-<!-- Generated from libs/server/config/src/lib/registry by its tests. Do not edit by hand: change the registry and run `pnpm nx test server-config -- -u`. -->
+<!-- Generated from libs/server/config/src/lib/registry by its tests. Do not edit by hand: change the registry and run `pnpm nx test docs-checks -- -u`. -->
 
 QAuth reads its configuration from environment variables. This page lists every QAuth key the auth server and the developer portal read, generated from the configuration key registry in `libs/server/config/src/lib/registry/`. A test fails when the page, the registry and the env schemas disagree. Variables of the Node.js runtime itself, such as `UV_THREADPOOL_SIZE`, are not listed.
 
