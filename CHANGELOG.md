@@ -123,11 +123,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client's `client_id` and that names no user, and only a hand-written SQL
   update could narrow it. For a CIMD client NULL now issues nothing: the
   token endpoint refuses every scope on `client_credentials` with
-  `invalid_scope` (event reason `scope_not_allowed_for_grant`). A
-  `cimd_clients` entry of the seed manifest takes `client_credentials_scopes`,
-  a non-empty list out of its `scopes`, and every seeder run writes it, or
-  NULL for an entry without it; a CIMD resolution writes NULL on a new row and
-  never changes the list of an existing one. Other clients keep NULL as any
+  `invalid_scope` (for a scope in `scopes`, event reason
+  `scope_not_allowed_for_grant`). A `cimd_clients` entry of the seed manifest
+  takes `client_credentials_scopes`, a non-empty list out of its `scopes`, and
+  every seeder run writes it, or NULL for an entry without it, printing the
+  list it removed; a CIMD resolution writes NULL on a new row and never
+  changes the list of an existing one. Other clients keep NULL as any
   scope of `scopes`. The CIMD section of the Docker guide and the **SSF
   transmitter** page say how to set the list.
 
@@ -135,7 +136,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokens today gets `invalid_scope` once a node runs this release. If it
   should keep them, add the scopes it needs as itself to its `cimd_clients`
   entry's `client_credentials_scopes` and run this release's
-  `db:seed-oauth-clients`, the first that accepts the field. A node of the
+  `db:seed-oauth-clients`, the first that accepts the field. A CIMD client
+  whose row holds a list set by hand needs it in the entry too, before that
+  run: an entry without the list removes it. A node of the
   previous release already narrows a client's grant to its list ([#891]), so
   the list holds on every node once it is written. Until every node runs
   this release, a node of the previous release still issues every scope of

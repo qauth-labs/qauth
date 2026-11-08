@@ -644,7 +644,7 @@ A document that declares `token_endpoint_auth_method: private_key_jwt` and a key
 - Without the list, the token endpoint refuses every `client_credentials` request of the client with `invalid_scope`; for a scope in `scopes`, the event reason is `scope_not_allowed_for_grant`. With it, the client gets a token of its own for the listed scopes only, and the scopes its users grant it, `notes:read` here, reach only the tokens a user granted.
 - List only scopes a token without a user may carry, such as `ssf:stream` for a relying party that manages its [SSF stream](/operate/ssf-transmitter/#register-a-receiver). A resource server that does not check `sub` may act on such a token for every user.
 - The seed refuses a scope that `scopes` does not hold and an empty list. It cannot check the grant: the document may add or drop `client_credentials` at any resolution, and the list applies whenever it does.
-- Each run writes the list to the row, without `--rotate`, as it writes `scopes`. An entry without the list removes it, which closes the grant again. A resolution of the document never changes the list.
+- Each run writes the list to the row, without `--rotate`, as it writes `scopes`. An entry without the list removes it, which closes the grant again, and the seed prints the list it removed: a node of an earlier release, during a rolling upgrade, issues every scope of `scopes` to a CIMD client without one. A resolution of the document never changes the list.
 - The token endpoint reads the row on every request, so the next token request follows the list. A token issued before keeps its scopes until it expires.
 
 ### Redirect URI schemes for native apps
