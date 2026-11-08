@@ -482,12 +482,20 @@ describe('the realm operations of the admin API (#517, real containers)', () => 
     expect(read404.statusCode).toBe(404);
     const patch404 = await patch(other.id, token, { password: { minScore: 4 } }, '"0"');
     expect(patch404.statusCode).toBe(404);
-    // The same answer as for a realm that does not exist.
-    const missing = await send('GET', realmPath('018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f'), token);
+    // The same answer as for a realm that does not exist, but for the id
+    // from the path it names.
+    const missingId = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f';
+    const missing = await send('GET', realmPath(missingId), token);
     expect(missing.statusCode).toBe(404);
-    expect(read404.json<{ detail?: string }>().detail).toBe(
-      missing.json<{ detail?: string }>().detail
-    );
+    const answer = (response: typeof missing, id: string) => {
+      const { code, title, detail } = response.json<{
+        code?: string;
+        title?: string;
+        detail?: string;
+      }>();
+      return { code, title, detail: detail?.replaceAll(id, '<realmId>') };
+    };
+    expect(answer(read404, other.id)).toEqual(answer(missing, missingId));
     expect(await auditRows(other.id)).toEqual([]);
   });
 
