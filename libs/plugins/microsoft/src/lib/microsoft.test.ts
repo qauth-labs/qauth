@@ -5,6 +5,7 @@ import {
   authMethodParameters,
   completeUpstreamStep,
   loadAuthMethodPlugins,
+  rankAttributeSource,
   startUpstreamStep,
   type VerifiedIdentity,
 } from '@qauth-labs/server-federation';
@@ -247,6 +248,10 @@ describe('the Microsoft plugin (#671)', () => {
       method.secretDestination?.(method.configSchema.parse(configFor(tenant)));
     expect(destination(TENANT)).not.toBe(destination(OTHER_TENANT));
     expect(destination('organizations')).not.toBe(destination('common'));
+  });
+
+  it("ranks its attributes with an oidc_ provider's in claim resolution", () => {
+    expect(rankAttributeSource(MICROSOFT_PLUGIN_TYPE)).toBe(rankAttributeSource('oidc_example'));
   });
 
   it('names the redirect URI to register for the app registration', () => {

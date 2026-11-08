@@ -6,6 +6,7 @@ import {
   authMethodParameters,
   completeUpstreamStep,
   loadAuthMethodPlugins,
+  rankAttributeSource,
   startUpstreamStep,
   type VerifiedIdentity,
 } from '@qauth-labs/server-federation';
@@ -299,6 +300,10 @@ describe('the Apple plugin (#671)', () => {
     ['not json', undefined],
   ])('reads the name of the user member %s', (value, name) => {
     expect(appleUserName(value)).toEqual(name);
+  });
+
+  it("ranks its attributes with an oidc_ provider's in claim resolution", () => {
+    expect(rankAttributeSource(APPLE_PLUGIN_TYPE)).toBe(rankAttributeSource('oidc_example'));
   });
 
   it('refuses a config with a client secret or a key', () => {
