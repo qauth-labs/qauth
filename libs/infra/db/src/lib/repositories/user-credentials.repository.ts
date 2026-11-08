@@ -30,6 +30,29 @@ const TOTP_PROVIDER_TYPE = 'totp';
 const PASSWORD_DATA_KEYS = `{password_hash,email_verified,password_normalization}`;
 
 /**
+ * Insert one credential row, mapping a `(realm_id, provider_type,
+ * external_sub)` conflict to {@link UniqueConstraintError}. `isPrimary` is
+ * for the users repository's account creation only (#846): the database
+ * refuses the mark on any credential but a user's first.
+ */
+export async function insertUserCredential(
+  invoker: DbClient,
+  data: NewUserCredential & { readonly isPrimary: boolean }
+): Promise<UserCredential> {
+  try {
+    const [credential] = await invoker.insert(userCredentials).values(data).returning();
+    return credential;
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      const constraint =
+        extractConstraintName(error) || 'idx_user_credentials_realm_provider_sub_unique';
+      throw new UniqueConstraintError(constraint, error);
+    }
+    throw error;
+  }
+}
+
+/**
  * Factory for the `user_credentials` repository (ADR-002/ADR-003, #228).
  *
  * `credential_data` stays `Record<string, unknown>` at this layer — shape
@@ -40,7 +63,8 @@ const PASSWORD_DATA_KEYS = `{password_hash,email_verified,password_normalization
 export function createUserCredentialsRepository(defaultDb: DbClient): UserCredentialsRepository {
   return {
     /**
-     * Create a credential row.
+     * Create a credential row for an account that exists: never its primary
+     * identity, which the users repository writes with the account (#846).
      *
      * @throws UniqueConstraintError on a `(realm_id, provider_type,
      * external_sub)` conflict — same wire behavior (generic 409) as the users
@@ -48,18 +72,33 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
      * the credential index fires before the users index maps identically.
      */
     async create(data: NewUserCredential, tx?: DbClient): Promise<UserCredential> {
+      return insertUserCredential(tx ?? defaultDb, { ...data, isPrimary: false });
+    },
+
+    /**
+     * The account's primary identity (ADR-015 Decision 8, #846): the
+     * credential that created it, or `undefined` when the account has none
+     * (its primary credential was deleted, before migration 0068 marked it
+     * or after). A credential of another realm is none.
+     */
+    async findPrimaryByUserId(
+      realmId: string,
+      userId: string,
+      tx?: DbClient
+    ): Promise<UserCredential | undefined> {
       const invoker = tx ?? defaultDb;
-      try {
-        const [credential] = await invoker.insert(userCredentials).values(data).returning();
-        return credential;
-      } catch (error) {
-        if (isUniqueConstraintError(error)) {
-          const constraint =
-            extractConstraintName(error) || 'idx_user_credentials_realm_provider_sub_unique';
-          throw new UniqueConstraintError(constraint, error);
-        }
-        throw error;
-      }
+      const [credential] = await invoker
+        .select()
+        .from(userCredentials)
+        .where(
+          and(
+            eq(userCredentials.realmId, realmId),
+            eq(userCredentials.userId, userId),
+            eq(userCredentials.isPrimary, true)
+          )
+        )
+        .limit(1);
+      return credential;
     },
 
     /** A credential of the realm by id; one of another realm is not found (#489). */

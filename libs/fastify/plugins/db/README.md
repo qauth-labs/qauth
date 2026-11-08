@@ -148,10 +148,16 @@ fastify.get('/users/:id', async (request, reply) => {
 
 // Create user
 fastify.post('/users', async (request, reply) => {
-  const userData = request.body as NewUser;
+  const { email } = request.body as { email: string };
 
   try {
-    const user = await fastify.repositories.users.create(userData);
+    // An account is created with its primary credential, in one transaction
+    // (ADR-015 question 13): the credential that creates it is its primary
+    // identity.
+    const user = await fastify.repositories.users.create(
+      { realmId: request.realm.id },
+      { providerType: 'password', externalSub: email }
+    );
     reply.code(201).send({ user });
   } catch (error) {
     if (error instanceof UniqueConstraintError) {
@@ -200,14 +206,12 @@ fastify.post('/setup', async (request, reply) => {
     // Create realm
     const realm = await fastify.repositories.realms.create({ name: realmName }, tx);
 
-    // Create the admin identity anchor. Since ADR-002 (#230) `users` carries
-    // no email or password — those live on the credential row below.
-    const admin = await fastify.repositories.users.create({ realmId: realm.id }, tx);
-
-    await fastify.repositories.userCredentials.create(
+    // Create the admin identity anchor with its primary credential. Since
+    // ADR-002 (#230) `users` carries no email or password — those live on the
+    // credential row, which users.create writes in the same transaction.
+    const admin = await fastify.repositories.users.create(
+      { realmId: realm.id },
       {
-        userId: admin.id,
-        realmId: realm.id,
         providerType: 'password',
         externalSub: adminEmail,
         credentialData: buildPasswordCredentialData(await hashPassword('admin123'), true),

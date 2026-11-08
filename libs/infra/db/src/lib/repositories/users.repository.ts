@@ -2,9 +2,10 @@ import { NotFoundError } from '@qauth-labs/shared-errors';
 import { and, eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
 import { z } from 'zod';
 
-import type { RealmScopedRepository } from '../../types';
+import type { RealmScopedRepository, UserCredential } from '../../types';
 import { DbClient } from '../db';
 import { users } from '../schema/core';
+import { insertUserCredential } from './user-credentials.repository';
 
 export type User = InferSelectModel<typeof users>;
 export type NewUser = InferInsertModel<typeof users>;
@@ -45,12 +46,45 @@ function userOfRealm(realmId: string, id: string) {
 }
 
 /**
+ * The credential that creates an account: its primary identity (ADR-015
+ * Decision 8 and question 13, #846). The account's realm is the user's.
+ */
+export interface NewPrimaryCredential {
+  /** `user_credentials.provider_type`: `password`, `webauthn`, an upstream type, … */
+  readonly providerType: string;
+  /** `user_credentials.external_sub`: the method's subject identifier. */
+  readonly externalSub: string;
+  /** `user_credentials.credential_data`, as the method's provider shapes it; `{}` when absent. */
+  readonly credentialData?: Readonly<Record<string, unknown>>;
+}
+
+/** A new account: the `users` row and its primary credential. */
+export type CreatedUser = User & { readonly primaryCredential: UserCredential };
+
+/**
  * Users repository: realm-scoped CRUD (#489) plus the last-login stamp. A user
  * id is taken from outside the database (a token's `sub`, a code, a session),
  * so every id-keyed method takes the realm the request was resolved to and
  * answers a user of another realm as it answers an unknown id.
  */
-export interface UsersRepository extends RealmScopedRepository<User, NewUser, UpdateUser> {
+export interface UsersRepository extends Omit<
+  RealmScopedRepository<User, NewUser, UpdateUser>,
+  'create'
+> {
+  /**
+   * Create an account: the `users` row and the credential that creates it,
+   * marked as its primary identity (ADR-015 Decision 8, #846), in one
+   * transaction. There is no other way to create a user through the
+   * repositories, so no account-creation path can leave the mark out.
+   *
+   * With `tx`, both rows are written in the caller's transaction, and a
+   * refusal of the credential leaves it to roll back; without, in a
+   * transaction of their own.
+   *
+   * @throws UniqueConstraintError when the realm already holds the
+   * credential's `(provider_type, external_sub)`: nothing is created
+   */
+  create(data: NewUser, primary: NewPrimaryCredential, tx?: DbClient): Promise<CreatedUser>;
   /**
    * Update the last login timestamp for a user of the realm
    */
@@ -66,19 +100,34 @@ export interface UsersRepository extends RealmScopedRepository<User, NewUser, Up
 export function createUsersRepository(defaultDb: DbClient): UsersRepository {
   return {
     /**
-     * Create a new identity anchor. Since #230 the users table carries no
-     * email or password fields — credentials go through `user_credentials`,
-     * and duplicate registration is guarded by the credentials unique index,
-     * not by this insert.
+     * Create a new identity anchor with its primary credential (#846). Since
+     * #230 the users table carries no email or password fields — credentials
+     * go through `user_credentials`, and duplicate registration is guarded
+     * by the credentials unique index, not by the users insert.
      *
      * @param data - Identity-anchor data (realmId + optional profile fields)
+     * @param primary - The credential that creates the account
      * @param tx - Optional transaction client
-     * @returns Created user
+     * @returns Created user, with its primary credential
      */
-    async create(data: NewUser, tx?: DbClient): Promise<User> {
-      const invoker = tx ?? defaultDb;
-      const [user] = await invoker.insert(users).values(data).returning();
-      return user;
+    async create(
+      data: NewUser,
+      primary: NewPrimaryCredential,
+      tx?: DbClient
+    ): Promise<CreatedUser> {
+      const write = async (invoker: DbClient): Promise<CreatedUser> => {
+        const [user] = await invoker.insert(users).values(data).returning();
+        const primaryCredential = await insertUserCredential(invoker, {
+          userId: user.id,
+          realmId: user.realmId,
+          providerType: primary.providerType,
+          externalSub: primary.externalSub,
+          credentialData: { ...primary.credentialData },
+          isPrimary: true,
+        });
+        return { ...user, primaryCredential };
+      };
+      return tx === undefined ? defaultDb.transaction(write) : write(tx);
     },
 
     /**

@@ -104,7 +104,11 @@ export type NewEmailVerificationToken = InferInsertModel<typeof emailVerificatio
  * interface (the provider-facing shape) at shared import sites.
  */
 export type UserCredential = InferSelectModel<typeof userCredentials>;
-export type NewUserCredential = InferInsertModel<typeof userCredentials>;
+/**
+ * A credential for an account that exists. Never its primary identity: the
+ * users repository writes that one with the account (#846).
+ */
+export type NewUserCredential = Omit<InferInsertModel<typeof userCredentials>, 'isPrimary'>;
 export type UserAttributeRow = InferSelectModel<typeof userAttributes>;
 export type NewUserAttributeRow = InferInsertModel<typeof userAttributes>;
 
@@ -133,6 +137,15 @@ export interface UpsertUserAttributeInput {
  */
 export interface UserCredentialsRepository {
   create(data: NewUserCredential, tx?: DbClient): Promise<UserCredential>;
+  /**
+   * The account's primary identity (ADR-015 Decision 8, #846), or `undefined`
+   * when it has none; a credential of another realm is none.
+   */
+  findPrimaryByUserId(
+    realmId: string,
+    userId: string,
+    tx?: DbClient
+  ): Promise<UserCredential | undefined>;
   /** A credential of the realm by id; another realm's is answered as unknown (#489). */
   findById(realmId: string, id: string, tx?: DbClient): Promise<UserCredential | undefined>;
   findByRealmProviderSub(

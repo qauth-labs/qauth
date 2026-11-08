@@ -59,6 +59,20 @@
 > one, and it already counts such an account as verified for sign-in.
 > Decision 8's table, its reason, its test and the negative consequence now
 > say so.
+>
+> **Amended 2026-11-08, decision 8 and question 13**: 0.2's sign-in asked every
+> unverified account for a mailed code, so a deployment that cannot send mail
+> left an unverified account no way in. The maintainer decided that accounts
+> need a way to be verified other than by email. An operator may now verify
+> an account (below). Question 13 was weighed again that day and kept: a
+> credential added later does not verify an account. The reason, restated
+> without email: a password account is found, reset and claimed by its
+> address (ADR-017's unclaimed-account rule). A key added later proves who
+> holds the account, but not that the identifier it answers to is theirs.
+> Counting it would let someone who registered another person's address add
+> a key, pass, and keep the account from the address's owner: account
+> pre-hijacking. A refusal now carries one of two reasons, and neither names
+> an address.
 
 ## Context
 
@@ -361,6 +375,14 @@ and this rule does not change that. Only the primary identity counts. If a
 later credential could make an account verified, someone who registers an
 address they do not control could add a key of their own and pass the check
 (question 13).
+
+An operator may also verify an account (amended 2026-11-08). The audited admin
+security operation `users.verify` does it, with approval like every security
+operation; so does a server-side CLI where no admin API is set up (#1052). The
+verification is recorded on the account with the operator who made it, and it
+counts beside the table. It is the operator's attestation, so it also claims an
+unclaimed account: the first mailbox proof of another person no longer ends it.
+It is the way out for a deployment that cannot send mail.
 
 An upstream account's primary identity is the provider's subject identifier,
 never an address the provider reports. QAuth checks it itself at the sign-in
@@ -720,7 +742,10 @@ question below.
     moving it. The last option lets someone who registers an address they
     do not control add a key of their own and pass the check. _Decided
     2026-10-09 (maintainer): an explicit marker._ It is set at account
-    creation and cannot move in 1.0. Decision 8 says so.
+    creation and cannot move in 1.0. Decision 8 says so. _Weighed again
+    2026-11-08 (maintainer): kept._ A later key proves the account's holder,
+    not the identifier a password account answers to; counting it reopens
+    account pre-hijacking against ADR-017's unclaimed-account rule.
 
 ## Related
 

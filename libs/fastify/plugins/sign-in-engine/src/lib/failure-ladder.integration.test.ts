@@ -118,14 +118,14 @@ describe('the failure ladder over real Redis and Postgres', () => {
     realmId = (await createRealmsRepository(db).create({ name: 'failure-ladder' })).id;
     const hash = await hasher.hashPassword(PASSWORD);
     seed = async (identifier) => {
-      const user = await users.create({ realmId, enabled: true });
-      await userCredentials.create({
-        userId: user.id,
-        realmId,
-        providerType: 'password',
-        externalSub: identifier,
-        credentialData: buildPasswordCredentialData(hash, true, null),
-      });
+      const user = await users.create(
+        { realmId, enabled: true },
+        {
+          providerType: 'password',
+          externalSub: identifier,
+          credentialData: buildPasswordCredentialData(hash, true, null),
+        }
+      );
       return user.id;
     };
 

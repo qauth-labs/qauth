@@ -14,7 +14,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -82,7 +82,7 @@ describe('approval requests (real Postgres)', () => {
   /** A realm, its requester and a filed approval needing `required` approvals. */
   async function filed(required = 1, overrides: Partial<NewAdminApproval> = {}) {
     const realm = await realms.create({ name: `realm-${randomBytes(4).toString('hex')}` });
-    const requester = await users.create({ realmId: realm.id });
+    const requester = await users.create({ realmId: realm.id }, testPrimaryCredential());
     const approval = await approvals.create({
       realmId: realm.id,
       requesterKind: 'human',
@@ -131,7 +131,7 @@ describe('approval requests (real Postgres)', () => {
 
   it('becomes approved with its last approval, and takes each approver once', async () => {
     const { realm, requester, approval } = await filed(2);
-    const second = await users.create({ realmId: realm.id });
+    const second = await users.create({ realmId: realm.id }, testPrimaryCredential());
 
     const first = await approvals.addApproval(realm.id, approval.id, {
       expectedCount: 0,
@@ -189,7 +189,7 @@ describe('approval requests (real Postgres)', () => {
 
   it('is cancelled only by its requester, from the state the caller saw', async () => {
     const { realm, requester, approval } = await filed();
-    const stranger = await users.create({ realmId: realm.id });
+    const stranger = await users.create({ realmId: realm.id }, testPrimaryCredential());
     const cancel = (requesterId: string, status: 'pending' | 'approved') =>
       approvals.cancel(realm.id, approval.id, {
         requesterRealmId: realm.id,

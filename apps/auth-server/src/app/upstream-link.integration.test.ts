@@ -531,7 +531,20 @@ describe('linking an upstream account to an existing one (#670, real containers)
     return app().repositories.userCredentials.findByRealmProviderSub(realmId, TYPE, sub);
   }
 
-  /** Give `userId` an identity of the provider, as a first sign-in or a link stores it. */
+  /** A new account whose primary identity is the provider's identity `sub`. */
+  async function accountHolding(sub = PERSON.sub): Promise<{ id: string; credentialId: string }> {
+    const user = await app().repositories.users.create(
+      { realmId },
+      {
+        providerType: TYPE,
+        externalSub: sub,
+        credentialData: { kind: 'upstream', iss: provider.issuer, verified: true },
+      }
+    );
+    return { id: user.id, credentialId: user.primaryCredential.id };
+  }
+
+  /** Give `userId` an identity of the provider, as a link stores it. */
   async function holdIdentity(userId: string, sub = PERSON.sub): Promise<string> {
     const credential = await app().repositories.userCredentials.create({
       userId,
@@ -917,8 +930,7 @@ describe('linking an upstream account to an existing one (#670, real containers)
 
   describe('an identity already linked to another account', () => {
     it('is refused at the callback of a qauth_link, with its page and an event, and stays with its holder', async () => {
-      const holder = await app().repositories.users.create({ realmId });
-      await holdIdentity(holder.id);
+      const holder = await accountHolding();
       const ownerId = await registerPasswordAccount(app(), EMAIL);
       const jar = new CookieJar();
       await signIn(jar);
@@ -949,8 +961,7 @@ describe('linking an upstream account to an existing one (#670, real containers)
       await chooseLink(jar, id);
       await answerToNext(jar, id, IDENTIFIER, { login_hint: EMAIL });
       // Meanwhile another account takes the identity.
-      const other = await app().repositories.users.create({ realmId });
-      await holdIdentity(other.id);
+      const other = await accountHolding();
 
       const done = await answer(jar, id, PASSWORD, { password: E2E_PASSWORD });
 
@@ -1065,8 +1076,8 @@ describe('linking an upstream account to an existing one (#670, real containers)
     });
 
     it("refuses to unlink the account's last way to sign in, its authenticator app notwithstanding", async () => {
-      const user = await app().repositories.users.create({ realmId });
-      const credentialId = await holdIdentity(user.id);
+      const user = await accountHolding();
+      const { credentialId } = user;
       await bindTotp(user.id, false);
 
       const refused = await linkedAccounts(
@@ -1083,8 +1094,8 @@ describe('linking an upstream account to an existing one (#670, real containers)
 
     it("answers 404 for another account's linked account, as for one that does not exist", async () => {
       const ownerId = await registerPasswordAccount(app(), EMAIL);
-      const other = await app().repositories.users.create({ realmId });
-      const credentialId = await holdIdentity(other.id);
+      const other = await accountHolding();
+      const { credentialId } = other;
 
       const refused = await linkedAccounts(
         'DELETE',

@@ -176,6 +176,21 @@
 > was created before the change or by a sign-in that adds no `amr` value, gives tokens without
 > `amr`. Discovery lists `amr` and `auth_time` in `claims_supported` whatever the switch.
 > Decisions 10 and 11 and F5 are edited in place.
+>
+> **Amended 2026-11-08** with the maintainer's decisions of that day. 0.2's sign-in engine (#638)
+> asked every unverified account for a mailed code after its correct password, whatever the
+> realm's gate said. A deployment that cannot send mail therefore left such an account no way in.
+> Decision 8's verification bullet is edited in place:
+>
+> - The realm's `accounts.requireVerifiedAccount` decides again, at every endpoint, whether an
+>   unverified account may finish a sign-in.
+> - With the gate on, the mailed code is offered only when the account has an address and the
+>   realm can send mail. Otherwise the sign-in is refused as `account_not_verified`. The page
+>   names the operator's audited verification (ADR-015 Decision 8, amended the same day; #1052).
+>   It never shows a code step that cannot be answered.
+> - An unclaimed account still binds no passkey and no TOTP. A key would prove who holds the
+>   account, not that its address is theirs, so it is no way to verify one (ADR-015 question 13,
+>   weighed again and kept). An operator's verification claims an unclaimed account.
 
 ## Context
 
@@ -1150,10 +1165,12 @@ OpenID Connect 1.0, an OIDF specification. There is no path marker (question 14,
   revokes the user's session rows in Postgres and clears their Redis cache. It sends a back-channel
   logout to every app with a session. It also revokes every refresh family of the user, as
   `/auth/logout` does today. The portal and the hosted account page (F2a) both offer it.
-- Verification. At this endpoint, an account that is not yet verified (for a password account, its
-  address is unproved) is always verified after a correct password. This holds whatever
-  `REQUIRE_VERIFIED_ACCOUNT` says. So no code from this endpoint belongs to an account that is not
-  yet verified. This replaces `/auth/verify` for native clients.
+- Verification (amended 2026-11-08). The realm's `accounts.requireVerifiedAccount` decides whether
+  an unverified account (for a password account, its address is unproved) may finish a sign-in
+  here. With it on, no code from this endpoint belongs to an account that is not yet verified:
+  after a correct password the account is verified with the mailed code, offered only when it has
+  an address and the realm can send mail; otherwise the answer is `account_not_verified`, which
+  names the operator's audited verification. This replaces `/auth/verify` for native clients.
 - `REQUIRE_VERIFIED_ACCOUNT` is today's `REQUIRE_EMAIL_VERIFIED` (default `false`), renamed. The old
   name stays as a deprecated alias. A separate code change makes the rename.
 

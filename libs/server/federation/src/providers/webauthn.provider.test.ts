@@ -365,6 +365,20 @@ describe('createWebAuthnProvider', () => {
       );
       expect(enrolment.credentialData).toMatchObject({ backup_eligible: true, backed_up: true });
     });
+
+    it('records whether the registration carried the UV flag (#846)', async () => {
+      const verified = W3C_WEBAUTHN_VECTORS.packedEs256;
+      expect(
+        (await enrol(setup([verified.registration.challenge]), verified, 'sign-in')).credentialData
+          .user_verified
+      ).toBe(true);
+      // A second factor's registration does not require the flag.
+      const unverified = W3C_WEBAUTHN_VECTORS.packedEd25519;
+      expect(
+        (await enrol(setup([unverified.registration.challenge]), unverified, 'second-factor'))
+          .credentialData.user_verified
+      ).toBe(false);
+    });
   });
 
   describe('the challenge', () => {

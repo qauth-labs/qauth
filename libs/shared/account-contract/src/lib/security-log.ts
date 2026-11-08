@@ -182,6 +182,8 @@ export const NOT_IN_SECURITY_LOG: Readonly<Record<string, string>> = {
   'user.disabled':
     'An operator’s switch, recorded in the admin events; a disabled account cannot read its log.',
   'user.enabled': 'An operator’s switch, recorded in the admin events.',
+  'user.agent_ownership_refused':
+    'A refused agent registration changes nothing on the account; the answer to the request says so.',
   'authorization.completed': 'An app’s authorization request; the sign-in behind it is the entry.',
   'authorization.failed': 'A refused authorization request changes nothing on the account.',
   'step_up.required': 'A request for a fresh sign-in; the sign-in that follows is the entry.',

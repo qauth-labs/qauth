@@ -20,7 +20,7 @@
  * `test-integration` target in the `integration` job of ci.yml.
  */
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -82,7 +82,7 @@ describe('repository integration (real Postgres)', () => {
     const users = createUsersRepository(db().database.db);
     // #230: users is a pure identity anchor — realmId is the only required
     // field; credential data goes through user_credentials (seedCredential).
-    return users.create({ realmId });
+    return users.create({ realmId }, testPrimaryCredential());
   }
 
   async function seedCredential(realmId: string, userId: string, email = 'user@example.com') {

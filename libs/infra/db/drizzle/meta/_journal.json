@@ -477,6 +477,13 @@
       "when": 1794014587504,
       "tag": "0067_session_recovery_code",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1794063471631,
+      "tag": "0068_primary_credential",
+      "breakpoints": true
     }
   ]
 }

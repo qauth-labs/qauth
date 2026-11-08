@@ -362,6 +362,7 @@ export function createWebAuthnProvider(deps: WebAuthnProviderDependencies): WebA
           backup_eligible: verified.backupEligible,
           backed_up: verified.backedUp,
           aaguid: verified.aaguid,
+          user_verified: verified.userVerified,
           rp_id: state.rpId,
           user_handle: state.userHandle,
           nickname: normalisePasskeyNickname(input.nickname),

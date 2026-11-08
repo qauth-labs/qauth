@@ -17,7 +17,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -63,7 +63,10 @@ describe('realm scoping of id lookups (real Postgres, #489)', () => {
   /** One realm's rows, all named alike in both realms where a name is chosen. */
   async function seedRealmRows(name: string, tag: string) {
     const realm = await createRealmsRepository(db()).create({ name });
-    const user = await createUsersRepository(db()).create({ realmId: realm.id });
+    const user = await createUsersRepository(db()).create(
+      { realmId: realm.id },
+      testPrimaryCredential()
+    );
     const client = await createOAuthClientsRepository(db()).create({
       realmId: realm.id,
       // The same `client_id` in both realms: client ids are per realm.

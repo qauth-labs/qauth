@@ -18,16 +18,11 @@ function build(options: { duplicate?: boolean; allowed?: boolean } = {}) {
   let committed: typeof writes = [];
   const stores: AccountRegistrationRepositories<string> = {
     users: {
-      create: async (data, tx) => {
-        writes.push({ what: 'user', data, tx });
-        return { id: USER };
-      },
-    },
-    userCredentials: {
-      create: async (data, tx) => {
+      // The account and its primary credential in one call (#846).
+      create: async (data, primary, tx) => {
         if (options.duplicate === true) throw new Duplicate();
-        writes.push({ what: 'credential', data, tx });
-        return { id: 'credential-1' };
+        writes.push({ what: 'user', data: { ...data, primary }, tx });
+        return { id: USER };
       },
     },
     userAttributes: {
@@ -72,18 +67,19 @@ describe('createRepositoryAccountRegistrations', () => {
     });
     expect(result).toEqual({ kind: 'created', userId: USER });
     expect(built.committed()).toEqual([
-      { what: 'user', data: { realmId: REALM }, tx: 'tx-1' },
       {
-        what: 'credential',
+        what: 'user',
         data: {
-          userId: USER,
           realmId: REALM,
-          providerType: 'password',
-          externalSub: ADDRESS,
-          credentialData: {
-            password_hash: 'argon2id(seven amber kites over the old harbour)',
-            email_verified: true,
-            password_normalization: 'nfc',
+          // The password credential is the account's primary identity.
+          primary: {
+            providerType: 'password',
+            externalSub: ADDRESS,
+            credentialData: {
+              password_hash: 'argon2id(seven amber kites over the old harbour)',
+              email_verified: true,
+              password_normalization: 'nfc',
+            },
           },
         },
         tx: 'tx-1',
@@ -130,8 +126,7 @@ describe('createRepositoryAccountRegistrations', () => {
     const built = build();
     const failing = createRepositoryAccountRegistrations(
       {
-        users: { create: async () => ({ id: USER }) },
-        userCredentials: {
+        users: {
           create: async () => {
             throw new Error('database down');
           },

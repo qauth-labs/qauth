@@ -466,11 +466,13 @@ await fastify.register(passwordPlugin, {
 });
 
 // Since ADR-002 (#230) the `users` row holds no password hash — the secret
-// lives in `user_credentials.credential_data.password_hash` and is never
-// fetched here — so the user row is already safe to return. Kept as an
-// explicit seam in case you attach derived fields later.
-function sanitizeUser<T extends Record<string, unknown>>(user: T): T {
-  return user;
+// lives in `user_credentials.credential_data.password_hash`. `users.create`
+// returns the new account with its primary credential, whose
+// `credentialData` holds that hash, so the credential is dropped here; the
+// rest of the row is safe to return.
+function sanitizeUser<T extends Record<string, unknown>>(user: T): Omit<T, 'primaryCredential'> {
+  const { primaryCredential: _primaryCredential, ...account } = user;
+  return account;
 }
 
 // A decoy Argon2id hash of a random secret nobody holds, made by the
@@ -515,18 +517,18 @@ fastify.post('/auth/register', async (request, reply) => {
   // Hash the NFC form the check returns
   const passwordHash = await fastify.passwordHasher.hashPassword(checked.password);
 
-  // Create the identity anchor, then the credential. Since ADR-002 (#230)
-  // `users` carries no email or password_hash; the unique index on
-  // (realm_id, provider_type, external_sub) is the duplicate-registration guard.
-  const user = await fastify.repositories.users.create({ realmId });
-
-  await fastify.repositories.userCredentials.create({
-    userId: user.id,
-    realmId,
-    providerType: 'password',
-    externalSub: normalizeEmail(email),
-    credentialData: buildPasswordCredentialData(passwordHash, false, checked.normalization),
-  });
+  // Create the identity anchor with its primary credential, in one
+  // transaction. Since ADR-002 (#230) `users` carries no email or
+  // password_hash; the unique index on (realm_id, provider_type, external_sub)
+  // is the duplicate-registration guard.
+  const user = await fastify.repositories.users.create(
+    { realmId },
+    {
+      providerType: 'password',
+      externalSub: normalizeEmail(email),
+      credentialData: buildPasswordCredentialData(passwordHash, false, checked.normalization),
+    }
+  );
 
   // Remove passwordHash from response
   return reply.code(201).send({ user: sanitizeUser(user) });
