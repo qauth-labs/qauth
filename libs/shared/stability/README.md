@@ -58,9 +58,10 @@ decision record names before it is built is listed with `built: false`; building
    name every built server item, so a missing entry fails to compile. Register its routes only
    while its switch is on, and tag each `x-qauth-stability: experimental`.
 4. For a built item, set `experimental: true` in the frontmatter of its docs page, which then
-   shows the Experimental banner, and name the item on the page. The tests of this library fail
-   while a flagged page and a registry item do not match one to one.
-5. Run `pnpm nx test shared-stability -- -u` to regenerate the docs page, and
+   shows the Experimental banner, and name the item on the page. The tests of the `docs-checks`
+   project (`apps/docs-checks`) fail while a flagged page and a registry item do not match one to
+   one.
+5. Run `pnpm nx test docs-checks -- -u` to regenerate the docs page, and
    `pnpm nx test auth-server -- -u` to regenerate the wire suite's list of experimental routes and
    discovery members. Commit both.
 

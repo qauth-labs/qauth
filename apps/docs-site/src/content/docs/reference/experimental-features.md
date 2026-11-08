@@ -6,7 +6,7 @@ sidebar:
 lastVerified: '2026-10-25'
 ---
 
-<!-- Generated from libs/shared/stability by its tests. Do not edit by hand: change the registry and run `pnpm nx test shared-stability -- -u`. -->
+<!-- Generated from libs/shared/stability by its tests. Do not edit by hand: change the registry and run `pnpm nx test docs-checks -- -u`. -->
 
 An experimental item ships, but it is outside the stability promise of QAuth 1.0
 ([ADR-018 §4 and §5](/reference/records/adr/018-1-0-scope-and-stability/)). This page lists every

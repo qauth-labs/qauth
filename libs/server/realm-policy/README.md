@@ -164,10 +164,12 @@ lead from the first stored version, `FIRST_REALM_POLICY_SCHEMA_VERSION`, to the 
 ## Tests
 
 ```bash
-pnpm nx test server-realm-policy        # unit and contract tests
-pnpm nx test server-realm-policy -- -u  # regenerate reference/realm-policies.md
+pnpm nx test server-realm-policy  # unit and contract tests
+pnpm nx test docs-checks -- -u    # regenerate reference/realm-policies.md
 ```
 
 The contract test checks every registered field: all annotations present, every secret write-only,
-every security field naming an effect, every docs link resolving, and each seed key agreeing with
-the configuration key registry of `@qauth-labs/server-config` (role, path, secrecy and default).
+every security field naming an effect, and each seed key agreeing with the configuration key
+registry of `@qauth-labs/server-config` (role, path, secrecy and default). The checks against the
+docs site (the committed page, and every field's docs link) live in the `docs-checks` project
+(`apps/docs-checks`), so a docs edit does not mark this library's dependents affected.

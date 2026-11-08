@@ -6,7 +6,7 @@ sidebar:
 lastVerified: '2026-11-01'
 ---
 
-<!-- Generated from libs/server/realm-policy by its tests. Do not edit by hand: change the schema and run `pnpm nx test server-realm-policy -- -u`. -->
+<!-- Generated from libs/server/realm-policy by its tests. Do not edit by hand: change the schema and run `pnpm nx test docs-checks -- -u`. -->
 
 A realm's policies are its own settings: token lifetimes, the sign-in and password rules, client
 registration, mail and the environment posture

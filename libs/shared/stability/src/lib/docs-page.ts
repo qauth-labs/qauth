@@ -4,8 +4,9 @@ import { type ExperimentalItem, PROMOTION_CONDITIONS } from './item';
 
 /**
  * The docs page `reference/experimental-features.md`, rendered from the
- * registry. Generated, never edited by hand: `pnpm nx test shared-stability -- -u`
- * rewrites it, and the test fails while the committed page differs.
+ * registry. Generated, never edited by hand: `pnpm nx test docs-checks -- -u`
+ * rewrites it, and the `docs-checks` project's test fails while the committed
+ * page differs.
  */
 
 /** The page, from the repository root. */
@@ -118,7 +119,7 @@ sidebar:
   order: 5
 lastVerified: '${EXPERIMENTAL_FEATURES_PAGE_LAST_VERIFIED}'
 ---`,
-    `<!-- Generated from libs/shared/stability by its tests. Do not edit by hand: change the registry and run \`pnpm nx test shared-stability -- -u\`. -->`,
+    `<!-- Generated from libs/shared/stability by its tests. Do not edit by hand: change the registry and run \`pnpm nx test docs-checks -- -u\`. -->`,
     `An experimental item ships, but it is outside the stability promise of QAuth 1.0
 ([ADR-018 §4 and §5](/reference/records/adr/018-1-0-scope-and-stability/)). This page lists every
 experimental item, generated from the registry in \`libs/shared/stability\`. An item joins the

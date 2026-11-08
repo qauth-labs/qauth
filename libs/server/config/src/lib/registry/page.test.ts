@@ -1,57 +1,21 @@
-import { execFileSync } from 'node:child_process';
-import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
-
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import * as schemas from '../schemas';
 import { DEV_SESSION_COOKIE_SECRET_DEFAULT } from '../schemas';
 import { envSchemaShape } from './drift';
 import { CONFIG_KEY_REGISTRY, SERVER_CONFIG_KEYS } from './keys';
-import { CONFIGURATION_PAGE_PATH, describeDefault, renderConfigurationPage } from './page';
-import { type ConfigKey, defineKeys } from './types';
+import { describeDefault, renderConfigurationPage } from './page';
+import { defineKeys } from './types';
 
 /**
  * The configuration page on the docs site is generated from the registry
- * (`operate/configuration.md`). This test is the generator: when the registry
- * changes, `pnpm nx test server-config -- -u` rewrites the page, and without
- * `-u` the test fails until the committed page matches.
- *
- * The rendered page goes through Oxfmt first, so the committed file is
- * already formatted and the pre-commit hook never rewrites it.
+ * (`operate/configuration.md`). These tests check what the registry renders.
+ * The check that the committed page is that rendering, formatted with Oxfmt,
+ * lives in the `docs-checks` project (apps/docs-checks), beside the docs it
+ * reads: `pnpm nx test docs-checks -- -u` rewrites the page (#1044).
  */
 
-const REPO_ROOT = resolve(__dirname, '../../../../../..');
-const PAGE_PATH = join(REPO_ROOT, CONFIGURATION_PAGE_PATH);
-
-/** Oxfmt's command line, which formats with the repository's `.oxfmtrc.json`. */
-const OXFMT = join(
-  dirname(createRequire(__filename).resolve('oxfmt/package.json')),
-  'bin',
-  'oxfmt'
-);
-
-/** `text` as Oxfmt formats the file at `path`. */
-function formatAs(path: string, text: string): string {
-  return execFileSync(process.execPath, [OXFMT, `--stdin-filepath=${path}`], {
-    cwd: REPO_ROOT,
-    input: text,
-    encoding: 'utf8',
-  });
-}
-
-async function formattedPage(registry: readonly ConfigKey[]): Promise<string> {
-  return formatAs(PAGE_PATH, renderConfigurationPage(registry));
-}
-
-/**
- * The generated page. The first test pins the committed file to it, so the
- * other tests read it from memory and pass or fail in any order.
- */
-let generated = '';
-beforeAll(async () => {
-  generated = await formattedPage(CONFIG_KEY_REGISTRY);
-});
+const generated = renderConfigurationPage(CONFIG_KEY_REGISTRY);
 
 function generatedPage(): string {
   return generated;
@@ -63,10 +27,6 @@ function rowOf(page: string, name: string): string | undefined {
 }
 
 describe('the configuration page', () => {
-  it('is what the registry renders (regenerate with `pnpm nx test server-config -- -u`)', async () => {
-    await expect(generated).toMatchFileSnapshot(PAGE_PATH);
-  });
-
   it.each(
     CONFIG_KEY_REGISTRY.filter((key) => key.tier === 'stable').map(
       (key) => [key.name, key] as const

@@ -1,0 +1,29 @@
+{
+  "name": "docs-checks",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/docs-checks/src",
+  "projectType": "application",
+  "tags": ["scope:docs-checks", "type:testing"],
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        { "json": "{workspaceRoot}/tsconfig.json", "fields": ["compilerOptions"] },
+        { "externalDependencies": ["vitest", "oxfmt"] },
+        { "env": "CI" },
+        { "dependentTasksOutputFiles": "**/*.js", "transitive": true },
+        "{workspaceRoot}/.oxfmtrc.json",
+        "{workspaceRoot}/apps/docs-site/src/content/docs/**/*",
+        "{workspaceRoot}/docs/**/*",
+        "{workspaceRoot}/CHANGELOG.md",
+        "{workspaceRoot}/apps/**/*.ts",
+        "{workspaceRoot}/libs/**/*.ts",
+        "{workspaceRoot}/**/project.json"
+      ],
+      "metadata": {
+        "description": "The checks that compare the docs with the code of the libraries (#1044): the generated pages `reference/realm-policies.md` (server-realm-policy), `reference/experimental-features.md` (shared-stability) and `operate/configuration.md` (server-config) must be what their registries render, formatted with Oxfmt and the repo's `.oxfmtrc.json` (`pnpm nx test docs-checks -- -u` rewrites all three); every realm policy field's docs link must name a page of the docs site and a heading on it; the pages flagged `experimental: true` must match the experimental-feature registry one to one (#477); the decision records under docs/adr must name what the registry says they do; and every `path` evidence must exist (#476), which may name any file in the repository, so apps/**/*.ts, libs/**/*.ts and docs/** are inputs. docs-inputs.test.ts reads every project.json, and its list of docs files includes CHANGELOG.md. These checks lived in the libraries until #1044. There, their inputs made every docs edit touch the libraries, and `affected.legacy` then marked every dependent affected, the auth server and its integration suite among them. Nothing may depend on this project (a module-boundary constraint in .oxlintrc.json), so a docs edit affects it and nothing else. Setting `inputs` replaces the inferred array, so the first six entries are the inferred defaults re-declared, with `oxfmt` added to the external dependencies."
+      }
+    }
+  }
+}

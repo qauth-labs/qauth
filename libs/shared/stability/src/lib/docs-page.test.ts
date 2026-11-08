@@ -1,51 +1,22 @@
-import { execFileSync } from 'node:child_process';
-import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
-
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { headingAnchor, markdownHeadingAnchors } from './anchor';
-import {
-  evidenceLink,
-  EXPERIMENTAL_FEATURES_PAGE_PATH,
-  renderExperimentalFeaturesPage,
-} from './docs-page';
+import { evidenceLink, renderExperimentalFeaturesPage } from './docs-page';
 import { experimentalDocsUrl } from './enabled';
 import { PROMOTION_CONDITIONS } from './item';
 import { EXPERIMENTAL_ITEMS } from './items';
 
 /**
  * The docs page `reference/experimental-features.md` is generated from the
- * registry. This test is the generator: when the registry changes,
- * `pnpm nx test shared-stability -- -u` rewrites the page, and without `-u`
- * the test fails until the committed page matches.
- *
- * The rendered page goes through Oxfmt first, so the committed file is
- * already formatted and the pre-commit hook never rewrites it.
+ * registry. These tests check what the registry renders. The check that the
+ * committed page is that rendering, formatted with Oxfmt, lives in the
+ * `docs-checks` project (apps/docs-checks), beside the docs it reads:
+ * `pnpm nx test docs-checks -- -u` rewrites the page (#1044).
  */
-
-const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..');
-const PAGE_PATH = join(REPO_ROOT, EXPERIMENTAL_FEATURES_PAGE_PATH);
-
-/** Oxfmt's command line, which formats with the repository's `.oxfmtrc.json`. */
-const OXFMT = join(
-  dirname(createRequire(__filename).resolve('oxfmt/package.json')),
-  'bin',
-  'oxfmt'
-);
-
-/** `text` as Oxfmt formats the file at `path`. */
-function formatAs(path: string, text: string): string {
-  return execFileSync(process.execPath, [OXFMT, `--stdin-filepath=${path}`], {
-    cwd: REPO_ROOT,
-    input: text,
-    encoding: 'utf8',
-  });
-}
 
 let page = '';
 beforeAll(() => {
-  page = formatAs(PAGE_PATH, renderExperimentalFeaturesPage(EXPERIMENTAL_ITEMS));
+  page = renderExperimentalFeaturesPage(EXPERIMENTAL_ITEMS);
 });
 
 /** `text` as a regular expression that matches it literally. */
@@ -62,10 +33,6 @@ function sectionOf(id: string): string {
 }
 
 describe('the experimental features page', () => {
-  it('is what the registry renders (regenerate with `pnpm nx test shared-stability -- -u`)', async () => {
-    await expect(page).toMatchFileSnapshot(PAGE_PATH);
-  });
-
   it('carries the frontmatter the docs collection requires', () => {
     expect(page).toMatch(
       /^---\ntitle: Experimental features\ndescription: .+\nsidebar:\n {2}order: \d+\nlastVerified: '\d{4}-\d{2}-\d{2}'\n---\n/

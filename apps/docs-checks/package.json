@@ -1,0 +1,12 @@
+{
+  "name": "@qauth-labs/docs-checks",
+  "version": "0.0.0",
+  "private": true,
+  "devDependencies": {
+    "@qauth-labs/server-config": "workspace:*",
+    "@qauth-labs/server-realm-policy": "workspace:*",
+    "@qauth-labs/shared-stability": "workspace:*",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
