@@ -135,11 +135,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scope of `scopes`. The CIMD section of the Docker guide and the **SSF
   transmitter** page say how to set the list.
 
-  **Action for operators**: a CIMD client that gets `client_credentials`
-  tokens today gets `invalid_scope` once a node runs this release. If it
-  should keep them, add the scopes it needs as itself to its `cimd_clients`
-  entry's `client_credentials_scopes` and run this release's
-  `db:seed-oauth-clients`, the first that accepts the field. A CIMD client
+  **Action for operators**: a CIMD client without a list that gets
+  `client_credentials` tokens today gets `invalid_scope` from a node of this
+  release; a list a row already holds keeps its scopes. If such a client
+  should keep its tokens, add the scopes it needs as itself to its
+  `cimd_clients` entry's `client_credentials_scopes` and run this release's
+  `db:seed-oauth-clients`, the first that accepts the field, before the first
+  node of this release serves requests: until that run, the client's
+  requests to such a node fail with `invalid_scope`. A CIMD client
   whose row holds a list set by hand needs it in the entry too, before that
   run: an entry without the list removes it. A node of the
   previous release already narrows a client's grant to its list ([#891]), so
