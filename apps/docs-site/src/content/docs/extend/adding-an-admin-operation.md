@@ -89,7 +89,7 @@ typed.patch(
     schema: {
       ...operationSchemaExtensions(operations.updatePolicies), // operationId, x-qauth-class, …
       'x-qauth-stability': 'experimental',
-      'x-qauth-errors': [400, 401, 403, 404, 412, 415, 422, 428],
+      'x-qauth-errors': [400, 401, 403, 404, 412, 415, 422, 428, 503],
       security: [{ [ADMIN_SECURITY_SCHEME]: [] }],
       // params, headers, body, response …
     },
