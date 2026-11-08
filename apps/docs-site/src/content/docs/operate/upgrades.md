@@ -1132,8 +1132,8 @@ also get a token without a user for each scope its users grant it
 every existing row passes: the scopes that grant may issue, out of `scopes`.
 NULL, every existing client's value, keeps the grant as it was, and the
 previous release keeps creating and updating clients on the new schema.
-A CIMD client is the exception since
-[#956](https://github.com/qauth-labs/qauth/issues/956): without a list, the
+From the release after 0.2.2, a CIMD client is the exception
+([#956](https://github.com/qauth-labs/qauth/issues/956)): without a list, the
 grant issues it no token, and its `cimd_clients` entry in the seed manifest
 sets the list
 ([Tokens a CIMD client gets as itself](/operate/docker/#tokens-a-cimd-client-gets-as-itself)).
