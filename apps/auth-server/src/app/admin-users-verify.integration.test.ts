@@ -442,9 +442,13 @@ describe('users.verify and the host command (#1052, real containers)', () => {
     const realm = await defaultRealm();
     expect((await signIn(email)).statusCode).toBe(401);
 
-    // What `verify-account` stores on the account (the migration runner's
-    // suite runs the command itself).
-    await app().repositories.users.recordOperatorVerification(realm.id, userId, 'operator_cli:ops');
+    // What `verify-account` stores on the account, as the table's owner (the
+    // migration runner's suite runs the command itself).
+    await app().dbPool.query(
+      `UPDATE users SET operator_verified_at = $1, operator_verified_by = 'operator_cli:ops'
+        WHERE realm_id = $2 AND id = $3`,
+      [Date.now(), realm.id, userId]
+    );
 
     const signedIn = await signIn(email);
     expect(signedIn.statusCode, signedIn.body).toBe(200);

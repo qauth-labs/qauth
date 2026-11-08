@@ -1,7 +1,6 @@
 import { PreconditionFailedError } from '@qauth-labs/shared-errors';
 import {
   OPERATOR_VERIFICATION_METHODS,
-  operatorVerifiedBy,
   parseOperatorVerifiedBy,
 } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
@@ -131,7 +130,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         security: [{ [ADMIN_SECURITY_SCHEME]: [] }],
         summary: 'Verify an account as the operator',
         description:
-          "Records the operator's verification on the account: it counts as verified beside its primary identity, for signing in where verified accounts are required and for owning an agent, and an unclaimed account is claimed, so another person's later mailbox proof no longer ends it. email_verified is not changed. A security operation: it needs users.security and an approval, filed with approvals.create against the account as it stands. Its body is an empty object. 404 for an account the realm does not hold, 409 for a disabled account or one an operator already verified, 412 when the account changed since the approval was filed.",
+          "Records the operator's verification on the account: it counts as verified beside its primary identity, for signing in where verified accounts are required and for owning an agent, and an unclaimed account is claimed, so another person's later mailbox proof no longer ends it. email_verified is not changed. A security operation: it needs users.security and an approval, filed with approvals.create against the account as it stands. Its body is an empty object. 404 for an account the realm does not hold, 409 for a disabled account or one an operator already verified. An approval filed against the account as it stood no longer matches once a credential is added, removed or proved: the call is answered 403 approval_required, and 412 when the account changes during the call.",
         'x-qauth-errors': [400, 401, 403, 404, 409, 412, 428],
         params: verificationParams,
         headers: verificationHeaders,
@@ -152,11 +151,12 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       if (accountVerificationStateVersion(state) !== stateVersion) {
         throw new PreconditionFailedError({ operation: operations.verify.id });
       }
-      const verifiedBy = operatorVerifiedBy({ method: 'operator', accountId: caller.userId });
+      // Through `users_record_operator_verification` (migration 0070): the
+      // admin role writes these two columns of the account and no other.
       const user = await request.server.repositories.users.recordOperatorVerification(
         realmId,
         userId,
-        verifiedBy,
+        caller.userId,
         tx
       );
       // Disabled, or verified by another call, since the read.
@@ -177,7 +177,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
           after: {
             userId,
             operatorVerifiedAt: verification.verifiedAt,
-            operatorVerifiedBy: verifiedBy,
+            operatorVerifiedBy: user.operatorVerifiedBy,
           },
         },
         annotations: {},

@@ -72,7 +72,6 @@ export interface DatabaseGrantsMap {
 const S: readonly TablePrivilege[] = Object.freeze(['SELECT']);
 const SI: readonly TablePrivilege[] = Object.freeze(['SELECT', 'INSERT']);
 const SD: readonly TablePrivilege[] = Object.freeze(['SELECT', 'DELETE']);
-const SU: readonly TablePrivilege[] = Object.freeze(['SELECT', 'UPDATE']);
 const SIU: readonly TablePrivilege[] = Object.freeze(['SELECT', 'INSERT', 'UPDATE']);
 const SID: readonly TablePrivilege[] = Object.freeze(['SELECT', 'INSERT', 'DELETE']);
 const SIUD: readonly TablePrivilege[] = Object.freeze(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
@@ -140,9 +139,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   ssf_stream_subjects: { api: SID },
   ssf_streams: { api: SIUD, delivery: S },
   user_attributes: { web: SIU, api: SIU },
-  // `admin` reads an account's credentials for `users.verify` (#1052): what
-  // its approver is shown, and the state the approval binds.
-  user_credentials: { web: SIU, api: SIU, admin: S },
+  // `admin` reads nothing of it: what `users.verify` shows of an account's
+  // credentials comes through `user_credential_proofs` (#1052).
+  user_credentials: { web: SIU, api: SIU },
   // Each account's recovery codes (#649): the sign-in engine, on `web`,
   // reads an account's codes, takes one (an `UPDATE … WHERE used_at IS NULL`)
   // and replaces a set (a `DELETE` and an `INSERT` in one transaction) when
@@ -163,8 +162,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   user_session_epochs: { web: SIU },
   // `api` creates accounts; `web` and `api` record sign-ins; `admin` finds
   // the account behind an admin token, and records an operator's
-  // verification of one (`users.verify`, #1052). No role deletes one.
-  users: { web: SIU, api: SIU, admin: SU },
+  // verification of one only through `users_record_operator_verification`
+  // (`users.verify`, #1052). No role deletes one.
+  users: { web: SIU, api: SIU, admin: S },
 });
 
 /**
@@ -211,6 +211,11 @@ export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // repository reports on its metrics: `admin` builds it too since it writes
   // the events of its operations (#1052).
   '"events_oldest_unread_time"()': ['web', 'api', 'admin', 'delivery'],
+  // An operator's verification of an account (`users.verify`, migration
+  // 0070, #1052): what the account's credentials prove, read without their
+  // secrets, and the write of the verification's two columns alone.
+  '"user_credential_proofs"(uuid, uuid)': ['admin'],
+  '"users_record_operator_verification"(uuid, uuid, uuid, bigint)': ['admin'],
   // Whether an event about a user can still reach an SSF stream (migration
   // 0055): the subject sweep, an `api` job.
   '"ssf_subject_events_pending"(uuid, text)': ['api'],

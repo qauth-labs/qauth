@@ -563,8 +563,10 @@ describe('each service role on a database user of its own (#498)', () => {
     expect(cancelled.json()).toMatchObject({ status: 'cancelled' });
 
     // users.verify (#1052), approved and run as the admin user: it reads the
-    // account and its credentials, updates the account and records
-    // user.verified in the event store.
+    // account, what its credentials prove through user_credential_proofs,
+    // records the verification through users_record_operator_verification
+    // (it holds no SELECT on user_credentials and no UPDATE on users), and
+    // records user.verified in the event store.
     const account = (
       await fixture.app.repositories.users.create({ realmId: realm.id }, testPrimaryCredential())
     ).id;

@@ -72,15 +72,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `operator_verified_by`, migration 0070) and counts beside the proof of its
   primary identity: in the sign-in gate of every path ([#1051]), and in the
   verified-owner check of an agent ([#846]). It claims an unclaimed account,
-  and never sets `email_verified`. Where no admin API is set up, the migration
-  runner's `verify-account --realm <name> --user <id>` records the same
-  verification on the host, as the operating-system user that ran it. It
-  refuses a disabled or missing account (exit 6), and runs only on a current
+  and never sets `email_verified`; a password reset by mail stays closed while
+  the address is unconfirmed (audited as `address_unproved`). Where no admin
+  API is set up, the migration runner's `verify-account --realm <name> --user
+  <id>` records the same verification on the host, as the operating-system
+  user that ran it. It refuses a disabled or missing account (exit 6), and runs only on a current
   database. Both paths record the new admin event
   `urn:qauth:event:user.verified:v1-rc.0`, whose `method` is `operator` or
   `operator_cli`. The pair of operations stays reserved for the admin
-  console's user screen ([#682]). The admin role's database user gains UPDATE
-  on `users`, SELECT on `user_credentials` and the event writer's grants. An
+  console's user screen ([#682]). The admin role's database user gains the
+  event writer's grants and EXECUTE on two functions of migration 0070:
+  `user_credential_proofs`, which returns what an account's credentials prove
+  and nothing secret, and `users_record_operator_verification`, which writes
+  the verification's columns alone. It holds no SELECT on `user_credentials`
+  and no UPDATE on `users`. An
   admin operation may now read state without `classify`, only to show it to
   the approver and bind the approval to it; it then needs its declaration on
   every request.

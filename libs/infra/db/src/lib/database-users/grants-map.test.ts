@@ -158,6 +158,15 @@ describe('the grants map (#498)', () => {
     }
   });
 
+  it("gives admin users.verify's two functions, and no credential read nor account write of its own (#1052)", () => {
+    expect(privilegesOf('admin', 'user_credentials')).toEqual([]);
+    expect(privilegesOf('admin', 'users')).toEqual(['SELECT']);
+    expect(FUNCTION_GRANTS['"user_credential_proofs"(uuid, uuid)']).toEqual(['admin']);
+    expect(
+      FUNCTION_GRANTS['"users_record_operator_verification"(uuid, uuid, uuid, bigint)']
+    ).toEqual(['admin']);
+  });
+
   it('lets no role write who administers, nor delete a realm or a user', () => {
     for (const role of DATABASE_ROLES) {
       for (const table of ['admin_grants', 'admin_roles']) {

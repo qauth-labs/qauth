@@ -6,7 +6,12 @@ import {
 } from '@qauth-labs/shared-errors';
 import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 
-import type { NewUserCredential, UserCredential, UserCredentialsRepository } from '../../types';
+import type {
+  CredentialProofRow,
+  NewUserCredential,
+  UserCredential,
+  UserCredentialsRepository,
+} from '../../types';
 import { DbClient } from '../db';
 import { users } from '../schema/core';
 import { userCredentials } from '../schema/identity';
@@ -228,6 +233,37 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
     async findAllByUserId(userId: string, tx?: DbClient): Promise<UserCredential[]> {
       const invoker = tx ?? defaultDb;
       return invoker.select().from(userCredentials).where(eq(userCredentials.userId, userId));
+    },
+
+    /**
+     * What each credential of the realm's account proves, through
+     * `user_credential_proofs` (migration 0070, #1052): the admin role
+     * executes it and holds no `SELECT` on the table, so it never reads a
+     * password hash or a sealed secret.
+     */
+    async findProofsByUserId(
+      realmId: string,
+      userId: string,
+      tx?: DbClient
+    ): Promise<CredentialProofRow[]> {
+      const invoker = tx ?? defaultDb;
+      const { rows } = await invoker.execute<{
+        id: string;
+        provider_type: string;
+        is_primary: boolean;
+        // node-postgres reads a bigint as a string.
+        disabled_at: string | number | null;
+        identifier: string | null;
+        proof_data: CredentialProofRow['proofData'] | null;
+      }>(sql`select * from "user_credential_proofs"(${realmId}::uuid, ${userId}::uuid)`);
+      return rows.map((row) => ({
+        id: row.id,
+        providerType: row.provider_type,
+        isPrimary: row.is_primary,
+        disabledAt: row.disabled_at === null ? null : Number(row.disabled_at),
+        identifier: row.identifier,
+        proofData: row.proof_data ?? {},
+      }));
     },
 
     /**

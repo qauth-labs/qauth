@@ -1,5 +1,5 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, eq, InferInsertModel, InferSelectModel, isNull } from 'drizzle-orm';
+import { and, eq, InferInsertModel, InferSelectModel, sql } from 'drizzle-orm';
 import { z } from 'zod';
 
 import type { RealmScopedRepository, UserCredential } from '../../types';
@@ -95,20 +95,31 @@ export interface UsersRepository extends Omit<
    */
   updateLastLogin(realmId: string, id: string, tx?: DbClient): Promise<User>;
   /**
-   * Record an operator's verification of an enabled account of the realm
-   * (ADR-015 Decision 8, amended 2026-11-08; #1052): `operator_verified_at`
-   * takes the time now and `operator_verified_by` the operator, in the form
-   * `operatorVerifiedBy` of shared-validation makes. Conditional: an account
-   * that is gone, disabled or already verified by an operator is left as it
-   * is, and `undefined` returned. Nothing else of the account changes, its
-   * credentials and their `email_verified` included.
+   * Record the admin account `operatorAccountId`'s verification of an
+   * enabled account of the realm (`users.verify`, ADR-015 Decision 8,
+   * amended 2026-11-08; #1052): `operator_verified_at` takes the time now
+   * and `operator_verified_by` `operator:<operatorAccountId>`, through
+   * `users_record_operator_verification` (migration 0070), so the admin role
+   * that runs it holds no `UPDATE` on `users`. Conditional: an account that
+   * is gone, disabled or already verified by an operator is left as it is,
+   * and `undefined` returned. Nothing else of the account changes, its
+   * credentials and their `email_verified` included. The host's
+   * `verify-account` command records its own form as the table's owner
+   * (`account-verification/verify-account.ts`).
    */
   recordOperatorVerification(
     realmId: string,
     id: string,
-    verifiedBy: string,
+    operatorAccountId: string,
     tx?: DbClient
-  ): Promise<User | undefined>;
+  ): Promise<RecordedOperatorVerification | undefined>;
+}
+
+/** The verification {@link UsersRepository.recordOperatorVerification} wrote. */
+export interface RecordedOperatorVerification {
+  readonly id: string;
+  readonly operatorVerifiedAt: number;
+  readonly operatorVerifiedBy: string;
 }
 
 /**
@@ -256,20 +267,25 @@ export function createUsersRepository(defaultDb: DbClient): UsersRepository {
     async recordOperatorVerification(
       realmId: string,
       id: string,
-      verifiedBy: string,
+      operatorAccountId: string,
       tx?: DbClient
-    ): Promise<User | undefined> {
-      if (!isUserIdShape(id)) return undefined;
+    ): Promise<RecordedOperatorVerification | undefined> {
+      if (!isUserIdShape(id) || !isUserIdShape(operatorAccountId)) return undefined;
       const invoker = tx ?? defaultDb;
-      const now = Date.now();
-      const [user] = await invoker
-        .update(users)
-        .set({ operatorVerifiedAt: now, operatorVerifiedBy: verifiedBy, updatedAt: now })
-        .where(
-          and(userOfRealm(realmId, id), eq(users.enabled, true), isNull(users.operatorVerifiedAt))
-        )
-        .returning();
-      return user;
+      const { rows } = await invoker.execute<{
+        // node-postgres reads a bigint as a string.
+        operator_verified_at: string | number;
+        operator_verified_by: string;
+      }>(
+        sql`select * from "users_record_operator_verification"(${realmId}::uuid, ${id}::uuid, ${operatorAccountId}::uuid, ${Date.now()})`
+      );
+      const [row] = rows;
+      if (row === undefined) return undefined;
+      return {
+        id,
+        operatorVerifiedAt: Number(row.operator_verified_at),
+        operatorVerifiedBy: row.operator_verified_by,
+      };
     },
 
     /**

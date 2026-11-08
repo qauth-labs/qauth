@@ -132,6 +132,28 @@ export interface UpsertUserAttributeInput {
 }
 
 /**
+ * One credential of an account as `user_credential_proofs` returns it
+ * (migration 0070, #1052): what it is and what it proves, and nothing secret.
+ */
+export interface CredentialProofRow {
+  readonly id: string;
+  readonly providerType: string;
+  readonly isPrimary: boolean;
+  readonly disabledAt: number | null;
+  /** The address of a password credential; `null` for any other type. */
+  readonly identifier: string | null;
+  /**
+   * Of `credential_data`, only the keys that say what it proves, where set:
+   * `email_verified`, `user_verified` and `kind`.
+   */
+  readonly proofData: {
+    readonly email_verified?: unknown;
+    readonly user_verified?: unknown;
+    readonly kind?: unknown;
+  };
+}
+
+/**
  * Repository for `user_credentials` (one row per authentication method per
  * user; ADR-002 §Decision.2).
  */
@@ -178,6 +200,13 @@ export interface UserCredentialsRepository {
   ): Promise<UserCredential[]>;
   /** Every credential a user holds, of every provider type (#639). */
   findAllByUserId(userId: string, tx?: DbClient): Promise<UserCredential[]>;
+  /**
+   * The credentials the realm's account `userId` holds, as an operator's
+   * verification shows them (#1052): through `user_credential_proofs`
+   * (migration 0070), so a role that may not read the table, the admin
+   * role, reads what each proves and nothing secret. In no set order.
+   */
+  findProofsByUserId(realmId: string, userId: string, tx?: DbClient): Promise<CredentialProofRow[]>;
   /** Every credential a user holds for one provider type (#238). */
   findAllByUserIdAndType(
     userId: string,

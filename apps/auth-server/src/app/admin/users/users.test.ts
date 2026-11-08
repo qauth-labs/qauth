@@ -1,4 +1,7 @@
-import { buildPasswordCredentialData } from '@qauth-labs/fastify-plugin-federation';
+import {
+  buildPasswordCredentialData,
+  decideVerifiedOwner,
+} from '@qauth-labs/fastify-plugin-federation';
 import { NotFoundError } from '@qauth-labs/shared-errors';
 import { getEventType } from '@qauth-labs/shared-events';
 import { OPERATOR_VERIFICATION_METHODS } from '@qauth-labs/shared-validation';
@@ -26,7 +29,6 @@ import { accountVerificationOf, accountVerificationSchema } from './routes';
  */
 
 const REALM = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f';
-const OTHER_REALM = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e70';
 const USER = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e71';
 const ADMIN = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e72';
 
@@ -53,12 +55,12 @@ const userRow = (overrides: Partial<UserRow> = {}): UserRow => ({
   ...overrides,
 });
 
+/** A credential as `user_credential_proofs` returns it (migration 0070): nothing secret. */
 const credential = (overrides: Record<string, unknown>) => ({
-  realmId: REALM,
-  externalSub: 'ada@example.com',
   isPrimary: false,
   disabledAt: null,
-  credentialData: {},
+  identifier: null,
+  proofData: {},
   ...overrides,
 });
 
@@ -66,9 +68,10 @@ const PASSWORD = credential({
   id: 'c2',
   providerType: 'password',
   isPrimary: true,
-  credentialData: buildPasswordCredentialData('$argon2id$h', false, 'nfc'),
+  identifier: 'ada@example.com',
+  proofData: { email_verified: false },
 });
-const TOTP = credential({ id: 'c1', providerType: 'totp', externalSub: 'totp' });
+const TOTP = credential({ id: 'c1', providerType: 'totp' });
 
 /** A request behind the pipeline, for `users.verify`'s `loadState`. */
 function requestFor(user: UserRow | undefined, rows: unknown[], transaction?: unknown) {
@@ -77,14 +80,14 @@ function requestFor(user: UserRow | undefined, rows: unknown[], transaction?: un
     server: {
       repositories: {
         users: { findById: vi.fn(async () => user) },
-        userCredentials: { findAllByUserId: vi.fn(async () => rows) },
+        userCredentials: { findProofsByUserId: vi.fn(async () => rows) },
       },
     },
   } as unknown as FastifyRequest & {
     server: {
       repositories: {
         users: { findById: ReturnType<typeof vi.fn> };
-        userCredentials: { findAllByUserId: ReturnType<typeof vi.fn> };
+        userCredentials: { findProofsByUserId: ReturnType<typeof vi.fn> };
       };
     };
   };
@@ -133,8 +136,14 @@ describe('users.verify in the registry (#1052)', () => {
 
 describe('the account users.verify meets (#1052)', () => {
   it("reads the account and its credentials in the realm, by id, with each one's proof", async () => {
-    const foreign = credential({ id: 'c0', providerType: 'password', realmId: OTHER_REALM });
-    const state = await load(requestFor(userRow(), [PASSWORD, foreign, TOTP]));
+    const request = requestFor(userRow(), [PASSWORD, TOTP]);
+    const state = await load(request);
+    // The function keys the credentials by the realm and the account.
+    expect(request.server.repositories.userCredentials.findProofsByUserId).toHaveBeenCalledWith(
+      REALM,
+      USER,
+      undefined
+    );
     expect(state).toEqual({
       userId: USER,
       createdAt: Date.UTC(2026, 10, 1),
@@ -159,23 +168,51 @@ describe('the account users.verify meets (#1052)', () => {
     });
   });
 
-  it('shows an upstream identity as vouched for by its provider, and a confirmed address as proved', async () => {
-    const upstream = credential({
-      id: 'c3',
-      providerType: 'oidc_corp',
-      externalSub: 'sub-1',
-      credentialData: { kind: 'upstream', iss: 'https://idp.example.com', verified: true },
-    });
-    const confirmed = credential({
-      id: 'c4',
-      providerType: 'password',
-      credentialData: buildPasswordCredentialData('$argon2id$h', true, 'nfc'),
-    });
-    const state = await load(requestFor(userRow(), [upstream, confirmed]));
-    expect(state.credentials.map((entry) => [entry.id, entry.proof, entry.identifier])).toEqual([
-      ['c3', 'provider', null],
-      ['c4', 'proved', 'ada@example.com'],
+  it("shows each credential's proof by its kind's row of Decision 8's table", async () => {
+    const rows = [
+      credential({ id: 'c3', providerType: 'oidc_corp', proofData: { kind: 'upstream' } }),
+      credential({
+        id: 'c4',
+        providerType: 'password',
+        identifier: 'ada@example.com',
+        proofData: { email_verified: true },
+      }),
+      credential({ id: 'c5', providerType: 'webauthn', proofData: { user_verified: false } }),
+      credential({ id: 'c6', providerType: 'webauthn', proofData: { user_verified: true } }),
+      credential({ id: 'c7', providerType: 'wallet' }),
+      credential({ id: 'c8', providerType: 'oidc_corp' }),
+      // A password row whose flag is not a boolean `true` is not confirmed.
+      credential({ id: 'c9', providerType: 'password', proofData: { email_verified: 'true' } }),
+    ];
+    const state = await load(requestFor(userRow(), rows));
+    expect(state.credentials.map((entry) => [entry.id, entry.proof])).toEqual([
+      ['c3', 'provider'],
+      ['c4', 'proved'],
+      ['c5', 'not_proved'],
+      ['c6', 'proved'],
+      ['c7', 'proved'],
+      ['c8', 'none'],
+      ['c9', 'not_proved'],
     ]);
+  });
+
+  it("shows the same proof as the verified-owner rule for a primary identity's full data", async () => {
+    // The admin role reads only the keys of `user_credential_proofs`; for
+    // well-formed data its proof agrees with `decideVerifiedOwner`.
+    for (const confirmed of [true, false]) {
+      const full = buildPasswordCredentialData('$argon2id$h', confirmed, 'nfc');
+      const shown = await load(
+        requestFor(userRow(), [
+          credential({
+            id: 'c1',
+            providerType: 'password',
+            proofData: { email_verified: full.email_verified },
+          }),
+        ])
+      );
+      const decided = decideVerifiedOwner({ providerType: 'password', credentialData: full });
+      expect(shown.credentials[0]?.proof === 'proved').toBe(decided.verified);
+    }
   });
 
   it('refuses an account the realm does not hold with 404', async () => {
@@ -205,7 +242,8 @@ describe('the account users.verify meets (#1052)', () => {
     const inside = requestFor(userRow(), [], tx);
     await load(inside);
     expect(inside.server.repositories.users.findById).toHaveBeenCalledWith(REALM, USER, tx);
-    expect(inside.server.repositories.userCredentials.findAllByUserId).toHaveBeenCalledWith(
+    expect(inside.server.repositories.userCredentials.findProofsByUserId).toHaveBeenCalledWith(
+      REALM,
       USER,
       tx
     );

@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 
 import { canonicalizeJson } from '@qauth-labs/fastify-plugin-db';
-import { decideVerifiedOwner, primaryIdentityKindOf } from '@qauth-labs/fastify-plugin-federation';
+import {
+  PASSWORD_PROVIDER_TYPE,
+  primaryIdentityKindOf,
+} from '@qauth-labs/fastify-plugin-federation';
 import { NotFoundError } from '@qauth-labs/shared-errors';
 import { isOperatorVerified } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -89,23 +92,37 @@ export interface AccountVerificationState {
   readonly credentials: readonly AccountCredentialState[];
 }
 
-/** A credential row, as the state reads it. */
-interface CredentialRow {
-  readonly id: string;
-  readonly realmId: string;
-  readonly providerType: string;
-  readonly externalSub: string;
-  readonly credentialData: unknown;
-  readonly isPrimary: boolean;
-  readonly disabledAt: number | null;
-}
+/** A credential, as `user_credential_proofs` returns it: nothing secret. */
+type CredentialRow = Awaited<
+  ReturnType<FastifyInstance['repositories']['userCredentials']['findProofsByUserId']>
+>[number];
 
-/** What one credential proves, by its kind's rule. */
+/**
+ * What one credential proves, by its kind's row of Decision 8's table
+ * (`decideVerifiedOwner` of federation), read off the keys of its data that
+ * say so: a confirmed address, a passkey registered with user verification,
+ * a wallet binding (made only after a presentation QAuth verified). The
+ * admin role reads no more of the data (migration 0070), so a row whose data
+ * is malformed otherwise is shown by these keys alone; what the account's
+ * standing is decided by is the full rule, wherever it is checked.
+ */
 function proofOf(credential: CredentialRow): CredentialProof {
-  const kind = primaryIdentityKindOf(credential);
-  if (kind === 'other') return 'none';
-  if (kind === 'upstream') return 'provider';
-  return decideVerifiedOwner(credential).verified ? 'proved' : 'not_proved';
+  const kind = primaryIdentityKindOf({
+    providerType: credential.providerType,
+    credentialData: credential.proofData,
+  });
+  switch (kind) {
+    case 'password':
+      return credential.proofData.email_verified === true ? 'proved' : 'not_proved';
+    case 'passkey':
+      return credential.proofData.user_verified !== false ? 'proved' : 'not_proved';
+    case 'wallet':
+      return 'proved';
+    case 'upstream':
+      return 'provider';
+    case 'other':
+      return 'none';
+  }
 }
 
 function credentialStateOf(credential: CredentialRow): AccountCredentialState {
@@ -115,7 +132,7 @@ function credentialStateOf(credential: CredentialRow): AccountCredentialState {
     primary: credential.isPrimary,
     disabled: credential.disabledAt !== null,
     proof: proofOf(credential),
-    identifier: credential.providerType === 'password' ? credential.externalSub : null,
+    identifier: credential.providerType === PASSWORD_PROVIDER_TYPE ? credential.identifier : null,
   };
 }
 
@@ -141,9 +158,10 @@ export async function readAccountVerificationState(
   if (user === undefined) throw new NotFoundError('User', userId);
   if (!user.enabled) throw new AccountVerificationConflictError('disabled');
   if (isOperatorVerified(user)) throw new AccountVerificationConflictError('already_verified');
-  const rows = await server.repositories.userCredentials.findAllByUserId(user.id, tx);
+  // The realm's credentials of the account, through the function the admin
+  // role may execute: it reads nothing secret of them.
+  const rows = await server.repositories.userCredentials.findProofsByUserId(realmId, user.id, tx);
   const credentials = rows
-    .filter((row) => row.realmId === realmId)
     .map(credentialStateOf)
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return { userId: user.id, createdAt: user.createdAt, credentials };
@@ -239,7 +257,7 @@ function renderVerification(input: RenderInput): RenderedOperation {
     {
       label: 'effect',
       value:
-        "The account counts as verified wherever QAuth asks for a verified account: signing in where verified accounts are required, and owning an agent. It is the operator's attestation, so it claims the account if it is unclaimed: another person's later mailbox proof no longer ends it. email_verified is not changed.",
+        "The account counts as verified wherever QAuth asks for a verified account: signing in where verified accounts are required, and owning an agent. It is the operator's attestation, so it claims the account if it is unclaimed: another person's later mailbox proof no longer ends it. It attests the account, not its address: while the address is unconfirmed, no password reset by mail opens. email_verified is not changed.",
     },
     ...shown.map((credential): RenderedField => ({
       label: `credential ${credential.type}${credential.primary ? ' (primary)' : ''}${credential.disabled ? ' (disabled)' : ''}`,
