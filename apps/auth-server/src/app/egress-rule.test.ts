@@ -53,12 +53,16 @@ function workspaceConfig(): OxlintConfig {
 const configures = (rules: Record<string, unknown> | undefined) =>
   rules !== undefined && GUARD_RULE in rules;
 
-/** Server code: the auth server's routes and helpers, a fastify plugin, a server library. */
+/**
+ * Server code: the auth server's routes and helpers, a fastify plugin, a
+ * server library, a sign-in method plugin (#671).
+ */
 const SERVER_CODE = [
   'apps/auth-server/src/app/helpers/sample.ts',
   'apps/auth-server/src/app/routes/oauth/sample.ts',
   'libs/fastify/plugins/ssf/src/lib/sample.ts',
   'libs/server/federation/src/sample.ts',
+  'libs/plugins/google/src/lib/sample.ts',
 ];
 
 /**

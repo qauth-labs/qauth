@@ -1,0 +1,19 @@
+{
+  "name": "@qauth-labs/plugin-apple",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/server-upstream-oidc": "workspace:*",
+    "tslib": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@qauth-labs/plugin-sdk": "workspace:*",
+    "@qauth-labs/server-federation": "workspace:*",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "jose": "catalog:",
+    "vitest": "catalog:"
+  }
+}
