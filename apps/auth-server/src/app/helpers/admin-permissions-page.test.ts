@@ -165,8 +165,18 @@ describe('the admin permissions page (#507)', () => {
     expect(stability).not.toMatch(/once published/);
   });
 
-  it('says that no permission has been retired yet', () => {
-    expect(sectionOf(page, 'Retired permissions')).toContain('No permission has been retired.');
+  // #984: secrets.seal, which seals for every security operation, took the
+  // place of the plugin operations' own seal and its permission.
+  it('lists plugins.write as retired in v0.3.0, and no role grants it', () => {
+    expect(
+      tableRows(sectionOf(page, 'Retired permissions')).map(([id, cls, release]) => [
+        id,
+        cls,
+        release,
+      ])
+    ).toEqual([['`plugins.write`', 'write', 'v0.3.0']]);
+    expect(PERMISSION_REGISTRY.isGrantable('plugins.write')).toBe(false);
+    expect(PERMISSION_REGISTRY.isGrantable('secrets.seal')).toBe(true);
   });
 });
 
@@ -192,8 +202,11 @@ describe('renderAdminPermissionsPage', () => {
     expect(permissions).toContainEqual(['`widgets.rotate`', 'security']);
     expect(permissions).not.toContainEqual(['`widgets.list`', 'read']);
     expect(rendered).toContain('Rotate a \\| widget.');
-    expect(tableRows(sectionOf(rendered, 'Retired permissions'))).toEqual([
-      ['`widgets.list`', 'read', 'v0.3.0', 'List the widgets.'],
+    expect(tableRows(sectionOf(rendered, 'Retired permissions'))).toContainEqual([
+      '`widgets.list`',
+      'read',
+      'v0.3.0',
+      'List the widgets.',
     ]);
   });
 });

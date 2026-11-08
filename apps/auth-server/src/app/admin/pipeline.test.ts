@@ -27,6 +27,7 @@ import {
   recordAdminChange,
   requestAdminCaller,
 } from './pipeline';
+import { SEALED_VALUE_SCHEMA } from './secrets/secret-members';
 
 /**
  * What the admin pipeline refuses at boot (#511): a route that names no realm
@@ -412,6 +413,169 @@ describe('the routes of security operations at boot (#512)', () => {
         });
       })
     ).rejects.toThrow(/fixtureKeys.rotate, which has no renderer/);
+  });
+
+  // #984: a security operation takes a secret only sealed.
+  describe('a secret member', () => {
+    const credentials = (secretMembers: readonly string[]) =>
+      defineOperation({
+        id: 'fixtureCredentials.update',
+        class: 'security',
+        effects: ['credential-path'],
+        permissions: ['realms.policies.security'],
+        description: 'A security operation that sets a secret (fixture).',
+        render: () => ({ title: 'Set the credential' }),
+        secretMembers,
+      });
+    const credentialsPath = '/admin/v1-rc.0/realms/:realmId/credentials';
+    const params = z.object({ realmId: z.uuid() });
+
+    /** Boot the route of an operation declaring `secretMembers`, with the body schema `body`. */
+    const bootWithBody = (secretMembers: readonly string[], body: unknown) =>
+      bootSecurity(credentials(secretMembers), (scope, schema) => {
+        scope.post(
+          credentialsPath,
+          {
+            config: { operation: 'fixtureCredentials.update' },
+            schema: { ...schema, params, body } as object,
+          },
+          async () => ({})
+        );
+      });
+
+    // Acceptance criterion: a declared secret member whose schema is not the
+    // sealed one fails the admin listener's boot.
+    it.each([
+      ['a plain string', z.strictObject({ password: z.string().min(1) })],
+      [
+        'a string beside a sealed value',
+        z.strictObject({ password: z.union([z.string(), SEALED_VALUE_SCHEMA]) }),
+      ],
+      [
+        'a look-alike of the sealed schema',
+        z.strictObject({ password: z.strictObject({ sealed: z.string() }) }),
+      ],
+      [
+        'the sealed schema with a check of its own',
+        z.strictObject({ password: SEALED_VALUE_SCHEMA.refine(() => true) }),
+      ],
+      [
+        'the sealed schema behind a transform',
+        z.strictObject({ password: SEALED_VALUE_SCHEMA.transform((value) => value) }),
+      ],
+      ['an untyped member', z.strictObject({ password: z.unknown() })],
+    ])('refuses to boot a declared secret member that is %s', async (_label, body) => {
+      await expect(bootWithBody(['/password'], body)).rejects.toThrow(
+        /declares the secret member \/password, but the schema of \/password is not the sealed-value schema/
+      );
+    });
+
+    it('refuses to boot a declared secret member its body schema does not have, or cannot be followed to', async () => {
+      await expect(
+        bootWithBody(['/password'], z.strictObject({ secret: SEALED_VALUE_SCHEMA }))
+      ).rejects.toThrow(/the body schema has no member \/password/);
+      await instance?.close();
+      // The check cannot say what a union or a transform hands the handler.
+      await expect(
+        bootWithBody(
+          ['/credential/password'],
+          z.strictObject({
+            credential: z.union([
+              z.strictObject({ password: SEALED_VALUE_SCHEMA }),
+              z.strictObject({ password: z.string() }),
+            ]),
+          })
+        )
+      ).rejects.toThrow(/the schema of \/credential is a Zod union/);
+      await instance?.close();
+      await expect(
+        bootWithBody(
+          ['/password'],
+          z.strictObject({ password: SEALED_VALUE_SCHEMA }).transform((body) => body)
+        )
+      ).rejects.toThrow(/the schema of the body is a Zod pipe/);
+      await instance?.close();
+      // `*` stands for every member of a record or item of an array, not of an object.
+      await expect(
+        bootWithBody(['/*'], z.strictObject({ password: SEALED_VALUE_SCHEMA }))
+      ).rejects.toThrow(/the body is an object, so \/\* names each of its secret members/);
+    });
+
+    it('boots a declared secret member that takes the sealed schema, as it is, nullable, optional or described', async () => {
+      const body = z
+        .strictObject({
+          password: SEALED_VALUE_SCHEMA,
+          previous: SEALED_VALUE_SCHEMA.nullable(),
+          recovery: SEALED_VALUE_SCHEMA.meta({ description: 'The recovery code.' }).optional(),
+          secrets: z.record(z.string(), SEALED_VALUE_SCHEMA.nullable()).optional(),
+          keys: z
+            .array(z.strictObject({ id: z.string(), private: SEALED_VALUE_SCHEMA }))
+            .default([]),
+          label: z.string(),
+        })
+        .refine(() => true)
+        .meta({ description: 'A credential.' });
+      await expect(
+        bootWithBody(['/password', '/previous', '/recovery', '/secrets/*', '/keys/*/private'], body)
+      ).resolves.toBeDefined();
+      await instance?.close();
+      // A record takes a named member as one of its own.
+      await expect(bootWithBody(['/secrets/clientSecret'], body)).resolves.toBeDefined();
+    });
+
+    it('holds no member it does not declare: a plain string elsewhere still boots', async () => {
+      await expect(
+        bootWithBody(
+          ['/password'],
+          z.strictObject({ password: SEALED_VALUE_SCHEMA, note: z.string() })
+        )
+      ).resolves.toBeDefined();
+    });
+
+    /** The pipeline's scope the last {@link bootWithScope} registered its route in. */
+    let routeScope: FastifyInstance | undefined;
+
+    /** Boot the route of `operation` with the route option `sealScope`. */
+    const bootWithScope = (operation: AdminOperation, sealScope: unknown) =>
+      bootSecurity(operation, (scope, schema) => {
+        routeScope = scope;
+        scope.post(
+          credentialsPath,
+          {
+            config: { operation: operation.id, sealScope } as object,
+            schema: {
+              ...schema,
+              params,
+              body: z.strictObject({ password: SEALED_VALUE_SCHEMA }),
+            } as object,
+          },
+          async () => ({})
+        );
+      });
+
+    it('records what the route binds a sealed value to, beside its path parameters', async () => {
+      const sealScope = () => 'the installed version';
+      await bootWithScope(credentials(['/password']), sealScope);
+      expect(routeScope?.adminApi.routeOf('fixtureCredentials.update')?.sealScope).toBe(sealScope);
+    });
+
+    it('refuses to boot a sealScope that is no function, or on an operation that declares no secret member', async () => {
+      await expect(bootWithScope(credentials(['/password']), 'scope')).rejects.toThrow(
+        /sealScope is a function of the path parameters/
+      );
+      await instance?.close();
+      const plain = defineOperation({
+        id: 'fixtureCredentials.update',
+        class: 'security',
+        effects: ['credential-path'],
+        permissions: ['realms.policies.security'],
+        description: 'A security operation that sets no secret (fixture).',
+        render: () => ({ title: 'Set the credential' }),
+      });
+      await expect(bootWithScope(plain, () => 'scope')).rejects.toThrow(
+        /only the route of a security operation that declares secret members binds a sealed value \(sealScope\)/
+      );
+    });
   });
 });
 

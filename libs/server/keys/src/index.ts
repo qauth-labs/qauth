@@ -78,6 +78,7 @@ export {
   UpstreamClientNotFoundError,
 } from './lib/signer-errors';
 export {
+  ADMIN_SEALED_VALUE_CONTEXT_PREFIX,
   AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
   DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,

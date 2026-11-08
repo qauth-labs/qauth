@@ -34,6 +34,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`account_not_verified`, or `no_primary_identity`) and the primary
   identity's kind. An anonymous registration is unchanged.
 
+- **A security operation takes a secret only sealed** ([#984], ADR-019
+  Decision 7). An approval keeps `op_hash` and its nonce until it closes
+  (#901), so a copy of the approvals table taken while one is open, or the
+  audit log's `request_digest`, let a guessed secret be tested offline. An
+  admin operation's definition now declares the members of its body that
+  carry a secret (`secretMembers`, JSON Pointers with `*` for every member of
+  a record or item of an array), and the admin listener refuses to boot a
+  security operation whose body schema holds a declared member to anything
+  but the one sealed-value schema, `{ "sealed": "v1.…" }`: not a string, a
+  union with one, a refined or transformed copy. The new operation
+  `secrets.seal` (`POST /admin/v1-rc.0/realms/{realmId}/secrets/seal`, under
+  the new write permission `secrets.seal`) encrypts a value with the realm's
+  `data_at_rest` key, bound to one operation, one of its declared members
+  and the path parameters of the request it is for (`params`, parsed by
+  that operation's route), with what the route binds beside them
+  (`config.sealScope`), changes nothing and records no value; the
+  operation's handler opens it only for its own operation, that member, its
+  own path parameters and the realm, and answers 400 `bad_request` to any
+  other. An approval whose renderer shows a sealed
+  value is never filed. The signer's `admin` caller now encrypts and
+  decrypts the contexts `admin-sealed-value:` and nothing else.
+
 ### Changed
 
 - **A realm's plugin state belongs to the plugin that wrote it** ([#949],
@@ -54,6 +76,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secrets sealed again, and enabled again. During a rolling upgrade, such a
   plugin stays on at the nodes of 0.2; configure no plugin until every node
   runs the new release.
+
+- **`plugins.update` takes its secrets sealed by `secrets.seal`** ([#984],
+  experimental `plugin-api`). `plugins.secrets.seal` and its route
+  `POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/secrets/seal` are
+  removed: a client seals each secret with `secrets.seal`, for the operation
+  `plugins.update`, the member `/secrets/<path>` and the params
+  `{ "plugin": "<id>" }`, and sends it under `secrets` as before. The value
+  is bound, as the removed route bound it, to the plugin and the package and
+  type installed under it: it opens for no other plugin, and not once
+  another package or type is installed under the same id (#949). A value
+  sealed by the removed route does not open.
+  The configure handler opens each value and stores it sealed again under
+  the plugin's context, so the value an approval bound never opens as a
+  stored secret; secrets already stored are unchanged. The permission
+  `plugins.write`, which only the removed operation needed, is retired in
+  0.3.0: a custom role that lists it keeps its other permissions and no
+  longer seals, and a change to the role's permissions must leave
+  `plugins.write` out. **Upgrading:** a client of the plugin API calls
+  `secrets.seal` in place of the removed route, and a custom role that
+  sealed plugin secrets is given `secrets.seal` in place of `plugins.write`.
+  During a rolling upgrade, a value sealed at a node of one release does not
+  open at a node of the other, and an approval of a configure filed before
+  the upgrade fails at its retry: configure plugins once every node runs the
+  new release, and file such an approval again.
 
 ## [0.2.0] - 2026-11-07
 
@@ -3603,6 +3649,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#968]: https://github.com/qauth-labs/qauth/issues/968
 [#969]: https://github.com/qauth-labs/qauth/issues/969
 [#982]: https://github.com/qauth-labs/qauth/issues/982
+[#984]: https://github.com/qauth-labs/qauth/issues/984
 [#1009]: https://github.com/qauth-labs/qauth/issues/1009
 [#1012]: https://github.com/qauth-labs/qauth/issues/1012
 

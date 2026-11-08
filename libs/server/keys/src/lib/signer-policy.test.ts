@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { SIGNER_OPERATIONS } from './signer';
 import {
+  ADMIN_SEALED_VALUE_CONTEXT_PREFIX,
   AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
   DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,
@@ -81,6 +82,37 @@ describe('SIGNER_POLICY', () => {
       ],
       admin: ['getVerificationKeys', 'getJwks', 'getUpstreamJwks'],
     });
+  });
+
+  it('lets admin encrypt and decrypt only a value sealed for an admin operation, and no other role but local decrypt it (#984)', () => {
+    // Pinned as a string: the auth server builds its contexts from it, and the
+    // values it seals name it.
+    expect(ADMIN_SEALED_VALUE_CONTEXT_PREFIX).toBe('admin-sealed-value:');
+    expect(SIGNER_POLICY.admin.encrypt).toEqual([ADMIN_SEALED_VALUE_CONTEXT_PREFIX]);
+    expect(SIGNER_POLICY.admin.decrypt).toEqual([ADMIN_SEALED_VALUE_CONTEXT_PREFIX]);
+    const context = 'admin-sealed-value:plugins.update:/secrets/clientSecret';
+    expect(isSignerCallAllowed('admin', 'encrypt', context)).toBe(true);
+    expect(isSignerCallAllowed('admin', 'decrypt', context)).toBe(true);
+    expect(
+      SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'decrypt', context))
+    ).toEqual(['local', 'admin']);
+    // Nothing else of the role encrypts or decrypts: no stored secret, and no
+    // context without the prefix.
+    for (const other of [
+      undefined,
+      '',
+      'admin-sealed-valuex:plugins.update:/secrets/clientSecret',
+      'Admin-sealed-value:plugins.update:/secrets/clientSecret',
+      'realm_secrets:mail.smtp.password',
+      'delivery:ssf_streams.x:1',
+      'upstream-oidc:client-secret:realm-1:oidc_corp',
+      'auth-method-plugin:corp:@example/qauth-plugin-corp-sso:corp_sso:clientSecret',
+      'oid4vp-response-key:ephemeral-kid',
+      'totp-secret:realm-1:user-1',
+    ]) {
+      expect(isSignerCallAllowed('admin', 'encrypt', other), String(other)).toBe(false);
+      expect(isSignerCallAllowed('admin', 'decrypt', other), String(other)).toBe(false);
+    }
   });
 
   it('lets delivery sign webhooks and api sign client assertions, and no other role but local', () => {

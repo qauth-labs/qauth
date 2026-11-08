@@ -56,6 +56,7 @@ import {
 import { isApprovalEngineOperation } from './approvals/operations';
 import { callerAccount } from './approvals/standing';
 import { adminRealmRouteProblem } from './route-placement';
+import { secretMemberSchemaProblem } from './secrets/secret-members';
 
 /**
  * THE ADMIN API'S REQUEST PIPELINE (ADR-019 Decision 7, issue #511).
@@ -224,6 +225,20 @@ export interface RouteSchemaPart {
   safeParse(value: unknown): { success: true; data: unknown } | { success: false; error?: unknown };
 }
 
+/**
+ * What a route of a security operation binds a value sealed for it to, beside
+ * the operation, the member, the realm and the request's path parameters
+ * (#984): a string read from the parsed path parameters, such as the package
+ * and the type of the installed plugin a configure names, or `undefined` when
+ * they name nothing the operation can act on, and no value is sealed or
+ * opened for them. `secrets.seal` reads it from the parameters a value is
+ * sealed for, and the handler's open from its own request's: a value opens
+ * only when both read the same.
+ */
+export type SealScope = (
+  params: Readonly<Record<string, unknown>>
+) => string | undefined | Promise<string | undefined>;
+
 /** The route of an admin operation, as the approval routes file a request of it. */
 export interface AdminOperationRoute {
   /** Its one method, upper case. */
@@ -232,6 +247,8 @@ export interface AdminOperationRoute {
   readonly params?: RouteSchemaPart;
   readonly querystring?: RouteSchemaPart;
   readonly body?: RouteSchemaPart;
+  /** What a value sealed for the operation is bound to, beside its path parameters ({@link SealScope}). */
+  readonly sealScope?: SealScope;
 }
 
 /** What the routes behind the pipeline know of it. */
@@ -243,6 +260,16 @@ export interface AdminApiContext {
 }
 
 declare module 'fastify' {
+  interface FastifyContextConfig {
+    /**
+     * What a value sealed for the route's operation is bound to, beside the
+     * operation, the member, the realm and the path parameters
+     * ({@link SealScope}, #984). Only the route of a security operation that
+     * declares secret members sets one.
+     */
+    sealScope?: SealScope;
+  }
+
   interface FastifyInstance {
     /**
      * The admin pipeline's registry and route table (#512), inside the
@@ -1094,7 +1121,11 @@ function schemaPart(schema: Record<string, unknown>, name: (typeof FILED_PARTS)[
  *   object schema for its path parameters, which always hold the realm,
  *   naming every parameter of its URL; one for its body under every method
  *   that carries one (all but GET, HEAD and TRACE); and one for its query
- *   where it has one.
+ *   where it has one. Its body schema holds each secret member its
+ *   definition declares (`secretMembers`) to the sealed-value schema, so a
+ *   secret never reaches the request an approval binds in the clear (#984).
+ * - Only such an operation's route binds a sealed value to more than its
+ *   operation, member, realm and path parameters (`config.sealScope`).
  * - An operation is served by one route. A HEAD route, which Fastify adds
  *   beside a GET route on a listener that exposes them (the admin listener
  *   does not), is checked as any route but is never the operation's route:
@@ -1137,6 +1168,23 @@ function operationRouteProblem(
     if (!BODYLESS_METHODS.has(methods[0]) && schemaPart(schema, 'body') === undefined) {
       return `${where}: the security operation ${operation.id} has no Zod body schema, so its handler would read a body no schema parsed`;
     }
+    // An approval keeps a digest of the request that a copy of the approvals
+    // table can test a guessed body against: a secret reaches it only sealed.
+    for (const member of operation.secretMembers ?? []) {
+      const problem = secretMemberSchemaProblem(schemaPart(schema, 'body'), member);
+      if (problem !== undefined) {
+        return `${where}: the security operation ${operation.id} declares the secret member ${member}, but ${problem}; a secret member takes only a value sealed with secrets.seal (#984)`;
+      }
+    }
+  }
+  const sealScope: unknown = route.config?.sealScope;
+  if (sealScope !== undefined) {
+    if (typeof sealScope !== 'function') {
+      return `${where}: sealScope is a function of the path parameters`;
+    }
+    if (operation.class !== 'security' || (operation.secretMembers ?? []).length === 0) {
+      return `${where}: only the route of a security operation that declares secret members binds a sealed value (sealScope), and ${operation.id} declares none`;
+    }
   }
   if (methods.length === 1 && methods[0] === 'HEAD') return undefined;
   const taken = routes.get(operation.id);
@@ -1153,6 +1201,7 @@ function operationRouteProblem(
     ...part('params'),
     ...part('querystring'),
     ...part('body'),
+    ...(typeof sealScope === 'function' ? { sealScope: sealScope as SealScope } : {}),
   });
   return undefined;
 }

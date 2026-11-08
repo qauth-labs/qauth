@@ -7,6 +7,8 @@ export type * from './types';
 // context from (#600), so the app, which may not import server-keys, and the
 // signer's policy name the same one.
 export { AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX } from '@qauth-labs/server-keys';
+// The same for a value sealed for an admin operation's secret member (#984).
+export { ADMIN_SEALED_VALUE_CONTEXT_PREFIX } from '@qauth-labs/server-keys';
 // The same for an OID4VP request state's ephemeral response key (#546), and
 // the request-object typ the signer stamps, which the auth server pins equal to
 // the federation library's.

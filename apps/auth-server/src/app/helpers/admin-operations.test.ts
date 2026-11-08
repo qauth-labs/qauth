@@ -290,6 +290,87 @@ describe('defineOperation: the static rule (#508)', () => {
   });
 });
 
+describe('defineOperation: secret members (#984)', () => {
+  const securityOperation = (overrides: Partial<AdminOperationDefinition> = {}) =>
+    readOperation({
+      id: 'widgets.credentials.update',
+      class: 'security',
+      effects: ['credential-path'],
+      permissions: ['realms.policies.security'],
+      ...overrides,
+    });
+
+  it('takes the members of the body a security operation takes only sealed, frozen', () => {
+    const operation = defineOperation(
+      securityOperation({ secretMembers: ['/password', '/secrets/*', '/keys/*/private~1key'] })
+    );
+    expect(operation.secretMembers).toEqual(['/password', '/secrets/*', '/keys/*/private~1key']);
+    expect(Object.isFrozen(operation.secretMembers)).toBe(true);
+    // Leaving the member out declares none.
+    expect(defineOperation(securityOperation()).secretMembers).toBeUndefined();
+  });
+
+  it('copies the list it checked, so a later change to it changes nothing', () => {
+    const members = ['/password'];
+    const operation = defineOperation(securityOperation({ secretMembers: members }));
+    members.push('/other');
+    expect(operation.secretMembers).toEqual(['/password']);
+  });
+
+  it.each([
+    ['an empty list', []],
+    ['a list that is not a list', '/password'],
+    ['a member that is no pointer', ['password']],
+    ['the whole body', ['']],
+    ['an empty token', ['/secrets//x']],
+    ['a stray ~', ['/secrets/a~b']],
+    ['a control character', ['/pass\u0000word']],
+    ['a member that is not a string', [42]],
+  ])('refuses %s', (_label, secretMembers) => {
+    expect(() =>
+      defineOperation(
+        securityOperation({ secretMembers: secretMembers as unknown as readonly string[] })
+      )
+    ).toThrow(/secretMembers is a non-empty list of members of the body/);
+  });
+
+  it('refuses a member listed twice', () => {
+    expect(() =>
+      defineOperation(securityOperation({ secretMembers: ['/password', '/password'] }))
+    ).toThrow(/a secret member is listed twice/);
+  });
+
+  // Only an approval binds a request by a digest a guess can be tested
+  // against, and only a security operation is approved.
+  it('refuses secret members on an operation that is no security operation', () => {
+    expect(() => defineOperation(readOperation({ secretMembers: ['/password'] }))).toThrow(
+      /only a security operation declares secret members/
+    );
+    expect(() =>
+      createOperationRegistry(
+        [
+          readOperation({
+            id: 'widgets.update',
+            class: 'write',
+            permissions: ['realms.policies.write'],
+            secretMembers: ['/password'],
+          }),
+        ],
+        { reserved: NO_RESERVATIONS }
+      )
+    ).toThrow(/only a security operation declares secret members/);
+  });
+
+  it('declares the plugin configure secret under /secrets/* in the server registry', () => {
+    expect(OPERATION_REGISTRY.get('plugins.update')?.secretMembers).toEqual(['/secrets/*']);
+    expect(
+      OPERATION_REGISTRY.all
+        .filter((operation) => operation.secretMembers !== undefined)
+        .map((operation) => operation.id)
+    ).toEqual(['plugins.update']);
+  });
+});
+
 describe('createOperationRegistry (#508)', () => {
   it('looks operations up by exact id', () => {
     const operations = registry([readOperation(), readOperation({ id: 'widgets.list' })]);
