@@ -35,6 +35,7 @@ import {
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
 
+import { AccountVerificationConflictError } from '../helpers/account-verification-errors';
 import {
   DelegatedTokenRefusedError,
   InsufficientUserAuthenticationError,
@@ -242,6 +243,13 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // The approval engine (#512): a move an approval cannot make from where it
   // stands.
   { errorClass: ApprovalStateError, code: 'conflict', oauthError: 'invalid_request' },
+  // An operator's verification of an account that is disabled, or that an
+  // operator already verified (#1052).
+  {
+    errorClass: AccountVerificationConflictError,
+    code: 'conflict',
+    oauthError: 'invalid_request',
+  },
   // The Interaction API's one refusal of a request at an interaction (#592):
   // unknown, expired, finished or not bound to the browser's flow cookie.
   {

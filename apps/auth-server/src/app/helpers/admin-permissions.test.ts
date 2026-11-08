@@ -31,6 +31,7 @@ describe('the admin permission catalog (#507)', () => {
       ['plugins.write', 'write'],
       ['plugins.security', 'security'],
       ['secrets.seal', 'write'],
+      ['users.security', 'security'],
       ['approvals.read', 'read'],
       ['approvals.approve', 'security'],
     ]);
@@ -39,7 +40,12 @@ describe('the admin permission catalog (#507)', () => {
   it('gives each security permission an id no write permission has', () => {
     const security = PERMISSION_REGISTRY.ofClass('security').map((permission) => permission.id);
     const write = PERMISSION_REGISTRY.ofClass('write').map((permission) => permission.id);
-    expect(security).toEqual(['realms.policies.security', 'plugins.security', 'approvals.approve']);
+    expect(security).toEqual([
+      'realms.policies.security',
+      'plugins.security',
+      'users.security',
+      'approvals.approve',
+    ]);
     expect(security.filter((id) => write.includes(id))).toEqual([]);
   });
 

@@ -136,6 +136,10 @@ describe('what each role loads (the boot-time list)', () => {
     expect(repositoriesFor(['admin'])).toEqual([
       'users',
       'realms',
+      // An operator's verification of an account (#1052) reads its
+      // credentials and records `user.verified`.
+      'userCredentials',
+      'events',
       'adminGrants',
       'adminAuditLog',
       'adminApprovals',
