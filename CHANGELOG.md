@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would be: per changed field the value before and after, the direction,
   the class, the effects and the scopes it needs; for the patch, whether it
   needs an approval, whether a second admin is recommended or mandatory,
-  how many other admins may approve it, and the realm's current `ETag`. It
-  classifies with the update's own code, writes nothing but its audit row,
-  and shows a secret field only as `set` or `not set`. The answer's shape
+  how many other admins could give a second approval (among the grants the
+  caller's realm sees), and the realm's current `ETag`. It classifies with
+  the update's own code, refuses what the update refuses before it writes,
+  the policy rules included (the new `policyStore.check`), writes nothing
+  but its audit row, and shows a secret field only as `set` or `not set`. The answer's shape
   (`AdminChangePreview`) is the one later previews reuse. The new
   `@qauth-labs/shared-admin-settings` library holds a metadata file
   generated from the realm policy schema (path, one-sentence explanation,

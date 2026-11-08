@@ -343,8 +343,7 @@ describe('the preview of a realm policy change (#589, real containers)', () => {
       // A second admin is recommended for every security change until the
       // two-admin rule is built (#521).
       twoAdmin: 'recommended',
-      // The requester never approves its own request, and no one else holds
-      // approvals.approve on the realm.
+      // No admin but the requester holds approvals.approve on the realm.
       eligibleApprovers: 0,
       changes: [
         {
@@ -668,9 +667,22 @@ describe('the preview of a realm policy change (#589, real containers)', () => {
     expect(await count()).toBe(1);
     await adminWith(realm.id, 'security-admin');
     expect(await count()).toBe(2);
+    // A grant on every realm, which the requester's realm, the operator
+    // realm, sees (#489).
+    const globalAdmin = await app().repositories.users.create(
+      { realmId: (await operatorRealm()).id },
+      testPrimaryCredential()
+    );
+    await app().repositories.adminGrants.create({
+      userId: globalAdmin.id,
+      role: { kind: 'built-in', name: 'security-admin' },
+      targetRealmId: null,
+      createdBy: null,
+    });
+    expect(await count()).toBe(3);
   });
 
-  it('refuses what the update refuses: another media type, an unknown field, a value out of bounds', async () => {
+  it('refuses what the update refuses: another media type, an unknown field, a value out of bounds, a rule', async () => {
     const realm = await tenant('alpha');
     const editor = await adminWith(realm.id, 'editor');
     const before = await stored(realm.id);
@@ -700,6 +712,14 @@ describe('the preview of a realm policy change (#589, real containers)', () => {
         .errors.map((error) => error.pointer)
         .sort()
     ).toEqual(['/bruteForce/lockoutSeconds', '/bruteForce/windowSeconds']);
+    // A rule of the store the save would refuse it by, after its approval:
+    // SMTP without a host, port, user, sender or password.
+    const smtp = await preview(realm.id, editor.token, { mail: { provider: 'smtp' } });
+    expect(smtp.statusCode, smtp.body).toBe(422);
+    expect(smtp.json()).toMatchObject({ code: 'unprocessable_content' });
+    expect(smtp.json<{ errors: { pointer: string }[] }>().errors.map((e) => e.pointer)).toContain(
+      '/mail/smtp/host'
+    );
     expect(await stored(realm.id)).toEqual(before);
   });
 });

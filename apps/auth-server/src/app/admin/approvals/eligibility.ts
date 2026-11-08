@@ -9,20 +9,33 @@ import type { RealmRow } from '../../helpers/request-realm';
 import type { ApprovalAccount } from './standing';
 
 /**
- * WHO MAY APPROVE A REQUEST ON A REALM, COUNTED (ADR-019 Decision 7, #589).
+ * WHO COULD GIVE A SECOND APPROVAL OF A REQUEST ON A REALM, COUNTED
+ * (ADR-019 Decision 7, ADR-020 §4, #589).
  *
  * The preview of a security change (`realms.policies.preview`) says how many
- * admins could give its approval besides the requester, so the admin console
- * can warn a realm with one admin (ADR-020 §4) before anything is filed.
+ * admins besides the requester could give a second admin's approval, so the
+ * admin console can warn a realm with one admin before anything is filed.
+ * Today an approval takes the requester's own step-up alone
+ * (`approvalsRequiredFor`, `./engine.ts`): a second admin's approval is
+ * recommended, and the engine asks for none. The two-admin rule (#521),
+ * which makes one mandatory where the realm says so, lets these accounts
+ * give it.
  *
- * The count follows who may approve today (`approvalStanding`, `./standing.ts`): a
- * different human account, enabled, of an enabled realm with an issuer (the
- * approval page signs it in there), holding `approvals.approve` on the realm
- * through a live grant that covers it, read as the admin API reads a
- * caller's grants (`grantCoversRealm`). The two-admin rule (#521) narrows it
+ * The count reads who holds the right to approve as the approval standing
+ * does (`approvalStanding`, `./standing.ts`): a different human account,
+ * enabled, of an enabled realm with an issuer (the approval page signs it in
+ * there), holding `approvals.approve` on the realm through a live grant that
+ * covers it, read as the admin API reads a caller's grants
+ * (`grantCoversRealm`). When #521 narrows who may give the second approval
  * (no account created, granted a role or changed in the last 7 days, no
- * credential of the requester); it narrows it here, so the preview and the
- * approval it announces read one rule.
+ * credential of the requester), this count must take the same narrowing, so
+ * the preview and the approval it announces read one rule. It does not yet.
+ *
+ * The preview needs only `realms.read`, and must show nothing the caller's
+ * realm cannot see: the count covers the grants that realm sees (#489). A
+ * grant on the realm is seen from it, whoever holds it; a grant on every
+ * realm only from the operator realm, so it counts only for an
+ * operator-realm caller.
  *
  * Every read takes `tx`: inside an admin handler a repository call outside
  * the handler's transaction is refused (`admin/handler-scope.ts`).
@@ -37,6 +50,11 @@ export interface EligibleApproversInput {
   readonly targetRealm: Pick<RealmRow, 'id' | 'isOperator'>;
   /** The account that files the request: never counted. */
   readonly requester: ApprovalAccount;
+  /**
+   * The realm of the caller who asks: a grant on every realm is counted only
+   * when it is the operator realm, the one realm that sees such a grant (#489).
+   */
+  readonly callerRealm: Pick<RealmRow, 'isOperator'>;
   /** The admin handler's transaction. */
   readonly tx: Parameters<FastifyInstance['repositories']['adminGrants']['listLiveOnTarget']>[2];
   /** The clock, in epoch milliseconds. Defaults to `Date.now`. */
@@ -44,25 +62,29 @@ export interface EligibleApproversInput {
 }
 
 /**
- * How many accounts other than the requester may give an approval of a
- * request on `targetRealm` now: the admins a second approval could come
- * from. Zero means the requester is the only one.
+ * How many accounts other than the requester hold the right to approve a
+ * request on `targetRealm`, among the grants `callerRealm` sees: the admins
+ * a second approval could come from. Zero means the requester is the only
+ * one the caller can see.
  */
 export async function eligibleApproverCount(
   fastify: FastifyInstance,
   input: EligibleApproversInput
 ): Promise<number> {
-  const { targetRealm, requester, tx } = input;
+  const { targetRealm, requester, callerRealm, tx } = input;
   const now = input.now ?? Date.now();
 
   // The grants on the realm, its own admins' and the operator realm's (#489),
-  // and the operator realm's grants on every realm, which it alone sees.
+  // and, for an operator-realm caller, the operator realm's grants on every
+  // realm, which it alone sees.
   const grants = await fastify.repositories.adminGrants.listLiveOnTarget(
     targetRealm.id,
     targetRealm.id,
     tx
   );
-  const operator = await fastify.repositories.realms.findOperator(tx);
+  const operator = callerRealm.isOperator
+    ? await fastify.repositories.realms.findOperator(tx)
+    : undefined;
   if (operator !== undefined) {
     grants.push(
       ...(await fastify.repositories.adminGrants.listLiveOnTarget(operator.id, null, tx))

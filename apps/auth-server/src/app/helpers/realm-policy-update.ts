@@ -69,3 +69,33 @@ export async function updateRealmPolicies(
     throw error;
   }
 }
+
+/**
+ * Whether {@link updateRealmPolicies} would take `patch` now, writing nothing
+ * (`policyStore.check`): the admin API's policy preview (#589) refuses with
+ * it what the save would, with the same {@link UnprocessableContentError}.
+ * A secret member is judged by whether it sets or clears its secret, its
+ * value unread, and the database's own refusals as it writes (a sandbox
+ * realm's ceiling) are the update's alone.
+ *
+ * @throws UnprocessableContentError when the update would refuse the patch
+ *   or the document it gives, by its schema or a rule
+ */
+export async function checkRealmPolicies(
+  fastify: Pick<FastifyInstance, 'policyStore'>,
+  realmId: string,
+  patch: unknown,
+  options: Parameters<FastifyInstance['policyStore']['check']>[2]
+): Promise<void> {
+  try {
+    await fastify.policyStore.check(realmId, patch, options);
+  } catch (error) {
+    if (error instanceof PolicyValidationError) {
+      throw new UnprocessableContentError(
+        error.issues.map(unprocessablePolicyField),
+        REALM_POLICIES_REFUSED_MESSAGE
+      );
+    }
+    throw error;
+  }
+}

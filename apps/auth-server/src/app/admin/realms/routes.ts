@@ -31,6 +31,7 @@ import {
 } from '../../helpers/admin-operations';
 import { UnprocessableContentError } from '../../helpers/api-request-errors';
 import {
+  checkRealmPolicies,
   REALM_POLICIES_REFUSED_MESSAGE,
   unprocessablePolicyField,
   updateRealmPolicies,
@@ -82,13 +83,16 @@ import { previewPolicyPatch } from './preview';
  * transaction, the policy store hands it to the realm's secret store, and no
  * response, log or audit record ever holds it.
  *
- * The preview takes the same body, refused the same way (400, 415, 422), and
+ * The preview takes the same body, refused as the patch is before the store
+ * writes (400, 415, 422, 503; `policyStore.check` runs the store's rules), and
  * answers what the patch would change and need (`AdminChangePreview`,
  * `../change-preview.ts`), with the realm's `ETag` in its body. It needs
  * only `realms.read`, as reading the realm does: it shows nothing a read of
- * the realm does not, but which admins could approve the change, as a count.
- * It never opens a sealed value, writes nothing, and its audit row, as every
- * admin call's, records the read and no change.
+ * the realm does not, but how many admins could give a second approval,
+ * counted among the grants the caller's realm sees (#489). It never opens a
+ * sealed value, so one that does not open, like the sandbox ceiling the
+ * database checks, is refused by the patch alone. It writes nothing, and
+ * its audit row, as every admin call's, records the read and no change.
  */
 
 /** The path of a realm, as the admin listener routes it. */
@@ -473,8 +477,8 @@ export const realmRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: "Preview a change of a realm's policies",
         description:
-          'Takes the JSON Merge Patch realms.policies.update takes and answers what it would change and need, without saving it: each changed field before and after, tightening, loosening or neutral, its class, effects, permissions and scopes; for the whole patch, its class and scopes, whether it needs an approval, whether a second admin is recommended or mandatory, how many other admins could approve it, and the realm’s current ETag, which the save names in If-Match. It is judged by the same diff and classification as the save, and refused the same way (400, 415, 422). It writes nothing, needs only realms.read, never opens a sealed value, and shows a secret field only as set or not set.',
-        'x-qauth-errors': [400, 401, 403, 404, 415, 422],
+          'Takes the JSON Merge Patch realms.policies.update takes and answers what it would change and need, without saving it: each changed field before and after, tightening, loosening or neutral, its class, effects, permissions and scopes; for the whole patch, its class and scopes, whether it needs an approval, whether a second admin is recommended or mandatory, how many other admins could approve it, and the realm’s current ETag, which the save names in If-Match. It is judged by the same diff and classification as the save, and refused as the save is before it writes (400, 415, 422, and 503 while a later release’s policies are stored), the policy rules included; a sealed value is taken as setting its secret, unopened, so a value that does not open, and the sandbox ceiling the database checks, are refused by the save alone. It writes nothing, needs only realms.read, and shows a secret field only as set or not set. eligibleApprovers counts the other admins a second admin’s approval could come from, among the grants the caller’s realm sees.',
+        'x-qauth-errors': [400, 401, 403, 404, 415, 422, 503],
         consumes: [MERGE_PATCH_MEDIA_TYPE],
         params: realmParams,
         body: patchBody,
@@ -487,6 +491,13 @@ export const realmRoutes: FastifyPluginAsync = async (fastify) => {
       const tx = adminTransaction(request);
       const state = await readPolicyState(request, realmId, tx);
       checkPolicyPatch(request, request.body, state);
+      // What the save refuses before it writes, its rules included (the mail
+      // transport's, for one), against the same policies.
+      try {
+        await checkRealmPolicies(request.server, realmId, request.body, { tx });
+      } catch (error) {
+        throw storeRefusal(error, realmId);
+      }
       const { registry } = request.server.adminApi;
       const preview = previewPolicyPatch(registry, realmId, request.body, state);
       const approval =
@@ -496,6 +507,7 @@ export const realmRoutes: FastifyPluginAsync = async (fastify) => {
               eligibleApprovers: await eligibleApproverCount(request.server, {
                 targetRealm: caller.targetRealm,
                 requester: callerAccount(caller),
+                callerRealm: caller.issuerRealm,
                 tx,
               }),
             }

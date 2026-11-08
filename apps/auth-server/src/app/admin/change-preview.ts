@@ -108,7 +108,7 @@ export const changePreviewSchema = z
     }),
     eligibleApprovers: z.int().min(0).nullable().meta({
       description:
-        'How many admins other than the caller may approve the save now; 0 when no second admin can; null when it needs no approval.',
+        'How many admins other than the caller hold the right to approve the save on the realm: those a second admin’s approval could come from, among the grants the caller’s realm sees (a grant on every realm only from the operator realm). 0 when the caller is the only one; null when the save needs no approval. Today an approval takes the caller’s own step-up alone, and a second admin’s is recommended.',
     }),
     changes: z.array(changePreviewEntrySchema).meta({
       description: 'Every field the save changes, in the order of the schema; empty when none.',

@@ -109,10 +109,16 @@ const REALMS: RealmFixture[] = [
 
 const requester = { realmId: OPERATOR, accountId: 'requester', kind: 'human' as const };
 
-const count = (fastify: FastifyInstance, target = TENANT, isOperator = false) =>
+const count = (
+  fastify: FastifyInstance,
+  target = TENANT,
+  isOperator = false,
+  callerRealm = { isOperator: true }
+) =>
   eligibleApproverCount(fastify, {
     targetRealm: { id: target, isOperator },
     requester,
+    callerRealm,
     tx: TX as never,
     now: NOW,
   });
@@ -193,6 +199,22 @@ describe('eligibleApproverCount (#589)', () => {
       { userId: 'global-admin', accountRealmId: OPERATOR, target: null },
     ]);
     expect(await count(fastify, OPERATOR, true)).toBe(2);
+  });
+
+  // A realm-local caller sees no grant on every realm (#489), so the count
+  // it is shown leaves them out.
+  it('counts no grant on every realm for a caller of another realm than the operator realm', async () => {
+    const { fastify, listLiveOnTarget } = serverWith(REALMS, [
+      { userId: 'local-admin', accountRealmId: TENANT, target: TENANT },
+      { userId: 'operator-on-tenant', accountRealmId: OPERATOR, target: TENANT },
+      { userId: 'global-admin', accountRealmId: OPERATOR, target: null },
+    ]);
+    expect(await count(fastify, TENANT, false, { isOperator: false })).toBe(2);
+    expect(listLiveOnTarget.mock.calls.map(([realmId, target]) => [realmId, target])).toEqual([
+      [TENANT, TENANT],
+    ]);
+    expect(fastify.repositories.realms.findOperator).not.toHaveBeenCalled();
+    expect(await count(fastify)).toBe(3);
   });
 
   it('reads the grants on the realm alone where no operator realm exists', async () => {
