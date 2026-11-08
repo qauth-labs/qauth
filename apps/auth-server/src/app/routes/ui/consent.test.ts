@@ -114,6 +114,10 @@ function createReply() {
       state.headers[k] = v;
       return reply;
     },
+    getHeader(k: string) {
+      const name = Object.keys(state.headers).find((key) => key.toLowerCase() === k.toLowerCase());
+      return name === undefined ? undefined : state.headers[name];
+    },
     redirect(url: string, code: number) {
       state.redirected = url;
       state.statusCode = code;
@@ -277,6 +281,24 @@ describe('UI /ui/consent GET — rendering', () => {
     );
 
     expect(state.redirected).toContain('/ui/login?return_to=');
+  });
+
+  it("allows the client's redirect_uri in form-action, which the consent answer redirects to (Chromium and WebKit check it)", async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await signIn(sessions, { sid: 'sid-fa' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    state.headers['content-security-policy'] = "default-src 'self'; form-action 'self'";
+    await ctx.get!(
+      { query: BASE_QUERY, url: '/ui/consent?...', headers: { cookie }, ip: '127.0.0.1' },
+      reply
+    );
+
+    expect(state.headers['Content-Security-Policy']).toBe(
+      `default-src 'self'; form-action 'self' ${new URL(BASE_QUERY.redirect_uri).origin}`
+    );
   });
 
   it('renders consent HTML with CSRF token hidden input when session is valid', async () => {

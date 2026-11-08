@@ -43,7 +43,8 @@ summary: >-
   for the password. Until a factor succeeds, every answer is the same for every account: an unknown identifier, a
   password-only, passkey-only, disabled or locked account all get the password step again with invalid_credentials,
   after one Argon2id verification and the 500 ms floor. A correct password fixes the subject; an account whose
-  address is not proved yet then verifies it with an emailed code, whatever REQUIRE_VERIFIED_ACCOUNT says; the sign-in
+  address is not proved yet then verifies it with an emailed code under the realm's gate, where a code can arrive (with
+  the gate off it signs in unverified; under it, where no code can arrive, it is refused); the sign-in
   completes when the account's strongest bound factor and the MFA policy are met, and the transport then mints the
   session or the code. A right password on the realm's breach list, or an update the account owes, first asks for a
   new password, after a mailed code when the password is the account's only factor. A different identifier in a later
@@ -556,7 +557,7 @@ states:
       With no usable password (no account, a passkey-only account, a disabled password) the answer is verified
       against a dummy hash, so every outcome costs one verification. Every refusal is the same: the password step
       again with invalid_credentials. A disabled user is refused after its password checked out, and nothing about it
-      changes. An unverified account's right password proves it, whatever REQUIRE_VERIFIED_ACCOUNT says: rule 8
+      changes. An unverified account's right password proves it under the realm's gate, where a code can arrive: rule 8
       verifies its address. A right password is then checked against the realm's breach list, when it names one.
     always:
       - guard: noUsablePassword

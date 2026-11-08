@@ -86,6 +86,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policies may make, as this bound asks; set the value you want, up to
   86400, with `realms.policies.update`. Set the two environment keys to 86400
   or less before you start this release.
+- **A sign-in never waits on a mailed code that cannot arrive, and binding a
+  factor never asks for one** ([#1051], ADR-017 Decision 8 amended
+  2026-11-08). The account decides, never a channel.
+  - The first passkey or TOTP of a verified password-only account binds
+    after the fresh sign-in the binding needs, with no mailed code. Until
+    now a code to the account's address came first, so a deployment with no
+    mail transport could bind neither. An unclaimed account (its identifier
+    never verified) binds none, as before.
+  - The realm's `accounts.requireVerifiedAccount` decides again whether an
+    unverified account may finish a sign-in. With it off, the account signs
+    in with no code. With it on, the code is mailed only where the realm can
+    send mail. Where it cannot (no transport, or `mock` in production), the
+    correct password is refused as a wrong one, as an engine without codes
+    refuses it.
+  - A password reset is not offered, and a forced password update of a
+    password-only account is not available, where no code can arrive.
+  - **Upgrading:** a deployment with the gate off no longer verifies an
+    unverified account's address at sign-in. The case the binding's mailed
+    code guarded, someone who knows only the password binding a factor of
+    their own, is closed through the account's own channels in [#1064].
 
 - **`INTERACTION_UI_ENABLED` needs `CEREMONY_APP_DEPLOYED`.** The switch
   sends every browser sign-in to the ceremony page `/ui/interaction/{id}`,
@@ -99,6 +119,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on serving its own `/ui` pages (account, passkey, TOTP, recovery codes). **Upgrading:** a deployment with `INTERACTION_UI_ENABLED`
   on and no ceremony app turns it off; one with a ceremony app sets
   `CEREMONY_APP_DEPLOYED=true`.
+
+### Fixed
+
+- **A sign-in that finishes on a QAuth page returns to the client in
+  Chromium and WebKit.** The server-rendered sign-in, consent, passkey, TOTP,
+  recovery-code and upstream-link pages carried `form-action 'self'`, and a
+  form answer that finishes the authorization redirects the browser to the
+  client's `redirect_uri`. Chromium and WebKit check `form-action` on the
+  redirects after a form post, so the browser stayed on QAuth's page instead
+  of returning to the app (Firefox does not check them). With the hosted
+  pages on, every client sign-in of an account that holds a passkey ended
+  there. Each of these pages now allows the one client the checked
+  authorization request names: its `redirect_uri`'s origin, or a native app's
+  scheme. The Interaction API's step read carries the same source as
+  `formAction`, so a ceremony app's page can allow it too.
 
 ## [0.2.1] - 2026-11-08
 
@@ -3788,6 +3823,8 @@ It adds migrations 0068 and 0069.
 [#1009]: https://github.com/qauth-labs/qauth/issues/1009
 [#1012]: https://github.com/qauth-labs/qauth/issues/1012
 [#1031]: https://github.com/qauth-labs/qauth/issues/1031
+[#1051]: https://github.com/qauth-labs/qauth/issues/1051
+[#1064]: https://github.com/qauth-labs/qauth/issues/1064
 
 ### Deprecated
 

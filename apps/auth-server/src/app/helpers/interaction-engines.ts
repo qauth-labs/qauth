@@ -157,9 +157,11 @@ function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailC
  * account run of failures counts across every front door.
  *
  * Both engines verify an unverified account inline after its password, with
- * an emailed code (#638, ADR-017 Decision 8): `REQUIRE_VERIFIED_ACCOUNT` no
- * longer decides the Interaction API's answer, and an unverified account
- * never completes a sign-in here without its code.
+ * an emailed code, under the realm's gate (#638, ADR-017 Decision 8 amended
+ * 2026-11-08), and only where a code can arrive (#1051): where none can, the
+ * gate refuses the account like a wrong password; with the gate off, it
+ * signs in unverified. Binding a first passkey or TOTP needs a verified
+ * account, never a mailed code.
  *
  * Both meet the round limits (#636, ADR-017 Decision 7) before the ladder:
  * every round from an end-user IP inside its hard block is refused, and each
@@ -213,6 +215,12 @@ export function createInteractionEngines(
   // Interaction API's client is not authenticated, so no client row.
   const limits = createServerRoundLimiter(fastify, { perClient: false });
   const emailCodes = {
+    // Whether a code can reach anyone in the realm (#1051): its mail
+    // transport sends. A mock sends nothing in production, as the
+    // password-disabled notice counts it (engine-mail.ts); elsewhere a test
+    // reads its codes off the mock.
+    deliverable: (realmId: string) =>
+      fastify.emailService.canSend(realmId, { mockSends: env.NODE_ENV !== 'production' }),
     digest: createServerEmailCodeDigest(fastify),
     addresses: createRepositoryAddressVerifier(
       {

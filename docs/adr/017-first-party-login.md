@@ -191,6 +191,15 @@
 > - An unclaimed account still binds no passkey and no TOTP. A key would prove who holds the
 >   account, not that its address is theirs, so it is no way to verify one (ADR-015 question 13,
 >   weighed again and kept). An operator's verification claims an unclaimed account.
+> - The first passkey or TOTP of a verified password-only account binds after the fresh
+>   authentication the binding needs, with no mailed code: the account decides, never a channel
+>   (the maintainer's word that day). The mailed code had guarded one case: someone who knows only
+>   the password binds a factor of their own, after which the owner's reset cannot pass it. That
+>   case is to be closed through the account's own channels, not a mailbox: a notice of the
+>   binding over QAuth's Shared Signals transmitter (a CAEP `credential-change` to the user's own
+>   receiver and to the connected apps) and on the account's other sessions, and a window in which
+>   a factor bound after a password-only sign-in can be removed with the password and does not
+>   block a reset (#1064).
 
 ## Context
 
@@ -1216,10 +1225,10 @@ Second factors and recovery codes (F2b, F2c):
   Decision 7's second-factor row throttles it.
 - Binding, removing or replacing an authenticator, and regenerating recovery codes, need a fresh
   authentication at most 5 minutes old that includes the account's strongest bound factor. Only a
-  rebind after a lost factor lets a recovery code stand in for that factor. Binding the first
-  passkey or TOTP of a password-only account also needs a code mailed to its address in the same
-  transaction, unless the transaction already proved that mailbox; the code adds no `amr`. Each
-  change sends the notice ADR-020 requires.
+  rebind after a lost factor lets a recovery code stand in for that factor. The first passkey or
+  TOTP of a password-only account binds only to a verified account: the account decides, never a
+  channel (amended 2026-11-08; until then a code mailed to its address was asked in the same
+  transaction). An unclaimed account binds none. Each change sends the notice ADR-020 requires.
 - A lost second factor is recovered only with a recovery code or through an admin (ADR-020), never
   by email alone. A reset never removes, skips or replaces a second factor.
 

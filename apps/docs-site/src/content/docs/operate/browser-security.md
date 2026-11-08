@@ -109,7 +109,12 @@ cookie, so CSRF does not apply.
   `style-src 'self'` and `font-src 'self'` allow without a nonce. A fresh
   per-request nonce authorises the inline `<style>` a page adds for rules of its
   own, such as the login and consent pages; there is **no** `'unsafe-inline'` for
-  scripts, so an injected `<script>` is refused by the browser.
+  scripts, so an injected `<script>` is refused by the browser. A page whose
+  form's answer redirects the browser to a client adds exactly that client to
+  `form-action`: the origin of its `redirect_uri`, or a native app's scheme.
+  Chromium and WebKit apply `form-action` to the redirects after a form post,
+  so the sign-in, consent, passkey, TOTP and recovery-code pages allow the
+  client the authorization request named, once the request is checked.
 - **Strict-Transport-Security**: `max-age=31536000; includeSubDomains; preload`
   (one year, preload-eligible). Gated by `SECURITY_HSTS_ENABLED` /
   `SECURITY_HSTS_MAX_AGE`; keep enabled in production behind TLS.

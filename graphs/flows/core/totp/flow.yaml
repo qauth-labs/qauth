@@ -36,9 +36,9 @@ summary: >-
   day, and at 100 in a row the TOTP is disabled while the account keeps a way back. Under an MFA policy, an account
   with no second factor (or one that took a recovery code for its lost one) gets the set-up step on the hosted pages
   after a password, and so, whatever the policy, does one whose disabled TOTP a recovery code stood in for:
-  a new secret, bound only after a first valid code, within 5 minutes of the factor the transaction proved, and, for
-  the first second factor of a password-only account, after a code mailed to its address. Then the first set of
-  recovery codes is shown.
+  a new secret, bound only after a first valid code, within 5 minutes of the factor the transaction proved, to a
+  verified account and with no emailed code (the account decides, never a channel). Then the first set of recovery
+  codes is shown.
 
 scope:
   shows: >-
@@ -54,8 +54,7 @@ scope:
     - 'a recovery code in place of the TOTP, drawn by flows/core/recovery-code: offered beside totp on the hosted
       pages, and alone when the TOTP is disabled; and the set shown once after the first enrolment'
     - 'the rounds of an emailed code, drawn by flows/core/account-verification: the inline verification of an address
-      not proved yet, before any second factor, and the mailbox proof before a binding, with the purpose recovery and
-      8 digits'
+      not proved yet, before any second factor'
     - 'removing or replacing a TOTP from the account page, and an admin deleting it (#687, ADR-020): the same fresh
       authentication of at most 5 minutes, drawn with those pages'
     - "the limiters' credential round (#636): reserved before the ladder, it refuses a round inside a delay or past a
@@ -130,14 +129,6 @@ context:
   addressProved:
     values: [false, true]
     initial: any
-  # Whether the account holds no factor beyond the password: its first second factor needs its mailbox.
-  passwordOnly:
-    values: [false, true]
-    initial: any
-  # A code mailed to the account's address was answered right in this transaction, for any purpose.
-  mailboxProved:
-    values: [false, true]
-    initial: any
   # How long ago the transaction's last factor was proved, when a set-up is offered or bound.
   authAge:
     values: [fresh, stale]
@@ -194,7 +185,6 @@ guards:
   unclaimed: 'not addressProved'
   stale: "authAge == 'stale'"
   validSetupCode: "setupCode == 'valid'"
-  mailboxOwed: 'passwordOnly and not mailboxProved'
   disabled: 'totpDisabled'
 
 effects:
@@ -213,8 +203,7 @@ effects:
   disableTotp: { set: { totpDisabled: true, disabledNow: true } }
   sealSecret: { set: { secretSealed: true } }
   confirmSetup: { set: { setupConfirmed: true } }
-  proveAddress: { set: { addressProved: true, mailboxProved: true } }
-  proveMailbox: { set: { mailboxProved: true } }
+  proveAddress: { set: { addressProved: true } }
   # the binding's first code is the bound TOTP's proof: totp joins the verified steps, and the amr carries otp and mfa
   bindSecret: { set: { secretBound: true, bindingNoticed: true, totpProved: true } }
   audit: { set: { audited: true } }
@@ -236,12 +225,6 @@ failures:
   startingSetup: { from: totpCredentials, store: [unavailable] }
   reservingSetupCode: { from: limiters, store: [unavailable] }
   checkingSetupCode: { from: totpCredentials, store: [unavailable] }
-  provingMailbox:
-    from: core.account-verification
-    throttled: [sendCapped, lockedOut]
-    ended: [burned, ended]
-    invalid: [answerRefused]
-    store: [unavailable]
   bindingSecret:
     from: userCredentials
     ended: [account_disabled, subject_mismatch, account_unclaimed]
@@ -262,8 +245,6 @@ main:
     ceiling: below
     armed: true
     addressProved: true
-    passwordOnly: false
-    mailboxProved: false
     authAge: fresh
     setupCode: valid
   events: [CODE, DONE, DONE]
@@ -480,47 +461,15 @@ states:
   checkingBinding:
     title: Ask what the binding still needs
     description: >-
-      Binding the first second factor of a password-only account needs a code mailed to its address in the same
-      transaction, unless the transaction proved that mailbox already, and a factor proved at most 5 minutes ago
-      (ADR-017 Decision 8).
+      Binding a TOTP needs a factor proved at most 5 minutes ago, and a claimed account, which the set-up step already
+      required; never an emailed code (ADR-017 Decision 8, amended 2026-11-08: the account decides, never a channel).
     always:
-      - guard: mailboxOwed
-        target: provingMailbox
-        say: 'the mailbox is not proved in this transaction: a code is mailed'
       - guard: stale
         target: ended
         effect: [audit, waitFloor]
         say: 'the last factor is more than 5 minutes old: nothing is bound, and the transaction ends'
       - target: bindingSecret
         say: 'the binding may go ahead'
-
-  provingMailbox:
-    title: Prove the account's mailbox with an emailed code
-    description: >-
-      The code rounds of flows/core/account-verification, with the purpose recovery and 8 digits. A right code proves
-      the mailbox and adds no amr value.
-    invoke: { flow: core.account-verification }
-    on:
-      DONE:
-        target: checkingBinding
-        effect: [proveMailbox, timePasses]
-        say: 'the code is right: the mailbox is proved'
-      FAIL.throttled:
-        target: throttled
-        effect: [audit, waitFloor]
-        say: "the send caps or the email-code ladder's wait refuse the round"
-      FAIL.ended:
-        target: ended
-        effect: [waitFloor]
-        say: 'the fifth wrong code burned the code, or the account changed: the transaction ends'
-      FAIL.invalid:
-        target: answerRefused
-        effect: [audit, waitFloor]
-        say: 'the code is not of the offered length'
-      FAIL.store:
-        target: unavailable
-        effect: [waitFloor]
-        say: 'the send caps, the ladder or the database fail'
 
   bindingSecret:
     title: Bind the secret to the account
@@ -782,9 +731,9 @@ assertions:
   - id: an-unclaimed-account-never-enrols
     never: 'secretBound and not addressProved'
     say: 'An unclaimed account cannot bind a TOTP'
-  - id: a-mailbox-before-the-first-second-factor
-    never: 'secretBound and passwordOnly and not mailboxProved'
-    say: 'The first second factor of a password-only account is bound only after a code mailed to its address'
+  - id: a-verified-account-before-a-binding
+    never: 'secretBound and not addressProved'
+    say: 'A TOTP is bound only to a claimed account, with no emailed code: the account decides, never a channel'
   - id: a-fresh-factor-before-a-binding
     never: "secretBound and authAge == 'stale'"
     say: 'A TOTP is bound only within 5 minutes of the factor the transaction proved'
