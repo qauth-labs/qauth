@@ -219,7 +219,9 @@ start_server() {
   # only verified accounts, and the mock provider delivers no verification mail.
   # Mailpit is a plaintext relay on the private Docker network, which a release
   # from 0.2 reaches only with SMTP_ALLOW_PLAINTEXT and SMTP_ALLOWED_HOSTS; an
-  # earlier release ignores both keys.
+  # earlier release ignores both keys. Sign-up is open (ALLOW_SIGN_UP): the
+  # scenario makes its accounts through POST /auth/register, which a realm's
+  # closed sign-up refuses from 0.2.1; an earlier release ignores the key.
   run docker run -d --name "$container" --network "$NETWORK" -p "127.0.0.1:$HTTP_PORT:3000" \
     -e NODE_ENV=production -e HOST=0.0.0.0 -e PORT=3000 -e LOG_LEVEL=info \
     -e DATABASE_URL="$NETWORK_DATABASE_URL" \
@@ -229,7 +231,7 @@ start_server() {
     -e EMAIL_PROVIDER=smtp -e SMTP_HOST=mail -e SMTP_PORT=1025 -e SMTP_SECURE=false \
     -e SMTP_USER=upgrade-test -e SMTP_PASSWORD=upgrade-test \
     -e SMTP_ALLOW_PLAINTEXT=true -e SMTP_ALLOWED_HOSTS=mail \
-    -e EMAIL_FROM_ADDRESS=noreply@qauth.dev -e EMAIL_BASE_URL="$BASE_URL" \
+    -e EMAIL_FROM_ADDRESS=noreply@qauth.dev -e EMAIL_BASE_URL="$BASE_URL" -e ALLOW_SIGN_UP=true \
     -e RATE_LIMIT_MAX=10000 -e REGISTRATION_RATE_LIMIT=100 -e LOGIN_RATE_LIMIT=100 \
     -e TOKEN_RATE_LIMIT=1000 -e AUTHORIZE_RATE_LIMIT=1000 -e INTROSPECT_RATE_LIMIT=1000 \
     -e USERINFO_RATE_LIMIT=1000 -e VERIFICATION_RATE_LIMIT=100 -e REGISTER_CLIENT_RATE_LIMIT=100 \

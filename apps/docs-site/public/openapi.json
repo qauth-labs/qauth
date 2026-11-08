@@ -2140,7 +2140,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Register a password account. Answers every address with the same 202 and message, whether it was free or already registered; the next step arrives by email (a verification link for a new account, a notice for an existing one). The password must meet the realm's password policy: at least `password.minLength` characters (15 by default) after NFC normalisation, at most 256 UTF-16 code units, not a common word or password or the address, service or realm name as a whole, and a zxcvbn score of at least `password.minScore`. A password over 256 UTF-16 code units is refused by the request schema with a 400 `validation_error`, before the policy runs. A refusal by the policy is a 422 `weak_password` whose `reasons` say why (`too_short`, `blocklisted`, `too_weak`).",
+        "description": "Register a password account. Answers every address with the same 202 and message, whether it was free or already registered; the next step arrives by email (a verification link for a new account, a notice for an existing one). The password must meet the realm's password policy: at least `password.minLength` characters (15 by default) after NFC normalisation, at most 256 UTF-16 code units, not a common word or password or the address, service or realm name as a whole, and a zxcvbn score of at least `password.minScore`. A password over 256 UTF-16 code units is refused by the request schema with a 400 `validation_error`, before the policy runs. A refusal by the policy is a 422 `weak_password` whose `reasons` say why (`too_short`, `blocklisted`, `too_weak`). While the realm's `accounts.allowSignUp` is off (the default), every request is refused with a 403 `forbidden`, before the password or the address is checked.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2195,6 +2195,16 @@
           },
           "400": {
             "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/problem+json": {
                 "schema": {

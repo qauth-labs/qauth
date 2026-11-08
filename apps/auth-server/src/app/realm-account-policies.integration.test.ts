@@ -255,8 +255,10 @@ describe('account policies read from the realm row (#528, real containers)', () 
 
     for (const realmId of [defaultId, betaId]) {
       const { policies } = (await app.policyStore.get(realmId)) ?? {};
-      // Sign-up is off by default (ADR-017; the upstream sign-in flow, #639).
-      expect(policies?.accounts).toEqual({ requireVerifiedAccount: true, allowSignUp: false });
+      // Sign-up is off by default (ADR-017; the upstream sign-in flow, #639);
+      // the E2E harness seeds it open (`ALLOW_SIGN_UP=true`), because the
+      // suites make their accounts through `POST /auth/register`.
+      expect(policies?.accounts).toEqual({ requireVerifiedAccount: true, allowSignUp: true });
       expect(policies?.password).toEqual({ minLength: 15, minScore: 2, breachListSource: 'off' });
       expect(policies?.bruteForce).toEqual({
         enabled: true,
