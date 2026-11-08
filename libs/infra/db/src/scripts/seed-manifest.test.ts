@@ -515,7 +515,6 @@ describe('isCimdClientIdShape', () => {
         manifestSchema.safeParse(receiverClient({ client_credentials_scopes: value })).success
       ).toBe(false);
     });
-
   });
 
   // #956: a CIMD client's document may add `client_credentials`, so the
