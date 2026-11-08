@@ -277,7 +277,9 @@ describe('users.verify and the host command (#1052, real containers)', () => {
     const email = 'verify-approved@example.com';
     const userId = await unconfirmedAccount(email);
     const realm = await defaultRealm();
-    const requester = await adminWith('security-admin', 'qauth:admin:security');
+    // Security to file and run the verification, read to see the approval;
+    // never qauth:admin:write.
+    const requester = await adminWith('security-admin', 'qauth:admin:read qauth:admin:security');
 
     // Before: the gate refuses it as a wrong password, and it owns nothing.
     expect((await signIn(email)).statusCode).toBe(401);
