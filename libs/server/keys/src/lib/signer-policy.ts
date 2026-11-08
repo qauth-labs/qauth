@@ -124,6 +124,18 @@ export const OID4VP_RESPONSE_KEY_CONTEXT_PREFIX = 'oid4vp-response-key:';
  * builds its contexts from this constant (`totpSecretContext`).
  */
 export const TOTP_SECRET_CONTEXT_PREFIX = 'totp-secret:';
+
+/**
+ * The `context` prefix of a value sealed for one secret member of one admin
+ * operation (`admin-sealed-value:<operation id>:<member>`, #984): a secret a
+ * security operation's request carries, encrypted with the realm's
+ * `data_at_rest` key before the request is filed, so the approval that binds
+ * the request never holds it in the clear. The `admin` role seals such a value
+ * (`secrets.seal`) and opens it in the handler of the operation it was sealed
+ * for, and encrypts and decrypts nothing else. The auth server builds its
+ * contexts from this constant (`sealedValueContext`).
+ */
+export const ADMIN_SEALED_VALUE_CONTEXT_PREFIX = 'admin-sealed-value:';
 const NOTHING_ELSE = {
   signJws: [],
   signHybrid: false,
@@ -172,8 +184,12 @@ const NOTHING_ELSE = {
  *   with {@link DELIVERY_SECRET_CONTEXT_PREFIX}: a destination's secret, such
  *   as an SSF receiver's `Authorization` header that the api role stored
  *   encrypted and that each push sends (#410).
- * - `admin` reads public keys. The key operations of the admin API (rotation
- *   and retirement, #544 and #551) add their own grants.
+ * - `admin` reads public keys, and encrypts and decrypts only a value sealed
+ *   for an admin operation's secret member
+ *   ({@link ADMIN_SEALED_VALUE_CONTEXT_PREFIX}, #984): it seals one for a
+ *   caller, and opens it in the handler of the operation it was sealed for. The
+ *   key operations of the admin API (rotation and retirement, #544 and #551)
+ *   add their own grants.
  * - Every role may read the realm's public keys, which hold no secret.
  *
  * A role that is not in this table may call nothing.
@@ -219,7 +235,12 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     decrypt: [DELIVERY_SECRET_CONTEXT_PREFIX],
     ...PUBLIC_READS,
   },
-  admin: { ...NOTHING_ELSE, ...PUBLIC_READS },
+  admin: {
+    ...NOTHING_ELSE,
+    encrypt: [ADMIN_SEALED_VALUE_CONTEXT_PREFIX],
+    decrypt: [ADMIN_SEALED_VALUE_CONTEXT_PREFIX],
+    ...PUBLIC_READS,
+  },
 });
 
 function freezePolicy(
