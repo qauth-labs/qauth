@@ -332,10 +332,11 @@ approver never saw. Each may carry `If-Match` too.
 **Secrets.** A plugin's secret members follow the rule of every security operation: the operation
 takes a secret only sealed ([API conventions](/reference/api-conventions/#approvals)). A secret's
 value reaches the server in one request only: `secrets.seal`
-(`POST /admin/v1-rc.0/realms/{realmId}/secrets/seal`), for the operation `plugins.update` and the
-member `/secrets/<path>`, which encrypts it with the realm's `data_at_rest` key, bound to that
-operation, member and realm, and answers the ciphertext. It changes nothing, so it is a write
-under `secrets.seal`. A configure request then sends the plain members
+(`POST /admin/v1-rc.0/realms/{realmId}/secrets/seal`), for the operation `plugins.update`, the
+member `/secrets/<path>` (the path written as a JSON Pointer token: `~` as `~0`, `/` as `~1`) and
+the params `{ "plugin": "<id>" }`, which encrypts it with the realm's `data_at_rest` key, bound to
+that operation, member, plugin, the package and type installed under it, and the realm, and
+answers the ciphertext. It changes nothing, so it is a write under `secrets.seal`. A configure request then sends the plain members
 under `config` and names each secret member under `secrets`, by path: `{ sealed }` sets one to the
 sealed value, `null` clears it, and one it does not name keeps its value, unless the configure
 sends the plugin somewhere new: a configure that keeps a stored secret while a member whose value
@@ -343,8 +344,10 @@ is an http(s) URL is added or changes origin is refused with `400`, naming the s
 again, so a kept secret never follows a destination it was not set for (as the upstream OpenID
 Connect client refuses a changed issuer or token endpoint). So the request an
 approval stores until it is used, and the digest it is bound by, hold a ciphertext, never the
-value. The handler opens each sealed value for `plugins.update`, its member and this realm (a
-value sealed for another operation, member or realm is refused with `400`), and stores it sealed
+value. The handler opens each sealed value for `plugins.update`, its member, the plugin of the path with
+the package and type installed under it, and this realm (a value sealed for another operation,
+member, plugin, package, type or realm is refused with `400`, so a secret sealed while one package
+was installed is never handed to another), and stores it sealed
 again under the plugin's own context, bound to the plugin, its package and type, and the member:
 what the approval bound is never what is stored. The whole config, secrets included, must pass the
 plugin's own schema; a plugin is
@@ -356,7 +359,8 @@ plugin from the plain config an older version stored, and leaves it at the next 
 
 ```http
 POST /admin/v1-rc.0/realms/{realmId}/secrets/seal
-{ "operation": "plugins.update", "member": "/secrets/clientSecret", "value": "…" }
+{ "operation": "plugins.update", "member": "/secrets/clientSecret",
+  "params": { "plugin": "corp-sso" }, "value": "…" }
 → 200 { "operation": "plugins.update", "member": "/secrets/clientSecret", "sealed": "v1.…" }
 
 POST /admin/v1-rc.0/realms/{realmId}/plugins/corp-sso/config

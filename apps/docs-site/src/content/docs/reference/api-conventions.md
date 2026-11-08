@@ -300,27 +300,33 @@ never the secret: the admin listener refuses to boot a security operation whose 
 a declared secret member to any other schema. The [Security operations](/reference/security-operations/#operations)
 page lists each operation's secret members. The client seals each value first:
 
-1. `POST /admin/v1-rc.0/realms/{realmId}/secrets/seal` (`secrets.seal`) with the operation, the
-   member, a JSON Pointer into the operation's body that the operation declares secret, and the
-   value. It needs the write permission `secrets.seal`, changes nothing and records no value.
+1. `POST /admin/v1-rc.0/realms/{realmId}/secrets/seal` (`secrets.seal`) with the operation; the
+   member, a JSON Pointer (RFC 6901, `~` written `~0` and `/` written `~1`) into the operation's
+   body that the operation declares secret; `params`, the path parameters of the request the value
+   is for but `realmId`, as that operation's route parses them; and the value. It needs the write
+   permission `secrets.seal`, changes nothing and records no value.
 2. The answer holds the value encrypted with the realm's `data_at_rest` key, bound to that
-   operation, that member and the realm. No response, audit row or log line holds the value.
+   operation, that member, those path parameters, what the operation's route binds beside them
+   (for `plugins.update`, the package and type of the plugin installed under the name), and the
+   realm. No response, audit row or log line holds the value.
 3. The request carries `{ "sealed": … }` at the member, and is filed, approved and sent as any
    other.
 
 ```http
 POST /admin/v1-rc.0/realms/{realmId}/secrets/seal
-{ "operation": "plugins.update", "member": "/secrets/clientSecret", "value": "…" }
+{ "operation": "plugins.update", "member": "/secrets/clientSecret",
+  "params": { "plugin": "corp-sso" }, "value": "…" }
 → 200 { "operation": "plugins.update", "member": "/secrets/clientSecret", "sealed": "v1.…" }
 ```
 
-The operation's handler opens a sealed value only for its own operation, that member and the
-realm: one sealed for another operation, another member or another realm, or changed, is refused
-with 400 `bad_request`. A handler that keeps the secret stores it sealed again under a context of
+The operation's handler opens a sealed value only for its own operation, that member, its own
+path parameters and the realm: one sealed for another operation, member, resource or realm, or
+changed, is refused with 400 `bad_request`. A handler that keeps the secret stores it sealed again under a context of
 its own, so the value the approval bound never opens as a stored secret. The operation's renderer
 names a secret member and never shows its sealed value; an approval whose renderer shows one is
 never filed. The listener cannot tell a secret from a plain string by its schema: the operation
-that sets a secret declares it.
+that sets a secret declares it, in its body; a security operation takes no secret in its path or
+query.
 
 **What a security operation's route and handler must do.** The admin listener refuses to boot a
 security operation's route that cannot be bound this way: it needs a renderer, one method, a Zod

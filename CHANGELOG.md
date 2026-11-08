@@ -46,10 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   union with one, a refined or transformed copy. The new operation
   `secrets.seal` (`POST /admin/v1-rc.0/realms/{realmId}/secrets/seal`, under
   the new write permission `secrets.seal`) encrypts a value with the realm's
-  `data_at_rest` key, bound to one operation and one of its declared members,
-  changes nothing and records no value; the operation's handler opens it
-  only for its own operation, that member and the realm, and answers 400
-  `bad_request` to any other. An approval whose renderer shows a sealed
+  `data_at_rest` key, bound to one operation, one of its declared members
+  and the path parameters of the request it is for (`params`, parsed by
+  that operation's route), with what the route binds beside them
+  (`config.sealScope`), changes nothing and records no value; the
+  operation's handler opens it only for its own operation, that member, its
+  own path parameters and the realm, and answers 400 `bad_request` to any
+  other. An approval whose renderer shows a sealed
   value is never filed. The signer's `admin` caller now encrypts and
   decrypts the contexts `admin-sealed-value:` and nothing else.
 
@@ -76,10 +79,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`plugins.update` takes its secrets sealed by `secrets.seal`** ([#984],
   experimental `plugin-api`). `plugins.secrets.seal` and its route
-  `POST /admin/v1-rc.0/realms/{realmId}/plugins/{pluginId}/secrets/seal` are
+  `POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/secrets/seal` are
   removed: a client seals each secret with `secrets.seal`, for the operation
-  `plugins.update` and the member `/secrets/<path>`, and sends it under
-  `secrets` as before. A value sealed by the removed route does not open.
+  `plugins.update`, the member `/secrets/<path>` and the params
+  `{ "plugin": "<id>" }`, and sends it under `secrets` as before. The value
+  is bound, as the removed route bound it, to the plugin and the package and
+  type installed under it: it opens for no other plugin, and not once
+  another package or type is installed under the same id (#949). A value
+  sealed by the removed route does not open.
   The configure handler opens each value and stores it sealed again under
   the plugin's context, so the value an approval bound never opens as a
   stored secret; secrets already stored are unchanged. The permission
@@ -89,6 +96,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `plugins.write` out. **Upgrading:** a client of the plugin API calls
   `secrets.seal` in place of the removed route, and a custom role that
   sealed plugin secrets is given `secrets.seal` in place of `plugins.write`.
+  During a rolling upgrade, a value sealed at a node of one release does not
+  open at a node of the other, and an approval of a configure filed before
+  the upgrade fails at its retry: configure plugins once every node runs the
+  new release, and file such an approval again.
 
 ## [0.2.0] - 2026-11-07
 

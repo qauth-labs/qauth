@@ -103,12 +103,14 @@ operation of the OpenAPI document as `x-qauth-effects`
   `{ "sealed": … }` (`SEALED_VALUE_SCHEMA`), and the admin listener refuses to boot its route
   when its body schema holds a declared member to any other schema. A caller seals the value first
   with `secrets.seal`, which encrypts it with the realm's `data_at_rest` key for that
-  operation and member, changes nothing and records no value. The handler opens it only for its
-  own operation, that member and the realm, and refuses one sealed for any other with 400. The
+  operation, that member and the request's path parameters, with what the route binds beside them
+  (`config.sealScope`, such as the package and type of the plugin a configure names), changes
+  nothing and records no value. The handler opens it only for its own operation, that member, its
+  own path parameters and the realm, and refuses one sealed for any other with 400. The
   operation's renderer names a secret member and never shows its sealed value: an approval whose
   renderer does is never filed. The listener cannot tell a secret from a plain string by its
   schema, so a member the operation does not declare is not checked: the operation that sets a
-  secret declares it.
+  secret declares it, in its body. A security operation takes no secret in its path or query.
 - A security operation's handler makes an effect outside the database, such as a KMS or KEK call,
   a mail or an outbound request, only through a record its transaction writes and that is acted
   on after the commit (an outbox), or after the commit itself. An operation that rolls back leaves
