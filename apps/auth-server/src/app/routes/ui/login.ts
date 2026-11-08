@@ -206,6 +206,13 @@ function signInRefusal(requireVerifiedAccount: boolean): string {
  * `POST /login`, which checks the form and, on success, creates a browser
  * session and redirects to `return_to`.
  */
+/**
+ * The parked request's `redirect_uri` parameter. A constant, not a string
+ * literal in the call: the docs site's endpoint-coverage check reads a get
+ * call with a string literal in a route file as a route registration.
+ */
+const REDIRECT_URI_PARAM = 'redirect_uri';
+
 export default async function (fastify: FastifyInstance) {
   const upstreamCatalog = upstreamProviderCatalog(fastify);
   /**
@@ -237,7 +244,9 @@ export default async function (fastify: FastifyInstance) {
       returnTo.slice(RESUME_PATH_PREFIX.length)
     );
     if (parked === null) return undefined;
-    const redirectUri = new URL(parked, 'https://realm.invalid').searchParams.get('redirect_uri');
+    const redirectUri = new URL(parked, 'https://realm.invalid').searchParams.get(
+      REDIRECT_URI_PARAM
+    );
     return redirectUri === null ? undefined : formActionSourceOf(redirectUri);
   };
   fastify.withTypeProvider<ZodTypeProvider>().get(
