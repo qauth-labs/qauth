@@ -960,7 +960,7 @@ describe('POST /auth/login', () => {
       expect(emitUserEventMock).toHaveBeenCalledWith(
         expect.anything(),
         'urn:qauth:event:user.sign_in_failed:v1-rc.0',
-        { method: 'password', reason: 'email_not_verified' },
+        { method: 'password', reason: 'account_not_verified' },
         expect.objectContaining({ realmId: 'realm-1', userId: 'user-1', actor: 'user' })
       );
     });

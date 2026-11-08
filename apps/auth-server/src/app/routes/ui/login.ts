@@ -476,7 +476,7 @@ export default async function (fastify: FastifyInstance) {
           'urn:qauth:event:user.sign_in_failed:v1-rc.0',
           {
             method: 'password',
-            reason: unverified ? 'email_not_verified' : 'invalid_credentials',
+            reason: unverified ? 'account_not_verified' : 'invalid_credentials',
           },
           {
             realmId: realm.id,

@@ -218,7 +218,7 @@ describe('registration does not reveal whether an address is registered (real co
 
       // A scraper reads the metrics: no label of its own for the refusal.
       const metrics = await app.metrics.registry.metrics();
-      expect(metrics).not.toContain('email_not_verified');
+      expect(metrics).not.toContain('account_not_verified');
 
       // What did happen reaches only the mailbox, and the victim is unharmed.
       await vi.waitFor(() => expect(notices).toHaveBeenCalledWith(expect.any(String), VICTIM));

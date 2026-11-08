@@ -196,7 +196,7 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
       // Never a subject for a disabled user, and nothing about it changes.
       if (!candidate.enabled) return refuse({ reason: 'account_disabled' });
       if (!candidate.verified && deps.requireVerifiedAccount) {
-        return refuse({ reason: 'email_not_verified' });
+        return refuse({ reason: 'account_not_verified' });
       }
       // The right password of an account whose address is not proved yet
       // (#638) clears the counter, and makes no IP known: until the address
