@@ -18,7 +18,10 @@ import { webauthnCredentialDataSchema } from './webauthn-credential-data';
  * weighed again and kept on 2026-11-08). An email address is otherwise an
  * attribute; no account needs one, and an account whose primary identity is
  * a passkey, a wallet or an upstream identity never meets it. An operator's
- * audited verification (#1052) is the other way an account is verified.
+ * audited verification (#1052) is the other way an account is verified:
+ * `users.verify` or the host's `verify-account` command records it on the
+ * account, and it counts beside the table below (`operatorVerified`). It
+ * attests the account, never an address: `email_verified` stays as it was.
  *
  * Each type has its own proof, row by row of Decision 8's table:
  *
@@ -85,7 +88,15 @@ export interface UpstreamProviderSwitch {
 
 /** Whether an account is a verified owner, and if not, why. */
 export type VerifiedOwnerDecision =
-  | { readonly verified: true; readonly identity: PrimaryIdentityKind }
+  | {
+      readonly verified: true;
+      readonly identity: PrimaryIdentityKind;
+      /**
+       * `true` when an operator's verification (#1052) decided it: the
+       * primary identity is not proved by its kind's rule. Absent otherwise.
+       */
+      readonly operatorVerified?: true;
+    }
   | {
       readonly verified: false;
       readonly identity: PrimaryIdentityKind | 'none';
@@ -106,19 +117,46 @@ export function primaryIdentityKindOf(primary: PrimaryIdentity): PrimaryIdentity
   }
 }
 
+/** What the decision reads of the account itself, beside its primary identity. */
+export interface VerifiedOwnerAccount {
+  /**
+   * Whether an operator verified the account (ADR-015 Decision 8, amended
+   * 2026-11-08; #1052): `users.operator_verified_at` is set.
+   */
+  readonly operatorVerified?: boolean;
+}
+
 /**
  * Decide whether the account whose primary identity is `primary` is a
  * verified owner (ADR-015 Decision 8). `upstreamProvider` is the realm's
  * provider of the identity's type while it is on, read only for an upstream
  * identity; `undefined` when the realm has none of that type, or it is off.
+ * An operator's verification of the account (`account.operatorVerified`)
+ * makes it verified whatever its primary identity's proof says; an account
+ * with no primary identity left stays refused, since nothing of it signs in.
  */
 export function decideVerifiedOwner(
   primary: PrimaryIdentity | undefined,
-  upstreamProvider?: UpstreamProviderSwitch
+  upstreamProvider?: UpstreamProviderSwitch,
+  account: VerifiedOwnerAccount = {}
 ): VerifiedOwnerDecision {
   if (primary === undefined) {
     return { verified: false, identity: 'none', reason: 'no_primary_identity' };
   }
+  const decision = decideByPrimaryIdentity(primary, upstreamProvider);
+  if (decision.verified || account.operatorVerified !== true) return decision;
+  return {
+    verified: true,
+    identity: decision.identity as PrimaryIdentityKind,
+    operatorVerified: true,
+  };
+}
+
+/** Row by row of Decision 8's table: whether `primary` is proved by its kind's rule. */
+function decideByPrimaryIdentity(
+  primary: PrimaryIdentity,
+  upstreamProvider: UpstreamProviderSwitch | undefined
+): VerifiedOwnerDecision {
   const identity = primaryIdentityKindOf(primary);
   const refuse = (reason: VerifiedOwnerRefusalReason): VerifiedOwnerDecision => ({
     verified: false,

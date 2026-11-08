@@ -140,6 +140,53 @@ describe('decideVerifiedOwner (ADR-015 Decision 8, #846)', () => {
     });
   });
 
+  describe("an operator's verification of the account (#1052)", () => {
+    it('makes an account verified whose primary identity is not proved, and says so', () => {
+      const unconfirmed = {
+        providerType: 'password',
+        credentialData: buildPasswordCredentialData('$argon2id$h', false, 'nfc'),
+      };
+      expect(decideVerifiedOwner(unconfirmed, undefined, { operatorVerified: true })).toEqual({
+        verified: true,
+        identity: 'password',
+        operatorVerified: true,
+      });
+      expect(
+        decideVerifiedOwner(
+          { providerType: 'oidc_corp', credentialData: UPSTREAM_DATA },
+          { marksVerified: false },
+          { operatorVerified: true }
+        )
+      ).toEqual({ verified: true, identity: 'upstream', operatorVerified: true });
+      expect(decideVerifiedOwner(unconfirmed, undefined, { operatorVerified: false })).toEqual({
+        verified: false,
+        identity: 'password',
+        reason: 'account_not_verified',
+      });
+    });
+
+    it('leaves the decision of a proved primary identity as it is', () => {
+      expect(
+        decideVerifiedOwner(
+          {
+            providerType: 'password',
+            credentialData: buildPasswordCredentialData('$argon2id$h', true, 'nfc'),
+          },
+          undefined,
+          { operatorVerified: true }
+        )
+      ).toEqual({ verified: true, identity: 'password' });
+    });
+
+    it('does not verify an account that has no primary identity left', () => {
+      expect(decideVerifiedOwner(undefined, undefined, { operatorVerified: true })).toEqual({
+        verified: false,
+        identity: 'none',
+        reason: 'no_primary_identity',
+      });
+    });
+  });
+
   it('refuses an account with no primary identity', () => {
     expect(decideVerifiedOwner(undefined)).toEqual({
       verified: false,

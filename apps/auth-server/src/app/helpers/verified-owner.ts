@@ -4,6 +4,7 @@ import {
   type VerifiedOwnerDecision,
 } from '@qauth-labs/fastify-plugin-federation';
 import { ForbiddenError } from '@qauth-labs/shared-errors';
+import { isOperatorVerified } from '@qauth-labs/shared-validation';
 import type { FastifyRequest } from 'fastify';
 
 import { upstreamProviderCatalog, type UpstreamProviderServer } from './upstream-providers';
@@ -23,7 +24,9 @@ import { emitUserEvent } from './user-events';
  *
  * It never reads `REQUIRE_VERIFIED_ACCOUNT`: that setting governs a password
  * account's sign-in, not the ownership of an agent. No later credential makes
- * an account verified, and an email address on its own counts for nothing.
+ * an account verified, and an email address on its own counts for nothing. An
+ * operator's verification of the account (`users.verify` or the host's
+ * `verify-account` command, #1052) counts beside the primary identity.
  *
  * Every place where an account takes an agent calls {@link
  * assertVerifiedOwner}: today the dynamic registration of an agent client
@@ -60,11 +63,14 @@ export async function checkVerifiedOwner(
     account.userId
   );
   if (primary === undefined) return decideVerifiedOwner(undefined);
+  const user = await fastify.repositories.users.findById(account.realmId, account.userId);
   const provider =
     primaryIdentityKindOf(primary) === 'upstream'
       ? await upstreamProviderCatalog(fastify).find(account.realmId, primary.providerType)
       : undefined;
-  return decideVerifiedOwner(primary, provider);
+  return decideVerifiedOwner(primary, provider, {
+    operatorVerified: user !== undefined && isOperatorVerified(user),
+  });
 }
 
 /** Whether `account` is a verified owner of an agent (ADR-015 Decision 8). */
