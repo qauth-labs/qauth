@@ -294,6 +294,24 @@ const setFlagName = (name: string) => `${name}Set`;
 const isUniqueList = (value: unknown) =>
   !Array.isArray(value) || new Set(value).size === value.length;
 
+/**
+ * The class of one change of a field whose rule is `securityWhen`, moving in
+ * `direction` (ADR-019 Decision 7): what the diff gives each change, and what
+ * the settings metadata (`settings.ts`) says each direction of a field needs.
+ *
+ * FAIL CLOSED: only `never` is never a security change, and a `loosening`
+ * field's change is one unless it tightens. A rule this code does not know
+ * makes every change one.
+ */
+export function changeClassOf(
+  securityWhen: PolicyField['securityWhen'],
+  direction: ChangeDirection
+): PolicyChangeClass {
+  if (securityWhen === 'never') return 'write';
+  if (securityWhen === 'loosening') return direction === 'tightening' ? 'write' : 'security';
+  return 'security';
+}
+
 /** Whether two values of a field are the same: `0` and `-0` are, as JSON writes them. */
 function samePolicyValue(a: unknown, b: unknown): boolean {
   if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) return a === b;
@@ -767,15 +785,7 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
           environmentBound: field.environmentBound,
         };
       }
-      // FAIL CLOSED: only `never` is never a security change, and a `loosening`
-      // field's change is one unless it tightens. A rule this code does not
-      // know makes every change one.
-      const security =
-        field.securityWhen === 'never'
-          ? false
-          : field.securityWhen === 'loosening'
-            ? change.direction !== 'tightening'
-            : true;
+      const security = changeClassOf(field.securityWhen, change.direction) === 'security';
       changes.push(
         Object.freeze({
           ...change,

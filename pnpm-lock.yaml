@@ -1743,6 +1743,9 @@ importers:
       '@qauth-labs/server-egress':
         specifier: workspace:*
         version: link:../egress
+      '@qauth-labs/shared-admin-settings':
+        specifier: workspace:*
+        version: link:../../shared/admin-settings
       '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../shared/validation
@@ -1928,6 +1931,12 @@ importers:
       tsx:
         specifier: 'catalog:'
         version: 4.23.15
+
+  libs/shared/admin-settings:
+    dependencies:
+      tslib:
+        specifier: 'catalog:'
+        version: 2.8.1
 
   libs/shared/errors:
     dependencies:
