@@ -30,8 +30,14 @@ import {
  *
  * The burst below mixes the three endpoints that check a secret. While it
  * runs, a JWT-authenticated request (`GET /oauth/userinfo`, whose signature
- * check runs on the same thread pool through WebCrypto) must answer within
- * twice its idle latency.
+ * check runs on the same thread pool through WebCrypto) must not wait for a
+ * check: it must answer within twice its idle latency, for the main-thread
+ * work the burst adds, plus half of one client-secret check, for the jitter of
+ * a loaded runner (#1044). Kept waiting behind even one check, it would take
+ * its idle latency plus a whole check, and the test also asserts that this is
+ * more than the bound, so the bound cannot drift to where it no longer tells
+ * the two apart. The ratio alone failed on CI's jitter: 624.7 ms against a
+ * limit of 615.9 ms, with no check in the way.
  *
  * The burst is small on purpose. It runs in this process, on the event loop
  * the JWT request needs too, and every request costs some main-thread work
@@ -57,6 +63,8 @@ const QUEUE_LIMIT = 2;
 const BURST_PER_ENDPOINT = 10;
 /** Idle userinfo requests the baseline latency is the median of. */
 const IDLE_SAMPLES = 5;
+/** Client-secret checks, one at a time, the length of one check is the median of. */
+const CHECK_SAMPLES = 3;
 
 /** pino's numeric level for `warn`. */
 const PINO_WARN_LEVEL = 40;
@@ -152,8 +160,16 @@ describe('client-secret checks under a burst (real containers)', () => {
           ...baseEnvironment(infra, jwt),
           PASSWORD_HASH_QUEUE_LIMIT: String(QUEUE_LIMIT),
           // Each verification holds an Argon2 thread long enough that the
-          // burst keeps both busy while the JWT request runs.
+          // burst keeps both busy while the JWT request runs, and that a
+          // request held behind one would stand well clear of the jitter:
+          // about 1.4 s on a developer machine, more on CI, where the idle
+          // request took about 0.3 s. One lane keeps a job on its one thread;
+          // with four, two jobs spread over every core of a CI runner and slow
+          // the event loop the JWT request needs. The time cost is the
+          // hasher's maximum, so the memory (256 MiB) sets the length.
           PASSWORD_TIME_COST: '10',
+          PASSWORD_MEMORY_COST: '262144',
+          PASSWORD_PARALLELISM: '1',
           // A 429 would end the burst before the queue fills.
           TOKEN_RATE_LIMIT: '10000',
           TOKEN_RATE_LIMIT_LENIENT: '10000',
@@ -223,6 +239,23 @@ describe('client-secret checks under a burst (real containers)', () => {
       }
       const idleLatency = median(idle);
 
+      // One client-secret check alone: about one Argon2 job.
+      const checks: number[] = [];
+      for (let i = 0; i < CHECK_SAMPLES; i++) {
+        const { result, ms } = await timed(() => secretRequest(app, 'introspect'));
+        expect(result.statusCode).toBe(200);
+        checks.push(ms);
+      }
+      const checkLatency = median(checks);
+
+      const bound = 2 * idleLatency + checkLatency / 2;
+      const timings = `idle ${idleLatency.toFixed(1)} ms, one check ${checkLatency.toFixed(1)} ms, bound ${bound.toFixed(1)} ms`;
+      // What a JWT request held behind a single check would take must break
+      // the bound, or the assertion below could not catch one.
+      expect(idleLatency + checkLatency, `held behind one check (${timings})`).toBeGreaterThan(
+        bound
+      );
+
       // The burst, every request in flight at once, then the JWT request
       // behind it.
       const inFlight = burst(app);
@@ -230,7 +263,7 @@ describe('client-secret checks under a burst (real containers)', () => {
       const answers = await Promise.all(inFlight);
 
       expect(during.result.statusCode).toBe(200);
-      expect(during.ms).toBeLessThan(2 * idleLatency);
+      expect(during.ms, `JWT request during the burst (${timings})`).toBeLessThan(bound);
 
       // Every check either ran (the secret is right) or was shed; none timed
       // out, failed or was refused as a wrong secret.
