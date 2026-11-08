@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- CI's integration suites run on three runners, and a pull request that
+  changes only docs runs none of them ([#1044]). `nx affected`, in CI as
+  locally, now runs the tasks whose inputs a change reaches (`affected.legacy`
+  is off), not every target of each project a change touches and of its
+  dependents. A target that reads a file outside its project and its
+  dependencies must name it among its inputs; the integration suites' inputs
+  are the new `integration` named input in `nx.json`, plus what a suite reads
+  beyond it, named in its `project.json`. The `integration` check now
+  passes when the three `integration (shard N/3)` jobs do, each running one
+  shard of every affected project's `*.integration.test.ts` files
+  (`QAUTH_INTEGRATION_SHARD`, read by `vitest.integration.config.mts`), so
+  every file runs once. The checks that compare the docs with the code of
+  `server-realm-policy`, `shared-stability` and `server-config` moved to a
+  new project, `docs-checks` (`apps/docs-checks`), which nothing may depend
+  on: with the docs among those libraries' inputs, a docs edit marked the
+  auth server affected and ran its integration suite. They run on every pull
+  request in the `coverage` job, as before.
+
+  **Action for contributors**: regenerate `reference/realm-policies.md`,
+  `reference/experimental-features.md` and `operate/configuration.md` with
+  `pnpm nx test docs-checks -- -u`, which replaces the libraries' own
+  `test -- -u`. Run `pnpm install` once, for the new project.
+
+## [0.2.2] - 2026-11-08
+
+A patch release that carries breaking changes, as a 0.x release may (see the
+**Upgrading** notes below). A sign-in no longer waits on a mailed code that
+cannot arrive, and a first passkey or TOTP binds to a verified account with no
+mailed code, so a deployment without mail can add passkeys. The sign-in pages
+return the browser to the client in Chromium and WebKit. `INTERACTION_UI_ENABLED`
+needs `CEREMONY_APP_DEPLOYED`, and the realm's verified-account gate decides
+again. It adds the admin API's realm and policy operations.
+
 ### Added
 
 - **A plugin names where its secrets go, and a preset's kept secret is
@@ -119,29 +154,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on serving its own `/ui` pages (account, passkey, TOTP, recovery codes). **Upgrading:** a deployment with `INTERACTION_UI_ENABLED`
   on and no ceremony app turns it off; one with a ceremony app sets
   `CEREMONY_APP_DEPLOYED=true`.
-
-- CI's integration suites run on three runners, and a pull request that
-  changes only docs runs none of them ([#1044]). `nx affected`, in CI as
-  locally, now runs the tasks whose inputs a change reaches (`affected.legacy`
-  is off), not every target of each project a change touches and of its
-  dependents. A target that reads a file outside its project and its
-  dependencies must name it among its inputs; the integration suites' inputs
-  are the new `integration` named input in `nx.json`, plus what a suite reads
-  beyond it, named in its `project.json`. The `integration` check now
-  passes when the three `integration (shard N/3)` jobs do, each running one
-  shard of every affected project's `*.integration.test.ts` files
-  (`QAUTH_INTEGRATION_SHARD`, read by `vitest.integration.config.mts`), so
-  every file runs once. The checks that compare the docs with the code of
-  `server-realm-policy`, `shared-stability` and `server-config` moved to a
-  new project, `docs-checks` (`apps/docs-checks`), which nothing may depend
-  on: with the docs among those libraries' inputs, a docs edit marked the
-  auth server affected and ran its integration suite. They run on every pull
-  request in the `coverage` job, as before.
-
-  **Action for contributors**: regenerate `reference/realm-policies.md`,
-  `reference/experimental-features.md` and `operate/configuration.md` with
-  `pnpm nx test docs-checks -- -u`, which replaces the libraries' own
-  `test -- -u`. Run `pnpm install` once, for the new project.
 
 ### Fixed
 
@@ -4709,7 +4721,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/qauth-labs/qauth/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/qauth-labs/qauth/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/qauth-labs/qauth/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/qauth-labs/qauth/compare/v0.1.2...v0.1.3
