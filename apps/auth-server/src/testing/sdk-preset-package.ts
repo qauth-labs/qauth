@@ -24,7 +24,9 @@ import { pathToFileURL } from 'node:url';
  * endpoint `organizations` takes a token of any tenant whose issuer is the
  * template with the token's `tid`. With `formPost` the provider answers by
  * `form_post`, and the response member `profile` the callback reads rides
- * the bounce; its `name` becomes the `nickname` claim.
+ * the bounce; its `name` becomes the `nickname` claim, with a
+ * `nickname_verified` flag of the preset's own that never makes the
+ * attribute verified.
  */
 
 /** The workspace root, from `apps/auth-server/src/testing`. */
@@ -105,20 +107,26 @@ export const upstreamOidcPreset = defineUpstreamOidcPreset({
       return name === undefined ? undefined : JSON.stringify({ name });
     },
   },
-  // The member's name as a nickname, and an address the member says is
-  // verified: the client never takes the second, as the provider vouches for
-  // an email, not a preset.
+  // The member's name as a nickname with a flag that says it is verified,
+  // and an address the member says is verified: the client never takes the
+  // address, as the provider vouches for an email, not a preset, and a claim
+  // the preset set never makes an attribute verified, whatever its rule reads.
   identityClaims: ({ response }) => {
     const value = Object.hasOwn(response, ${JSON.stringify(SDK_PRESET_MEMBER)}) ? response[${JSON.stringify(SDK_PRESET_MEMBER)}] : undefined;
     const name = value === undefined ? undefined : profileName(value);
     return name === undefined
       ? {}
-      : { nickname: name, email: 'made-up@sdk-idp.example', email_verified: true };
+      : {
+          nickname: name,
+          nickname_verified: true,
+          email: 'made-up@sdk-idp.example',
+          email_verified: true,
+        };
   },
   attributes: [
     { claim: 'email', verified: (claims) => upstreamClaimIsTrue(claims, 'email_verified') },
     { claim: 'name' },
-    { claim: 'nickname' },
+    { claim: 'nickname', verified: (claims) => upstreamClaimIsTrue(claims, 'nickname_verified') },
     { claim: 'tid' },
   ],
 });

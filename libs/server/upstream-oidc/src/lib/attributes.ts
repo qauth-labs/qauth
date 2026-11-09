@@ -42,13 +42,28 @@ export function claimAttributes(source: string, identity: VerifiedIdentity): Use
  * claim is not a plain-text string is left out; a key two rules map to is
  * taken from the first that has a value.
  *
+ * `presetClaims` names the claims a preset's `identityClaims` set (#671):
+ * values the server's client did not check, such as one from a response
+ * member the browser carried. An attribute read from one is never verified,
+ * and a rule's `verified` sees the claims without them, so no flag a preset
+ * makes up can vouch for a value either. A method the loader built from a
+ * preset ranks with `oidc_*` because the client checked the provider's
+ * claims, so only those may make an attribute verified.
+ *
  * @experimental
  */
 export function upstreamClaimAttributes(
   source: string,
   claims: Readonly<Record<string, unknown>>,
-  rules: readonly UpstreamClaimAttribute[]
+  rules: readonly UpstreamClaimAttribute[],
+  presetClaims: ReadonlySet<string> = new Set()
 ): UserAttribute[] {
+  const providerClaims =
+    presetClaims.size === 0
+      ? claims
+      : Object.freeze(
+          Object.fromEntries(Object.entries(claims).filter(([name]) => !presetClaims.has(name)))
+        );
   const attributes: UserAttribute[] = [];
   const taken = new Set<string>();
   for (const rule of rules) {
@@ -57,7 +72,12 @@ export function upstreamClaimAttributes(
     const value = Object.hasOwn(claims, rule.claim) ? claims[rule.claim] : undefined;
     if (!isAttributeValue(value)) continue;
     taken.add(key);
-    attributes.push({ source, attrKey: key, attrValue: value, verified: vouched(rule, claims) });
+    attributes.push({
+      source,
+      attrKey: key,
+      attrValue: value,
+      verified: !presetClaims.has(rule.claim) && vouched(rule, providerClaims),
+    });
   }
   return attributes;
 }
