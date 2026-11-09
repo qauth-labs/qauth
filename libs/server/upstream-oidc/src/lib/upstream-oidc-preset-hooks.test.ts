@@ -458,6 +458,22 @@ describe('response members and identity claims (#671)', () => {
     ).toEqual([false]);
   });
 
+  it("hands the hook a copy, so a nested claim it changes stays the provider's", async () => {
+    const { provider, method, host } = await memberHost(({ claims, response }) => {
+      // A hook that writes a member into a nested provider claim.
+      (claims['address'] as Record<string, unknown>)['country'] = response['user'] ?? 'XX';
+      return {};
+    });
+    const { completion } = await signIn(
+      method,
+      host,
+      provider,
+      { sub: 'user-1', claims: { address: { country: 'NL' } } },
+      { user: '{"n":"Ada"}' }
+    );
+    expect(identityOf(completion).rawClaims).toMatchObject({ address: { country: 'NL' } });
+  });
+
   it('fails the callback when the identity claims throw', async () => {
     const { provider, method, host } = await memberHost(() => {
       throw new Error('broken');
