@@ -6,8 +6,7 @@ import { SELF_REPORTED_SOURCE } from '../providers/password.provider';
  * Claim resolution reads `user_attributes` rows and must decide which source's
  * value QAuth asserts downstream. The trust order is APP-CODE POLICY (per the
  * schema JSDoc in `identity.ts` — deliberately not a DB constraint), and this
- * module is its single implementation: `wallet > oidc_* > self_reported`,
- * where the first-party provider plugins rank with `oidc_*`.
+ * module is its single implementation: `wallet > oidc_* > self_reported`.
  *
  * Design decisions (adjudicated, #229):
  *
@@ -45,26 +44,12 @@ export interface TrustRankedAttribute {
 }
 
 /**
- * The attribute sources of the provider plugins that ship with the server
- * (#671): each the `type` of a first-party preset on the generic upstream
- * OpenID Connect client, which writes attributes under it as an `oidc_*`
- * provider does under its own, so they rank in that family. A third-party
- * plugin's type stays unknown. Each plugin's tests pin its type here.
- */
-export const FIRST_PARTY_UPSTREAM_SOURCES: readonly string[] = Object.freeze([
-  'apple',
-  'google',
-  'microsoft',
-]);
-
-/**
- * ADR-002 trust rank: `wallet` (3) > `oidc_*` family and
- * {@link FIRST_PARTY_UPSTREAM_SOURCES} (2) > `self_reported` (1) > unknown
- * (0, eligible — see module JSDoc).
+ * ADR-002 trust rank: `wallet` (3) > `oidc_*` family (2) >
+ * `self_reported` (1) > unknown (0, eligible — see module JSDoc).
  */
 export function rankAttributeSource(source: string): number {
   if (source === 'wallet') return 3;
-  if (source.startsWith('oidc_') || FIRST_PARTY_UPSTREAM_SOURCES.includes(source)) return 2;
+  if (source.startsWith('oidc_')) return 2;
   if (source === SELF_REPORTED_SOURCE) return 1;
   return 0;
 }

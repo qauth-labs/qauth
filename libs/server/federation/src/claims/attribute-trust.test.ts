@@ -17,17 +17,6 @@ describe('rankAttributeSource (ADR-002 trust order)', () => {
     expect(rankAttributeSource('carrier_pigeon')).toBe(0);
   });
 
-  it('ranks the first-party provider plugins (#671) with the oidc_ family, and no other plugin', () => {
-    for (const source of ['apple', 'google', 'microsoft']) {
-      expect(rankAttributeSource(source), source).toBe(2);
-    }
-    expect(rankAttributeSource('corp_sso')).toBe(0);
-    expect(rankAttributeSource('Google')).toBe(0);
-    expect(
-      selectTrustedAttribute([row('self_reported'), row('google'), row('oidc_corp')], NOW)?.source
-    ).toBe('google');
-  });
-
   it('the oidc_ family is a prefix match, not an allowlist', () => {
     expect(rankAttributeSource('oidc_anything_future')).toBe(2);
     // 'oidc' without the underscore is NOT the family.
