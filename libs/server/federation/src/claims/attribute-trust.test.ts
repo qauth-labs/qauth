@@ -22,6 +22,16 @@ describe('rankAttributeSource (ADR-002 trust order)', () => {
     // 'oidc' without the underscore is NOT the family.
     expect(rankAttributeSource('oidc')).toBe(0);
   });
+
+  // #671: by how the method was built, never by a provider's name.
+  it("ranks a method the loader built from a preset with oidc_*, and a plain plugin's type as unknown", () => {
+    const upstreamPresetSources = new Set(['example_idp']);
+    expect(rankAttributeSource('example_idp', { upstreamPresetSources })).toBe(2);
+    expect(rankAttributeSource('example_idp')).toBe(0);
+    expect(rankAttributeSource('corp_sso', { upstreamPresetSources })).toBe(0);
+    // The set adds to the rank; it never lowers QAuth's own sources.
+    expect(rankAttributeSource('wallet', { upstreamPresetSources: new Set(['wallet']) })).toBe(3);
+  });
 });
 
 describe('selectTrustedAttribute', () => {
@@ -70,6 +80,24 @@ describe('selectTrustedAttribute', () => {
     const expiredWallet = row('wallet', 'w@x.co', NOW - 1);
     const self = row('self_reported');
     expect(selectTrustedAttribute([expiredWallet, self], NOW)).toBe(self);
+  });
+
+  it('passes the rank options on: a preset-built source beats self_reported only when it is named (#671)', () => {
+    const preset = row('example_idp');
+    const self = row('self_reported');
+    expect(
+      selectTrustedAttribute([self, preset], NOW, {
+        upstreamPresetSources: new Set(['example_idp']),
+      })
+    ).toBe(preset);
+    expect(selectTrustedAttribute([self, preset], NOW)).toBe(self);
+    // Within the rank, the lexicographic tie-break holds.
+    const oidc = row('oidc_corp');
+    expect(
+      selectTrustedAttribute([preset, oidc], NOW, {
+        upstreamPresetSources: new Set(['example_idp']),
+      })
+    ).toBe(preset);
   });
 
   it('does not mutate the input array', () => {
