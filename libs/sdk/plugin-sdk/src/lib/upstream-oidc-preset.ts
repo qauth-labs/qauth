@@ -6,7 +6,6 @@ import {
   AUTH_METHOD_CONTRACT,
   AUTH_METHOD_ID_PATTERN,
   UPSTREAM_OIDC_METHOD_ID,
-  UPSTREAM_OIDC_TYPE_PATTERN,
 } from './contract.js';
 import { AuthMethodContractError } from './errors.js';
 import { authMethodTypeProblems, contractProblems, displayProblems } from './validate.js';
@@ -349,7 +348,9 @@ export type UpstreamResponseMembers = Readonly<
  * `sub` and the claims only the ID token may carry
  * ({@link UPSTREAM_ID_TOKEN_ONLY_CLAIMS}) stay the validated ones. A claim the
  * provider vouches for ({@link UPSTREAM_VERIFIED_CLAIM_PAIRS}) and its
- * `*_verified` flag may be removed, never set.
+ * `*_verified` flag may be removed, never set. Every claim the preset sets is
+ * one the server's client did not check, so no attribute read from it is
+ * verified, and an attribute rule's `verified` never sees it.
  *
  * @experimental
  */
@@ -373,9 +374,11 @@ export interface UpstreamClaimAttribute {
   /** The attribute's key: the claim's name unless set. */
   readonly attribute?: string;
   /**
-   * Whether the provider vouches for the value, read from the identity's
-   * claims: `verified` only when this returns the boolean `true`. Without it
-   * the attribute is never verified.
+   * Whether the provider vouches for the value, read from the provider's
+   * claims the server's client checked, without any claim the preset's
+   * `identityClaims` set: `verified` only when this returns the boolean
+   * `true`. Without it, or when the preset set the rule's claim itself, the
+   * attribute is never verified.
    */
   readonly verified?: (claims: Readonly<Record<string, unknown>>) => boolean;
 }
@@ -579,7 +582,9 @@ export function upstreamOidcPresetProblems(value: unknown): string[] {
   }
   const typeProblems = authMethodTypeProblems(preset['type']);
   problems.push(...typeProblems);
-  if (typeProblems.length === 0 && UPSTREAM_OIDC_TYPE_PATTERN.test(preset['type'] as string)) {
+  // The whole `oidc_` prefix, which claim resolution ranks as the generic
+  // client's, not only the types its aliases make.
+  if (typeProblems.length === 0 && (preset['type'] as string).startsWith('oidc_')) {
     problems.push(
       `type ${String(preset['type'])} is in the generic upstream OpenID Connect client's namespace (oidc_<alias>), which no preset may take`
     );

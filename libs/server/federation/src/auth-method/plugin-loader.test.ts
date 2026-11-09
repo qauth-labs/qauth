@@ -2,7 +2,6 @@ import {
   AUTH_METHOD_CONTRACT,
   defineUpstreamOidcPreset,
   UPSTREAM_OIDC_METHOD_ID,
-  UPSTREAM_OIDC_TYPE_PATTERN,
 } from '@qauth-labs/plugin-sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -323,8 +322,10 @@ describe('loadAuthMethodPlugins (#600)', () => {
     expect((await load(sample('corp_sso', UPSTREAM_OIDC_METHOD_ID))).problems).toEqual([
       "its id oidc is the generic upstream OpenID Connect client's, which no plugin may take",
     ]);
-    for (const type of ['oidc_corp', 'oidc_0', `oidc_${'a'.repeat(58)}`]) {
-      expect(UPSTREAM_OIDC_TYPE_PATTERN.test(type), type).toBe(true);
+    // The aliases' namespace, and the rest of the prefix the rank reads as
+    // the generic client's (#671), which no alias makes.
+    for (const type of ['oidc_corp', 'oidc_0', `oidc_${'a'.repeat(58)}`, 'oidc_', 'oidc__corp']) {
+      expect(type.startsWith('oidc_'), type).toBe(true);
       const error = await load(sample(type, 'corp'));
       expect(error.packageName).toBe(THIRD_PARTY);
       expect(error.problems).toEqual([

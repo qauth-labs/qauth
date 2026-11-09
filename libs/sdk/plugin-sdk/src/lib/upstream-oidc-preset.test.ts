@@ -93,6 +93,12 @@ describe('upstreamOidcPresetProblems (#671)', () => {
     expect(problemsOf({ type: 'oidc_example' })).toEqual([
       "type oidc_example is in the generic upstream OpenID Connect client's namespace (oidc_<alias>), which no preset may take",
     ]);
+    // The rest of the prefix claim resolution ranks as the generic client's.
+    for (const type of ['oidc_', 'oidc__example']) {
+      expect(problemsOf({ type })).toEqual([
+        `type ${type} is in the generic upstream OpenID Connect client's namespace (oidc_<alias>), which no preset may take`,
+      ]);
+    }
     expect(problemsOf({ type: 'wallet' })).toEqual([
       "type wallet is reserved for QAuth's own credentials",
     ]);

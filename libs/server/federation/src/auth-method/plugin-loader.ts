@@ -7,7 +7,6 @@ import {
   AuthMethodContractError,
   UPSTREAM_OIDC_METHOD_ID,
   UPSTREAM_OIDC_PRESET_EXPORT,
-  UPSTREAM_OIDC_TYPE_PATTERN,
   type UpstreamOidcPreset,
   upstreamOidcPresetProblems,
 } from '@qauth-labs/plugin-sdk';
@@ -274,7 +273,10 @@ function reservedNameProblems(method: Pick<AuthMethod, 'id' | 'type'>): string[]
       `its id ${method.id} is the generic upstream OpenID Connect client's, which no plugin may take`
     );
   }
-  if (UPSTREAM_OIDC_TYPE_PATTERN.test(method.type)) {
+  // Every type the rank takes for the generic client's, which ranks with
+  // `oidc_*` by its prefix (#671): `oidc_` and `oidc__corp` too, which no
+  // provider alias makes.
+  if (method.type.startsWith('oidc_')) {
     problems.push(
       `its type ${method.type} is in the generic upstream OpenID Connect client's namespace (oidc_<alias>), which no plugin may take`
     );
@@ -379,8 +381,8 @@ async function loadPackage(
  *   checks or that the server cannot build, is written against another
  *   contract version, does not meet the contract, marks a
  *   secret config member the server cannot keep write-only, takes the generic
- *   upstream OpenID Connect client's id or a type in its namespace
- *   ({@link UPSTREAM_OIDC_METHOD_ID}, {@link UPSTREAM_OIDC_TYPE_PATTERN}), or
+ *   upstream OpenID Connect client's id or a type with its `oidc_` prefix
+ *   ({@link UPSTREAM_OIDC_METHOD_ID}), or
  *   repeats the `id` or the `type` of a plugin loaded before it
  * @experimental
  */
