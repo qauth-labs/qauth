@@ -176,6 +176,16 @@ const MAX_CODE_LENGTH = 4096;
 interface UpstreamOidcResult {
   readonly sub: string;
   readonly claims: Readonly<Record<string, unknown>>;
+  /** The names of `claims` a preset's `identityClaims` set (#671). */
+  readonly presetClaims: ReadonlySet<string>;
+}
+
+/** How many verified identities a method keeps the preset's claims of, at most. */
+const MAX_PENDING_ATTRIBUTES = 256;
+
+/** The key of an identity `verify()` resolved: its subject and its claims as JSON. */
+function identityKey(externalSub: string, rawClaims: Readonly<Record<string, unknown>>): string {
+  return `${externalSub}\u0000${JSON.stringify(rawClaims)}`;
 }
 
 /**
@@ -252,6 +262,16 @@ export function upstreamOidcClientMethod<TConfig>(
   const attributeRules = parts.attributes ?? UPSTREAM_STANDARD_ATTRIBUTES;
   /** Results the callback produced and `verify()` has not taken yet. */
   const issued = new WeakSet<object>();
+  /**
+   * The claims a preset set, of the identities `verify()` resolved and
+   * `extractAttributes()` has not mapped yet (#671). The host checks the
+   * identity between the two calls and hands on a JSON copy, so it is found
+   * again by its subject and its claims, never by the object. Two sign-ins
+   * that end in the same claims keep the union of what the preset set in
+   * each: more claims of unknown provenance, never fewer. A missing entry
+   * makes every claim one of unknown provenance.
+   */
+  const presetClaimsOf = new Map<string, ReadonlySet<string>>();
   const documents = new TtlCache<Record<string, unknown>>(
     UPSTREAM_DISCOVERY_TTL_MS,
     MAX_CACHED_DOCUMENTS,
@@ -403,7 +423,7 @@ export function upstreamOidcClientMethod<TConfig>(
     const userinfo = config.fetchUserinfo
       ? await readUserinfo(context, metadata, tokens.accessToken, sub)
       : {};
-    const claims = withIdentityClaims(
+    const { claims, presetClaims } = withIdentityClaims(
       mergedClaims(idTokenClaims, userinfo),
       parts.identityClaims,
       responseMembers === undefined ? {} : readResponseMembers(query, responseMembers),
@@ -412,7 +432,11 @@ export function upstreamOidcClientMethod<TConfig>(
     if (Buffer.byteLength(JSON.stringify(claims), 'utf8') > MAX_AUTH_METHOD_RAW_CLAIMS_BYTES) {
       throw invalidResponse('the claims are larger than an identity may carry');
     }
-    const result: UpstreamOidcResult = Object.freeze({ sub, claims: Object.freeze(claims) });
+    const result: UpstreamOidcResult = Object.freeze({
+      sub,
+      claims: Object.freeze(claims),
+      presetClaims,
+    });
     issued.add(result);
     return { kind: 'result', result };
   }
@@ -471,11 +495,43 @@ export function upstreamOidcClientMethod<TConfig>(
         throw new Error("not a result of this method's callback");
       }
       issued.delete(input);
-      const { sub, claims } = input as UpstreamOidcResult;
-      return { externalSub: sub, assuranceLevel: 'low', rawClaims: { ...claims } };
+      const { sub, claims, presetClaims } = input as UpstreamOidcResult;
+      const rawClaims = { ...claims };
+      if (parts.identityClaims !== undefined) {
+        const key = identityKey(sub, rawClaims);
+        const known = presetClaimsOf.get(key);
+        presetClaimsOf.delete(key);
+        // Bounded, the oldest going first: an entry is needed only until the
+        // host maps the identity, right after this call.
+        if (presetClaimsOf.size >= MAX_PENDING_ATTRIBUTES) {
+          const oldest = presetClaimsOf.keys().next();
+          if (oldest.done !== true) presetClaimsOf.delete(oldest.value);
+        }
+        presetClaimsOf.set(
+          key,
+          known === undefined ? presetClaims : new Set([...known, ...presetClaims])
+        );
+      }
+      return { externalSub: sub, assuranceLevel: 'low', rawClaims };
     },
     extractAttributes(identity: VerifiedIdentity): UserAttribute[] {
-      return upstreamClaimAttributes(type, identity.rawClaims, attributeRules);
+      if (parts.identityClaims === undefined) {
+        return upstreamClaimAttributes(type, identity.rawClaims, attributeRules);
+      }
+      // A preset with identity claims: which claims it set is known only for
+      // an identity this method verified. Any other identity's claims are
+      // all of unknown provenance, so none of its attributes is verified.
+      const key = identityKey(identity.externalSub, identity.rawClaims);
+      const presetClaims = presetClaimsOf.get(key);
+      // Read once: the host maps an identity's attributes once, and the
+      // entry holds the person's claims.
+      presetClaimsOf.delete(key);
+      return upstreamClaimAttributes(
+        type,
+        identity.rawClaims,
+        attributeRules,
+        presetClaims ?? new Set(Object.keys(identity.rawClaims))
+      );
     },
   };
   return Object.freeze(method);
@@ -654,8 +710,9 @@ function withIdentityClaims<TConfig>(
   identityClaims: UpstreamIdentityClaims<TConfig> | undefined,
   response: Readonly<Record<string, string>>,
   config: TConfig
-): Record<string, unknown> {
-  if (identityClaims === undefined) return claims;
+): { claims: Record<string, unknown>; presetClaims: ReadonlySet<string> } {
+  const presetClaims = new Set<string>();
+  if (identityClaims === undefined) return { claims, presetClaims };
   let extra: unknown;
   try {
     extra = identityClaims({ claims: Object.freeze({ ...claims }), response, config });
@@ -668,13 +725,20 @@ function withIdentityClaims<TConfig>(
   const merged: Record<string, unknown> = { ...claims };
   for (const [name, value] of Object.entries(extra)) {
     if (name === 'sub' || UPSTREAM_ID_TOKEN_ONLY_CLAIMS.includes(name)) continue;
-    if (value === undefined) delete merged[name];
+    if (value === undefined) {
+      delete merged[name];
+      presetClaims.delete(name);
+    }
     // A claim the provider vouches for, or its flag, is the provider's to
     // set: a preset only removes one, so a value it makes up, such as one
-    // from a response member, is never taken as verified.
-    else if (!VOUCHED_CLAIMS.has(name)) merged[name] = value;
+    // from a response member, is never taken as verified. Every other claim
+    // it sets is recorded, and never makes an attribute verified either.
+    else if (!VOUCHED_CLAIMS.has(name)) {
+      merged[name] = value;
+      presetClaims.add(name);
+    }
   }
-  return merged;
+  return { claims: merged, presetClaims };
 }
 
 /** One parameter's single value; a missing or repeated one is `undefined`. */

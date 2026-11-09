@@ -161,10 +161,12 @@ provider:
   and the preset's config. `sub` and the claims only the ID token may carry stay the validated
   ones; a claim set to `undefined` is removed. A claim the provider vouches for (`email`,
   `phone_number`) and its `*_verified` flag may be removed, never set, so a value the preset makes
-  up is never taken as verified.
+  up is never taken as verified. Any other claim the preset sets never makes an attribute
+  verified either: the client checked only the provider's claims.
 - **Attribute rules** (`attributes`, `UpstreamClaimAttribute`): the claims the identity maps to
   as attributes and the claim that marks each verified, in place of the standard rules
-  (`UPSTREAM_STANDARD_ATTRIBUTES`).
+  (`UPSTREAM_STANDARD_ATTRIBUTES`). A rule's `verified` sees the provider's claims only, never
+  one the preset set, and an attribute read from a claim the preset set is never verified.
 
 ## Registration check
 
