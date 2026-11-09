@@ -13,10 +13,18 @@ import {
   type AuthMethodRouteRequest,
   MAX_AUTH_METHOD_RAW_CLAIMS_BYTES,
   MAX_UPSTREAM_REDIRECT_LENGTH,
+  MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH,
+  MAX_UPSTREAM_RESPONSE_MEMBERS,
+  UPSTREAM_ID_TOKEN_ONLY_CLAIMS,
   UPSTREAM_OIDC_METHOD_ID,
   UPSTREAM_OIDC_TYPE_PATTERN,
+  UPSTREAM_RESPONSE_MEMBER_NAME_PATTERN,
+  UPSTREAM_RESPONSE_PARAMETERS,
   UPSTREAM_STEP_URN,
+  UPSTREAM_VERIFIED_CLAIM_PAIRS,
   type UpstreamCallbackOutcome,
+  type UpstreamIdentityClaims,
+  type UpstreamResponseMembers,
   type UpstreamStart,
   type UpstreamStartRequest,
   type UserAttribute,
@@ -150,20 +158,10 @@ export const UPSTREAM_DISCOVERY_FAILURE_TTL_MS = 30 * 1000;
 /** How many discovery documents one method keeps. */
 const MAX_CACHED_DOCUMENTS = 256;
 
-/** The authorization response parameters a `form_post` bounce carries on. */
-const RESPONSE_PARAMETERS = ['code', 'state', 'iss', 'error', 'error_description', 'error_uri'];
-
-/** The name of a response member a preset reads: lower case, as a form member's. */
-const RESPONSE_MEMBER_NAME = /^[a-z][a-z0-9_]{0,31}$/;
-
-/** The most response members a preset reads. */
-const MAX_RESPONSE_MEMBERS = 4;
-
-/**
- * The longest value of a response member the bounce carries on and the
- * callback reads, in characters: it rides in the callback's URL.
- */
-export const MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH = 1024;
+// What a preset's response members are (#671) is the plugin SDK's: their
+// names, their cap and the protocol's own parameters, which the bounce
+// carries on and no member may be.
+export { MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH };
 
 /** A BCP 47 tag as `ui_locales` may carry it. */
 const LOCALE_TAG = /^[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8}){0,7}$/;
@@ -234,40 +232,9 @@ export interface UpstreamOidcClientParts<TConfig> {
   readonly attributes?: readonly UpstreamClaimAttribute[];
 }
 
-/**
- * Members of the authorization response besides the protocol's own that a
- * preset's callback reads (#671), by name: each maps the value the
- * provider sent to the value the `form_post` bounce carries on, or
- * `undefined` to drop it. The value is the browser's to choose, never signed
- * by the provider: whatever the callback makes of it is only ever an
- * unverified claim.
- *
- * @experimental
- */
-export type UpstreamResponseMembers = Readonly<
-  Record<string, (value: string) => string | undefined>
->;
-
-/**
- * The claims a preset's identity gets besides the provider's (#671): from
- * the response members it reads and the preset's config. The result's
- * members are set over the provider's claims, and one set to `undefined`
- * removes a claim; `sub` and the claims only the ID token may carry (`iss`,
- * `aud`, `acr`, `auth_time` and the rest) stay the validated ones. A claim
- * the provider vouches for, `email` or `phone_number`, and its
- * `*_verified` flag may be removed, never set: a value the preset makes up
- * is never taken as one the provider verified.
- *
- * @experimental
- */
-export type UpstreamIdentityClaims<TConfig> = (input: {
-  /** The provider's claims, validated: the ID token's over userinfo's. */
-  readonly claims: Readonly<Record<string, unknown>>;
-  /** The preset's response members the response carried, each a single value. */
-  readonly response: Readonly<Record<string, string>>;
-  /** The preset's config, parsed. */
-  readonly config: TConfig;
-}) => Readonly<Record<string, unknown>>;
+// A preset's response members and identity claims are the plugin SDK's
+// types (#671).
+export type { UpstreamIdentityClaims, UpstreamResponseMembers };
 
 /**
  * The client as an AuthMethod under the names and the config `parts` give
@@ -485,7 +452,7 @@ export function upstreamOidcClientMethod<TConfig>(
           // state, code or iss, and takes any `error` as an error, so a
           // response with two `error` values cannot become a plain code.
           const carried: Record<string, string> = {};
-          for (const name of RESPONSE_PARAMETERS) {
+          for (const name of UPSTREAM_RESPONSE_PARAMETERS) {
             if (!Object.hasOwn(request.form, name)) continue;
             carried[name] = single(request.form, name) ?? '';
           }
@@ -588,48 +555,17 @@ function ownTransaction(
 }
 
 /**
- * The claims only the ID token may carry: its own validity (`iss`, `aud`,
- * `azp`, `exp`, `iat`, `nbf`, `jti`, `nonce`, the hashes) and the facts of
- * the authentication (`acr`, `amr`, `auth_time`, `sid`, `cnf`). A userinfo
- * answer is not signed, so one of these from it is dropped, never merged
- * where the ID token lacks it. `sub` is not here: userinfo's must equal the
- * ID token's, which `readUserinfo` checks.
+ * Every claim of `UPSTREAM_VERIFIED_CLAIM_PAIRS` (the plugin SDK's): a value
+ * or its flag. The claims only the ID token may carry,
+ * `UPSTREAM_ID_TOKEN_ONLY_CLAIMS`, are the SDK's too, so the test kit holds a
+ * preset to the same lists.
  */
-const ID_TOKEN_ONLY_CLAIMS: readonly string[] = [
-  'iss',
-  'aud',
-  'azp',
-  'exp',
-  'iat',
-  'nbf',
-  'jti',
-  'nonce',
-  'at_hash',
-  'c_hash',
-  's_hash',
-  'acr',
-  'amr',
-  'auth_time',
-  'sid',
-  'cnf',
-];
-
-/**
- * Claims whose truth another claim of the same source vouches for: a value
- * and its `*_verified` flag (OpenID Connect Core 1.0 §5.1).
- */
-const VERIFIED_CLAIM_PAIRS: readonly (readonly [value: string, flag: string])[] = [
-  ['email', 'email_verified'],
-  ['phone_number', 'phone_number_verified'],
-];
-
-/** Every claim of {@link VERIFIED_CLAIM_PAIRS}: a value or its flag. */
-const VOUCHED_CLAIMS: ReadonlySet<string> = new Set(VERIFIED_CLAIM_PAIRS.flat());
+const VOUCHED_CLAIMS: ReadonlySet<string> = new Set(UPSTREAM_VERIFIED_CLAIM_PAIRS.flat());
 
 /**
  * The identity's claims: the ID token's over the userinfo answer's. The ID
  * token's win: they are signed, and `iss`, `sub` and `aud` stay the checked
- * ones. The protocol claims ({@link ID_TOKEN_ONLY_CLAIMS}) come from the ID
+ * ones. The protocol claims ({@link UPSTREAM_ID_TOKEN_ONLY_CLAIMS}) come from the ID
  * token alone: an `acr` or `auth_time` the ID token lacks is not filled in
  * from userinfo. A value and its `*_verified` flag are taken together, from
  * the source that holds the value: an ID token's unverified `email` never
@@ -640,9 +576,9 @@ function mergedClaims(
   answer: Readonly<Record<string, unknown>>
 ): Record<string, unknown> {
   const userinfo: Record<string, unknown> = { ...answer };
-  for (const name of ID_TOKEN_ONLY_CLAIMS) delete userinfo[name];
+  for (const name of UPSTREAM_ID_TOKEN_ONLY_CLAIMS) delete userinfo[name];
   const claims: Record<string, unknown> = { ...userinfo, ...idToken };
-  for (const [value, flag] of VERIFIED_CLAIM_PAIRS) {
+  for (const [value, flag] of UPSTREAM_VERIFIED_CLAIM_PAIRS) {
     const source = Object.hasOwn(idToken, value)
       ? idToken
       : Object.hasOwn(userinfo, value)
@@ -662,16 +598,16 @@ function checkedResponseMembers(
   const entries = typeof members === 'object' && members !== null ? Object.entries(members) : [];
   if (
     entries.length === 0 ||
-    entries.length > MAX_RESPONSE_MEMBERS ||
+    entries.length > MAX_UPSTREAM_RESPONSE_MEMBERS ||
     entries.some(
       ([name, map]) =>
-        !RESPONSE_MEMBER_NAME.test(name) ||
-        RESPONSE_PARAMETERS.includes(name) ||
+        !UPSTREAM_RESPONSE_MEMBER_NAME_PATTERN.test(name) ||
+        UPSTREAM_RESPONSE_PARAMETERS.includes(name) ||
         typeof map !== 'function'
     )
   ) {
     throw new TypeError(
-      `responseMembers must map one to ${MAX_RESPONSE_MEMBERS} lower-case member names, none a protocol parameter, to functions`
+      `responseMembers must map one to ${MAX_UPSTREAM_RESPONSE_MEMBERS} lower-case member names, none a protocol parameter, to functions`
     );
   }
   return Object.freeze(Object.fromEntries(entries));
@@ -731,7 +667,7 @@ function withIdentityClaims<TConfig>(
   }
   const merged: Record<string, unknown> = { ...claims };
   for (const [name, value] of Object.entries(extra)) {
-    if (name === 'sub' || ID_TOKEN_ONLY_CLAIMS.includes(name)) continue;
+    if (name === 'sub' || UPSTREAM_ID_TOKEN_ONLY_CLAIMS.includes(name)) continue;
     if (value === undefined) delete merged[name];
     // A claim the provider vouches for, or its flag, is the provider's to
     // set: a preset only removes one, so a value it makes up, such as one
