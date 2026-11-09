@@ -57,6 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `oidc_`. The Google, Microsoft and Apple
   plugins are presets in their own repositories ([#1074], [#1075], [#1076]);
   Apple sign-in also needs the signer to hold the key Apple issues ([#1073]).
+- **The docs list QAuth's provider plugins** ([#1074], [#1075], [#1076]).
+  `operate/images` names each plugin in its own repository (GitHub, Google,
+  Microsoft and Apple) with its package and the redirect URI to register at
+  the provider. `extend/auth-method-contract` links the three preset plugins
+  beside the GitHub one.
 
 ### Changed
 

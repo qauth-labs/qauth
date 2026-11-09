@@ -667,6 +667,13 @@ the released server image with the plugin added on top, as an operator adds it. 
 releases it, yet it is not on the server's first-party list: like any other package, it loads only
 while `PLUGIN_API_ENABLED` is on.
 
+QAuth's preset plugins are built the same way, each in its own repository:
+[qauth-labs/plugin-google](https://github.com/qauth-labs/plugin-google),
+[qauth-labs/plugin-microsoft](https://github.com/qauth-labs/plugin-microsoft) and
+[qauth-labs/plugin-apple](https://github.com/qauth-labs/plugin-apple)
+([Write a preset plugin](/extend/preset-plugins/)). [QAuth's provider plugins](/operate/images/#qauths-provider-plugins)
+lists all four, with their packages and the redirect URI each one registers.
+
 **Install the SDK.** The package carries QAuth's own version: install the version of the QAuth
 release the plugin is for. A release is on npm's `latest` dist-tag, the first being `0.2.0`,
 and a release candidate is on `next`. Zod is a peer dependency, so install it beside the SDK:

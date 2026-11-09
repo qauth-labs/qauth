@@ -3,7 +3,7 @@ title: Published images
 description: The container images each QAuth release publishes, how to run them by digest, how to verify their signature, provenance and SBOM before you do, and how to build your own image with an AuthMethod plugin added.
 sidebar:
   order: 9
-lastVerified: '2026-11-05'
+lastVerified: '2026-11-09'
 ---
 
 Each QAuth release publishes two container images, built once from the
@@ -154,6 +154,25 @@ For example, QAuth's own GitHub plugin, `@qauth-labs/plugin-github`, installs th
 end-to-end suite of its repository installs it with these flags into the released server image,
 and its README names the plugin version made for each QAuth release.
 The example's sources are in [qauth-labs/plugin-github](https://github.com/qauth-labs/plugin-github).
+
+### QAuth's provider plugins
+
+QAuth makes these plugins. Each lives in its own repository and has its own version line, and each
+README says which QAuth release a version is for, what to set up at the provider, and the config
+members. None is on the first-party list, so each needs `PLUGIN_API_ENABLED=true`. Register the
+redirect URI at the provider, once for each host a realm signs in on.
+
+| Provider  | Package                                                                                 | Redirect URI to register                           |
+| --------- | --------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| GitHub    | [`@qauth-labs/plugin-github`](https://github.com/qauth-labs/plugin-github#readme)       | `https://<realm host>/upstream/github/callback`    |
+| Google    | [`@qauth-labs/plugin-google`](https://github.com/qauth-labs/plugin-google#readme)       | `https://<realm host>/upstream/google/callback`    |
+| Microsoft | [`@qauth-labs/plugin-microsoft`](https://github.com/qauth-labs/plugin-microsoft#readme) | `https://<realm host>/upstream/microsoft/callback` |
+| Apple     | [`@qauth-labs/plugin-apple`](https://github.com/qauth-labs/plugin-apple#readme)         | `https://<realm host>/upstream/apple/callback`     |
+
+Google, Microsoft and Apple are [preset plugins](/extend/preset-plugins/), built on the server's
+own OpenID Connect client, so they need a QAuth release that loads presets (#671). Sign in with
+Apple also needs the signer to hold the key Apple issues (#1073). Until then its code exchange
+fails closed, and no account is created.
 
 ## What a release runs
 
