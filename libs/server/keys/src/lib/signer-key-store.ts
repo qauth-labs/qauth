@@ -21,9 +21,10 @@ export interface UpstreamClientRecord {
   readonly clientId: string;
   /**
    * The `iss` of the provider's assertions when it is not the client id
-   * (#671): Sign in with Apple's client secret is issued by the developer
-   * team (its Team ID) for the client id. Absent for RFC 7523, whose
-   * assertions are issued by the client itself.
+   * (#671): a provider whose signed client secret is issued by the
+   * developer account that registered the client, such as a team id, names
+   * that account here. Absent for RFC 7523, whose assertions are issued by
+   * the client itself.
    */
   readonly assertionIssuer?: string;
 }

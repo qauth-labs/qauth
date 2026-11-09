@@ -50,7 +50,7 @@ export interface TestHostOptions {
   readonly signerClientId?: string;
   /**
    * The `iss` the signer's upstream client record names for its assertions,
-   * such as Apple's Team ID: the client id unless set.
+   * such as a developer account's team id: the client id unless set.
    */
   readonly signerAssertionIssuer?: string;
   /** Answers instead of the provider. */
