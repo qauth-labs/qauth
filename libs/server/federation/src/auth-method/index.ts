@@ -8,8 +8,8 @@
 export * from '@qauth-labs/plugin-sdk';
 export * from '@qauth-labs/plugin-sdk/host';
 
-// The server's own: the registry item, the generic OIDC client's reserved
-// names, the plugin loader and the secret members of a plugin's config.
+// The server's own: the registry item, the plugin loader and the secret
+// members of a plugin's config.
 export * from './contract';
 export * from './plugin-loader';
 export * from './secret-members';
