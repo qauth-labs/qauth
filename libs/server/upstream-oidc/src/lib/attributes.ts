@@ -1,4 +1,14 @@
-import type { UserAttribute, VerifiedIdentity } from '@qauth-labs/server-federation';
+import {
+  UPSTREAM_STANDARD_ATTRIBUTES,
+  type UpstreamClaimAttribute,
+  upstreamClaimIsTrue,
+  type UserAttribute,
+  type VerifiedIdentity,
+} from '@qauth-labs/server-federation';
+
+// A preset's attribute rules are the plugin SDK's shape (#671): the rule, its
+// test of a `*_verified` flag and the standard rules are declared there.
+export { UPSTREAM_STANDARD_ATTRIBUTES, type UpstreamClaimAttribute, upstreamClaimIsTrue };
 
 /**
  * The attributes the client takes from a provider's claims: by default the
@@ -14,55 +24,6 @@ import type { UserAttribute, VerifiedIdentity } from '@qauth-labs/server-federat
  * asserts it, it does not verify it. A claim that is not a string, or that
  * the engine's attribute rules would refuse, is left out.
  */
-
-/**
- * One attribute a provider's claims map to.
- *
- * @experimental
- */
-export interface UpstreamClaimAttribute {
-  /** The claim the value is read from: a string claim, or the attribute is left out. */
-  readonly claim: string;
-  /** The attribute's key: the claim's name unless set. */
-  readonly attribute?: string;
-  /**
-   * Whether the provider vouches for the value, read from the identity's
-   * claims: `verified` only when this returns the boolean `true`. Without
-   * it the attribute is never verified.
-   */
-  readonly verified?: (claims: Readonly<Record<string, unknown>>) => boolean;
-}
-
-/** Whether `claims[name]` is the boolean `true`. */
-export function upstreamClaimIsTrue(
-  claims: Readonly<Record<string, unknown>>,
-  name: string
-): boolean {
-  return Object.hasOwn(claims, name) && claims[name] === true;
-}
-
-/**
- * The generic client's attributes: the standard profile claims that are
- * plain text, `email` and `phone_number` verified by their `*_verified`
- * claim.
- *
- * @experimental
- */
-export const UPSTREAM_STANDARD_ATTRIBUTES: readonly UpstreamClaimAttribute[] = Object.freeze([
-  { claim: 'email', verified: (claims) => upstreamClaimIsTrue(claims, 'email_verified') },
-  {
-    claim: 'phone_number',
-    verified: (claims) => upstreamClaimIsTrue(claims, 'phone_number_verified'),
-  },
-  { claim: 'name' },
-  { claim: 'given_name' },
-  { claim: 'family_name' },
-  { claim: 'middle_name' },
-  { claim: 'nickname' },
-  { claim: 'preferred_username' },
-  { claim: 'locale' },
-  { claim: 'zoneinfo' },
-]);
 
 /** The longest attribute value, as the AuthMethod contract caps it. */
 const MAX_VALUE_LENGTH = 8192;
