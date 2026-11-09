@@ -145,7 +145,10 @@ describe('a signed client secret (#671)', () => {
     const [claims] = provider.assertions;
     expect(claims).toMatchObject({ iss: 'TEAM123456', sub: CLIENT_ID, aud: ORIGIN });
     expect(typeof claims['jti']).toBe('string');
-    expect((claims['exp'] as number) - (claims['iat'] as number)).toBeLessThanOrEqual(60);
+    // Sixty seconds: the client sets `exp`, and the signer stamps `iat` a moment later.
+    const life = (claims['exp'] as number) - (claims['iat'] as number);
+    expect(life).toBeGreaterThanOrEqual(59);
+    expect(life).toBeLessThanOrEqual(60);
   });
 
   it('is refused at discovery by a provider that takes no client_secret_post', async () => {
