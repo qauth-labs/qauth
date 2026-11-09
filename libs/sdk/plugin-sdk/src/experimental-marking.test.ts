@@ -57,9 +57,11 @@ describe('the AuthMethod contract is marked experimental', () => {
       'src/lib/engine.ts',
       'src/lib/errors.ts',
       'src/lib/parameters.ts',
+      'src/lib/upstream-oidc-preset.ts',
       'src/lib/validate.ts',
       'src/testing/contract-kit.ts',
       'src/testing/fetch-guard.ts',
+      'src/testing/preset-kit.ts',
     ]);
   });
 

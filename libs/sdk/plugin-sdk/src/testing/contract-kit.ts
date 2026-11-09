@@ -617,6 +617,24 @@ function configSecrets(method: AuthMethod, config: unknown, run: KitRun): readon
 }
 
 /**
+ * The string values of `config` under the members `schema` marks
+ * `writeOnly`, or `undefined` when the schema does not render as JSON
+ * Schema: what the preset kit (`checkUpstreamOidcPreset`) compares a client
+ * secret with.
+ *
+ * @experimental
+ */
+export function configWriteOnlyValues(schema: unknown, config: unknown): string[] | undefined {
+  let rendered: unknown;
+  try {
+    rendered = toJSONSchema(schema as Parameters<typeof toJSONSchema>[0]);
+  } catch {
+    return undefined;
+  }
+  return writeOnlyValues(rendered, rendered, config, 0);
+}
+
+/**
  * The string values of `config` under the members its schema marks
  * `writeOnly`: every string leaf of such a member, whatever its shape. The
  * walk follows `properties`, `additionalProperties`, `items`, the members of

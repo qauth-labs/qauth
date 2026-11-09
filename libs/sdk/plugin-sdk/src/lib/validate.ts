@@ -232,7 +232,13 @@ export function routeProblems(routes: unknown): string[] {
   return problems;
 }
 
-function contractProblems(contract: unknown): string[] {
+/**
+ * The problems of `contract` as the contract a method or a preset declares:
+ * none when it is {@link AUTH_METHOD_CONTRACT}.
+ *
+ * @experimental
+ */
+export function contractProblems(contract: unknown): string[] {
   if (contract === AUTH_METHOD_CONTRACT) return [];
   if (typeof contract === 'string' && contract.startsWith(`${AUTH_METHOD_CONTRACT_NAME}/`)) {
     return [
@@ -258,7 +264,13 @@ export function authMethodTypeProblems(type: unknown): string[] {
   return [];
 }
 
-function displayProblems(display: unknown): string[] {
+/**
+ * The problems of `display` as a method's or a preset's display data: its
+ * name under the display rule, and its icon when it has one.
+ *
+ * @experimental
+ */
+export function displayProblems(display: unknown): string[] {
   if (typeof display !== 'object' || display === null) return ['display must be an object'];
   const { name, icon } = display as Record<string, unknown>;
   const problems: string[] = [];
