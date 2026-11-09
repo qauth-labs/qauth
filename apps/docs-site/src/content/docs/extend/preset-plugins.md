@@ -91,8 +91,10 @@ these, which no admin can:
 - **A multi-tenant issuer** (`tenantIssuer: { template, tenantClaim }`): for a provider whose shared
   endpoints serve many tenants. The template holds `{tenantid}` once, in its path
   (`https://idp.example.com/{tenantid}/v2.0`), and a token is accepted only when its `iss` is the
-  template with its own `tenantClaim` value in place. A token of another tenant than the configured
-  one is refused.
+  template with its own `tenantClaim` value in place. That check binds a token to its own tenant;
+  it does not restrict sign-in to one tenant, so an issuer template takes every tenant the shared
+  endpoint serves. A preset that should take one tenant sets that tenant's issuer, without
+  `tenantIssuer`, and a token of any other tenant is refused.
 - **Response members** (`responseMembers`): at most four members the provider sends beside the
   protocol's parameters, each with a map. A provider that answers by `form_post` posts the response
   cross-site; the client bounces it to the `GET` callback, and each member rides on in the URL as
