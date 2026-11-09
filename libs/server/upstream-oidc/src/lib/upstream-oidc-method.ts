@@ -715,7 +715,9 @@ function withIdentityClaims<TConfig>(
   if (identityClaims === undefined) return { claims, presetClaims };
   let extra: unknown;
   try {
-    extra = identityClaims({ claims: Object.freeze({ ...claims }), response, config });
+    // A deep copy: a hook that changes a nested claim changes only its copy,
+    // so no value of the provider's moves without being recorded below.
+    extra = identityClaims({ claims: Object.freeze(structuredClone(claims)), response, config });
   } catch (cause) {
     throw invalidResponse("the preset's identity claims failed", { cause });
   }
