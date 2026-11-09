@@ -547,7 +547,7 @@ export const upstreamOidcPreset = defineUpstreamOidcPreset({
 });
 ```
 
-- **Its own names.** Its `id` is never `oidc` and its `type` never `oidc_<alias>`, so the plugin
+- **Its own names.** Its `id` is never `oidc` and its `type` never starts with `oidc_`, so the plugin
   loader takes it as any plugin: it loads only while `PLUGIN_API_ENABLED` is on, as no provider
   plugin is on the server's first-party list. Its callback is `/upstream/<type>/callback` on the
   realm host: the `redirect_uri` to register at the provider.
