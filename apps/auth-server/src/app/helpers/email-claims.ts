@@ -5,6 +5,7 @@ import {
 } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyInstance } from 'fastify';
 
+import { attributeRankOptions } from './auth-method-plugins';
 import { isWalletAttributeIssuerStillTrusted } from './wallet-verification';
 
 /**
@@ -13,7 +14,9 @@ import { isWalletAttributeIssuerStillTrusted } from './wallet-verification';
  * The BREAKING #229 semantics in one place: `email`/`email_verified` resolve
  * exclusively from VERIFIED `user_attributes` rows using the ADR-002 trust
  * order (`wallet > oidc_* > self_reported`, expiry-aware — see
- * `selectTrustedAttribute`). When no verified email attribute exists, BOTH
+ * `selectTrustedAttribute`), where a method the plugin loader built from an
+ * upstream OpenID Connect preset ranks with `oidc_*` (#671,
+ * `attributeRankOptions`). When no verified email attribute exists, BOTH
  * claims are OMITTED entirely — never null, never present-but-false. There is
  * deliberately no compatibility flag.
  *
@@ -86,14 +89,16 @@ export async function resolveEmailClaims(
     EMAIL_ATTR_KEY
   );
   const now = Date.now();
-  let winner = selectTrustedAttribute(rows, now);
+  const rank = attributeRankOptions(fastify);
+  let winner = selectTrustedAttribute(rows, now, rank);
   if (
     winner?.source === WALLET_SOURCE &&
     !(await isWalletAttributeIssuerStillTrusted(fastify, user, winner.provenance))
   ) {
     winner = selectTrustedAttribute(
       rows.filter((row) => row.source !== WALLET_SOURCE),
-      now
+      now,
+      rank
     );
   }
   if (!winner) {

@@ -13,6 +13,7 @@ import { AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX } from '@qauth-labs/fastify-pl
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { redactLoggedUrl } from '../../config/logger';
 import { fixturePluginImporter, fixturePluginMethod } from '../../testing/auth-method-plugins';
 import {
   INSTALLED_PLUGIN_ID,
@@ -21,14 +22,26 @@ import {
   installFixturePluginPackage,
 } from '../../testing/installed-auth-method-plugin';
 import { testRealm } from '../../testing/request-realm';
+import {
+  importedPackages,
+  SDK_PRESET_ID,
+  SDK_PRESET_MEMBER,
+  SDK_PRESET_PACKAGE,
+  SDK_PRESET_SOURCE,
+  SDK_PRESET_TYPE,
+  type WrittenSdkPresetPackage,
+  writeSdkPresetPackage,
+} from '../../testing/sdk-preset-package';
 import { pluginConfigBodySchema, pluginResource } from '../admin/plugins/routes';
 import {
   AUTH_METHOD_PLUGIN_SIGNER_CALLER,
+  attributeRankOptions,
   authMethodPluginContext,
   AuthMethodPluginDisabledError,
   authMethodPluginEnabledIn,
   authMethodPluginSecretCipher,
   authMethodPluginSecretContext,
+  authMethodPluginRuntime,
   authMethodPluginStateMismatch,
   FIRST_PARTY_AUTH_METHOD_PLUGINS,
   loadDeploymentAuthMethodPlugins,
@@ -543,7 +556,7 @@ describe('a preset plugin on the generic OpenID Connect client (#951)', () => {
 });
 
 describe('loadDeploymentAuthMethodPlugins (#600)', () => {
-  it('ships an empty first-party list until the first-party plugins land', () => {
+  it('ships an empty first-party list: every provider plugin lives in its own repository (#671)', () => {
     expect(FIRST_PARTY_AUTH_METHOD_PLUGINS).toEqual([]);
     expect(Object.isFrozen(FIRST_PARTY_AUTH_METHOD_PLUGINS)).toBe(true);
   });
@@ -586,6 +599,7 @@ describe('loadDeploymentAuthMethodPlugins (#600)', () => {
         authMethodPlugin: PLUGIN_PACKAGE,
         id: 'corp',
         type: 'corp_sso',
+        kind: 'auth-method',
         firstParty: true,
         contract: 'qauth-auth-method/1-rc.0',
       },
@@ -652,5 +666,111 @@ describe('a plugin installed as a package (#1009)', () => {
       `The AuthMethod plugin ${installed.packageName} is not loaded: it is not a first-party plugin, and the experimental plugin API is off. Set PLUGIN_API_ENABLED=true to load it, or remove it from AUTH_METHOD_PLUGINS`
     );
     expect(log.info).not.toHaveBeenCalled();
+  });
+});
+
+describe('a preset package that imports only the plugin SDK (#671)', () => {
+  // The package as a provider plugin in its own repository writes it, loaded
+  // through the server's loader and built on the server's client.
+  let written: WrittenSdkPresetPackage;
+
+  beforeAll(async () => {
+    written = await writeSdkPresetPackage();
+  });
+
+  afterAll(async () => {
+    await written.remove();
+  });
+
+  it('imports the plugin SDK and its peer Zod, and nothing of the server', () => {
+    expect(importedPackages(SDK_PRESET_SOURCE)).toEqual(['@qauth-labs/plugin-sdk', 'zod']);
+  });
+
+  it("loads with the plugin API on, its method built on the server's client, and says how it was built", async () => {
+    const log = silent();
+    const runtime = await loadDeploymentAuthMethodPlugins(
+      log,
+      { packages: [SDK_PRESET_PACKAGE], pluginApiEnabled: true, nodeEnv: 'test' },
+      { importPackage: written.importPackage }
+    );
+
+    const plugin = runtime.ofType(SDK_PRESET_TYPE);
+    expect(plugin).toMatchObject({
+      package: SDK_PRESET_PACKAGE,
+      id: SDK_PRESET_ID,
+      kind: 'upstream-oidc-preset',
+      firstParty: false,
+      secretPaths: ['clientSecret'],
+      responseMembers: [SDK_PRESET_MEMBER],
+    });
+    // The server's client: its callback and its form_post bounce.
+    expect(plugin?.method.routes.map((route) => `${route.method} ${route.path}`)).toEqual([
+      'GET /callback',
+      'POST /callback',
+    ]);
+    expect(runtime.upstreamPresetTypes).toEqual(new Set([SDK_PRESET_TYPE]));
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authMethodPlugin: SDK_PRESET_PACKAGE,
+        kind: 'upstream-oidc-preset',
+        firstParty: false,
+      }),
+      `AuthMethod plugin ${SDK_PRESET_PACKAGE} loaded: ${SDK_PRESET_ID} (${SDK_PRESET_TYPE})`
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('is skipped with the plugin API off, and the boot says why', async () => {
+    const log = silent();
+    const importPackage = vi.fn(written.importPackage);
+    const runtime = await loadDeploymentAuthMethodPlugins(
+      log,
+      { packages: [SDK_PRESET_PACKAGE], pluginApiEnabled: false, nodeEnv: 'test' },
+      { importPackage }
+    );
+
+    expect(runtime.installed).toEqual([]);
+    expect(runtime.upstreamPresetTypes.size).toBe(0);
+    expect(importPackage).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      { authMethodPlugin: SDK_PRESET_PACKAGE, reason: 'plugin-api-off' },
+      `The AuthMethod plugin ${SDK_PRESET_PACKAGE} is not loaded: it is not a first-party plugin, and the experimental plugin API is off. Set PLUGIN_API_ENABLED=true to load it, or remove it from AUTH_METHOD_PLUGINS`
+    );
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it('censors the response member its form_post bounce carries in the request log, once it loads', async () => {
+    const url = `/upstream/${SDK_PRESET_TYPE}/callback?state=s&${SDK_PRESET_MEMBER}=${encodeURIComponent(JSON.stringify({ name: 'Ada' }))}`;
+    await loadDeploymentAuthMethodPlugins(
+      silent(),
+      { packages: [SDK_PRESET_PACKAGE], pluginApiEnabled: true, nodeEnv: 'test' },
+      { importPackage: written.importPackage }
+    );
+
+    const logged = redactLoggedUrl(url);
+    expect(logged).not.toContain('Ada');
+    expect(logged).toContain('state=s');
+  });
+
+  it("ranks the preset-built method's attributes with oidc_*, and a plain plugin's type as unknown", async () => {
+    const runtime = await loadDeploymentAuthMethodPlugins(
+      silent(),
+      { packages: [SDK_PRESET_PACKAGE, PLUGIN_PACKAGE], pluginApiEnabled: true, nodeEnv: 'test' },
+      {
+        importPackage: async (name) =>
+          name === PLUGIN_PACKAGE
+            ? { authMethod: fixturePluginMethod({ type: 'corp_sso', id: 'corp' }) }
+            : written.importPackage(name),
+      }
+    );
+
+    const rank = attributeRankOptions({ authMethodPlugins: runtime });
+    expect(rank.upstreamPresetSources?.has(SDK_PRESET_TYPE)).toBe(true);
+    expect(rank.upstreamPresetSources?.has('corp_sso')).toBe(false);
+    // A server without the plugin runtime ranks no plugin's source.
+    expect(attributeRankOptions({})).toEqual({});
+    expect(attributeRankOptions({ authMethodPlugins: authMethodPluginRuntime([]) })).toEqual({
+      upstreamPresetSources: new Set(),
+    });
   });
 });

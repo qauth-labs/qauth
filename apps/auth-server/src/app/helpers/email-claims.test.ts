@@ -37,6 +37,64 @@ function attrRow(source: string, attrValue: string, expiresAt: number | null = n
   };
 }
 
+describe("resolveEmailClaims: a preset plugin's rank (#671)", () => {
+  beforeEach(() => {
+    (isWalletAttributeIssuerStillTrusted as unknown as Mock).mockReset().mockResolvedValue(true);
+  });
+
+  /** A server whose plugin runtime holds a method the loader built from a preset of `presetType`. */
+  function withPreset(rows: unknown[], presetType: string) {
+    const fastify = fastifyStub(rows) as unknown as Record<string, unknown>;
+    fastify['authMethodPlugins'] = { upstreamPresetTypes: new Set([presetType]) };
+    return fastify as unknown as FastifyInstance;
+  }
+
+  it("asserts a preset-built method's verified email over a self-reported one", async () => {
+    const rows = [
+      attrRow('self_reported', 'self@example.com'),
+      attrRow('sdk_idp', 'p@example.com'),
+    ];
+    expect(await resolveEmailClaims(withPreset(rows, 'sdk_idp'), USER)).toEqual({
+      email: 'p@example.com',
+      email_verified: true,
+    });
+  });
+
+  it("leaves a plain plugin's type unknown, below self_reported", async () => {
+    const rows = [
+      attrRow('self_reported', 'self@example.com'),
+      attrRow('corp_sso', 'c@example.com'),
+    ];
+    expect(await resolveEmailClaims(withPreset(rows, 'sdk_idp'), USER)).toEqual({
+      email: 'self@example.com',
+      email_verified: true,
+    });
+    // And a server without the plugin runtime ranks no plugin's source.
+    expect(
+      await resolveEmailClaims(
+        fastifyStub([
+          attrRow('self_reported', 'self@example.com'),
+          attrRow('sdk_idp', 'p@example.com'),
+        ]),
+        USER
+      )
+    ).toEqual({ email: 'self@example.com', email_verified: true });
+  });
+
+  it('ranks it below a wallet row, and falls back to it when the wallet issuer is no longer trusted', async () => {
+    (isWalletAttributeIssuerStillTrusted as unknown as Mock).mockResolvedValue(false);
+    const rows = [
+      attrRow('wallet', 'wallet@example.com'),
+      attrRow('self_reported', 'self@example.com'),
+      attrRow('sdk_idp', 'p@example.com'),
+    ];
+    expect(await resolveEmailClaims(withPreset(rows, 'sdk_idp'), USER)).toEqual({
+      email: 'p@example.com',
+      email_verified: true,
+    });
+  });
+});
+
 describe('resolveEmailClaims', () => {
   beforeEach(() => {
     (isWalletAttributeIssuerStillTrusted as unknown as Mock).mockReset().mockResolvedValue(true);

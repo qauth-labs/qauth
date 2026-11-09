@@ -1,11 +1,16 @@
-import { AUTH_METHOD_CONTRACT } from '@qauth-labs/plugin-sdk';
+import {
+  AUTH_METHOD_CONTRACT,
+  defineUpstreamOidcPreset,
+  UPSTREAM_OIDC_METHOD_ID,
+  UPSTREAM_OIDC_TYPE_PATTERN,
+} from '@qauth-labs/plugin-sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { createSampleAuthMethod } from '../../testing/sample-auth-method.fixture';
-import { UPSTREAM_OIDC_METHOD_ID, UPSTREAM_OIDC_TYPE_PATTERN } from './contract';
 import {
   AuthMethodPluginError,
+  type BuildUpstreamOidcPreset,
   type ImportAuthMethodPlugin,
   loadAuthMethodPlugins,
   skippedAuthMethodPluginMessage,
@@ -359,5 +364,150 @@ describe('loadAuthMethodPlugins (#600)', () => {
       })
     );
     expect(error.problems).toEqual(['AUTH_METHOD_PLUGINS lists it twice']);
+  });
+});
+
+describe('loadAuthMethodPlugins: a package that exports an upstream OpenID Connect preset (#671)', () => {
+  const configSchema = z.strictObject({
+    clientId: z.string().min(1),
+    clientSecret: z.string().min(1).meta({ writeOnly: true }),
+  });
+  const preset = defineUpstreamOidcPreset({
+    id: 'corp-idp',
+    type: 'corp_idp',
+    display: { name: 'Corp IdP' },
+    origins: ['https://idp.example.com'],
+    configSchema,
+    upstreamConfig: (config) => ({
+      issuer: 'https://idp.example.com',
+      clientId: config.clientId,
+      clientAuthentication: { method: 'client_secret_basic', clientSecret: config.clientSecret },
+    }),
+    responseMembers: { profile: (value) => value },
+  });
+
+  /** Stands in for the server's client: a sample method under the preset's id and type. */
+  const builder = () => vi.fn<BuildUpstreamOidcPreset>((given) => sample(given.type, given.id));
+
+  const load = (module: unknown, build?: BuildUpstreamOidcPreset) =>
+    loadAuthMethodPlugins({
+      packages: [THIRD_PARTY],
+      pluginApiEnabled: true,
+      firstParty: [],
+      importPackage: importerOf({ [THIRD_PARTY]: module }),
+      ...(build === undefined ? {} : { buildUpstreamOidcPreset: build }),
+    });
+
+  it("builds the method with the server's builder and records how it was built", async () => {
+    const build = builder();
+    const loaded = await load({ upstreamOidcPreset: preset }, build);
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(build).toHaveBeenCalledWith(preset);
+    const [plugin] = loaded.installed;
+    expect(plugin).toMatchObject({
+      package: THIRD_PARTY,
+      id: 'corp-idp',
+      type: 'corp_idp',
+      kind: 'upstream-oidc-preset',
+      responseMembers: ['profile'],
+      secretPaths: ['clientSecret'],
+    });
+    expect(Object.isFrozen(plugin.method)).toBe(true);
+
+    // A package that builds its own method is the other kind, with no members.
+    const plain = await load({ authMethod: sample('corp_sso') }, build);
+    expect(plain.installed[0]).toMatchObject({ kind: 'auth-method', responseMembers: [] });
+  });
+
+  it('reads a CommonJS preset package under default too', async () => {
+    const loaded = await load({ default: { upstreamOidcPreset: preset } }, builder());
+    expect(loaded.installed.map((plugin) => plugin.kind)).toEqual(['upstream-oidc-preset']);
+  });
+
+  it('keeps a preset package out while the plugin API is off, as any package it does not list first-party', async () => {
+    const build = builder();
+    const importPackage = importerOf({ [THIRD_PARTY]: { upstreamOidcPreset: preset } });
+    const loaded = await loadAuthMethodPlugins({
+      packages: [THIRD_PARTY],
+      pluginApiEnabled: false,
+      firstParty: [],
+      importPackage,
+      buildUpstreamOidcPreset: build,
+    });
+    expect(loaded).toEqual({
+      installed: [],
+      skipped: [{ package: THIRD_PARTY, reason: 'plugin-api-off' }],
+    });
+    expect(importPackage).not.toHaveBeenCalled();
+    expect(build).not.toHaveBeenCalled();
+  });
+
+  it('refuses a package that exports both an authMethod and a preset', async () => {
+    const error = await refusal(
+      load({ authMethod: sample('corp_sso'), upstreamOidcPreset: preset }, builder())
+    );
+    expect(error.problems).toEqual([
+      'it exports both authMethod and upstreamOidcPreset: a plugin package exports one of them',
+    ]);
+  });
+
+  it('refuses a preset when the server builds none', async () => {
+    const error = await refusal(load({ upstreamOidcPreset: preset }));
+    expect(error.problems).toEqual([
+      'it exports an upstreamOidcPreset, and this server builds no upstream OpenID Connect preset',
+    ]);
+  });
+
+  it('refuses a preset that fails its checks before it is built, naming each problem', async () => {
+    const build = builder();
+    const error = await refusal(
+      load(
+        {
+          upstreamOidcPreset: { ...preset, type: 'oidc_corp', origins: ['http://idp.example.com'] },
+        },
+        build
+      )
+    );
+    expect(error.problems).toEqual([
+      "type oidc_corp is in the generic upstream OpenID Connect client's namespace (oidc_<alias>), which no preset may take",
+      'origins[0] must be a bare https origin, such as https://idp.example.com',
+    ]);
+    expect(build).not.toHaveBeenCalled();
+
+    const versioned = await refusal(
+      load({ upstreamOidcPreset: { ...preset, contract: 'qauth-auth-method/0' } }, build)
+    );
+    expect(versioned.problems).toEqual([
+      `it is written against the contract qauth-auth-method/0, and this server implements ${AUTH_METHOD_CONTRACT}: install a version of the plugin built for ${AUTH_METHOD_CONTRACT}`,
+    ]);
+    expect((await refusal(load({ upstreamOidcPreset: 'corp' }, build))).problems).toEqual([
+      expect.stringContaining('it exports no authMethod'),
+    ]);
+  });
+
+  it("refuses a preset the builder cannot build, with each of the builder's reasons", async () => {
+    const error = await refusal(
+      load({ upstreamOidcPreset: preset }, () => {
+        throw new TypeError('The preset cannot be built:\n- one problem\n- another');
+      })
+    );
+    expect(error.problems).toEqual([
+      'its upstreamOidcPreset cannot be built: one problem',
+      'its upstreamOidcPreset cannot be built: another',
+    ]);
+  });
+
+  it('holds the built method to the whole contract, as a package-built one', async () => {
+    const error = await refusal(
+      load({ upstreamOidcPreset: preset }, () => ({ ...sample('corp_idp'), type: 'Corp IdP' }))
+    );
+    expect(error.problems.join('\n')).toMatch(/type must match/);
+    const notAMethod = await refusal(
+      load(
+        { upstreamOidcPreset: preset },
+        () => 'corp' as unknown as ReturnType<BuildUpstreamOidcPreset>
+      )
+    );
+    expect(notAMethod.problems.join('\n')).toMatch(/not an object/);
   });
 });

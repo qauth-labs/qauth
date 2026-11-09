@@ -5,10 +5,14 @@ import {
   AUTH_METHOD_PLUGIN_EXPORT,
   type AuthMethod,
   AuthMethodContractError,
+  UPSTREAM_OIDC_METHOD_ID,
+  UPSTREAM_OIDC_PRESET_EXPORT,
+  UPSTREAM_OIDC_TYPE_PATTERN,
+  type UpstreamOidcPreset,
+  upstreamOidcPresetProblems,
 } from '@qauth-labs/plugin-sdk';
 import { authMethodSnapshot } from '@qauth-labs/plugin-sdk/host';
 
-import { UPSTREAM_OIDC_METHOD_ID, UPSTREAM_OIDC_TYPE_PATTERN } from './contract';
 import { authMethodSecretPaths } from './secret-members';
 
 /**
@@ -32,6 +36,17 @@ import { authMethodSecretPaths } from './secret-members';
  * Plugin code is trusted code that runs in-process: a package's own code
  * runs as it is imported. The loader cannot sandbox it, so the switch and the
  * list decide whose code is imported at all.
+ *
+ * A package exports one of two things (#671):
+ *
+ * - `authMethod`: an AuthMethod it built itself;
+ * - `upstreamOidcPreset`: an upstream OpenID Connect preset, the facts and
+ *   claim rules of one provider (`defineUpstreamOidcPreset` of the plugin
+ *   SDK). The loader checks it, then builds the method on the server's own
+ *   OpenID Connect client (`buildUpstreamOidcPreset`): the protocol code is
+ *   the server's, so a plugin in its own repository carries none of it.
+ *
+ * Either way the method is then held to the whole AuthMethod contract.
  *
  * @experimental
  */
@@ -60,7 +75,35 @@ export interface LoadAuthMethodPluginsOptions {
   readonly firstParty: readonly string[];
   /** Replaces the dynamic `import()`, for tests. */
   readonly importPackage?: ImportAuthMethodPlugin;
+  /**
+   * Builds the method of a package that exports an upstream OpenID Connect
+   * preset: the server's `createUpstreamOidcPresetMethod`
+   * (`@qauth-labs/server-upstream-oidc`), which this library cannot import.
+   * Without it, such a package fails the boot.
+   */
+  readonly buildUpstreamOidcPreset?: BuildUpstreamOidcPreset;
 }
+
+/**
+ * Builds the method of an upstream OpenID Connect preset (#671). It throws a
+ * `TypeError` for a preset it cannot build.
+ *
+ * @experimental
+ */
+export type BuildUpstreamOidcPreset = (preset: UpstreamOidcPreset) => AuthMethod;
+
+/**
+ * How an installed plugin's method was built (#671):
+ *
+ * - `auth-method`: by the package, which exports its `authMethod`;
+ * - `upstream-oidc-preset`: by the server, on its own OpenID Connect client,
+ *   from the preset the package exports. The client checks the provider's ID
+ *   token itself, so claim resolution ranks the attributes such a method
+ *   writes with an `oidc_*` provider's (`rankAttributeSource`).
+ *
+ * @experimental
+ */
+export type AuthMethodPluginKind = 'auth-method' | 'upstream-oidc-preset';
 
 /**
  * One installed plugin: its package and the method it registers.
@@ -80,6 +123,14 @@ export interface InstalledAuthMethodPlugin {
   readonly method: AuthMethod;
   /** The paths of its config's secret members, which stay write-only. */
   readonly secretPaths: readonly string[];
+  /** How its method was built. */
+  readonly kind: AuthMethodPluginKind;
+  /**
+   * The names of the authorization response members its callback reads, which
+   * its `form_post` bounce carries on in the callback's URL: a preset's
+   * `responseMembers`. None for an `authMethod`.
+   */
+  readonly responseMembers: readonly string[];
 }
 
 /**
@@ -144,15 +195,15 @@ function isMissingPackage(error: unknown, packageName: string): boolean {
   return firstLine.includes(`'${packageName}'`) || firstLine.includes(`"${packageName}"`);
 }
 
-/** The `authMethod` export of a module, or `undefined`. */
-function exportedMethod(module: unknown): unknown {
+/** The export `name` of a module, or `undefined`. */
+function exported(module: unknown, name: string): unknown {
   if (typeof module !== 'object' || module === null) return undefined;
-  const direct = (module as Record<string, unknown>)[AUTH_METHOD_PLUGIN_EXPORT];
+  const direct = (module as Record<string, unknown>)[name];
   if (direct !== undefined) return direct;
   // A CommonJS package imported from ESM arrives under `default`.
   const fallback = (module as { default?: unknown }).default;
   return typeof fallback === 'object' && fallback !== null
-    ? (fallback as Record<string, unknown>)[AUTH_METHOD_PLUGIN_EXPORT]
+    ? (fallback as Record<string, unknown>)[name]
     : undefined;
 }
 
@@ -160,7 +211,7 @@ function exportedMethod(module: unknown): unknown {
  * The contract version a candidate declares, checked first and on its own,
  * so a plugin written for another version says so, whatever else it breaks.
  */
-function contractVersionProblem(candidate: unknown): string | undefined {
+function contractVersionProblem(candidate: unknown, exportName: string): string | undefined {
   const contract =
     typeof candidate === 'object' && candidate !== null
       ? (candidate as Record<string, unknown>)['contract']
@@ -169,7 +220,45 @@ function contractVersionProblem(candidate: unknown): string | undefined {
   if (typeof contract === 'string' && contract.startsWith(`${AUTH_METHOD_CONTRACT_NAME}/`)) {
     return `it is written against the contract ${contract.slice(0, 64)}, and this server implements ${AUTH_METHOD_CONTRACT}: install a version of the plugin built for ${AUTH_METHOD_CONTRACT}`;
   }
-  return `its ${AUTH_METHOD_PLUGIN_EXPORT} names no contract version: it must declare contract ${AUTH_METHOD_CONTRACT}`;
+  return `its ${exportName} names no contract version: it must declare contract ${AUTH_METHOD_CONTRACT}`;
+}
+
+/**
+ * The method of a package's `upstreamOidcPreset`: the preset checked, then
+ * built on the server's client.
+ */
+function presetMethod(
+  packageName: string,
+  preset: unknown,
+  build: BuildUpstreamOidcPreset | undefined
+): { readonly method: unknown; readonly responseMembers: readonly string[] } {
+  const problems = upstreamOidcPresetProblems(preset);
+  if (problems.length > 0) throw new AuthMethodPluginError(packageName, problems);
+  if (build === undefined) {
+    throw new AuthMethodPluginError(packageName, [
+      `it exports an ${UPSTREAM_OIDC_PRESET_EXPORT}, and this server builds no upstream OpenID Connect preset`,
+    ]);
+  }
+  const checked = preset as UpstreamOidcPreset;
+  let method: unknown;
+  try {
+    method = build(checked);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    // The builder lists its problems one to a `- ` line, under a heading.
+    const lines = error.message.split('\n');
+    const listed = lines.filter((line) => line.startsWith('- ')).map((line) => line.slice(2));
+    throw new AuthMethodPluginError(
+      packageName,
+      (listed.length > 0 ? listed : [lines[0]]).map(
+        (reason) => `its ${UPSTREAM_OIDC_PRESET_EXPORT} cannot be built: ${reason}`
+      )
+    );
+  }
+  return {
+    method,
+    responseMembers: Object.freeze(Object.keys(checked.responseMembers ?? {})),
+  };
 }
 
 /**
@@ -197,7 +286,8 @@ function reservedNameProblems(method: Pick<AuthMethod, 'id' | 'type'>): string[]
 async function loadPackage(
   packageName: string,
   firstParty: boolean,
-  importer: ImportAuthMethodPlugin
+  importer: ImportAuthMethodPlugin,
+  buildPreset: BuildUpstreamOidcPreset | undefined
 ): Promise<InstalledAuthMethodPlugin> {
   let module: unknown;
   try {
@@ -213,15 +303,35 @@ async function loadPackage(
     ]);
   }
 
-  const candidate = exportedMethod(module);
-  if (typeof candidate !== 'object' || candidate === null) {
+  const exportedMethod = exported(module, AUTH_METHOD_PLUGIN_EXPORT);
+  const exportedPreset = exported(module, UPSTREAM_OIDC_PRESET_EXPORT);
+  if (exportedMethod !== undefined && exportedPreset !== undefined) {
     throw new AuthMethodPluginError(packageName, [
-      `it exports no ${AUTH_METHOD_PLUGIN_EXPORT}: a plugin package exports its AuthMethod as ${AUTH_METHOD_PLUGIN_EXPORT}`,
+      `it exports both ${AUTH_METHOD_PLUGIN_EXPORT} and ${UPSTREAM_OIDC_PRESET_EXPORT}: a plugin package exports one of them`,
     ]);
   }
-  const versionProblem = contractVersionProblem(candidate);
+  const kind: AuthMethodPluginKind =
+    exportedPreset !== undefined ? 'upstream-oidc-preset' : 'auth-method';
+  const exportName =
+    kind === 'auth-method' ? AUTH_METHOD_PLUGIN_EXPORT : UPSTREAM_OIDC_PRESET_EXPORT;
+  const exportedValue = kind === 'auth-method' ? exportedMethod : exportedPreset;
+  if (typeof exportedValue !== 'object' || exportedValue === null) {
+    throw new AuthMethodPluginError(packageName, [
+      `it exports no ${AUTH_METHOD_PLUGIN_EXPORT}: a plugin package exports its AuthMethod as ${AUTH_METHOD_PLUGIN_EXPORT}, or an upstream OpenID Connect preset as ${UPSTREAM_OIDC_PRESET_EXPORT}`,
+    ]);
+  }
+  const versionProblem = contractVersionProblem(exportedValue, exportName);
   if (versionProblem !== undefined) {
     throw new AuthMethodPluginError(packageName, [versionProblem]);
+  }
+  let candidate: unknown = exportedValue;
+  let responseMembers: readonly string[] = Object.freeze([]);
+  if (kind === 'upstream-oidc-preset') {
+    ({ method: candidate, responseMembers } = presetMethod(
+      packageName,
+      exportedValue,
+      buildPreset
+    ));
   }
 
   // The snapshot the registry keeps, held to the whole contract, and the
@@ -229,6 +339,9 @@ async function loadPackage(
   let method: AuthMethod;
   let secretPaths: string[];
   try {
+    if (typeof candidate !== 'object' || candidate === null) {
+      throw new AuthMethodContractError('The method', ['it is not an object']);
+    }
     const snapshot = authMethodSnapshot(candidate);
     assertAuthMethod(snapshot);
     method = snapshot;
@@ -248,6 +361,8 @@ async function loadPackage(
     type: method.type,
     method,
     secretPaths: Object.freeze([...secretPaths]),
+    kind,
+    responseMembers,
   });
 }
 
@@ -259,8 +374,10 @@ async function loadPackage(
  * answered among `skipped`, for the boot to log why.
  *
  * @throws AuthMethodPluginError when a package is listed twice, is not
- *   installed, fails as it is imported, exports no `authMethod`, is written
- *   against another contract version, does not meet the contract, marks a
+ *   installed, fails as it is imported, exports neither an `authMethod` nor
+ *   an `upstreamOidcPreset` (or both), exports a preset that fails its
+ *   checks or that the server cannot build, is written against another
+ *   contract version, does not meet the contract, marks a
  *   secret config member the server cannot keep write-only, takes the generic
  *   upstream OpenID Connect client's id or a type in its namespace
  *   ({@link UPSTREAM_OIDC_METHOD_ID}, {@link UPSTREAM_OIDC_TYPE_PATTERN}), or
@@ -289,7 +406,12 @@ export async function loadAuthMethodPlugins(
       continue;
     }
 
-    const plugin = await loadPackage(packageName, isFirstParty, importer);
+    const plugin = await loadPackage(
+      packageName,
+      isFirstParty,
+      importer,
+      options.buildUpstreamOidcPreset
+    );
     const sameId = installed.find((other) => other.id === plugin.id);
     if (sameId !== undefined) {
       throw new AuthMethodPluginError(packageName, [
