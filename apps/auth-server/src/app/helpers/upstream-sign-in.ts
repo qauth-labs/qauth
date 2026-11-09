@@ -59,6 +59,7 @@ import { realmRateLimitKey } from './realm-rate-limit';
 import { buildRealmUrl } from './realm-url';
 import { type RealmRow, requestRealm } from './request-realm';
 import { roundEnvironment } from './round-limits';
+import { upstreamAttributeProvenance } from './upstream-attribute-provenance';
 import type { UpstreamLinkRefusal } from './upstream-links';
 import {
   sendUpstreamPage,
@@ -638,6 +639,8 @@ export async function resolveUpstreamAccount(
           },
           tx
         );
+        // How the method was built, which the rank reads (#671).
+        const provenance = upstreamAttributeProvenance(fastify, type);
         await repositories.userAttributes.upsertMany(
           user.id,
           attributes.map((attribute) => ({
@@ -647,6 +650,7 @@ export async function resolveUpstreamAccount(
             // The provider vouched for it, and its verified switch is on.
             verified: attribute.verified && provider.marksVerified,
             expiresAt: attribute.expiresAt ?? null,
+            provenance,
           })),
           tx
         );

@@ -7,12 +7,14 @@ import { SELF_REPORTED_SOURCE } from '../providers/password.provider';
  * value QAuth asserts downstream. The trust order is APP-CODE POLICY (per the
  * schema JSDoc in `identity.ts` — deliberately not a DB constraint), and this
  * module is its single implementation: `wallet > oidc_* > self_reported`,
- * where a method the plugin loader built from an upstream OpenID Connect
- * preset (#671) ranks with `oidc_*`: the server's own client checked its ID
- * token, as it does a configured `oidc_*` provider's. The core names no
- * provider (ADR-018 §3): which sources are such methods is the caller's
- * answer ({@link AttributeRankOptions}), taken from the plugins the
- * deployment loaded, never a list of names here.
+ * where a row a method the plugin loader built from an upstream OpenID
+ * Connect preset wrote (#671) ranks with `oidc_*`: the server's own client
+ * checked its ID token, as it does a configured `oidc_*` provider's. The core
+ * names no provider (ADR-018 §3): the host records how the writing method was
+ * built in the row's `provenance` when it writes the row
+ * ({@link UPSTREAM_PRESET_PROVENANCE}), so every role ranks it alike, with or
+ * without the plugins loaded, and a type another package serves later does
+ * not re-rank what an earlier one wrote.
  *
  * Design decisions (adjudicated, #229):
  *
@@ -47,29 +49,40 @@ export interface TrustRankedAttribute {
   attrValue: string;
   /** Epoch-ms expiry for VC-derived attributes; null/undefined never expires. */
   expiresAt?: number | null;
+  /** The row's `provenance`, as the host wrote it; null/undefined for none. */
+  provenance?: unknown;
 }
 
 /**
- * What the caller knows of the deployment that the rank needs (#671).
+ * The `user_attributes.provenance` the host writes on every row of a method
+ * the plugin loader built from an upstream OpenID Connect preset (#671): the
+ * rows that rank with `oidc_*`. Written by the server's code only, never by a
+ * plugin, and only under the plugin's own `type` as the source.
  */
-export interface AttributeRankOptions {
-  /**
-   * The attribute sources of the methods the plugin loader built from an
-   * upstream OpenID Connect preset: each such plugin's `type`. A plain
-   * AuthMethod plugin's type is not among them, and stays unknown.
-   */
-  readonly upstreamPresetSources?: ReadonlySet<string>;
+export const UPSTREAM_PRESET_PROVENANCE: Readonly<{ builtFrom: 'upstream-oidc-preset' }> =
+  Object.freeze({ builtFrom: 'upstream-oidc-preset' });
+
+/** Whether `provenance` is {@link UPSTREAM_PRESET_PROVENANCE}. */
+export function isUpstreamPresetProvenance(provenance: unknown): boolean {
+  return (
+    typeof provenance === 'object' &&
+    provenance !== null &&
+    !Array.isArray(provenance) &&
+    (provenance as Record<string, unknown>)['builtFrom'] === UPSTREAM_PRESET_PROVENANCE.builtFrom
+  );
 }
 
 /**
- * ADR-002 trust rank: `wallet` (3) > `oidc_*` family and
- * {@link AttributeRankOptions.upstreamPresetSources} (2) > `self_reported`
- * (1) > unknown (0, eligible — see module JSDoc).
+ * ADR-002 trust rank: `wallet` (3) > `oidc_*` family and a row of a
+ * preset-built method ({@link UPSTREAM_PRESET_PROVENANCE}) (2) >
+ * `self_reported` (1) > unknown (0, eligible — see module JSDoc). A
+ * provenance never changes the rank of QAuth's own sources.
  */
-export function rankAttributeSource(source: string, options: AttributeRankOptions = {}): number {
+export function rankAttributeSource(source: string, provenance?: unknown): number {
   if (source === 'wallet') return 3;
-  if (source.startsWith('oidc_') || options.upstreamPresetSources?.has(source) === true) return 2;
+  if (source.startsWith('oidc_')) return 2;
   if (source === SELF_REPORTED_SOURCE) return 1;
+  if (isUpstreamPresetProvenance(provenance)) return 2;
   return 0;
 }
 
@@ -82,18 +95,17 @@ export function rankAttributeSource(source: string, options: AttributeRankOption
  * @param rows - Candidate rows; callers pass only `verified = true` rows
  * (the repository read enforces that filter).
  * @param now - Epoch-ms clock; a row with `expiresAt <= now` is excluded.
- * @param options - What the rank needs of the deployment ({@link AttributeRankOptions}).
  */
 export function selectTrustedAttribute<T extends TrustRankedAttribute>(
   rows: readonly T[],
-  now: number,
-  options: AttributeRankOptions = {}
+  now: number
 ): T | undefined {
   const eligible = rows.filter((row) => row.expiresAt == null || row.expiresAt > now);
   if (eligible.length === 0) return undefined;
 
   return [...eligible].sort((a, b) => {
-    const byRank = rankAttributeSource(b.source, options) - rankAttributeSource(a.source, options);
+    const byRank =
+      rankAttributeSource(b.source, b.provenance) - rankAttributeSource(a.source, a.provenance);
     if (byRank !== 0) return byRank;
     return a.source < b.source ? -1 : a.source > b.source ? 1 : 0;
   })[0];

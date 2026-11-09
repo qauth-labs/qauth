@@ -238,12 +238,13 @@ export {
   assertEmailVerifyingIssuersUsable,
   issuerVouchesForEmail,
 } from '@qauth-labs/server-federation';
-// The rank reads which sources are methods the loader built from a preset (#671).
-export type { AttributeRankOptions } from '@qauth-labs/server-federation';
+// The upstream sign-in writes the provenance of a preset-built method's rows,
+// which the rank reads (#671).
 export {
   buildPasswordCredentialData,
   createPasswordProvider,
   EMAIL_ATTR_KEY,
+  isUpstreamPresetProvenance,
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
   presentedPasswordFor,
@@ -251,6 +252,7 @@ export {
   readWalletBinding,
   selectTrustedAttribute,
   SELF_REPORTED_SOURCE,
+  UPSTREAM_PRESET_PROVENANCE,
   WALLET_PROVIDER_TYPE,
   WALLET_SOURCE,
 } from '@qauth-labs/server-federation';

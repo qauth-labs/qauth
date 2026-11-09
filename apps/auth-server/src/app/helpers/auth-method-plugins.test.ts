@@ -1,7 +1,11 @@
 import { types } from 'node:util';
 
 import type { RealmAuthMethodPlugin } from '@qauth-labs/fastify-plugin-db';
-import { AuthMethodConfigError } from '@qauth-labs/fastify-plugin-federation';
+import {
+  AuthMethodConfigError,
+  rankAttributeSource,
+  UPSTREAM_PRESET_PROVENANCE,
+} from '@qauth-labs/fastify-plugin-federation';
 import {
   EXAMPLE_PRESET_ID,
   EXAMPLE_PRESET_PACKAGE,
@@ -29,23 +33,22 @@ import {
   SDK_PRESET_PACKAGE,
   SDK_PRESET_SOURCE,
   SDK_PRESET_TYPE,
-  type WrittenSdkPresetPackage,
   writeSdkPresetPackage,
+  type WrittenSdkPresetPackage,
 } from '../../testing/sdk-preset-package';
 import { pluginConfigBodySchema, pluginResource } from '../admin/plugins/routes';
 import {
   AUTH_METHOD_PLUGIN_SIGNER_CALLER,
-  attributeRankOptions,
   authMethodPluginContext,
   AuthMethodPluginDisabledError,
   authMethodPluginEnabledIn,
   authMethodPluginSecretCipher,
   authMethodPluginSecretContext,
-  authMethodPluginRuntime,
   authMethodPluginStateMismatch,
   FIRST_PARTY_AUTH_METHOD_PLUGINS,
   loadDeploymentAuthMethodPlugins,
 } from './auth-method-plugins';
+import { upstreamAttributeProvenance } from './upstream-attribute-provenance';
 
 /**
  * The plugin runtime (#600): what a plugin is handed, and what the boot logs.
@@ -708,7 +711,6 @@ describe('a preset package that imports only the plugin SDK (#671)', () => {
       'GET /callback',
       'POST /callback',
     ]);
-    expect(runtime.upstreamPresetTypes).toEqual(new Set([SDK_PRESET_TYPE]));
     expect(log.info).toHaveBeenCalledWith(
       expect.objectContaining({
         authMethodPlugin: SDK_PRESET_PACKAGE,
@@ -730,7 +732,6 @@ describe('a preset package that imports only the plugin SDK (#671)', () => {
     );
 
     expect(runtime.installed).toEqual([]);
-    expect(runtime.upstreamPresetTypes.size).toBe(0);
     expect(importPackage).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       { authMethodPlugin: SDK_PRESET_PACKAGE, reason: 'plugin-api-off' },
@@ -752,7 +753,7 @@ describe('a preset package that imports only the plugin SDK (#671)', () => {
     expect(logged).toContain('state=s');
   });
 
-  it("ranks the preset-built method's attributes with oidc_*, and a plain plugin's type as unknown", async () => {
+  it("records on the preset-built method's attributes how it was built, and nothing on a plain plugin's", async () => {
     const runtime = await loadDeploymentAuthMethodPlugins(
       silent(),
       { packages: [SDK_PRESET_PACKAGE, PLUGIN_PACKAGE], pluginApiEnabled: true, nodeEnv: 'test' },
@@ -764,13 +765,16 @@ describe('a preset package that imports only the plugin SDK (#671)', () => {
       }
     );
 
-    const rank = attributeRankOptions({ authMethodPlugins: runtime });
-    expect(rank.upstreamPresetSources?.has(SDK_PRESET_TYPE)).toBe(true);
-    expect(rank.upstreamPresetSources?.has('corp_sso')).toBe(false);
-    // A server without the plugin runtime ranks no plugin's source.
-    expect(attributeRankOptions({})).toEqual({});
-    expect(attributeRankOptions({ authMethodPlugins: authMethodPluginRuntime([]) })).toEqual({
-      upstreamPresetSources: new Set(),
-    });
+    const fastify = { authMethodPlugins: runtime };
+    expect(upstreamAttributeProvenance(fastify, SDK_PRESET_TYPE)).toBe(UPSTREAM_PRESET_PROVENANCE);
+    expect(upstreamAttributeProvenance(fastify, 'corp_sso')).toBeNull();
+    expect(upstreamAttributeProvenance(fastify, 'oidc_corp')).toBeNull();
+    // A process without the plugin runtime records none.
+    expect(upstreamAttributeProvenance({}, SDK_PRESET_TYPE)).toBeNull();
+    // The rank reads it from the row, on any role.
+    expect(rankAttributeSource(SDK_PRESET_TYPE, UPSTREAM_PRESET_PROVENANCE)).toBe(
+      rankAttributeSource('oidc_corp')
+    );
+    expect(rankAttributeSource('corp_sso', null)).toBe(0);
   });
 });

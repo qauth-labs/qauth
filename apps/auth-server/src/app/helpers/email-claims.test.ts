@@ -1,3 +1,4 @@
+import { UPSTREAM_PRESET_PROVENANCE } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -42,43 +43,34 @@ describe("resolveEmailClaims: a preset plugin's rank (#671)", () => {
     (isWalletAttributeIssuerStillTrusted as unknown as Mock).mockReset().mockResolvedValue(true);
   });
 
-  /** A server whose plugin runtime holds a method the loader built from a preset of `presetType`. */
-  function withPreset(rows: unknown[], presetType: string) {
-    const fastify = fastifyStub(rows) as unknown as Record<string, unknown>;
-    fastify['authMethodPlugins'] = { upstreamPresetTypes: new Set([presetType]) };
-    return fastify as unknown as FastifyInstance;
+  /** A row of a method the plugin loader built from a preset, as the upstream sign-in writes it. */
+  function presetRow(source: string, attrValue: string) {
+    return { ...attrRow(source, attrValue), provenance: { ...UPSTREAM_PRESET_PROVENANCE } };
   }
 
-  it("asserts a preset-built method's verified email over a self-reported one", async () => {
+  // The stub has no plugin runtime, as a process of the `api` role, which
+  // serves the token and userinfo endpoints and loads no plugin: the rank
+  // comes from the row alone.
+  it("asserts a preset-built method's verified email over a self-reported one, on a process that loads no plugin", async () => {
     const rows = [
       attrRow('self_reported', 'self@example.com'),
-      attrRow('sdk_idp', 'p@example.com'),
+      presetRow('sdk_idp', 'p@example.com'),
     ];
-    expect(await resolveEmailClaims(withPreset(rows, 'sdk_idp'), USER)).toEqual({
+    expect(await resolveEmailClaims(fastifyStub(rows), USER)).toEqual({
       email: 'p@example.com',
       email_verified: true,
     });
   });
 
-  it("leaves a plain plugin's type unknown, below self_reported", async () => {
+  it("leaves a plain plugin's row unknown, below self_reported", async () => {
     const rows = [
       attrRow('self_reported', 'self@example.com'),
       attrRow('corp_sso', 'c@example.com'),
     ];
-    expect(await resolveEmailClaims(withPreset(rows, 'sdk_idp'), USER)).toEqual({
+    expect(await resolveEmailClaims(fastifyStub(rows), USER)).toEqual({
       email: 'self@example.com',
       email_verified: true,
     });
-    // And a server without the plugin runtime ranks no plugin's source.
-    expect(
-      await resolveEmailClaims(
-        fastifyStub([
-          attrRow('self_reported', 'self@example.com'),
-          attrRow('sdk_idp', 'p@example.com'),
-        ]),
-        USER
-      )
-    ).toEqual({ email: 'self@example.com', email_verified: true });
   });
 
   it('ranks it below a wallet row, and falls back to it when the wallet issuer is no longer trusted', async () => {
@@ -86,9 +78,9 @@ describe("resolveEmailClaims: a preset plugin's rank (#671)", () => {
     const rows = [
       attrRow('wallet', 'wallet@example.com'),
       attrRow('self_reported', 'self@example.com'),
-      attrRow('sdk_idp', 'p@example.com'),
+      presetRow('sdk_idp', 'p@example.com'),
     ];
-    expect(await resolveEmailClaims(withPreset(rows, 'sdk_idp'), USER)).toEqual({
+    expect(await resolveEmailClaims(fastifyStub(rows), USER)).toEqual({
       email: 'p@example.com',
       email_verified: true,
     });

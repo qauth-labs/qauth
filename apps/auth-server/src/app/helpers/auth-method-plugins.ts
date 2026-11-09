@@ -3,7 +3,6 @@ import type {
   RealmAuthMethodPluginBinding,
 } from '@qauth-labs/fastify-plugin-db';
 import {
-  type AttributeRankOptions,
   type AuthMethod,
   type AuthMethodContext,
   createAuthMethodContext,
@@ -32,9 +31,10 @@ import { requestRealm } from './request-realm';
  *   `/upstream/<type>` (`routes/upstream.ts`).
  * - A package exports its own `authMethod`, or an `upstreamOidcPreset` of
  *   the plugin SDK (#671), whose method the server builds on its own
- *   OpenID Connect client (`createUpstreamOidcPresetMethod`). The attributes
- *   such a method writes rank with an `oidc_*` provider's
- *   ({@link attributeRankOptions}); a plain `authMethod`'s rank as unknown.
+ *   OpenID Connect client (`createUpstreamOidcPresetMethod`). The upstream
+ *   sign-in records that on each attribute such a method writes
+ *   (`UPSTREAM_PRESET_PROVENANCE`), which then ranks with an `oidc_*`
+ *   provider's; a plain `authMethod`'s rank stays unknown.
  * - Per realm, a plugin is off until an admin enables it through the admin
  *   API (`admin/plugins/`): its state and config are a row of
  *   `realm_auth_method_plugins`, its secret members stored encrypted with the
@@ -179,12 +179,6 @@ export function authMethodPluginSecretCipher(
 export interface AuthMethodPluginRuntime {
   /** In the order `AUTH_METHOD_PLUGINS` lists them. */
   readonly installed: readonly InstalledAuthMethodPlugin[];
-  /**
-   * The types of the plugins whose method the loader built from an upstream
-   * OpenID Connect preset (#671): the attribute sources that rank with
-   * `oidc_*` ({@link attributeRankOptions}).
-   */
-  readonly upstreamPresetTypes: ReadonlySet<string>;
   /** The plugin whose AuthMethod `id` is `pluginId`, or `undefined`. */
   find(pluginId: string): InstalledAuthMethodPlugin | undefined;
   /** The plugin whose AuthMethod `type` is `type`, or `undefined`. */
@@ -208,34 +202,11 @@ export function authMethodPluginRuntime(
 ): AuthMethodPluginRuntime {
   const byId = new Map(installed.map((plugin) => [plugin.id, plugin]));
   const byType = new Map(installed.map((plugin) => [plugin.type, plugin]));
-  const upstreamPresetTypes: ReadonlySet<string> = new Set(
-    installed
-      .filter((plugin) => plugin.kind === 'upstream-oidc-preset')
-      .map((plugin) => plugin.type)
-  );
   return Object.freeze({
     installed: Object.freeze([...installed]),
-    upstreamPresetTypes,
     find: (pluginId: string) => byId.get(pluginId),
     ofType: (type: string) => byType.get(type),
   });
-}
-
-/**
- * How claim resolution ranks the attribute sources of the plugins this
- * process loaded (#671): a method the loader built from an upstream OpenID
- * Connect preset ranks with `oidc_*`, as the server's own client checked the
- * provider's ID token; a plain `authMethod`'s type stays unknown. Taken from
- * how each method was built, never from a list of provider names.
- *
- * A server without the plugin runtime, as a route's unit test builds, ranks
- * no plugin's source: a lower rank, never a higher one.
- */
-export function attributeRankOptions(
-  fastify: Partial<Pick<FastifyInstance, 'authMethodPlugins'>>
-): AttributeRankOptions {
-  const upstreamPresetSources = fastify.authMethodPlugins?.upstreamPresetTypes;
-  return upstreamPresetSources === undefined ? {} : { upstreamPresetSources };
 }
 
 /**

@@ -30,8 +30,8 @@ import {
   SDK_PRESET_PACKAGE,
   SDK_PRESET_TYPE,
   sdkPresetIssuer,
-  type WrittenSdkPresetPackage,
   writeSdkPresetPackage,
+  type WrittenSdkPresetPackage,
 } from '../testing/sdk-preset-package';
 import { SESSION_COOKIE } from '../testing/session-cookie-value';
 
@@ -591,6 +591,22 @@ describe('a preset package that imports only the plugin SDK (#671, real containe
         email: 'ada@example.com',
         email_verified: true,
       });
+
+      // The sign-in recorded how the method was built on each row it wrote,
+      // so a process that loads no plugin, as one of the `api` role, which
+      // serves the token endpoint, ranks it the same.
+      const rows = await app().repositories.userAttributes.findByUserIdAndSource(
+        credential.userId,
+        SDK_PRESET_TYPE
+      );
+      expect(rows.map((row) => row.provenance)).toEqual(
+        rows.map(() => ({ builtFrom: 'upstream-oidc-preset' }))
+      );
+      const withoutPlugins = { repositories: app().repositories } as unknown as FastifyInstance;
+      expect(await resolveEmailClaims(withoutPlugins, { id: credential.userId, realmId })).toEqual({
+        email: 'ada@example.com',
+        email_verified: true,
+      });
     });
 
     // Acceptance criterion: another tenant's token is refused.
@@ -657,8 +673,9 @@ describe('a preset package that imports only the plugin SDK (#671, real containe
       await codeAfterPages(jar, callback);
 
       const credential = await credentialOf(SUB);
-      // The member's name is a nickname, unverified; the address and the flag
-      // the preset set from it are not taken: the email is the ID token's.
+      // The member's name is a nickname, unverified though the preset set a
+      // flag its rule reads; the address and the flag the preset set from it
+      // are not taken: the email is the ID token's.
       expect(await attributesOf(credential.userId)).toEqual([
         { key: 'email', value: 'ada@example.com', verified: true },
         { key: 'name', value: 'Ada Lovelace', verified: false },
