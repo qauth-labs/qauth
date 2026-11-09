@@ -310,12 +310,9 @@ every boot; a process that loads plugins and holds the `signer` role, as a singl
 does, logs one more line saying that plugin code runs beside the signing keys and the KEK. With it
 off, such a package is never imported, and the boot logs a warning saying why.
 A plugin on QAuth's first-party list loads whatever the switch says. The list is fixed in the
-server's code (`FIRST_PARTY_AUTH_METHOD_PLUGINS`), never a setting. It holds the provider plugins
-that ship with the server, `@qauth-labs/plugin-apple`, `@qauth-labs/plugin-google` and
-`@qauth-labs/plugin-microsoft` ([below](#preset-plugins-on-the-generic-client)): the image carries
-them, and a deployment loads one when `AUTH_METHOD_PLUGINS` names it. A first-party plugin released
-from its own repository, such as the GitHub one, loads like any other package until it joins the
-list ([ADR-018](/reference/records/adr/018-1-0-scope-and-stability/) §3). Discovery
+server's code (`FIRST_PARTY_AUTH_METHOD_PLUGINS`), never a setting, and it is empty: a first-party
+plugin released from its own repository, such as the GitHub one, loads like any other package until
+it joins the list ([ADR-018](/reference/records/adr/018-1-0-scope-and-stability/) §3). Discovery
 has no member for plugins, and their routes
 are left out of the OpenAPI documents.
 

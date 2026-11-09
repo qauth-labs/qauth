@@ -1,8 +1,0 @@
-{
-  "name": "plugin-microsoft",
-  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "libs/plugins/microsoft/src",
-  "projectType": "library",
-  "tags": ["scope:plugin", "type:auth-method-plugin"],
-  "// targets": "to see all targets run: nx show project plugin-microsoft --web"
-}

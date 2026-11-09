@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { types } from 'node:util';
 
 import type { RealmAuthMethodPlugin } from '@qauth-labs/fastify-plugin-db';
@@ -545,22 +543,9 @@ describe('a preset plugin on the generic OpenID Connect client (#951)', () => {
 });
 
 describe('loadDeploymentAuthMethodPlugins (#600)', () => {
-  it('ships the provider plugins of libs/plugins/ (#671) as the first-party list', () => {
-    expect(FIRST_PARTY_AUTH_METHOD_PLUGINS).toEqual([
-      '@qauth-labs/plugin-apple',
-      '@qauth-labs/plugin-google',
-      '@qauth-labs/plugin-microsoft',
-    ]);
+  it('ships an empty first-party list until the first-party plugins land', () => {
+    expect(FIRST_PARTY_AUTH_METHOD_PLUGINS).toEqual([]);
     expect(Object.isFrozen(FIRST_PARTY_AUTH_METHOD_PLUGINS)).toBe(true);
-  });
-
-  it('lists only packages this app depends on, so the image carries each of them', async () => {
-    const manifest = JSON.parse(
-      await readFile(resolve(__dirname, '../../../package.json'), 'utf8')
-    ) as { dependencies: Record<string, string> };
-    for (const name of FIRST_PARTY_AUTH_METHOD_PLUGINS) {
-      expect(manifest.dependencies[name], name).toBe('workspace:*');
-    }
   });
 
   it('logs why a third-party plugin is not loaded while the plugin API is off', async () => {

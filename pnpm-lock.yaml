@@ -535,15 +535,6 @@ importers:
       '@qauth-labs/fastify-plugin-ssf':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/ssf
-      '@qauth-labs/plugin-apple':
-        specifier: workspace:*
-        version: link:../../libs/plugins/apple
-      '@qauth-labs/plugin-google':
-        specifier: workspace:*
-        version: link:../../libs/plugins/google
-      '@qauth-labs/plugin-microsoft':
-        specifier: workspace:*
-        version: link:../../libs/plugins/microsoft
       '@qauth-labs/server-config':
         specifier: workspace:*
         version: link:../../libs/server/config
@@ -1367,93 +1358,6 @@ importers:
       testcontainers:
         specifier: 'catalog:'
         version: 12.2.1(supports-color@8.1.1)
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
-
-  libs/plugins/apple:
-    dependencies:
-      '@qauth-labs/server-upstream-oidc':
-        specifier: workspace:*
-        version: link:../../server/upstream-oidc
-      tslib:
-        specifier: 'catalog:'
-        version: 2.8.1
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.7
-    devDependencies:
-      '@qauth-labs/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../sdk/plugin-sdk
-      '@qauth-labs/server-federation':
-        specifier: workspace:*
-        version: link:../../server/federation
-      '@vitest/coverage-v8':
-        specifier: 'catalog:'
-        version: 5.0.5(vitest@5.0.5)
-      '@vitest/ui':
-        specifier: 'catalog:'
-        version: 5.0.5(vitest@5.0.5)
-      jose:
-        specifier: 'catalog:'
-        version: 6.2.12
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
-
-  libs/plugins/google:
-    dependencies:
-      '@qauth-labs/server-upstream-oidc':
-        specifier: workspace:*
-        version: link:../../server/upstream-oidc
-      tslib:
-        specifier: 'catalog:'
-        version: 2.8.1
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.7
-    devDependencies:
-      '@qauth-labs/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../sdk/plugin-sdk
-      '@qauth-labs/server-federation':
-        specifier: workspace:*
-        version: link:../../server/federation
-      '@vitest/coverage-v8':
-        specifier: 'catalog:'
-        version: 5.0.5(vitest@5.0.5)
-      '@vitest/ui':
-        specifier: 'catalog:'
-        version: 5.0.5(vitest@5.0.5)
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
-
-  libs/plugins/microsoft:
-    dependencies:
-      '@qauth-labs/server-upstream-oidc':
-        specifier: workspace:*
-        version: link:../../server/upstream-oidc
-      tslib:
-        specifier: 'catalog:'
-        version: 2.8.1
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.7
-    devDependencies:
-      '@qauth-labs/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../sdk/plugin-sdk
-      '@qauth-labs/server-federation':
-        specifier: workspace:*
-        version: link:../../server/federation
-      '@vitest/coverage-v8':
-        specifier: 'catalog:'
-        version: 5.0.5(vitest@5.0.5)
-      '@vitest/ui':
-        specifier: 'catalog:'
-        version: 5.0.5(vitest@5.0.5)
       vitest:
         specifier: 'catalog:'
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))

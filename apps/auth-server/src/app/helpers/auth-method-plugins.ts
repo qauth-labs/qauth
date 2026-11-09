@@ -50,32 +50,25 @@ import { requestRealm } from './request-realm';
 /**
  * The first-party plugins: the packages that load whatever
  * `PLUGIN_API_ENABLED` says. A fixed list in the server's code, never a
- * setting (#600). The provider plugins of `libs/plugins/` (#671), which
- * ship with the server: they are dependencies of this app, so the image
- * carries them, and a deployment loads one when `AUTH_METHOD_PLUGINS` names
- * it. Being on the list lets it load with the plugin API off; every realm
- * still starts with it off.
+ * setting (#600). Empty.
  *
  * A first-party plugin is one QAuth makes and releases, and it may live in
- * its own repository (ADR-018 §3, amended 2026-11-05). Such a plugin, for
- * example the GitHub one (#672), is not on this list: it loads, as any
- * package the operator installs, only while the plugin API is on. Whether it
- * joins the list before 1.0 is decided when the plugin API leaves the
- * experiment.
+ * its own repository (ADR-018 §3, amended 2026-11-05). The first such
+ * plugin, for example the GitHub one (#672), is not on this list: it loads,
+ * as any package the operator installs, only while the plugin API is on.
+ * Whether it joins the list before 1.0 is decided when the plugin API leaves
+ * the experiment.
  *
  * The generic upstream OIDC client (`@qauth-labs/server-upstream-oidc`,
  * #601) is no plugin: it is a factory that builds one method per provider a
  * realm configures, every one with the id `oidc`, which the loader reserves,
  * where a plugin package exports one `authMethod`. The realm's provider rows
- * run it (#639, #714). The plugins listed here are presets built on it
- * (`createUpstreamOidcPresetMethod`, #951): plugins like any other, each
- * with its own id, type and config.
+ * run it (#639, #714). A preset plugin built on it
+ * (`createUpstreamOidcPresetMethod`, #951) is a plugin like any other, with
+ * its own id, type and config, so it can be listed here, as the presets of
+ * #671 are meant to be.
  */
-export const FIRST_PARTY_AUTH_METHOD_PLUGINS: readonly string[] = Object.freeze([
-  '@qauth-labs/plugin-apple',
-  '@qauth-labs/plugin-google',
-  '@qauth-labs/plugin-microsoft',
-]);
+export const FIRST_PARTY_AUTH_METHOD_PLUGINS: readonly string[] = Object.freeze([]);
 
 /**
  * The signer caller a plugin's context signs as, and a plugin secret
