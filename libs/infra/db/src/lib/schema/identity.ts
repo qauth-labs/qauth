@@ -181,7 +181,11 @@ export const userAttributes = pgTable(
      * issuer is no longer trusted, and the next wallet sign-in re-check its
      * revocation status (ANT-2026-ULJIA4P4). NULL for self-reported rows and
      * for wallet rows written before this column existed; claim resolution
-     * treats the latter as unbacked.
+     * treats the latter as unbacked. On the rows of a method the plugin
+     * loader built from an upstream OpenID Connect preset, the upstream
+     * sign-in writes `{ "builtFrom": "upstream-oidc-preset" }`
+     * (`UPSTREAM_PRESET_PROVENANCE`, #671), which ranks them with `oidc_*`;
+     * NULL on every other upstream row.
      */
     provenance: jsonb('provenance'),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
