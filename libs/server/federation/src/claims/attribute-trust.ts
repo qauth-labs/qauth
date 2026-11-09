@@ -6,7 +6,13 @@ import { SELF_REPORTED_SOURCE } from '../providers/password.provider';
  * Claim resolution reads `user_attributes` rows and must decide which source's
  * value QAuth asserts downstream. The trust order is APP-CODE POLICY (per the
  * schema JSDoc in `identity.ts` — deliberately not a DB constraint), and this
- * module is its single implementation: `wallet > oidc_* > self_reported`.
+ * module is its single implementation: `wallet > oidc_* > self_reported`,
+ * where a method the plugin loader built from an upstream OpenID Connect
+ * preset (#671) ranks with `oidc_*`: the server's own client checked its ID
+ * token, as it does a configured `oidc_*` provider's. The core names no
+ * provider (ADR-018 §3): which sources are such methods is the caller's
+ * answer ({@link AttributeRankOptions}), taken from the plugins the
+ * deployment loaded, never a list of names here.
  *
  * Design decisions (adjudicated, #229):
  *
@@ -44,12 +50,25 @@ export interface TrustRankedAttribute {
 }
 
 /**
- * ADR-002 trust rank: `wallet` (3) > `oidc_*` family (2) >
- * `self_reported` (1) > unknown (0, eligible — see module JSDoc).
+ * What the caller knows of the deployment that the rank needs (#671).
  */
-export function rankAttributeSource(source: string): number {
+export interface AttributeRankOptions {
+  /**
+   * The attribute sources of the methods the plugin loader built from an
+   * upstream OpenID Connect preset: each such plugin's `type`. A plain
+   * AuthMethod plugin's type is not among them, and stays unknown.
+   */
+  readonly upstreamPresetSources?: ReadonlySet<string>;
+}
+
+/**
+ * ADR-002 trust rank: `wallet` (3) > `oidc_*` family and
+ * {@link AttributeRankOptions.upstreamPresetSources} (2) > `self_reported`
+ * (1) > unknown (0, eligible — see module JSDoc).
+ */
+export function rankAttributeSource(source: string, options: AttributeRankOptions = {}): number {
   if (source === 'wallet') return 3;
-  if (source.startsWith('oidc_')) return 2;
+  if (source.startsWith('oidc_') || options.upstreamPresetSources?.has(source) === true) return 2;
   if (source === SELF_REPORTED_SOURCE) return 1;
   return 0;
 }
@@ -63,16 +82,18 @@ export function rankAttributeSource(source: string): number {
  * @param rows - Candidate rows; callers pass only `verified = true` rows
  * (the repository read enforces that filter).
  * @param now - Epoch-ms clock; a row with `expiresAt <= now` is excluded.
+ * @param options - What the rank needs of the deployment ({@link AttributeRankOptions}).
  */
 export function selectTrustedAttribute<T extends TrustRankedAttribute>(
   rows: readonly T[],
-  now: number
+  now: number,
+  options: AttributeRankOptions = {}
 ): T | undefined {
   const eligible = rows.filter((row) => row.expiresAt == null || row.expiresAt > now);
   if (eligible.length === 0) return undefined;
 
   return [...eligible].sort((a, b) => {
-    const byRank = rankAttributeSource(b.source) - rankAttributeSource(a.source);
+    const byRank = rankAttributeSource(b.source, options) - rankAttributeSource(a.source, options);
     if (byRank !== 0) return byRank;
     return a.source < b.source ? -1 : a.source > b.source ? 1 : 0;
   })[0];
