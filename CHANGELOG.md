@@ -48,9 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `assertionIssuer`), a multi-tenant issuer template, response members its
   `form_post` bounce carries (at most 1024 characters, censored in the request
   log), identity claims that never set `sub`, an ID-token-only claim or a
-  claim the provider vouches for, and attribute rules. In claim resolution, a
-  method built from a preset ranks with `oidc_*`; a plugin that exports its
-  own `authMethod` keeps an unknown rank. The Google, Microsoft and Apple
+  claim the provider vouches for, and attribute rules. A claim a preset sets
+  never makes an attribute verified: a rule's `verified` sees only the
+  provider's claims. In claim resolution, the rows a method built from a
+  preset writes rank with `oidc_*`, by the provenance the sign-in records on
+  them, on every role; a plugin that exports its own `authMethod` keeps an
+  unknown rank, and the loader refuses any plugin type that starts with
+  `oidc_`. The Google, Microsoft and Apple
   plugins are presets in their own repositories ([#1074], [#1075], [#1076]);
   Apple sign-in also needs the signer to hold the key Apple issues ([#1073]).
 

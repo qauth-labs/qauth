@@ -4,7 +4,6 @@ description: How a provider plugin in its own repository builds on QAuth's gener
 sidebar:
   order: 7
 lastVerified: '2026-11-09'
-experimental: true
 ---
 
 > **Experimental.** A preset is a plugin on the AuthMethod contract, QAuth's plugin API, the
@@ -61,17 +60,17 @@ against another version, so pin the SDK to the QAuth release you build for.
 The SDK's type is `UpstreamOidcPresetOptions<TConfig>`; `UpstreamOidcPreset` is the same with its
 `contract`.
 
-| Member            | What it is                                                                                                                                                                                               |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`              | Its AuthMethod id, the admin API's name for it. Never `oidc`, which the generic client holds.                                                                                                            |
-| `type`            | Its AuthMethod type: the attributes' source, and the route segment of `/upstream/<type>/callback`, the `redirect_uri` to register at the provider. Never `oidc_<alias>`, the generic client's namespace. |
-| `display`         | Its name, and optionally its icon, on the sign-in pages.                                                                                                                                                 |
-| `origins`         | The `https` origins the provider answers on, one to eight. The issuer and every endpoint, set by hand or discovered, must be on one of them, so the client secret reaches no other host.                 |
-| `configSchema`    | A Zod schema of what an admin sets for a realm. Its client secret is a member marked `.meta({ writeOnly: true })`, which the server stores encrypted and never shows.                                    |
-| `upstreamConfig`  | A function of the parsed config that makes the client's config, `UpstreamOidcProviderConfig`, at every use.                                                                                              |
-| `responseMembers` | Optional. Members of the authorization response the callback reads, beside the protocol's own.                                                                                                           |
-| `identityClaims`  | Optional. Claims the identity gets besides the provider's, from those members and the config.                                                                                                            |
-| `attributes`      | Optional. The attributes the claims map to; `UPSTREAM_STANDARD_ATTRIBUTES` unless set.                                                                                                                   |
+| Member            | What it is                                                                                                                                                                                                             |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`              | Its AuthMethod id, the admin API's name for it. Never `oidc`, which the generic client holds.                                                                                                                          |
+| `type`            | Its AuthMethod type: the attributes' source, and the route segment of `/upstream/<type>/callback`, the `redirect_uri` to register at the provider. Never one that starts with `oidc_`, the generic client's namespace. |
+| `display`         | Its name, and optionally its icon, on the sign-in pages.                                                                                                                                                               |
+| `origins`         | The `https` origins the provider answers on, one to eight. The issuer and every endpoint, set by hand or discovered, must be on one of them, so the client secret reaches no other host.                               |
+| `configSchema`    | A Zod schema of what an admin sets for a realm. Its client secret is a member marked `.meta({ writeOnly: true })`, which the server stores encrypted and never shows.                                                  |
+| `upstreamConfig`  | A function of the parsed config that makes the client's config, `UpstreamOidcProviderConfig`, at every use.                                                                                                            |
+| `responseMembers` | Optional. Members of the authorization response the callback reads, beside the protocol's own.                                                                                                                         |
+| `identityClaims`  | Optional. Claims the identity gets besides the provider's, from those members and the config.                                                                                                                          |
+| `attributes`      | Optional. The attributes the claims map to; `UPSTREAM_STANDARD_ATTRIBUTES` unless set.                                                                                                                                 |
 
 `UpstreamOidcProviderConfig` is the generic client's config: `issuer`, `clientId`,
 `clientAuthentication`, and optionally `scopes`, `endpoints` set by hand, `responseMode`
@@ -104,10 +103,13 @@ these, which no admin can:
   provider's, such as a name from a response member. A preset never sets `sub` or a claim only the
   ID token carries (`UPSTREAM_ID_TOKEN_ONLY_CLAIMS`), and it may remove a claim the provider vouches
   for (`email`, `phone_number` and their `*_verified` flags, `UPSTREAM_VERIFIED_CLAIM_PAIRS`) but
-  never set one: a value it makes up is never taken as verified.
+  never set one: a value it makes up is never taken as verified. No other claim it sets makes an
+  attribute verified either, since the server's client checked only the provider's claims.
 - **Attribute rules** (`attributes`): which claims become the account's attributes, under which
   key, and when one is verified (`verified: (claims) => upstreamClaimIsTrue(claims, 'email_verified')`).
-  Without `verified`, an attribute is never verified.
+  Without `verified`, an attribute is never verified. A rule's `verified` sees only the provider's
+  claims, never one the preset set, and an attribute read from a claim the preset set is never
+  verified.
 
 ## Check it with the preset kit
 
@@ -157,8 +159,12 @@ has it off until an admin configures and enables it with the
 
 Claim resolution asserts the highest-ranked verified attribute: `wallet`, then the `oidc_*`
 providers, then `self_reported`. A method the loader built from a preset ranks with `oidc_*`,
-because the server's own client checked the provider's ID token. A plugin that exports its own
-`authMethod` keeps an unknown rank, below `self_reported`, whatever its type.
+because the server's own client checked the provider's ID token. The sign-in records that on each
+attribute it writes for the method (`provenance: { "builtFrom": "upstream-oidc-preset" }`), so a
+process that loads no plugin, such as one of the `api` role that serves the token endpoint, ranks
+it the same, and a type another package serves later does not re-rank what this one wrote. A
+plugin that exports its own `authMethod` keeps an unknown rank, below `self_reported`, whatever its
+type, and no plugin's type starts with `oidc_`.
 
 ## Examples
 
