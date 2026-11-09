@@ -61,6 +61,15 @@
 >   ships, as a feature of its own, the package refuses every sender-constrained token (one that
 >   carries `cnf`, DPoP-bound or certificate-bound) in both validation modes, because it verifies no
 >   proof of possession. It does not accept the `DPoP` authorization scheme either.
+>
+> **Amended 2026-11-09** with the maintainer's decision of that day on where the provider plugins
+> live.
+>
+> - §3: every provider plugin (Google, Microsoft, Apple, GitHub and My Number) lives in its own
+>   repository, depends only on the published plugin SDK, and is released by QAuth on its own
+>   version line. An OpenID Connect provider's plugin is a preset that the plugin SDK describes,
+>   and the server builds its method on the core's generic client. Whether such a plugin joins the
+>   first-party list before 1.0 is still decided when the plugin API leaves the experiment.
 
 ## Context
 
@@ -219,6 +228,15 @@ The PQC library in §7 implements it as experimental.
   (`FIRST_PARTY_AUTH_METHOD_PLUGINS`) loads like any package the operator installs: only while
   `PLUGIN_API_ENABLED` is on. Whether that plugin joins the list before 1.0 is decided when the
   plugin API leaves the experiment. Decided 2026-11-05 (maintainer).
+- Every provider plugin lives in its own repository: Google, Microsoft, Apple, GitHub and My
+  Number. Each depends only on the published plugin SDK and is released by QAuth on its own
+  version line; none lives in QAuth's repository, and the server's code names none of them. An
+  OpenID Connect provider's plugin is a preset: the provider's facts and claim rules, in the shape
+  the plugin SDK describes. The server builds its method on the core's generic OIDC client, so the
+  protocol code stays in the core and a fix to it reaches every preset with a server release. In
+  claim resolution, a method built from a preset ranks with the generic client's `oidc_*`
+  providers. Whether such a plugin joins the first-party list before 1.0 is still decided when the
+  plugin API leaves the experiment. Decided 2026-11-09 (maintainer).
 
 **Events**
 
