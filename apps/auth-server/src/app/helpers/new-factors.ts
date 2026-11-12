@@ -29,19 +29,6 @@ export function newFactorWindowOf(
   return fastify.policyStore.ofRealm(realm).policies.accounts.newFactorWindowDays * DAY_MS;
 }
 
-/**
- * {@link newFactorWindowOf} of the realm `realmId`, read from its row at the
- * binding. A realm that does not exist binds nothing: the read throws.
- */
-export async function newFactorWindowIn(
-  fastify: Pick<FastifyInstance, 'policyStore' | 'repositories'>,
-  realmId: string
-): Promise<number> {
-  const realm = await fastify.repositories.realms.findById(realmId);
-  if (realm === undefined) throw new Error('a factor bound in a realm that does not exist');
-  return newFactorWindowOf(fastify, realm);
-}
-
 /** A credential row's window, as the repositories read it. */
 export interface NewFactorRow {
   readonly newUntil?: number | null;
@@ -50,4 +37,28 @@ export interface NewFactorRow {
 /** Whether a stored credential is new at `now`: inside the window its binding opened. */
 export function isNewCredential(row: NewFactorRow, now: number): boolean {
   return row.newUntil !== undefined && row.newUntil !== null && now < row.newUntil;
+}
+
+/**
+ * What kind of authenticator a passkey or an authenticator app is, as the
+ * `user.credential_added` and `user.credential_removed` events carry it
+ * (#1064), so their CAEP `credential-change` names its `credential_type`:
+ * `fido2-platform`, `fido2-roaming` or `app`.
+ */
+export type CredentialAuthenticator = 'platform' | 'roaming' | 'app';
+
+/**
+ * Whether a passkey lives on the device it was made on (`platform`) or on
+ * one carried to it (`roaming`), from what the client reported at its
+ * registration: an `internal` transport is the device's own authenticator,
+ * any other transport a roaming one. A client that reported none leaves only
+ * the backup flag: a passkey that may be synced is a platform's.
+ */
+export function passkeyAuthenticatorOf(data: {
+  readonly transports: readonly string[];
+  readonly backup_eligible: boolean;
+}): 'platform' | 'roaming' {
+  if (data.transports.includes('internal')) return 'platform';
+  if (data.transports.length > 0) return 'roaming';
+  return data.backup_eligible ? 'platform' : 'roaming';
 }

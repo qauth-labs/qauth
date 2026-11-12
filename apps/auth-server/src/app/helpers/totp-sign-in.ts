@@ -17,7 +17,7 @@ import { TOTP_SECRET_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import type { EngineMailer, MailRealm } from './engine-mail';
-import { newFactorWindowIn } from './new-factors';
+import { newFactorWindowIn } from './new-factor-window';
 import { realmIssuer, type RealmUrlSource } from './realm-url';
 import { emitUserEvent, type EventTransaction } from './user-events';
 
@@ -207,7 +207,8 @@ export function createServerTotp(
         await emitUserEvent(
           request,
           'urn:qauth:event:user.credential_added:v1-rc.0',
-          { type: 'totp', credentialId },
+          // An authenticator app (#1064): CAEP's `app`.
+          { type: 'totp', credentialId, authenticator: 'app' },
           { tx, realmId, userId, actor: 'user' }
         );
       },

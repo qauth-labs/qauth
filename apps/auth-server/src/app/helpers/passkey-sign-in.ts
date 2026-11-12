@@ -30,7 +30,8 @@ import { z } from 'zod';
 
 import { REDIS_KEYS } from '../constants/redis-keys';
 import type { EngineMailer } from './engine-mail';
-import { newFactorWindowIn } from './new-factors';
+import { newFactorWindowIn } from './new-factor-window';
+import { passkeyAuthenticatorOf } from './new-factors';
 import {
   type EnrolmentTransaction,
   storePasskeyAccount,
@@ -418,10 +419,17 @@ export function createServerPasskeys(
               if (request === undefined) {
                 throw new Error('a passkey bound outside the request that asked for it');
               }
+              // What kind of passkey it is (#1064), for the CAEP
+              // credential-change every stream of the user receives.
+              const data = webauthnCredentialDataSchema.safeParse(credential.credentialData);
               await emitUserEvent(
                 request,
                 'urn:qauth:event:user.credential_added:v1-rc.0',
-                { type: 'passkey', credentialId: credential.id },
+                {
+                  type: 'passkey',
+                  credentialId: credential.id,
+                  ...(data.success ? { authenticator: passkeyAuthenticatorOf(data.data) } : {}),
+                },
                 { tx, realmId, userId, actor: 'user' }
               );
             },

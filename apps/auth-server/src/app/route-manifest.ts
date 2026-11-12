@@ -269,7 +269,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/auth',
     roles: ['web'],
     plugins: ['sessions'],
-    repositories: ['events', 'userCredentials', 'users'],
+    repositories: ['events', 'realms', 'userCredentials', 'users'],
     load: () => import('./routes/auth/mail-pass'),
   },
   {
@@ -390,7 +390,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/oauth',
     roles: ['web'],
     plugins: ['egress', 'jwt', 'sessions'],
-    repositories: ['events', 'oauthClients', 'userCredentials', 'users'],
+    repositories: ['events', 'oauthClients', 'realms', 'userCredentials', 'users'],
     load: () => import('./routes/oauth/end-session'),
   },
   {
@@ -544,7 +544,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/ui',
     roles: ['web'],
     plugins: ['sessions'],
-    repositories: ['events', 'userCredentials', 'users'],
+    repositories: ['events', 'realms', 'userCredentials', 'users'],
     load: () => import('./routes/ui/passkey'),
   },
   {
@@ -552,7 +552,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/ui',
     roles: ['web'],
     plugins: ['sessions'],
-    repositories: ['events', 'userCredentials', 'users'],
+    repositories: ['events', 'realms', 'userCredentials', 'users'],
     load: () => import('./routes/ui/recovery-codes'),
   },
   {
@@ -568,7 +568,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/ui',
     roles: ['web'],
     plugins: ['sessions'],
-    repositories: ['events', 'userCredentials', 'users'],
+    repositories: ['events', 'realms', 'userCredentials', 'users'],
     load: () => import('./routes/ui/totp'),
   },
   {

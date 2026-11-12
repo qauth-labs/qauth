@@ -548,7 +548,7 @@ describe('the server passkey ceremonies (#651)', () => {
       expect(emitUserEvent).toHaveBeenCalledWith(
         REQUEST,
         'urn:qauth:event:user.credential_added:v1-rc.0',
-        { type: 'passkey', credentialId: 'row-1' },
+        { type: 'passkey', credentialId: 'row-1', authenticator: 'platform' },
         { tx: 'tx', realmId: REALM_ID, userId: USER_ID, actor: 'user' }
       );
     });
