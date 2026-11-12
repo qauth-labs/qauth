@@ -21,6 +21,15 @@ import { createRepositoryKeyStore } from './repository-key-stores';
  * place besides the key library that holds the KEK: the admin API hands the
  * text over and keeps nothing of it, and no plugin ever sees it (ADR-019
  * Decision 12). Nothing here returns, throws or logs key material.
+ *
+ * A switch to the `next` key runs at once, with no pre-publication window.
+ * The window of a rotation (ADR-019 Decision 9) lets a verifier that reads
+ * the key from QAuth's JWKS see it before it signs. A provider-issued key
+ * reached its verifier before QAuth ever held it: the provider issued it and
+ * keeps its public half. Waiting would protect nothing, and it would keep a
+ * wrong, revoked or leaked key signing for days. Only an import makes a
+ * provider's `next` key here; a key QAuth generates for a provider that
+ * reads a JWKS needs the window, and comes with its own switch.
  */
 
 /** The purpose every key here belongs to. */
@@ -74,8 +83,9 @@ export interface UpstreamClientKeys {
   importKey(input: ImportUpstreamClientKeyInput): Promise<ImportedUpstreamClientKey>;
   /**
    * Make the provider's `next` key `kid` its active key, and retire the
-   * active key of its algorithm, under the realm's key lock, once the next
-   * key's overlap has passed (`KeyFactory.activateNextKey`).
+   * active key of its algorithm, under the realm's key lock, at once
+   * (`KeyFactory.activateNextKey` with no pre-publication window; see the
+   * module comment).
    *
    * @throws KeyChangeRefusedError (`NO_NEXT_KEY`) when `kid` is not the
    *   provider's `next` key, and as `KeyFactory.activateNextKey`
@@ -99,6 +109,8 @@ export function createUpstreamClientKeys(deps: UpstreamClientKeysDependencies): 
     kekProvider: deps.kekProvider,
     enabledSignatureAlgorithms: deps.enabledSignatureAlgorithms,
     hybridSigning: deps.hybridSigning,
+    // The provider holds the key's public half already: no window to wait.
+    prepublishMs: 0,
   });
   return Object.freeze({
     async importKey(input: ImportUpstreamClientKeyInput): Promise<ImportedUpstreamClientKey> {

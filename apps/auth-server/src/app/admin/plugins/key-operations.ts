@@ -36,8 +36,9 @@ import type {
  * the last configure or enable): a key of any other is refused, so the
  * plugin is configured before its key is imported. The first key of the
  * algorithm signs at once; a second waits as `next` and signs only after an
- * approved switch, once it has been published for the overlap of a
- * rotation (ADR-019 Decision 9), and the old key signs until then.
+ * approved switch, and the old key signs until then. The switch waits for no
+ * pre-publication window: the provider holds the key's public half from the
+ * moment it issued it (see `createUpstreamClientKeys` of the signer plugin).
  */
 
 /** The ids of the client-assertion key operations. */
@@ -105,7 +106,7 @@ export const PLUGIN_KEY_OPERATION_DEFINITIONS: readonly AdminOperationDefinition
     effects: ['key-custody'],
     permissions: ['plugins.security'],
     description:
-      "Switch an AuthMethod plugin's client assertions in a realm to its next key, once that key has been published for the rotation overlap; the key that signed until then is retired.",
+      "Switch an AuthMethod plugin's client assertions in a realm to its next key, at once, since the provider already holds the key; the key that signed until then is retired.",
     render: renderActivate,
   },
 ]);

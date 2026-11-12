@@ -252,7 +252,8 @@ A manual rotation will be an admin API security operation
 `qauth:admin:security` scope and a fresh passkey approval, and it follows the
 windows above. In this release the admin API rotates one kind of key only: a
 provider plugin's client-assertion key, which the provider issued
-([below](#a-provider-issued-client-assertion-key)). For every other key,
+([below](#a-provider-issued-client-assertion-key)), and whose switch waits for
+no window, since the provider holds the key's public half already. For every other key,
 `auth-server:keys:create --status next` publishes a next key, but nothing makes
 a next key active yet.
 
@@ -496,8 +497,11 @@ showed.
 
 To replace the key without a gap, create a new key at Apple while the old one
 still works, and import it as above: it becomes `next`, and the old key keeps
-signing. Switch once it has been in the store for the pre-publication window
-(7 days, as for every rotation):
+signing. Switch when you are ready. The switch runs as soon as it is
+approved: unlike a rotation of a key QAuth generates, it waits for no
+pre-publication window, since Apple holds the new key's public half from the
+moment it issued it. A wrong, revoked or leaked key is replaced the same way,
+at once:
 
 ```http
 POST /admin/v1-rc.0/realms/{realmId}/plugins/apple/keys/activate
@@ -507,9 +511,9 @@ QAuth-Approval: {approvalId}
 ```
 
 Each process signs with the new key once it reads the realm's key list again,
-within a minute. A switch before the window has passed, or for a key id that is
-not the plugin's `next` key, is refused with `409`, and so is a third import
-while a `next` key waits. Revoke the old key at Apple after the switch.
+within a minute. A switch for a key id that is not the plugin's `next` key is
+refused with `409`, and so is a third import while a `next` key waits. Revoke
+the old key at Apple after the switch.
 
 ### Why there is no command or realm-file path
 

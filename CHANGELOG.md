@@ -146,7 +146,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider's key id, checks it against the algorithm the realm's configuration
   of the plugin asks for (ES256 for Apple), and hands it to the signer, which
   seals it under the KEK like a generated key; a second key waits as `next`
-  until `plugins.keys.activate` switches to it after the rotation overlap.
+  until `plugins.keys.activate` switches to it, as soon as the switch is
+  approved: the provider already holds the key's public half, so no
+  pre-publication window applies.
   Both are security operations under `plugins.security`, and no response,
   approval display, audit row or log line holds the key. A preset's
   `signed_client_secret` takes `assertionIssuer` (at most 255 characters,

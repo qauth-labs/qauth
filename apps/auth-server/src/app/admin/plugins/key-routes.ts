@@ -286,7 +286,7 @@ export const pluginKeyRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: "Switch an AuthMethod plugin's client assertions to its next key",
         description:
-          "Makes the plugin's next key the one the signer signs its client assertions with in the realm, and retires the key that signed until then. Refused with 409 while the next key has been published for less than the rotation overlap (seven days by default), or when the kid names no next key of the plugin.",
+          "Makes the plugin's next key the one the signer signs its client assertions with in the realm, and retires the key that signed until then. The switch runs once approved, with no pre-publication window, since the provider already holds the key's public half. Refused with 409 when the kid names no next key of the plugin.",
         'x-qauth-errors': [400, 401, 403, 404, 409],
         params,
         body: activateBody,

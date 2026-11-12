@@ -492,31 +492,28 @@ describe("a provider plugin's client-assertion key through the admin API (#1073,
     // A third waits for nothing: one next key at a time.
     const three = await importKey(realm.id, requester, 'APPLEKEY03', ecKey().pem);
     expect(three.response.statusCode, three.response.body).toBe(409);
-
-    // The switch waits for the rotation overlap.
-    const early = await sendApproved(
-      realm.id,
-      requester,
-      'plugins.keys.activate',
-      '/keys/activate',
-      {
-        kid: 'APPLEKEY02',
-      }
-    );
-    expect(early.response.statusCode, early.response.body).toBe(409);
     expect(await assertionKeys(realm.id)).toEqual([
       { kid: 'APPLEKEY01', status: 'active', algorithm: 'ES256' },
       { kid: 'APPLEKEY02', status: 'next', algorithm: 'ES256' },
     ]);
 
-    // Eight days later, as the overlap counts them.
-    const eightDays = 8 * 24 * 60 * 60 * 1000;
-    for (const table of ['realm_keys', 'realm_public_keys']) {
-      await app().dbPool.query(
-        `UPDATE ${table} SET publish_at = publish_at - $3 WHERE realm_id = $1 AND kid = $2`,
-        [realm.id, 'APPLEKEY02', eightDays]
-      );
-    }
+    // Until the switch, the first key is the active one, the one the signer
+    // signs with. The suite signs only after the switch: the signer keeps a
+    // realm's key list for a minute, so a signature here would leave it
+    // signing with the list from before the switch.
+
+    // A switch to a kid that is not the next key changes nothing.
+    const wrongKid = await sendApproved(
+      realm.id,
+      requester,
+      'plugins.keys.activate',
+      '/keys/activate',
+      { kid: 'APPLEKEY03' }
+    );
+    expect(wrongKid.response.statusCode, wrongKid.response.body).toBe(409);
+
+    // The switch runs once approved: the provider holds the key already, so
+    // no pre-publication window applies.
     const switched = await sendApproved(
       realm.id,
       requester,
