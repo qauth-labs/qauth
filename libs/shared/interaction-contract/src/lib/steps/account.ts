@@ -315,7 +315,7 @@ export const totpSetup = defineStep({
   transports: ['interaction'],
   summary: 'Sets up an authenticator app.',
   description:
-    'TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal data: readable with the flow cookie while this step is current, and never after. It is bound only after a first valid code (ADR-017 Decision 8). A password-only account’s first binding also needs a code mailed to its address in the same transaction, and an unclaimed account never reaches this step. The step adds no `amr` value of its own, but the first valid code that binds the secret stands for the sign-in’s `totp` step: the sign-in it completes proves `otp`, with no second code asked. The page shows the secret as a QR code and as text.',
+    'TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal data: readable with the flow cookie while this step is current, and never after. It is bound only after a first valid code (ADR-017 Decision 8). A verified account binds its first TOTP after a fresh sign-in, with no code mailed to its address: the account decides, never a channel (Decision 8, amended 2026-11-08). An unclaimed account (a password account not yet verified) binds none. The step adds no `amr` value of its own, but the first valid code that binds the secret stands for the sign-in’s `totp` step: the sign-in it completes proves `otp`, with no second code asked. The page shows the secret as a QR code and as text.',
   params: object(
     {
       algorithm: closedEnum(['SHA1'], 'The HMAC algorithm.'),
