@@ -20,20 +20,22 @@ route below is experimental and lives on the admin listener
 | `PATCH /admin/v1-rc.0/realms/<realm id>/clients/<id>`        | `clients.update`  | by field, as the table below says  |
 | `POST /admin/v1-rc.0/realms/<realm id>/clients/<id>/preview` | `clients.preview` | `clients.read`                     |
 | `DELETE /admin/v1-rc.0/realms/<realm id>/clients/<id>`       | `clients.delete`  | `clients.security` and an approval |
-| `POST /admin/v1-rc.0/realms/<realm id>/clients/<id>/disable` | `clients.disable` | `clients.write`                    |
+| `POST /admin/v1-rc.0/realms/<realm id>/clients/<id>/disable` | `clients.disable` | `clients.write`, or as below       |
 | `POST /admin/v1-rc.0/realms/<realm id>/clients/<id>/enable`  | `clients.enable`  | `clients.security` and an approval |
 
 `<id>` is the client's `id`, a UUID, not its `client_id`. A client of another
 realm answers `404`, as one that does not exist. No answer carries the
-client's secret or its hash, and a key set shows its public members only.
+client's secret or its hash, and a key set shows its public members only: a
+change or registration that sends a private member of a key (`d`, `p`, `k`
+and the rest) answers `400`.
 
 ## Read the clients
 
 `clients.list` answers every client of the realm, newest first, one page at a
 time (`limit`, `cursor`). `q` keeps the clients whose `client_id` or name
 holds the text, case ignored. `clients.get` answers one client with its
-`ETag`, which a change, a deletion and lifting a suspension name in
-`If-Match`.
+`ETag`, which a change, a suspension, a deletion and lifting a suspension
+name in `If-Match`.
 
 ## Change a client
 
@@ -56,7 +58,17 @@ the patch makes:
 | a laxer environment, PKCE or DPoP switched off, a longer lifetime    | `clients.security` and an approval |
 
 A patch of both kinds needs both permissions, and one approval. Every patch
-needs `clients.read` too: it answers the client. The generated
+needs `clients.read` too: it answers the client.
+
+A client that holds a `qauth:admin:*` scope obtains admin tokens: whoever
+changes it changes who administers the realm. Every change of one, a
+narrowing too, needs `clients.security` and an approval, and so does
+suspending it.
+
+A member the patch does not name is left as stored, even where the rules of
+a new registration would write it otherwise. A member the patch names may
+change another: removing first-party trust clears its policy and reason.
+Each such change is judged as its own. The generated
 [security operations](/reference/security-operations/) page lists each
 operation's effects.
 
@@ -85,14 +97,23 @@ QAuth-Approval: <approval id>
 ```
 
 The approval holds only for the client as it stood when it was filed: any
-change in between answers `412`. Removing first-party trust revokes every
+change in between answers `412`.
+
+An approver is shown every change whole: a list as each entry it removes and
+adds, a key set as each key, any other field beside the value it replaces.
+A change that needs approval and cannot be shown that way answers `422`
+before it is filed: a value longer than one line of an approval shows (about
+1000 characters), or more lines than the 50 an approval holds, the
+client's name and owner among them. File it as smaller changes.
+A registration answers `400` for the same reason. Removing first-party trust revokes every
 refresh token of the client.
 
 ### Token lifetimes
 
 `accessTokenLifespanSeconds` and `refreshTokenLifespanSeconds` give a client
 lifetimes of its own, shorter than the realm's (`422` for a longer one);
-`null` takes the realm's. The token endpoint issues the shorter of the two,
+`null` takes the realm's. A move to another environment is checked against
+the lifetimes of that environment's tier. The token endpoint issues the shorter of the two,
 so a client never outlives a realm whose lifetimes were shortened after it.
 
 ### A CIMD client
@@ -116,10 +137,16 @@ too.
 
 `clients.disable` suspends the client: it obtains no token, and its owner
 cannot lift the suspension. It only takes tokens away, so it needs no
-approval and no `If-Match`. `clients.enable` lifts the suspension, and
+approval, unless the client obtains admin tokens (above). It names the
+client's `ETag` in `If-Match`, so the approval of such a suspension holds for
+the client it was filed for. `clients.enable` lifts the suspension, and
 switches on a client no developer owns; a developer's own switch stays
 theirs. It needs an approval, as `clients.delete` does, which removes the
 client with its authorization codes, refresh tokens, consents and API keys.
+
+The seed manifest writes a client it provisions again on each run, and the
+server gives each realm's system client what it needs as it boots: change
+such a client in the manifest, or the next run may undo an admin's change.
 
 Each change records the client's events with the admin as their actor:
 `client.created` (registration `admin_api`), `client.updated`,

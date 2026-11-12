@@ -29,8 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logout URI, a laxer environment, PKCE or DPoP switched off and a longer
   token lifetime are security changes, which need `qauth:admin:security`
   and an approval; the rest, a stricter environment included, are writes. A
-  patch of both needs both scopes. Registering, deleting and re-enabling a
-  client are security operations; suspending one is a write. A CIMD
+  patch of both needs both scopes. Any change of a client that holds a
+  `qauth:admin:*` scope is a security change, and so is a scope added to a
+  `client_credentials` client with no scope list of its own. Registering,
+  deleting and re-enabling a client are security operations; suspending one
+  is a write, unless it holds an admin scope, and names the client's `ETag`.
+  An approver is shown every change whole, a list one entry per line: a
+  security change that cannot be answers `422` before it is filed. A CIMD
   client is read-only: a change, its preview and a deletion answer `409`,
   naming its document. No answer carries `client_secret_hash`. A client may
   now have token lifetimes of its own, shorter than the realm's
