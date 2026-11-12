@@ -3,7 +3,7 @@ title: MCP Quickstart
 description: Wire QAuth as the OAuth 2.1 authorization server for an MCP resource server, end to end.
 sidebar:
   order: 1
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-08'
 ---
 
 This guide takes you from nothing to a **working MCP authorization handshake** on
@@ -318,6 +318,9 @@ CIMD for anything you deploy.
   with no scopes; the operator grants them in the seed manifest's
   `cimd_clients` section
   ([Granting scopes to a CIMD client](/operate/docker/#granting-scopes-to-a-cimd-client)).
+  A document may declare `client_credentials` too, but that grant issues the
+  client no token until its entry lists, in `client_credentials_scopes`, the
+  scopes it may get without a user.
   For purely local testing over `http://localhost`, CIMD is impractical — use DCR.
   MCP 2026-07-28 still cites `draft-ietf-oauth-client-id-metadata-document-00`;
   the IETF draft has since reached **-02** (6 July 2026), and QAuth's

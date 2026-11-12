@@ -61,6 +61,7 @@ describe('applyCimdClientGrant (real Postgres)', () => {
   function withoutGrant(r: object) {
     const rest: Record<string, unknown> = { ...r };
     delete rest['scopes'];
+    delete rest['clientCredentialsScopes'];
     delete rest['audience'];
     delete rest['updatedAt'];
     return rest;
@@ -177,6 +178,62 @@ describe('applyCimdClientGrant (real Postgres)', () => {
 
     expect(result).toEqual({ clientId: CLIENT_ID, status: 'not_cimd' });
     expect(await row(r.id)).toEqual(before);
+  });
+
+  // #956: the document may add `client_credentials`; which scopes that grant
+  // may issue the client is the operator's list, which no resolution touches.
+  it('writes client_credentials_scopes, and the list outlives the first resolution', async () => {
+    const r = await realm('cimd-grant-6');
+
+    await applyCimdClientGrant(db(), r.id, {
+      client_id: CLIENT_ID,
+      scopes: ['notes:read', 'ssf:stream'],
+      client_credentials_scopes: ['ssf:stream'],
+    });
+    expect((await row(r.id)).clientCredentialsScopes).toEqual(['ssf:stream']);
+
+    const resolved = await createOAuthClientsRepository(db()).upsertCimdClient({
+      ...resolvedFromDocument(r.id),
+      grantTypes: ['authorization_code', 'refresh_token', 'client_credentials'],
+      tokenEndpointAuthMethod: 'private_key_jwt',
+      jwksUri: 'https://client.example.com/jwks.json',
+    });
+
+    expect(resolved.grantTypes).toContain('client_credentials');
+    expect(resolved.clientCredentialsScopes).toEqual(['ssf:stream']);
+  });
+
+  it('converges client_credentials_scopes alone, and an entry without it clears it', async () => {
+    const r = await realm('cimd-grant-7');
+    const clients = createOAuthClientsRepository(db());
+    await clients.upsertCimdClient(resolvedFromDocument(r.id));
+    const spec = { client_id: CLIENT_ID, scopes: ['notes:read', 'ssf:stream'] };
+    await applyCimdClientGrant(db(), r.id, spec);
+    expect((await row(r.id)).clientCredentialsScopes).toBeNull();
+    const before = await row(r.id);
+
+    const opened = await applyCimdClientGrant(db(), r.id, {
+      ...spec,
+      client_credentials_scopes: ['ssf:stream'],
+    });
+    expect(opened).toEqual({ clientId: CLIENT_ID, status: 'updated' });
+    const after = await row(r.id);
+    expect(after.clientCredentialsScopes).toEqual(['ssf:stream']);
+    expect(withoutGrant(after)).toEqual(withoutGrant(before));
+
+    const again = await applyCimdClientGrant(db(), r.id, {
+      ...spec,
+      client_credentials_scopes: ['ssf:stream'],
+    });
+    expect(again.status).toBe('unchanged');
+
+    const closed = await applyCimdClientGrant(db(), r.id, spec);
+    expect(closed).toEqual({
+      clientId: CLIENT_ID,
+      status: 'updated',
+      removedClientCredentialsScopes: ['ssf:stream'],
+    });
+    expect((await row(r.id)).clientCredentialsScopes).toBeNull();
   });
 
   it('grants per realm', async () => {

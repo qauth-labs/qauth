@@ -515,19 +515,75 @@ describe('isCimdClientIdShape', () => {
         manifestSchema.safeParse(receiverClient({ client_credentials_scopes: value })).success
       ).toBe(false);
     });
+  });
 
-    it('refuses it on a CIMD entry, which has no client_credentials grant', () => {
+  // #956: a CIMD client's document may add `client_credentials`, so the
+  // operator's entry says which of its scopes that grant may issue it.
+  describe('client_credentials_scopes on a CIMD entry (#956)', () => {
+    const cimdEntry = (overrides: Record<string, unknown>) => ({
+      realm: 'master',
+      cimd_clients: [
+        {
+          client_id: 'https://client.example.com/oauth/metadata.json',
+          scopes: ['notes:read', 'ssf:stream'],
+          ...overrides,
+        },
+      ],
+    });
+
+    it('accepts a list of scopes the entry grants, and leaves it out when omitted', () => {
       expect(
-        manifestSchema.safeParse({
-          realm: 'master',
-          cimd_clients: [
-            {
-              client_id: 'https://client.example.com/c',
-              scopes: ['ssf:stream'],
-              client_credentials_scopes: ['ssf:stream'],
-            },
-          ],
-        }).success
+        manifestSchema.parse(cimdEntry({ client_credentials_scopes: ['ssf:stream'] }))
+          .cimd_clients?.[0].client_credentials_scopes
+      ).toEqual(['ssf:stream']);
+      expect(
+        manifestSchema.parse(cimdEntry({})).cimd_clients?.[0].client_credentials_scopes
+      ).toBeUndefined();
+    });
+
+    it('refuses a scope the entry does not grant, naming it', () => {
+      const result = manifestSchema.safeParse(
+        cimdEntry({ client_credentials_scopes: ['ssf:stream', 'notes:write'] })
+      );
+      expect(result.success).toBe(false);
+      expect(result.error?.issues).toHaveLength(1);
+      expect(result.error?.issues[0].path).toEqual([
+        'cimd_clients',
+        0,
+        'client_credentials_scopes',
+      ]);
+      expect(result.error?.issues[0].message).toContain('"notes:write"');
+    });
+
+    it('refuses any scope when the entry grants none', () => {
+      const result = manifestSchema.safeParse(
+        cimdEntry({ scopes: [], client_credentials_scopes: ['ssf:stream'] })
+      );
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0].message).toContain('"ssf:stream"');
+    });
+
+    // `scopes` refuses QAuth's own scopes first; the list can name none either.
+    it('refuses a scope in the qauth: namespace', () => {
+      expect(
+        manifestSchema.safeParse(cimdEntry({ client_credentials_scopes: ['qauth:admin:read'] }))
+          .success
+      ).toBe(false);
+    });
+
+    it('refuses an empty list, and says that leaving it out gives no token', () => {
+      const result = manifestSchema.safeParse(cimdEntry({ client_credentials_scopes: [] }));
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0].message).toContain('leave it out');
+    });
+
+    it.each([
+      ['a string instead of a list', 'ssf:stream'],
+      ['an empty string', ['']],
+      ['null', null],
+    ])('refuses %s', (_name, value) => {
+      expect(
+        manifestSchema.safeParse(cimdEntry({ client_credentials_scopes: value })).success
       ).toBe(false);
     });
   });

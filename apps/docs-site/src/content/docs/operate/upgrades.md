@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — the upgrade from 0.1 to 0.2 with its hosts, keys, sessions and roles, and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-11-03'
+lastVerified: '2026-11-08'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -1132,6 +1132,11 @@ also get a token without a user for each scope its users grant it
 every existing row passes: the scopes that grant may issue, out of `scopes`.
 NULL, every existing client's value, keeps the grant as it was, and the
 previous release keeps creating and updating clients on the new schema.
+From the release after 0.2.2, a CIMD client is the exception
+([#956](https://github.com/qauth-labs/qauth/issues/956)): without a list, the
+grant issues it no token, and its `cimd_clients` entry in the seed manifest
+sets the list
+([Tokens a CIMD client gets as itself](/operate/docker/#tokens-a-cimd-client-gets-as-itself)).
 
 After the upgrade, give every client that signs users in and holds
 `client_credentials` the list, an SSF receiver's `["ssf:stream"]`, in its seed
