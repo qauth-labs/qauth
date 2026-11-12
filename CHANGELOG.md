@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Interaction API contract states the built-in proof of work, and how a
+  replacement ceremony app gets a typed client** ([#1082], ADR-017 Decision 7,
+  ADR-019 Decisions 5 and 6). A replacement app ([#618]) could not pass the
+  bot challenge without reading QAuth's source: the `captcha` step's `pow`
+  params named a `challenge` and a `difficulty`, and nothing said what is
+  hashed. The step's description and its `pow` params in the published
+  contract (`/interaction/v1-rc.0/openapi.json`) now state the rule: the
+  answer is a nonce of 1 to 16 ASCII digits with no sign and no leading zero,
+  and the engine accepts it when the SHA-256 digest of the UTF-8 bytes of
+  `<challenge>:<nonce>` starts with at least `difficulty` zero bits. The
+  step's example answer is now a solution of its puzzle. A new shared test
+  vector file, `test-vectors/interaction/proof-of-work.json`, holds the rule's
+  edges, and both the engine's check and the reference solver run it. The
+  Interaction API reference says how a replacement app gets its client: it
+  generates one from the published document. QAuth's own client and solver
+  stay internal to the reference ceremony app, not published as a package; the
+  SDKs QAuth publishes are those of ADR-018 §6. The check itself did not
+  change.
 - **A sign-in can turn into a registration and back** ([#1079], ADR-017
   Decision 8, ADR-019 Decision 6, ADR-020 §3). With the Interaction API on,
   the first step of an authorization request's sign-in offers the `register`
@@ -4067,6 +4085,7 @@ It adds migrations 0068 and 0069.
 [#614]: https://github.com/qauth-labs/qauth/issues/614
 [#615]: https://github.com/qauth-labs/qauth/issues/615
 [#616]: https://github.com/qauth-labs/qauth/issues/616
+[#618]: https://github.com/qauth-labs/qauth/issues/618
 [#624]: https://github.com/qauth-labs/qauth/issues/624
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
@@ -4137,6 +4156,7 @@ It adds migrations 0068 and 0069.
 [#1079]: https://github.com/qauth-labs/qauth/issues/1079
 [#1080]: https://github.com/qauth-labs/qauth/issues/1080
 [#1081]: https://github.com/qauth-labs/qauth/issues/1081
+[#1082]: https://github.com/qauth-labs/qauth/issues/1082
 
 ### Deprecated
 

@@ -5,10 +5,17 @@
  * content security policy needs no exception for it, and it asks nothing of
  * any other host.
  *
- * A solution is the smallest decimal nonce whose SHA-256 over
- * `<challenge>:<nonce>` (UTF-8) starts with at least `difficulty` zero bits.
- * The server checks it in one hash; finding it takes about 2^difficulty.
- * The nonce goes back as the step's `captcha_token`.
+ * The rule is the contract's (#1082): the `pow` params of the `captcha` step
+ * state it, and a replacement ceremony app writes its solver from it. A nonce
+ * solves the puzzle when the SHA-256 of the UTF-8 bytes of
+ * `<challenge>:<nonce>` starts with at least `difficulty` zero bits; this
+ * solver returns the smallest. The server checks it in one hash; finding it
+ * takes about 2^difficulty. The nonce goes back as the step's `captcha_token`.
+ * The tests run the shared vectors, `test-vectors/interaction/proof-of-work.json`,
+ * which the server's check runs too.
+ *
+ * Internal to the reference ceremony app: this package is not published
+ * (the Interaction API reference, "Replacement apps").
  */
 
 /** The `captcha` step's params of the built-in proof of work. */
