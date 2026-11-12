@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A sign-in can turn into a registration and back** ([#1079], ADR-017
+  Decision 8, ADR-019 Decision 6, ADR-020 §3). With the Interaction API on,
+  the first step of an authorization request's sign-in offers the `register`
+  path marker, "Create an account", while the realm allows sign-up
+  (`accounts.allowSignUp`), the client's `hosted_flows` name `register` and
+  the request carries no `max_age` and no `prompt=login`: the rules of
+  `prompt=create`, but for the `openid` scope. It is offered before anyone is
+  named and reads no account. Answering it starts the registration
+  `prompt=create` starts, in the same interaction and for the same request,
+  the bot challenge first where it is required, and the registration ends in
+  a code for that request. The registration's address step offers the
+  `sign_in` marker, "I have an account", back to the sign-in until the
+  address is given. The rules are read on every round, so a marker answered
+  once they no longer hold is refused with `invalid_answer`. A sign-in to link
+  an upstream account ([#670]) offers neither. Both steps are in the published
+  Interaction API contract (`/interaction/v1-rc.0/openapi.json`); the FiPA
+  endpoint does not serve them.
 - **The admin API manages every client of a realm** ([#632], ADR-020 §3,
   ADR-019 Decision 7, ADR-012, experimental routes). Under
   `/admin/v1-rc.0/realms/{realmId}/clients`, `clients.list` lists every
@@ -4074,6 +4091,7 @@ It adds migrations 0068 and 0069.
 [#1075]: https://github.com/qauth-labs/qauth/issues/1075
 [#1076]: https://github.com/qauth-labs/qauth/issues/1076
 [#1078]: https://github.com/qauth-labs/qauth/issues/1078
+[#1079]: https://github.com/qauth-labs/qauth/issues/1079
 
 ### Deprecated
 
