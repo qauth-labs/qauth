@@ -8,21 +8,23 @@ import { ClientManagedByDocumentError } from '../../helpers/admin-client-errors'
 import { classifyRequest, OPERATION_REGISTRY } from '../../helpers/admin-operations';
 import { RESERVED_OPERATIONS } from '../../helpers/admin-operations-reserved';
 import type { AdminRateLimitCheck } from '../pipeline';
+import { CLIENT_HEADER_LINES, clientChangeLines, shownValue } from './approval-lines';
 import {
   applyClientPatch,
+  classifyClientPatch,
   CLIENT_FIELD_DEFAULTS,
   CLIENT_FIELDS,
-  classifyClientPatch,
   listDirection,
   mergePatch,
   PATCHABLE_CLIENT_FIELDS,
 } from './fields';
 import {
+  assertShownInFull,
+  classifyClientDisable,
   CLIENT_OPERATION_IDS,
   type ClientCheckContext,
   clientSettingsProblems,
   refuseDocumentClient,
-  shownValue,
 } from './operations';
 import { previewClientPatch } from './preview';
 import {
@@ -304,9 +306,10 @@ describe('the classification of a client update (#632)', () => {
       'write'
     );
     expect(classify(client(), { scopes: ['openid'] }).class).toBe('write');
+    // The client then obtains admin tokens: who administers changes too.
     expect(classify(client(), { scopes: ['openid', 'qauth:admin:read'] })).toMatchObject({
       class: 'security',
-      effects: ['token-content'],
+      effects: ['token-content', 'administration'],
     });
   });
 
@@ -339,6 +342,84 @@ describe('the classification of a client update (#632)', () => {
     expect(
       classify(client(), { redirectUris: ['https://reports.example.com/callback'] }).class
     ).toBe('write');
+  });
+
+  it('makes every change of a client that holds an admin scope a security change', () => {
+    const console = client({ scopes: ['openid', 'qauth:admin:read', 'qauth:admin:security'] });
+    expect(classify(console, { name: 'Console' })).toEqual({
+      class: 'security',
+      effects: ['administration'],
+      permissions: ['clients.read', 'clients.security'],
+    });
+    // A narrowing too: without the scope no token could add it back.
+    expect(classify(console, { scopes: ['openid', 'qauth:admin:read'] })).toMatchObject({
+      class: 'security',
+      effects: ['administration'],
+    });
+    expect(classify(console, { accessTokenLifespanSeconds: 1 }).effects).toEqual([
+      'administration',
+    ]);
+    expect(classify(console, { redirectUris: ['https://c.example/cb'] }).effects).toEqual([
+      'token-content',
+      'administration',
+    ]);
+  });
+
+  it('suspends a client as a write, unless it holds an admin scope', () => {
+    expect(classifyClientDisable(client())).toEqual({
+      class: 'write',
+      effects: [],
+      permissions: ['clients.write'],
+    });
+    expect(classifyClientDisable(client({ scopes: ['qauth:admin:read'] }))).toEqual({
+      class: 'security',
+      effects: ['administration'],
+      permissions: ['clients.security'],
+    });
+  });
+
+  it('makes a scope added to a client_credentials client without a list a security change', () => {
+    const machine = client({
+      grantTypes: ['client_credentials'],
+      responseTypes: [],
+      redirectUris: [],
+      scopes: ['reports:read'],
+    });
+    expect(classify(machine, { scopes: ['reports:read', 'reports:write'] })).toMatchObject({
+      class: 'security',
+      effects: ['token-content'],
+    });
+    // With a list, a scope it leaves out is not issued to the client as itself.
+    const listed = client({
+      grantTypes: ['client_credentials'],
+      responseTypes: [],
+      redirectUris: [],
+      scopes: ['reports:read'],
+      clientCredentialsScopes: ['reports:read'],
+    });
+    expect(classify(listed, { scopes: ['reports:read', 'reports:write'] }).class).toBe('write');
+    expect(classify(machine, { scopes: [] }).class).toBe('write');
+  });
+
+  it('leaves a member the patch does not name as stored, and classifies one its rules change', () => {
+    const native = client({
+      tokenEndpointAuthMethod: 'private_key_jwt',
+      jwksUri: 'https://r.example/jwks',
+      firstPartyProfile: 'native_backend',
+      // Written by hand, a member missing.
+      firstPartyPolicy: { flows: ['login', 'register'] },
+      firstPartyReason: 'The operator ships the app.',
+      redirectUris: ['https://r.example/cb', 'https://r.example/cb'],
+    });
+    const applied = applyClientPatch(native, { name: 'Renamed' });
+    expect(applied.client.firstPartyPolicy).toEqual(native.firstPartyPolicy);
+    expect(applied.client.redirectUris).toEqual(native.redirectUris);
+    expect(classify(native, { name: 'Renamed' }).class).toBe('write');
+    // A rule that changes a member the patch did not name: the policy the
+    // profile clears is classified as its own change.
+    expect(classify(native, { firstPartyReason: null, firstPartyProfile: null })).toMatchObject({
+      class: 'security',
+    });
   });
 
   it('fails closed through the registry on a member the table does not take', () => {
@@ -592,6 +673,16 @@ describe('the checks of a client’s settings (#632)', () => {
     expect(problems(client(), { verifiedDomain: 'example.com' })).toEqual([]);
   });
 
+  it('checks a client lifetime against the tier of the environment a patch moves it to', () => {
+    const local = client({ environment: 'development', accessTokenLifespanSeconds: 3000 });
+    expect(problems(local, { environment: 'production' })).toMatchObject([
+      { pointer: '/accessTokenLifespanSeconds' },
+    ]);
+    expect(problems(local, { environment: 'production', accessTokenLifespanSeconds: 600 })).toEqual(
+      []
+    );
+  });
+
   it('checks only what the patch names: a stored value does not block an unrelated change', () => {
     const stored = client({ accessTokenLifespanSeconds: 3600 });
     expect(problems(stored, { name: 'Renamed' })).toEqual([]);
@@ -630,9 +721,11 @@ describe('a CIMD client (#632, ADR-012 Decision 3)', () => {
         ClientManagedByDocumentError
       );
     }
-    await expect(
-      operation(CLIENT_OPERATION_IDS.enable).loadState?.(request, { ...input, body: {} })
-    ).resolves.toMatchObject({ metadataDocument: DOCUMENT });
+    for (const id of [CLIENT_OPERATION_IDS.enable, CLIENT_OPERATION_IDS.disable]) {
+      await expect(
+        operation(id).loadState?.(request, { ...input, body: {} })
+      ).resolves.toMatchObject({ metadataDocument: DOCUMENT });
+    }
   });
 });
 
@@ -706,13 +799,13 @@ describe('the client operations in the registry (#632)', () => {
       [
         'clients.update',
         'security',
-        ['token-content', 'posture-loosening'],
+        ['token-content', 'posture-loosening', 'administration'],
         ['clients.write', 'clients.security', 'clients.read'],
       ],
       ['clients.preview', 'read', [], ['clients.read']],
       ['clients.delete', 'security', ['token-content'], ['clients.security']],
       ['clients.enable', 'security', ['token-content'], ['clients.security']],
-      ['clients.disable', 'write', [], ['clients.write']],
+      ['clients.disable', 'security', ['administration'], ['clients.write', 'clients.security']],
     ]);
     for (const [permission, cls] of [
       ['clients.read', 'read'],
@@ -723,7 +816,7 @@ describe('the client operations in the registry (#632)', () => {
     }
   });
 
-  it('reserves the security operations, and only the update classifies', () => {
+  it('reserves the security operations, and only the update and the suspension classify', () => {
     for (const id of ['clients.create', 'clients.update', 'clients.delete']) {
       expect(
         RESERVED_OPERATIONS.find((entry) => entry.id === id),
@@ -736,7 +829,7 @@ describe('the client operations in the registry (#632)', () => {
     const classifying = Object.values(CLIENT_OPERATION_IDS).filter(
       (id) => operation(id).classify !== undefined
     );
-    expect(classifying).toEqual(['clients.update']);
+    expect(classifying).toEqual(['clients.update', 'clients.disable']);
   });
 
   it('names the admin as the cause of a new client’s event', () => {
@@ -768,22 +861,63 @@ describe('what an approver is shown of a client operation (#632)', () => {
     });
   };
 
-  it('shows each changed field of an update beside the value it replaces', () => {
+  it('shows a list as each entry it removes and adds, and any other field beside the value it replaces', () => {
     const shown = render(
       CLIENT_OPERATION_IDS.update,
-      { name: 'Reports', redirectUris: ['https://new.example/cb'] },
+      {
+        name: 'Monthly reports',
+        redirectUris: ['https://reports.example.com/callback', 'https://new.example/cb'],
+        scopes: ['openid'],
+      },
       client()
     );
-    expect(shown.title).toBe('Change one setting of a client');
+    expect(shown.title).toBe('Change the settings of a client');
     expect(shown.fields).toEqual([
       { label: 'client', value: 'reports (Reports)' },
       { label: 'owner', value: 'no developer: an operator or an admin manages it' },
-      {
-        label: 'redirectUris',
-        before: '["https://reports.example.com/callback"]',
-        value: '["https://new.example/cb"]',
-      },
+      { label: 'name', before: 'Reports', value: 'Monthly reports' },
+      { label: 'redirectUris added', value: 'https://new.example/cb' },
+      { label: 'scopes removed', value: 'reports:read' },
     ]);
+  });
+
+  it('shows every entry of a padded list whole, so none hides behind another', () => {
+    const padded = `https://reports.example.com/callback/${'a'.repeat(480)}`;
+    const shown = render(
+      CLIENT_OPERATION_IDS.update,
+      {
+        redirectUris: ['https://reports.example.com/callback', padded, 'https://evil.example/cb'],
+      },
+      client()
+    );
+    expect(shown.fields?.slice(CLIENT_HEADER_LINES)).toEqual([
+      { label: 'redirectUris added', value: padded },
+      { label: 'redirectUris added', value: 'https://evil.example/cb' },
+    ]);
+  });
+
+  it('refuses a security change an approver could not be shown whole, and holds a write to nothing', () => {
+    const long = `https://reports.example.com/${'a'.repeat(1000)}`;
+    const body = { redirectUris: [long] };
+    const state = client();
+    const applied = applyClientPatch(state, body);
+    expect(clientChangeLines(state, applied.client, CLIENT_HEADER_LINES).problems).toMatchObject([
+      { pointer: '/redirectUris' },
+    ]);
+    expect(() => assertShownInFull(patch(body), state, applied)).toThrow(
+      expect.objectContaining({ statusCode: 422 })
+    );
+    // More lines than one approval holds.
+    const many = { scopes: Array.from({ length: 50 }, (_, index) => `scope:${index}`) };
+    const own = client({ grantTypes: ['client_credentials'], responseTypes: [], redirectUris: [] });
+    expect(() => assertShownInFull(patch(many), own, applyClientPatch(own, many))).toThrow(
+      expect.objectContaining({ statusCode: 422 })
+    );
+    // A write needs no approval: a long description is shown to nobody.
+    const description = { description: 'é'.repeat(2000) };
+    expect(() =>
+      assertShownInFull(patch(description), state, applyClientPatch(state, description))
+    ).not.toThrow();
   });
 
   it('refuses to show an update, a deletion or an enable without the client it was filed against', () => {
@@ -814,9 +948,30 @@ describe('what an approver is shown of a client operation (#632)', () => {
     expect(JSON.stringify(deleted)).not.toContain(SECRET_HASH);
   });
 
-  it('caps a long value', () => {
-    expect(shownValue('x'.repeat(600))).toHaveLength(501);
+  it('shows a string as it is and any other value as JSON', () => {
+    expect(shownValue('x'.repeat(600))).toHaveLength(600);
     expect(shownValue(['a'])).toBe('["a"]');
+    expect(shownValue(null)).toBe('null');
+  });
+
+  it('refuses a registration an approver could not be shown whole, or one with a private key', () => {
+    const body = clientCreateBodySchema();
+    const base = {
+      name: 'Batch',
+      tokenEndpointAuthMethod: 'private_key_jwt',
+      grantTypes: ['client_credentials'],
+    };
+    expect(body.safeParse(base).success).toBe(true);
+    expect(
+      body.safeParse({ ...base, scopes: Array.from({ length: 50 }, (_, index) => `s:${index}`) })
+        .success
+    ).toBe(false);
+    expect(
+      body.safeParse({ ...base, redirectUris: [`https://r.example/${'a'.repeat(1100)}`] }).success
+    ).toBe(false);
+    const privateKey = { kty: 'OKP', crv: 'Ed25519', x: 'cHVibGlj', d: 'cHJpdmF0ZQ' };
+    expect(body.safeParse({ ...base, jwks: { keys: [privateKey] } }).success).toBe(false);
+    expect(clientPatchBodySchema().safeParse({ jwks: { keys: [privateKey] } }).success).toBe(false);
   });
 });
 

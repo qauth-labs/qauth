@@ -561,7 +561,7 @@ describe('the admin client operations (#632, real containers)', () => {
       }),
       await send('DELETE', path, securityAdmin.token, undefined, { 'if-match': '*' }),
       await send('POST', `${path}/enable`, securityAdmin.token, {}, { 'if-match': '*' }),
-      await send('POST', `${path}/disable`, securityAdmin.token, {}),
+      await send('POST', `${path}/disable`, securityAdmin.token, {}, { 'if-match': '*' }),
     ];
     expect(responses.map((response) => response.statusCode)).toEqual([
       404, 404, 404, 404, 404, 404,
@@ -627,11 +627,19 @@ describe('the admin client operations (#632, real containers)', () => {
     const editor = await adminWith('editor', 'qauth:admin:read qauth:admin:write');
     const securityAdmin = await adminWith('security-admin');
 
-    const suspended = await send(
+    const unnamed = await send(
       'POST',
       `${clientPath(realm.id, client.id)}/disable`,
       editor.token,
       {}
+    );
+    expect(unnamed.statusCode).toBe(428);
+    const suspended = await send(
+      'POST',
+      `${clientPath(realm.id, client.id)}/disable`,
+      editor.token,
+      {},
+      { 'if-match': await etagOf(realm.id, client.id, editor) }
     );
     expect(suspended.statusCode, suspended.body).toBe(200);
     expect(suspended.json<ClientBody>().suspended).toBe(true);
@@ -689,5 +697,26 @@ describe('the admin client operations (#632, real containers)', () => {
       'urn:qauth:event:client.suspension_lifted:v1-rc.0',
       'urn:qauth:event:client.deleted:v1-rc.0',
     ]);
+  });
+
+  it('treats every change of a client that obtains admin tokens as a security change', async () => {
+    const realm = await defaultRealm();
+    const console = await storedClient(realm.id, {
+      scopes: ['openid', 'qauth:admin:read', 'qauth:admin:security'],
+    });
+    const editor = await adminWith('editor', 'qauth:admin:read qauth:admin:write');
+    const etag = await etagOf(realm.id, console.id, editor);
+
+    const renamed = await patchClient(realm.id, console.id, editor, { name: 'Console' }, etag);
+    expect(renamed.statusCode).toBe(403);
+    const suspended = await send(
+      'POST',
+      `${clientPath(realm.id, console.id)}/disable`,
+      editor.token,
+      {},
+      { 'if-match': etag }
+    );
+    expect(suspended.statusCode).toBe(403);
+    expect(await storedRow(console.id)).toMatchObject({ name: 'Stored client', suspended: false });
   });
 });

@@ -4,6 +4,7 @@ import { SECURITY_EFFECTS, type SecurityEffect } from '@qauth-labs/shared-valida
 import { describe, expect, it } from 'vitest';
 
 import { classifyClientPatch } from '../admin/clients/fields';
+import { classifyClientDisable } from '../admin/clients/operations';
 import type { AdminClient } from '../admin/clients/representation';
 import { classifyPolicyPatch, type RealmPolicyState } from '../admin/realms/operations';
 import {
@@ -695,7 +696,12 @@ describe('the server registry and reserved table (#508)', () => {
   it('lets only request-dependent reserved operations classify', () => {
     expect(
       RESERVED_OPERATIONS.filter((entry) => entry.requestDependent).map((entry) => entry.id)
-    ).toEqual(['realms.policies.update', 'clients.update', 'realms.imports.apply']);
+    ).toEqual([
+      'realms.policies.update',
+      'clients.update',
+      'clients.disable',
+      'realms.imports.apply',
+    ]);
     // M2: answering `write` for every request no longer takes the entry.
     const policies = defineOperation({
       id: 'realms.policies.update',
@@ -1127,6 +1133,7 @@ const REQUEST_DEPENDENT_PERMISSIONS = [
 const DECLARED_PERMISSIONS: Readonly<Record<string, readonly string[]>> = {
   // clients.read: a client update answers the client it changes (#632).
   'clients.update': ['clients.write', 'clients.security', 'clients.read'],
+  'clients.disable': ['clients.write', 'clients.security'],
 };
 
 /** A correct classify for each request-dependent reserved entry, as its issue would write it. */
@@ -1137,6 +1144,9 @@ const CORRECT_CLASSIFY: Record<string, AdminOperationDefinition['classify']> = {
   // The shipped classify (#632): every field by the client field table, on
   // the patched client.
   'clients.update': (request, state) => classifyClientPatch(request, state as AdminClient),
+  // The shipped classify (#632): administration for a client that obtains
+  // admin tokens.
+  'clients.disable': (_request, state) => classifyClientDisable(state as AdminClient),
   // An import is a security operation as soon as its file differs from the
   // realm in anything but the display name.
   'realms.imports.apply': (request, state) => {
@@ -1180,7 +1190,7 @@ describe('the reserved security cases (#508)', () => {
       const write: Classification = {
         class: 'write',
         effects: [],
-        permissions: [entry.id === 'clients.update' ? 'clients.write' : 'realms.policies.write'],
+        permissions: [entry.id.startsWith('clients.') ? 'clients.write' : 'realms.policies.write'],
       };
       expect(
         () => createOperationRegistry([requestDependentOperation(entry.id, () => write)]),
