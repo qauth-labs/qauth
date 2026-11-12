@@ -75,5 +75,8 @@ describe('migration 0071 (a client’s own token lifetimes)', () => {
     // A day for an access token, 90 days for a refresh token.
     expect(added[0]).toContain('BETWEEN 1 AND 86400');
     expect(added[1]).toContain('BETWEEN 1 AND 7776000');
+    // Not validated against the rows already there, which all read NULL:
+    // no scan holds the table's lock.
+    for (const statement of added) expect(statement).toMatch(/\) NOT VALID;$/);
   });
 });
