@@ -245,7 +245,8 @@ Placement rules that follow from earlier decisions:
 - A passkey or TOTP bound after a sign-in that proved only the password is new for the realm's
   window (ADR-017 Decision 8, amended 2026-11-12; #1064). The account's other live sessions show
   the binding as a notice, with "Not you? Remove it" while the factor is new: the password alone,
-  after a fresh sign-in, removes it, and the removal ends the sessions it opened. The passkey and
+  after a fresh sign-in, removes it, and the removal ends the sessions it opened and voids the
+  recovery codes, which its binding may have shown to whoever bound it. The passkey and
   TOTP rows say until when the factor is new. The same binding reaches the user's Shared Signals
   receivers as a CAEP `credential-change`. Mail is only one more channel.
 - A user can delete the account immediately, after fresh authentication and a typed confirmation.

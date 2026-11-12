@@ -226,18 +226,24 @@
 >   the realm's `accounts.newFactorWindowDays` (default 7, from 1 to 30). The credential stores
 >   when its window ends. A factor bound after a sign-in that proved a settled factor beyond the
 >   password is never new, and neither is one bound on an account that holds no password. A
->   recovery code is not a settled factor for this rule: it stands in for a lost one, and a chain
->   of new factors must not settle itself.
+>   recovery code counts as a settled factor for this rule only on an account that holds no new
+>   factor: the first binding shows the set, so while that factor is new the codes may be its
+>   taker's, and a chain of new factors must not settle itself. A passkey the sign-in proved that
+>   the account no longer holds proves nothing settled.
 > - While new, the factor signs in as usual, but it is not the account's strongest factor. The
 >   downgrade rule (Decision 4), the TOTP owed after the first factor, a reset, a forced password
 >   update and the fresh authentication a change needs all read the account without it. A session
 >   records the new credentials its sign-in bound or proved, and a factor it proved only through
->   one of them is not fresh for a change. The MFA policy still reads every factor.
+>   one of them is not fresh for a change. The MFA policy still reads every factor. Changing the
+>   window either way is a security operation: a longer one leaves a new factor removable with the
+>   password for longer, a shorter one leaves the owner less time to undo an intruder's.
 > - While new, the password alone, after a fresh sign-in, removes it. The removal ends the sessions
 >   whose sign-in bound or proved it, revokes the refresh-token families and unused authorization
->   codes those sessions opened, and records `user.credential_removed` with `whileNew`. After the
->   window it is a full factor, and removing it needs a fresh authentication that includes the
->   account's strongest bound factor.
+>   codes those sessions opened, ended sessions included for as long as they are kept, deletes the
+>   account's recovery codes, ends every sign-in in progress of the account, and records
+>   `user.credential_removed` with `whileNew`. The account's next sign-in with a factor beyond the
+>   password shows a new set. After the window it is a full factor, and removing it needs a fresh
+>   authentication that includes the account's strongest bound factor.
 > - Every binding and every removal of a passkey or TOTP is sent over the Shared Signals
 >   transmitter as a CAEP `credential-change` (`change_type` `create` or `delete`;
 >   `credential_type` `fido2-platform`, `fido2-roaming` or `app`) to every stream subscribed to the
@@ -1278,8 +1284,9 @@ Second factors and recovery codes (F2b, F2c):
   `accounts.newFactorWindowDays` (default 7; amended 2026-11-12, #1064). While new it signs in as
   usual, but no reset, forced update, downgrade rule or fresh authentication counts it as the
   account's strongest factor, and the password alone, after a fresh sign-in, removes it. Removing
-  it ends the sessions, refresh-token families and codes its sign-ins opened. After the window it
-  is a full factor. A factor bound after a sign-in that proved a stronger factor is never new.
+  it ends the sessions, refresh-token families and codes its sign-ins opened, the account's
+  recovery codes and its sign-ins in progress. After the window it is a full factor. A factor
+  bound after a sign-in that proved a stronger factor is never new.
   Every binding and removal goes to the user's Shared Signals streams as a CAEP
   `credential-change`, and the account's other sessions show it on the account page, with "Not
   you? Remove it" while the factor is new. Mail is only one more channel.

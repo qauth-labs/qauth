@@ -22,9 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change needs read the account without it, and the password alone, after a
   fresh sign-in, removes it. Removing it ends the sessions whose sign-in bound
   or proved it, revokes their refresh-token families and unused authorization
-  codes, and records `user.credential_removed` with `whileNew`. After the
-  window it is a full factor. A factor bound after a sign-in that proved a
-  settled factor beyond the password is never new. The owner learns of every
+  codes (ended sessions' too, while `SESSION_RETENTION_DAYS` keeps them),
+  deletes the account's recovery codes, which the binding may have shown to
+  whoever bound it, ends every sign-in in progress of the account, and
+  records `user.credential_removed` with `whileNew`. After the window it is a
+  full factor. A factor bound after a sign-in that proved a settled factor
+  beyond the password is never new, and a recovery code counts as one only
+  on an account that holds no new factor. Changing the window either way is a
+  security operation (`credential-path`). The owner learns of every
   binding through the account's own channels: `user.credential_added` and
   `user.credential_removed` now name the authenticator (`platform`,
   `roaming` or `app`) and go to every Shared Signals stream subscribed to the
