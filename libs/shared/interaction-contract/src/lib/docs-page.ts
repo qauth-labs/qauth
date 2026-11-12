@@ -22,6 +22,9 @@ import { STEPS } from './steps';
 /** The date the page's prose was last checked; change it with the prose. */
 export const INTERACTION_PAGE_LAST_VERIFIED = '2026-11-12';
 
+/** The shared test vectors of the built-in proof of work, by their path in the repository. */
+export const PROOF_OF_WORK_VECTORS_PATH = 'test-vectors/interaction/proof-of-work.json';
+
 /** Where the docs site serves the contract's files. */
 export const CONTRACT_SITE_PATH = `/interaction/${INTERACTION_API_VERSION}/`;
 
@@ -146,5 +149,12 @@ An error is an RFC 9457 problem details document (${code('application/problem+js
 | ---- | ------ | ------- |
 ${problemRows().join('\n')}`,
     `## Paths\n\n${bullets([RESERVED_PREFIX_RULE, DOCUMENT_PATH_RULE])}`,
+    `## Replacement apps
+
+A sign-in UI that replaces the reference ceremony app and follows this contract is a supported setup (#618). Beside the contract, it needs:
+
+- **A typed client.** Generate one from [openapi.json](${CONTRACT_SITE_PATH}openapi.json) with any OpenAPI 3.1 client generator, and generate it again when the path's release candidate changes. QAuth's own client, ${code('libs/shared/interaction-client')}, is generated the same way, for the reference ceremony app. It is not published as a package, and neither is its proof-of-work solver: the SDKs QAuth publishes are those of [ADR-018](/reference/records/adr/018-1-0-scope-and-stability/#6-sdks-and-the-rust-core) §6, and what this API promises is its document and its step schemas, not a client library.
+- **A solver for the built-in proof of work.** The [${code('captcha')}](#captcha) step states its rule, which is all a solver needs. Check a solver against ${code(PROOF_OF_WORK_VECTORS_PATH)}, the shared test vectors QAuth's own check and solver run.
+- **A hosted provider's script**, when the operator named a hosted provider for the bot challenge: the provider's own, loaded from the script hosts the operator listed (ADR-019 Decision 5).`,
   ].join('\n\n')}\n`;
 }

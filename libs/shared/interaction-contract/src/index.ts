@@ -23,3 +23,9 @@ export {
   stepSchemaFile,
 } from './lib/step-schema';
 export { stepByUrn, stepErrorCodes, stepNamed, STEPS } from './lib/steps';
+export {
+  CAPTCHA_TOKEN_DESCRIPTION,
+  PROOF_OF_WORK_CHALLENGE_DESCRIPTION,
+  PROOF_OF_WORK_DIFFICULTY_DESCRIPTION,
+  PROOF_OF_WORK_RULE,
+} from './lib/steps/sign-in';
