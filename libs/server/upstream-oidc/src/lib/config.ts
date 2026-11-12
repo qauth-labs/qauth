@@ -1,4 +1,23 @@
+import {
+  UPSTREAM_ASSERTION_ALGORITHMS,
+  UPSTREAM_ID_TOKEN_ALGORITHMS,
+  UPSTREAM_SIGNED_CLIENT_SECRET,
+  UPSTREAM_TENANT_PLACEHOLDER,
+  type UpstreamIdTokenAlgorithm,
+} from '@qauth-labs/server-federation';
 import { z } from 'zod';
+
+// The preset's provider config is the plugin SDK's (#671): its algorithms,
+// its signed client secret and its tenant placeholder are declared there, so
+// a preset written against the SDK alone and the schema below describe one
+// shape (`config-shape.test.ts`).
+export {
+  UPSTREAM_ASSERTION_ALGORITHMS,
+  UPSTREAM_ID_TOKEN_ALGORITHMS,
+  UPSTREAM_SIGNED_CLIENT_SECRET,
+  UPSTREAM_TENANT_PLACEHOLDER,
+};
+export type { UpstreamIdTokenAlgorithm };
 
 /**
  * The config of one upstream OpenID Connect provider in one realm (#601):
@@ -48,45 +67,9 @@ export const UPSTREAM_CLIENT_AUTHENTICATION_METHODS = Object.freeze([
 export type UpstreamClientAuthenticationMethod =
   (typeof UPSTREAM_CLIENT_AUTHENTICATION_METHODS)[number];
 
-/**
- * The algorithms an ID token may be signed with: asymmetric JWS algorithms
- * only. `none` and every MAC algorithm (`HS*`) are absent by construction: a
- * MAC would be checked with the client secret, which the provider also holds,
- * so it proves nothing about who signed.
- */
-export const UPSTREAM_ID_TOKEN_ALGORITHMS = Object.freeze([
-  'RS256',
-  'RS384',
-  'RS512',
-  'PS256',
-  'PS384',
-  'PS512',
-  'ES256',
-  'ES384',
-  'ES512',
-  'EdDSA',
-] as const);
-
-export type UpstreamIdTokenAlgorithm = (typeof UPSTREAM_ID_TOKEN_ALGORITHMS)[number];
-
 /** The ID token algorithms a provider's config allows unless it names its own. */
 export const DEFAULT_UPSTREAM_ID_TOKEN_ALGORITHMS: readonly UpstreamIdTokenAlgorithm[] =
   Object.freeze(['RS256', 'PS256', 'ES256', 'EdDSA']);
-
-/** The algorithms the signer signs a client assertion with. */
-export const UPSTREAM_ASSERTION_ALGORITHMS = Object.freeze(['RS256', 'ES256', 'EdDSA'] as const);
-
-/**
- * A client secret the signer role signs for each token request (#671): a
- * JWT, sent as `client_secret` in the form body, as Sign in with Apple asks
- * for. Its claims are a client assertion's (`iss`, `sub`, `aud`, `iat`,
- * `exp`, `jti`); the signer signs it with the realm's
- * `upstream_client_assertion` key for the provider (ADR-019 Decision 9), so
- * no secret is stored. Offered to preset plugins only
- * ({@link upstreamOidcClientConfigSchema}): the generic client's config,
- * which a realm's admin writes, has no such method.
- */
-export const UPSTREAM_SIGNED_CLIENT_SECRET = 'signed_client_secret';
 
 /** The scopes an authorization request asks for unless the config names its own. */
 export const DEFAULT_UPSTREAM_SCOPES: readonly string[] = Object.freeze([
@@ -164,7 +147,9 @@ export const upstreamClientAuthenticationSchema = z.discriminatedUnion('method',
 
 /**
  * How a preset plugin's client authenticates at the token endpoint: the
- * generic client's methods, and {@link UPSTREAM_SIGNED_CLIENT_SECRET}.
+ * generic client's methods, and {@link UPSTREAM_SIGNED_CLIENT_SECRET}, a
+ * client secret the signer role signs for each token request, which only a
+ * preset may name.
  */
 export const upstreamPresetClientAuthenticationSchema = z.discriminatedUnion('method', [
   ...upstreamClientAuthenticationSchema.options,
@@ -174,9 +159,6 @@ export const upstreamPresetClientAuthenticationSchema = z.discriminatedUnion('me
     signingAlgorithm: z.enum(UPSTREAM_ASSERTION_ALGORITHMS).default('ES256'),
   }),
 ]);
-
-/** The placeholder a tenant issuer template holds for the tenant id. */
-export const UPSTREAM_TENANT_PLACEHOLDER = '{tenantid}';
 
 /**
  * A tenant id as an issuer template takes it: letters, digits and `-`, as a
@@ -207,7 +189,7 @@ export function upstreamTenantIssuerProblem(template: unknown): string | undefin
 /**
  * The issuer of a multi-tenant provider (#671), whose shared endpoints
  * serve many tenants: the discovery document names the template (e.g.
- * `https://login.microsoftonline.com/{tenantid}/v2.0`), and
+ * `https://idp.example.com/{tenantid}/v2.0`), and
  * each ID token the template with its own tenant id, the value of its
  * `tenantClaim`. A token is accepted only when its `iss` is the template
  * with that tenant id in place: never a token whose issuer names one tenant

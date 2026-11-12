@@ -80,6 +80,43 @@ types it uses, the contract's constants, its errors and the static checks.
 - `UserAttribute` (type)
 - `VerifiedIdentity` (type)
 
+The shape of an upstream OpenID Connect preset (#671), a plugin the server
+builds on its own OpenID Connect client: its types, its constants, the helper
+that defines one, the loader's static checks of it, and the generic client's
+id and type namespace, which no plugin may take.
+
+- `defineUpstreamOidcPreset`
+- `isUpstreamOidcPreset`
+- `MAX_UPSTREAM_OIDC_PRESET_ORIGINS`
+- `MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH`
+- `MAX_UPSTREAM_RESPONSE_MEMBERS`
+- `UPSTREAM_ASSERTION_ALGORITHMS`
+- `UPSTREAM_ID_TOKEN_ALGORITHMS`
+- `UPSTREAM_ID_TOKEN_ONLY_CLAIMS`
+- `UPSTREAM_OIDC_METHOD_ID`
+- `UPSTREAM_OIDC_PRESET_EXPORT`
+- `UPSTREAM_OIDC_TYPE_PATTERN`
+- `UPSTREAM_PRESET_CLIENT_AUTHENTICATION_METHODS`
+- `UPSTREAM_RESPONSE_MEMBER_NAME_PATTERN`
+- `UPSTREAM_RESPONSE_PARAMETERS`
+- `UPSTREAM_SIGNED_CLIENT_SECRET`
+- `UPSTREAM_STANDARD_ATTRIBUTES`
+- `UPSTREAM_TENANT_PLACEHOLDER`
+- `UPSTREAM_VERIFIED_CLAIM_PAIRS`
+- `UpstreamAssertionAlgorithm` (type)
+- `UpstreamClaimAttribute` (type)
+- `upstreamClaimIsTrue`
+- `UpstreamIdentityClaims` (type)
+- `UpstreamIdTokenAlgorithm` (type)
+- `UpstreamOidcClientAuthentication` (type)
+- `UpstreamOidcEndpoints` (type)
+- `UpstreamOidcPreset` (type)
+- `UpstreamOidcPresetOptions` (type)
+- `upstreamOidcPresetProblems`
+- `UpstreamOidcProviderConfig` (type)
+- `UpstreamOidcTenantIssuer` (type)
+- `UpstreamResponseMembers` (type)
+
 ## `@qauth-labs/plugin-sdk/host`
 
 The host's half (`src/host.ts`): what QAuth's server runs around a method,
@@ -118,3 +155,10 @@ It replaces the global `fetch` while it runs.
 - `AuthMethodKitRequest` (type)
 - `AuthMethodKitScenario` (type)
 - `checkAuthMethod`
+
+The preset kit (#671), which checks an upstream OpenID Connect preset without
+the server.
+
+- `checkUpstreamOidcPreset`
+- `UpstreamOidcPresetKitReport` (type)
+- `UpstreamOidcPresetKitScenario` (type)

@@ -5,6 +5,7 @@ import {
   authMethodParameters,
   completeUpstreamStep,
   startUpstreamStep,
+  type UserAttribute,
   type VerifiedIdentity,
 } from '@qauth-labs/server-federation';
 import { decodeProtectedHeader } from 'jose';
@@ -90,6 +91,14 @@ function identityOf(completion: unknown): VerifiedIdentity {
   return (completion as { identity: VerifiedIdentity }).identity;
 }
 
+/** The attributes the host mapped from the identity, as the sign-in stores them. */
+function attributesOf(completion: unknown) {
+  expect(completion).toMatchObject({ kind: 'identity' });
+  return (completion as { attributes: readonly UserAttribute[] }).attributes.map(
+    ({ source, attrKey, attrValue, verified }) => ({ source, attrKey, attrValue, verified })
+  );
+}
+
 describe('a signed client secret (#671)', () => {
   const signedSchema = z.strictObject({ clientId: z.string().min(1).max(255) });
   const signedPreset = () =>
@@ -145,7 +154,10 @@ describe('a signed client secret (#671)', () => {
     const [claims] = provider.assertions;
     expect(claims).toMatchObject({ iss: 'TEAM123456', sub: CLIENT_ID, aud: ORIGIN });
     expect(typeof claims['jti']).toBe('string');
-    expect((claims['exp'] as number) - (claims['iat'] as number)).toBeLessThanOrEqual(60);
+    // Sixty seconds: the client sets `exp`, and the signer stamps `iat` a moment later.
+    const life = (claims['exp'] as number) - (claims['iat'] as number);
+    expect(life).toBeGreaterThanOrEqual(59);
+    expect(life).toBeLessThanOrEqual(60);
   });
 
   it('is refused at discovery by a provider that takes no client_secret_post', async () => {
@@ -279,9 +291,11 @@ describe('a multi-tenant issuer template (#671)', () => {
 
 describe('response members and identity claims (#671)', () => {
   const memberPreset = (
-    identityClaims?: UpstreamOidcPresetOptions<PlainConfig>['identityClaims']
+    identityClaims?: UpstreamOidcPresetOptions<PlainConfig>['identityClaims'],
+    attributes?: UpstreamOidcPresetOptions<PlainConfig>['attributes']
   ) =>
     preset({
+      ...(attributes === undefined ? {} : { attributes }),
       configSchema: plainSchema,
       upstreamConfig: (config: PlainConfig) => ({
         issuer: ORIGIN,
@@ -301,10 +315,11 @@ describe('response members and identity claims (#671)', () => {
     });
 
   async function memberHost(
-    identityClaims?: UpstreamOidcPresetOptions<PlainConfig>['identityClaims']
+    identityClaims?: UpstreamOidcPresetOptions<PlainConfig>['identityClaims'],
+    attributes?: UpstreamOidcPresetOptions<PlainConfig>['attributes']
   ) {
     const provider = await createFakeProvider({ issuer: ORIGIN });
-    const method = memberPreset(identityClaims);
+    const method = memberPreset(identityClaims, attributes);
     const host = await testHost(method, PLAIN_CONFIG, provider, {
       secrets: new Map([['clientSecret', CLIENT_SECRET]]),
     });
@@ -383,6 +398,80 @@ describe('response members and identity claims (#671)', () => {
     expect(identity.rawClaims).toMatchObject({ email: 'ada@example.com', email_verified: true });
     expect(identity.rawClaims).not.toHaveProperty('phone_number');
     expect(identity.rawClaims).not.toHaveProperty('phone_number_verified');
+  });
+
+  /** Rules whose flags a preset could try to set: only the provider's own may vouch. */
+  const flaggedRules: UpstreamOidcPresetOptions<PlainConfig>['attributes'] = [
+    { claim: 'nickname', verified: (claims) => upstreamClaimIsTrue(claims, 'nickname_verified') },
+    { claim: 'locale', verified: (claims) => upstreamClaimIsTrue(claims, 'locale_checked') },
+    { claim: 'name', verified: (claims) => upstreamClaimIsTrue(claims, 'name_checked') },
+  ];
+
+  /** Sets a nickname from the member, and the flags the rules read. */
+  const flaggingClaims: UpstreamOidcPresetOptions<PlainConfig>['identityClaims'] = ({
+    response,
+  }) => ({
+    nickname: response['user'] === undefined ? undefined : JSON.parse(response['user']).n,
+    nickname_verified: true,
+    locale_checked: true,
+  });
+
+  it('never makes an attribute verified from a claim the preset set, whatever its rule reads', async () => {
+    const { provider, method, host } = await memberHost(flaggingClaims, flaggedRules);
+    const { completion } = await signIn(
+      method,
+      host,
+      provider,
+      { sub: 'user-1', claims: { locale: 'en', name: 'Ada', name_checked: true } },
+      { user: '{"n":"Ada L."}' }
+    );
+    const identity = identityOf(completion);
+    expect(identity.rawClaims).toMatchObject({ nickname: 'Ada L.', nickname_verified: true });
+    expect(attributesOf(completion)).toEqual([
+      // Set by the preset from a member the browser carried.
+      { source: TYPE, attrKey: 'nickname', attrValue: 'Ada L.', verified: false },
+      // The provider's, but the flag its rule reads is the preset's.
+      { source: TYPE, attrKey: 'locale', attrValue: 'en', verified: false },
+      // The provider's, and so is its flag.
+      { source: TYPE, attrKey: 'name', attrValue: 'Ada', verified: true },
+    ]);
+  });
+
+  it("takes every claim as unverified for an identity this method's callback did not resolve", async () => {
+    const { provider, method, host } = await memberHost(flaggingClaims, flaggedRules);
+    const { completion } = await signIn(method, host, provider, {
+      sub: 'user-1',
+      claims: { name: 'Ada', name_checked: true },
+    });
+    const identity = identityOf(completion);
+    // The host maps the JSON copy it checked of an identity the callback
+    // resolved: found.
+    expect(attributesOf(completion)).toEqual([
+      { source: TYPE, attrKey: 'name', attrValue: 'Ada', verified: true },
+    ]);
+    // Once only: a second read finds nothing kept, so nothing is verified.
+    expect(method.extractAttributes(identity).map((a) => a.verified)).toEqual([false]);
+    // Nor is anything for an identity it never resolved: the same claims
+    // under another subject.
+    expect(
+      method.extractAttributes({ ...identity, externalSub: 'user-2' }).map((a) => a.verified)
+    ).toEqual([false]);
+  });
+
+  it("hands the hook a copy, so a nested claim it changes stays the provider's", async () => {
+    const { provider, method, host } = await memberHost(({ claims, response }) => {
+      // A hook that writes a member into a nested provider claim.
+      (claims['address'] as Record<string, unknown>)['country'] = response['user'] ?? 'XX';
+      return {};
+    });
+    const { completion } = await signIn(
+      method,
+      host,
+      provider,
+      { sub: 'user-1', claims: { address: { country: 'NL' } } },
+      { user: '{"n":"Ada"}' }
+    );
+    expect(identityOf(completion).rawClaims).toMatchObject({ address: { country: 'NL' } });
   });
 
   it('fails the callback when the identity claims throw', async () => {

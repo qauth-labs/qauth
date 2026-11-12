@@ -2,7 +2,7 @@
 title: Adding an admin operation
 description: The five steps of a new admin API operation — register its permission, define it, classify it, render it for the approver, audit it — with realms.get and realms.policies.update as the worked example.
 sidebar:
-  order: 7
+  order: 8
 lastVerified: '2026-11-08'
 ---
 

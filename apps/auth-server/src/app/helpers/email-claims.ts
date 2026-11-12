@@ -13,9 +13,11 @@ import { isWalletAttributeIssuerStillTrusted } from './wallet-verification';
  * The BREAKING #229 semantics in one place: `email`/`email_verified` resolve
  * exclusively from VERIFIED `user_attributes` rows using the ADR-002 trust
  * order (`wallet > oidc_* > self_reported`, expiry-aware — see
- * `selectTrustedAttribute`). When no verified email attribute exists, BOTH
- * claims are OMITTED entirely — never null, never present-but-false. There is
- * deliberately no compatibility flag.
+ * `selectTrustedAttribute`), where a row a method the plugin loader built
+ * from an upstream OpenID Connect preset wrote ranks with `oidc_*` by its
+ * recorded provenance (#671), on every role alike. When no verified email
+ * attribute exists, BOTH claims are OMITTED entirely — never null, never
+ * present-but-false. There is deliberately no compatibility flag.
  *
  * A `wallet` row is asserted only while the realm still trusts the issuer it
  * rests on (`isWalletAttributeIssuerStillTrusted`, ANT-2026-ULJIA4P4). The

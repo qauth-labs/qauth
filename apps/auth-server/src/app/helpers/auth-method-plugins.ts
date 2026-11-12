@@ -6,6 +6,7 @@ import {
   type AuthMethod,
   type AuthMethodContext,
   createAuthMethodContext,
+  createUpstreamOidcPresetMethod,
   type ImportAuthMethodPlugin,
   type InstalledAuthMethodPlugin,
   loadAuthMethodPlugins,
@@ -16,6 +17,7 @@ import {
 import { AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify';
 
+import { censorLoggedQueryParameters } from '../../config/logger';
 import { realmIssuer } from './realm-url';
 import { requestRealm } from './request-realm';
 
@@ -27,6 +29,12 @@ import { requestRealm } from './request-realm';
  *   other only while `PLUGIN_API_ENABLED` is on. Each loaded plugin's method
  *   joins the provider registry, and its routes mount under
  *   `/upstream/<type>` (`routes/upstream.ts`).
+ * - A package exports its own `authMethod`, or an `upstreamOidcPreset` of
+ *   the plugin SDK (#671), whose method the server builds on its own
+ *   OpenID Connect client (`createUpstreamOidcPresetMethod`). The upstream
+ *   sign-in records that on each attribute such a method writes
+ *   (`UPSTREAM_PRESET_PROVENANCE`), which then ranks with an `oidc_*`
+ *   provider's; a plain `authMethod`'s rank stays unknown.
  * - Per realm, a plugin is off until an admin enables it through the admin
  *   API (`admin/plugins/`): its state and config are a row of
  *   `realm_auth_method_plugins`, its secret members stored encrypted with the
@@ -50,32 +58,24 @@ import { requestRealm } from './request-realm';
 /**
  * The first-party plugins: the packages that load whatever
  * `PLUGIN_API_ENABLED` says. A fixed list in the server's code, never a
- * setting (#600). The provider plugins of `libs/plugins/` (#671), which
- * ship with the server: they are dependencies of this app, so the image
- * carries them, and a deployment loads one when `AUTH_METHOD_PLUGINS` names
- * it. Being on the list lets it load with the plugin API off; every realm
- * still starts with it off.
+ * setting (#600). Empty.
  *
- * A first-party plugin is one QAuth makes and releases, and it may live in
- * its own repository (ADR-018 §3, amended 2026-11-05). Such a plugin, for
- * example the GitHub one (#672), is not on this list: it loads, as any
- * package the operator installs, only while the plugin API is on. Whether it
- * joins the list before 1.0 is decided when the plugin API leaves the
- * experiment.
+ * A first-party plugin is one QAuth makes and releases. Every provider
+ * plugin lives in its own repository, depends only on the published plugin
+ * SDK and has its own version line (ADR-018 §3): none is on this list, so
+ * each loads, as any package the operator installs, only while the plugin
+ * API is on. Whether such a plugin joins the list before 1.0 is decided when
+ * the plugin API leaves the experiment. The list names no provider, and the
+ * server's code names none either.
  *
  * The generic upstream OIDC client (`@qauth-labs/server-upstream-oidc`,
  * #601) is no plugin: it is a factory that builds one method per provider a
  * realm configures, every one with the id `oidc`, which the loader reserves,
- * where a plugin package exports one `authMethod`. The realm's provider rows
- * run it (#639, #714). The plugins listed here are presets built on it
- * (`createUpstreamOidcPresetMethod`, #951): plugins like any other, each
- * with its own id, type and config.
+ * where a plugin package exports one `authMethod` or `upstreamOidcPreset`.
+ * The realm's provider rows run it (#639, #714). A preset plugin built on it
+ * (#951, #671) is a plugin like any other, with its own id, type and config.
  */
-export const FIRST_PARTY_AUTH_METHOD_PLUGINS: readonly string[] = Object.freeze([
-  '@qauth-labs/plugin-apple',
-  '@qauth-labs/plugin-google',
-  '@qauth-labs/plugin-microsoft',
-]);
+export const FIRST_PARTY_AUTH_METHOD_PLUGINS: readonly string[] = Object.freeze([]);
 
 /**
  * The signer caller a plugin's context signs as, and a plugin secret
@@ -235,6 +235,12 @@ export interface AuthMethodPluginSettings {
  * line per plugin loaded. A package that cannot be loaded throws, and the
  * boot fails.
  *
+ * A package that exports an upstream OpenID Connect preset (#671) gets its
+ * method built by `createUpstreamOidcPresetMethod`, and the response members
+ * its callback reads are censored in the request log from then on
+ * (`censorLoggedQueryParameters`): its `form_post` bounce carries them in
+ * the callback's URL.
+ *
  * @throws AuthMethodPluginError as `loadAuthMethodPlugins` does
  * @throws Error when test support is passed outside NODE_ENV=test
  */
@@ -255,7 +261,9 @@ export async function loadDeploymentAuthMethodPlugins(
     ...(testSupport?.importPackage === undefined
       ? {}
       : { importPackage: testSupport.importPackage }),
+    buildUpstreamOidcPreset: (preset) => createUpstreamOidcPresetMethod(preset),
   });
+  censorLoggedQueryParameters(loaded.installed.flatMap((plugin) => plugin.responseMembers));
   for (const skipped of loaded.skipped) {
     log.warn(
       { authMethodPlugin: skipped.package, reason: skipped.reason },
@@ -268,6 +276,7 @@ export async function loadDeploymentAuthMethodPlugins(
         authMethodPlugin: plugin.package,
         id: plugin.id,
         type: plugin.type,
+        kind: plugin.kind,
         firstParty: plugin.firstParty,
         contract: plugin.method.contract,
       },

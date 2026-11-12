@@ -1,8 +1,0 @@
-{
-  "name": "plugin-apple",
-  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "libs/plugins/apple/src",
-  "projectType": "library",
-  "tags": ["scope:plugin", "type:auth-method-plugin"],
-  "// targets": "to see all targets run: nx show project plugin-apple --web"
-}

@@ -1,4 +1,14 @@
-import type { UserAttribute, VerifiedIdentity } from '@qauth-labs/server-federation';
+import {
+  UPSTREAM_STANDARD_ATTRIBUTES,
+  type UpstreamClaimAttribute,
+  upstreamClaimIsTrue,
+  type UserAttribute,
+  type VerifiedIdentity,
+} from '@qauth-labs/server-federation';
+
+// A preset's attribute rules are the plugin SDK's shape (#671): the rule, its
+// test of a `*_verified` flag and the standard rules are declared there.
+export { UPSTREAM_STANDARD_ATTRIBUTES, type UpstreamClaimAttribute, upstreamClaimIsTrue };
 
 /**
  * The attributes the client takes from a provider's claims: by default the
@@ -14,55 +24,6 @@ import type { UserAttribute, VerifiedIdentity } from '@qauth-labs/server-federat
  * asserts it, it does not verify it. A claim that is not a string, or that
  * the engine's attribute rules would refuse, is left out.
  */
-
-/**
- * One attribute a provider's claims map to.
- *
- * @experimental
- */
-export interface UpstreamClaimAttribute {
-  /** The claim the value is read from: a string claim, or the attribute is left out. */
-  readonly claim: string;
-  /** The attribute's key: the claim's name unless set. */
-  readonly attribute?: string;
-  /**
-   * Whether the provider vouches for the value, read from the identity's
-   * claims: `verified` only when this returns the boolean `true`. Without
-   * it the attribute is never verified.
-   */
-  readonly verified?: (claims: Readonly<Record<string, unknown>>) => boolean;
-}
-
-/** Whether `claims[name]` is the boolean `true`. */
-export function upstreamClaimIsTrue(
-  claims: Readonly<Record<string, unknown>>,
-  name: string
-): boolean {
-  return Object.hasOwn(claims, name) && claims[name] === true;
-}
-
-/**
- * The generic client's attributes: the standard profile claims that are
- * plain text, `email` and `phone_number` verified by their `*_verified`
- * claim.
- *
- * @experimental
- */
-export const UPSTREAM_STANDARD_ATTRIBUTES: readonly UpstreamClaimAttribute[] = Object.freeze([
-  { claim: 'email', verified: (claims) => upstreamClaimIsTrue(claims, 'email_verified') },
-  {
-    claim: 'phone_number',
-    verified: (claims) => upstreamClaimIsTrue(claims, 'phone_number_verified'),
-  },
-  { claim: 'name' },
-  { claim: 'given_name' },
-  { claim: 'family_name' },
-  { claim: 'middle_name' },
-  { claim: 'nickname' },
-  { claim: 'preferred_username' },
-  { claim: 'locale' },
-  { claim: 'zoneinfo' },
-]);
 
 /** The longest attribute value, as the AuthMethod contract caps it. */
 const MAX_VALUE_LENGTH = 8192;
@@ -81,13 +42,28 @@ export function claimAttributes(source: string, identity: VerifiedIdentity): Use
  * claim is not a plain-text string is left out; a key two rules map to is
  * taken from the first that has a value.
  *
+ * `presetClaims` names the claims a preset's `identityClaims` set (#671):
+ * values the server's client did not check, such as one from a response
+ * member the browser carried. An attribute read from one is never verified,
+ * and a rule's `verified` sees the claims without them, so no flag a preset
+ * makes up can vouch for a value either. A method the loader built from a
+ * preset ranks with `oidc_*` because the client checked the provider's
+ * claims, so only those may make an attribute verified.
+ *
  * @experimental
  */
 export function upstreamClaimAttributes(
   source: string,
   claims: Readonly<Record<string, unknown>>,
-  rules: readonly UpstreamClaimAttribute[]
+  rules: readonly UpstreamClaimAttribute[],
+  presetClaims: ReadonlySet<string> = new Set()
 ): UserAttribute[] {
+  const providerClaims =
+    presetClaims.size === 0
+      ? claims
+      : Object.freeze(
+          Object.fromEntries(Object.entries(claims).filter(([name]) => !presetClaims.has(name)))
+        );
   const attributes: UserAttribute[] = [];
   const taken = new Set<string>();
   for (const rule of rules) {
@@ -96,7 +72,12 @@ export function upstreamClaimAttributes(
     const value = Object.hasOwn(claims, rule.claim) ? claims[rule.claim] : undefined;
     if (!isAttributeValue(value)) continue;
     taken.add(key);
-    attributes.push({ source, attrKey: key, attrValue: value, verified: vouched(rule, claims) });
+    attributes.push({
+      source,
+      attrKey: key,
+      attrValue: value,
+      verified: !presetClaims.has(rule.claim) && vouched(rule, providerClaims),
+    });
   }
   return attributes;
 }

@@ -133,16 +133,7 @@ function dependencyChecksConfigs() {
       // @qauth-labs/ui is the design system: helpers/ui-assets.ts reads its
       // stylesheets and fonts as files (require.resolve), which the rule does
       // not read as imports.
-      // The provider plugins (#671) are on the server's first-party list: the
-      // plugin loader imports each by the name AUTH_METHOD_PLUGINS gives, at
-      // boot, and nothing imports them statically. They are dependencies so
-      // the deployment carries them.
-      ignoredDependencies: [
-        '@qauth-labs/ui',
-        '@qauth-labs/plugin-apple',
-        '@qauth-labs/plugin-google',
-        '@qauth-labs/plugin-microsoft',
-      ],
+      ignoredDependencies: ['@qauth-labs/ui'],
     },
   ];
 

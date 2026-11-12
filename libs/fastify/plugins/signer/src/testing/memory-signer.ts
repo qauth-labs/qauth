@@ -111,7 +111,7 @@ export interface TestSigner {
 export interface TestUpstreamClient {
   /** The client id at the provider: every assertion's `sub`, and its `iss` unless `assertionIssuer` is set. */
   readonly clientId: string;
-  /** The assertions' `iss` when it is not the client id, such as Apple's Team ID (#671). */
+  /** The assertions' `iss` when it is not the client id, such as a developer account's team id (#671). */
   readonly assertionIssuer?: string;
   /** The assertion key's algorithm. The purpose's default (`RS256`) when absent. */
   readonly algorithm?: 'RS256' | 'ES256' | 'EdDSA';

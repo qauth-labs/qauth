@@ -10,8 +10,10 @@ Write, test and release a sign-in method for
 **[QAuth](https://github.com/qauth-labs/qauth)** in your own repository. A
 plugin is an npm package that exports one **AuthMethod**: a sign-in method that
 plugs into QAuth's engine, such as an upstream OAuth 2.0 or OpenID Connect
-provider. This package is the contract it is written against,
-`qauth-auth-method/1-rc.0`:
+provider. A plugin for an OpenID Connect provider may export a **preset**
+instead: the provider's facts and claim rules, whose method the server builds on
+its own OpenID Connect client. This package is the contract both are written
+against, `qauth-auth-method/1-rc.0`:
 
 - the `AuthMethod` interface and the types it uses: the context and the egress
   client as a method sees them, and the `CredentialProvider` half it extends;
@@ -19,7 +21,11 @@ provider. This package is the contract it is written against,
   `AUTH_METHOD_PLUGIN_EXPORT`, the upstream step `UPSTREAM_STEP_URN`, the
   patterns and the caps;
 - its errors, and the static checks QAuth's registry runs on a method;
-- the contract test kit, `checkAuthMethod`, under `@qauth-labs/plugin-sdk/testing`.
+- the preset's shape: `defineUpstreamOidcPreset`, the export name
+  `UPSTREAM_OIDC_PRESET_EXPORT` (`upstreamOidcPreset`), the types of its members
+  and of the provider config it makes, and its limits;
+- the contract test kit, `checkAuthMethod`, and the preset kit,
+  `checkUpstreamOidcPreset`, under `@qauth-labs/plugin-sdk/testing`.
 
 The contract is documented at
 [docs.qauth.dev/extend/auth-method-contract](https://docs.qauth.dev/extend/auth-method-contract/).
@@ -105,6 +111,37 @@ binding for each start, the binding carried back, PKCE with S256, `verify()`
 refusing what its callback did not produce, no `fetch`, and no secret in a log
 line. It works in any test runner, and refuses to run with
 `NODE_ENV=production`, because it replaces the global `fetch` while it runs.
+
+## Or write a preset
+
+For an OpenID Connect provider, export a preset as `upstreamOidcPreset` and let
+the server run the protocol: discovery, PKCE with S256, `state` and `nonce`, the
+ID token checks and the token request are its own.
+
+```ts
+import { defineUpstreamOidcPreset } from '@qauth-labs/plugin-sdk';
+import { z } from 'zod';
+
+export const upstreamOidcPreset = defineUpstreamOidcPreset({
+  id: 'example-idp',
+  type: 'example_idp',
+  display: { name: 'Example IdP' },
+  origins: ['https://idp.example.com'],
+  configSchema: z.strictObject({
+    clientId: z.string().min(1).max(255),
+    clientSecret: z.string().min(1).max(1024).meta({ writeOnly: true }),
+  }),
+  upstreamConfig: (config) => ({
+    issuer: 'https://idp.example.com',
+    clientId: config.clientId,
+    clientAuthentication: { method: 'client_secret_basic', clientSecret: config.clientSecret },
+  }),
+});
+```
+
+`checkUpstreamOidcPreset(upstreamOidcPreset, { configs: [...] })` of
+`@qauth-labs/plugin-sdk/testing` checks it without the server. The guide is
+[docs.qauth.dev/extend/preset-plugins](https://docs.qauth.dev/extend/preset-plugins/).
 
 ## Publish it, and what the operator does
 

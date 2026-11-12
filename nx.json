@@ -93,8 +93,7 @@
         "libs/core/crypto/*",
         "libs/core/crypto-native/*",
         "libs/keys/aws-kms/*",
-        "libs/keys/vault/*",
-        "libs/plugins/*/*"
+        "libs/keys/vault/*"
       ]
     },
     {
@@ -150,8 +149,7 @@
         "libs/core/crypto/*",
         "libs/core/crypto-native/*",
         "libs/keys/aws-kms/*",
-        "libs/keys/vault/*",
-        "libs/plugins/*/*"
+        "libs/keys/vault/*"
       ],
       "options": {
         "compiler": "tsgo",
