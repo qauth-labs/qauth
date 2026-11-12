@@ -104,6 +104,11 @@ export type StepVerdict =
        * `failed` is recorded and changes nothing else.
        */
       readonly breachCheck?: BreachCheckVerdict;
+      /**
+       * The account credential that proved it, when the step names one (a
+       * passkey, #1064): the engine reads from it whether the factor is new.
+       */
+      readonly credentialId?: string;
     }
   /** The bot challenge was solved. */
   | { readonly kind: 'passed' }

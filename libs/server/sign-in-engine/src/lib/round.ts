@@ -254,6 +254,15 @@ export interface SignedIn {
    * account API lets such a session rebind a factor. Absent otherwise.
    */
   readonly recoveryCode?: true;
+  /**
+   * The account's new credentials (#1064) the sign-in bound or proved: a
+   * passkey or an authenticator app inside the window that follows a
+   * binding after a password-only sign-in. The transport records them on the
+   * browser session, so removing one while it is new ends the session, and a
+   * fresh sign-in that proved a factor only through one of them is not the
+   * account's strongest factor. Absent when there are none.
+   */
+  readonly newCredentials?: readonly string[];
   readonly registered?: undefined;
   readonly recovered?: undefined;
 }

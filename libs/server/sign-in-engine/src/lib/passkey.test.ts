@@ -171,6 +171,12 @@ function answer(step: StepName, fields: Record<string, unknown>): RoundAnswer {
   return { step: STEP_URNS[step], fields };
 }
 
+/** The new credentials a completed sign-in names (#1064). */
+const namedNew = (result: RoundResult): unknown =>
+  result.kind === 'complete' && 'newCredentials' in result.signIn
+    ? result.signIn.newCredentials
+    : undefined;
+
 /** The transaction a result keeps; fails the test when it keeps none. */
 function kept(result: RoundResult): SignInTransaction {
   if (result.transaction === null) throw new Error(`${result.kind} kept no transaction`);
@@ -946,5 +952,171 @@ describe('the passkey the person asked for (#844)', () => {
     expect(built.passkeys.passkeys.get('credential-new')).toMatchObject({ userId: USER });
     expect(built.sender.sent).toEqual([]);
     expect(registered).not.toMatchObject({ offer: { current: { step: 'email_code' } } });
+  });
+});
+
+describe('a passkey bound after a password-only sign-in (#1064)', () => {
+  /** The realm's window in these tests: 7 days. */
+  const WINDOW = 7 * 24 * 60 * MINUTE;
+
+  /**
+   * `built`'s port names its credentials, as the auth server's does, and a
+   * new binding shows in the account the directory reads, new until the
+   * window ends.
+   */
+  const naming = (built: Built) => {
+    built.passkeys.namesCredentials = true;
+    built.passkeys.onBind = (passkey) => {
+      const current = built.directory.accounts.get(IDENTIFIER);
+      if (current === undefined) throw new Error('no account');
+      const isNew = built.passkeys.bindings.at(-1)?.isNew === true;
+      built.directory.accounts.set(IDENTIFIER, {
+        ...current,
+        others: [
+          ...current.others,
+          {
+            type: 'passkey',
+            disabled: false,
+            credentialId: passkey.id,
+            ...(isNew ? { newUntil: built.clock.now() + WINDOW } : {}),
+          },
+        ],
+      });
+    };
+  };
+  /** An account whose passkey is new until `until`; with none, one that is not. */
+  const accountWithPasskey = (until?: number) =>
+    passwordAccount(USER, PASSWORD, {
+      others: [
+        {
+          type: 'passkey',
+          disabled: false,
+          credentialId: PASSKEY,
+          ...(until === undefined ? {} : { newUntil: until }),
+        },
+      ],
+    });
+  /** The account's first set of recovery codes, saved. */
+  const withSavedSet = async (built: Built) => {
+    const set = await built.codes.replace({ realmId: REALM, userId: USER });
+    await built.codes.confirm({ realmId: REALM, userId: USER, setId: set.setId });
+  };
+  const registration = (result: RoundResult, id = 'credential-new') =>
+    answer('webauthn_create', {
+      webauthn_response: fakeRegistration(id, paramsOf(result, 'webauthn_create')),
+    });
+
+  it('is new: the port is told, and the sign-in names it', async () => {
+    const built = build(passwordAccount(USER, PASSWORD));
+    naming(built);
+    const ctx = context(built);
+    const offered = await signInWithPassword(built, ctx);
+    const coded = await built.engine.advance(kept(offered), registration(offered), ctx);
+    expect(built.passkeys.bindings).toEqual([{ id: 'credential-new', isNew: true }]);
+    // The stored form keeps the new credential, and reads back.
+    expect(kept(coded).newCredentials).toEqual(['credential-new']);
+    expect(readSignInTransaction(JSON.parse(JSON.stringify(kept(coded))))).toEqual(kept(coded));
+    const done = await built.engine.advance(
+      kept(coded),
+      answer('recovery_codes', { acknowledged: true }),
+      ctx
+    );
+    expect(done).toMatchObject({
+      kind: 'complete',
+      signIn: { subject: USER, amr: ['pwd'], newCredentials: ['credential-new'] },
+    });
+  });
+
+  it('is never new after a passkey that is not new', async () => {
+    const built = build(accountWithPasskey());
+    naming(built);
+    await withSavedSet(built);
+    const ctx = context(built, { enrol: 'passkey' });
+    const afterPassword = await signInWithPassword(built, ctx);
+    expect(offerOf(afterPassword).current.step).toBe('webauthn_get');
+    const offered = await built.engine.advance(kept(afterPassword), assertion(afterPassword), ctx);
+    const done = await built.engine.advance(kept(offered), registration(offered), ctx);
+    expect(built.passkeys.bindings).toEqual([{ id: 'credential-new', isNew: false }]);
+    expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd', 'pop', 'mfa'] } });
+    expect(namedNew(done)).toBeUndefined();
+  });
+
+  it('leaves the account at its password while new: the downgrade rule does not ask for it', async () => {
+    const built = build(accountWithPasskey(T0 + WINDOW));
+    naming(built);
+    const done = await signInWithPassword(built, context(built));
+    expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER, amr: ['pwd'] } });
+    expect(namedNew(done)).toBeUndefined();
+  });
+
+  it('signs in as usual while new, and the sign-in names it', async () => {
+    const built = build(accountWithPasskey(T0 + WINDOW));
+    naming(built);
+    await withSavedSet(built);
+    const ctx = context(built);
+    const first = await built.engine.advance(null, null, ctx);
+    const done = await built.engine.advance(kept(first), assertion(first), ctx);
+    expect(done).toMatchObject({
+      kind: 'complete',
+      signIn: { subject: USER, amr: ['pop', 'mfa'], newCredentials: [PASSKEY] },
+    });
+  });
+
+  it('makes a passkey bound after it new as well', async () => {
+    const built = build(accountWithPasskey(T0 + WINDOW));
+    naming(built);
+    await withSavedSet(built);
+    const ctx = context(built, { enrol: 'passkey' });
+    const first = await built.engine.advance(null, null, ctx);
+    const offered = await built.engine.advance(kept(first), assertion(first), ctx);
+    const done = await built.engine.advance(kept(offered), registration(offered), ctx);
+    expect(built.passkeys.bindings).toEqual([{ id: 'credential-new', isNew: true }]);
+    expect(done).toMatchObject({
+      kind: 'complete',
+      signIn: { newCredentials: expect.arrayContaining([PASSKEY, 'credential-new']) },
+    });
+  });
+
+  it('counts in full once the window is over: the password alone no longer completes', async () => {
+    const built = build(accountWithPasskey(T0 + WINDOW));
+    naming(built);
+    built.clock.advance(WINDOW);
+    const afterPassword = await signInWithPassword(built, context(built));
+    expect(offerOf(afterPassword).current.step).toBe('webauthn_get');
+  });
+
+  it('is never new on an account with no password', async () => {
+    const built = build(
+      passwordAccount(USER, PASSWORD, {
+        password: null,
+        others: [{ type: 'passkey', disabled: false, credentialId: PASSKEY }],
+      })
+    );
+    naming(built);
+    await withSavedSet(built);
+    const ctx = context(built, { enrol: 'passkey' });
+    const first = await built.engine.advance(null, null, ctx);
+    const offered = await built.engine.advance(kept(first), assertion(first), ctx);
+    await built.engine.advance(kept(offered), registration(offered), ctx);
+    expect(built.passkeys.bindings).toEqual([{ id: 'credential-new', isNew: false }]);
+  });
+
+  it('is refused from a stored transaction that names too many, or names one with no subject', async () => {
+    const built = build();
+    const ctx = context(built);
+    const first = await built.engine.advance(null, null, ctx);
+    const anonymous = JSON.parse(JSON.stringify(kept(first))) as Record<string, unknown>;
+    expect(readSignInTransaction(anonymous)).not.toBeNull();
+    expect(readSignInTransaction({ ...anonymous, newCredentials: ['a'] })).toBeNull();
+    expect(readSignInTransaction({ ...anonymous, passkeyCredential: 'a' })).toBeNull();
+    const signedIn = JSON.parse(
+      JSON.stringify(kept(await signInWithPassword(built, ctx)))
+    ) as Record<string, unknown>;
+    expect(readSignInTransaction({ ...signedIn, newCredentials: ['a', 'b'] })).not.toBeNull();
+    expect(
+      readSignInTransaction({ ...signedIn, newCredentials: ['a', 'b', 'c', 'd', 'e'] })
+    ).toBeNull();
+    expect(readSignInTransaction({ ...signedIn, newCredentials: [] })).toBeNull();
+    expect(readSignInTransaction({ ...signedIn, passkeyCredential: 'x'.repeat(65) })).toBeNull();
   });
 });

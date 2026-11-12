@@ -181,7 +181,23 @@ export interface SignInTransaction {
    * mailbox is proved before the secret is bound. Dropped at the binding.
    */
   readonly totpEnrolment?: TotpEnrolment;
+  /**
+   * The account credential the `webauthn_get` step proved (#1064), when the
+   * port named it: whether that passkey is new decides whether a factor this
+   * transaction binds is new too.
+   */
+  readonly passkeyCredential?: string;
+  /**
+   * The new credentials this transaction bound (#1064): a passkey or an
+   * authenticator app bound after a sign-in that proved only the password.
+   * The completed sign-in names them, with the new ones it proved, for the
+   * browser session.
+   */
+  readonly newCredentials?: readonly string[];
 }
+
+/** The most new credentials one transaction binds: a passkey and an authenticator app, at most. */
+export const MAX_NEW_CREDENTIALS = 4;
 
 /** What a transaction holds of its TOTP set-up: see {@link SignInTransaction.totpEnrolment}. */
 export interface TotpEnrolment {
@@ -345,6 +361,8 @@ export const signInTransactionSchema = z.strictObject({
       step: z.int().nonnegative().optional(),
     })
     .optional(),
+  passkeyCredential: z.string().min(1).max(64).optional(),
+  newCredentials: z.array(z.string().min(1).max(64)).min(1).max(MAX_NEW_CREDENTIALS).optional(),
 });
 
 /**
@@ -373,6 +391,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     ceremony,
     passkeyEnrolment,
     totpEnrolment,
+    passkeyCredential,
+    newCredentials,
   } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
@@ -430,6 +450,14 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   if (totpEnrolment !== undefined && (subject === undefined || authTime === undefined)) {
     return null;
   }
+  // A passkey names its credential only once it proved the subject, and a
+  // new credential is bound only to the account a factor proved (#1064).
+  if (
+    (passkeyCredential !== undefined || newCredentials !== undefined) &&
+    (subject === undefined || authTime === undefined)
+  ) {
+    return null;
+  }
   return freezeTransaction({
     v: SIGN_IN_TRANSACTION_VERSION,
     realmId,
@@ -464,6 +492,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
             ...(totpEnrolment.step === undefined ? {} : { step: totpEnrolment.step }),
           },
         }),
+    ...(passkeyCredential === undefined ? {} : { passkeyCredential }),
+    ...(newCredentials === undefined ? {} : { newCredentials }),
   });
 }
 
@@ -482,6 +512,8 @@ export function freezeTransaction(transaction: SignInTransaction): SignInTransac
     ceremony,
     passkeyEnrolment,
     totpEnrolment,
+    passkeyCredential,
+    newCredentials,
     ...rest
   } = transaction;
   return Object.freeze({
@@ -511,5 +543,7 @@ export function freezeTransaction(transaction: SignInTransaction): SignInTransac
               : Object.freeze({ ...passkeyEnrolment }),
         }),
     ...(totpEnrolment === undefined ? {} : { totpEnrolment: Object.freeze({ ...totpEnrolment }) }),
+    ...(passkeyCredential === undefined ? {} : { passkeyCredential }),
+    ...(newCredentials === undefined ? {} : { newCredentials: Object.freeze([...newCredentials]) }),
   });
 }
