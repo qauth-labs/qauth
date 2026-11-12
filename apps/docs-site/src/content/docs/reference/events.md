@@ -464,7 +464,7 @@ An operator enabled a disabled account again. The person signs in again: what wa
 
 ### user.upstream_linked v1-rc.0
 
-A person linked an upstream identity to their account: the provider proved the identity, and the person then signed in to the account with its own factors and its MFA policy, in the same browser and the same interaction. The account can sign in through the provider from now on. The person is told by email.
+A person linked an upstream identity to their account: the provider proved the identity, and the person then signed in to the account, with its own factors or through another upstream provider whose identity the account already holds, under its MFA policy, in the same browser and the same interaction. The account can sign in through the provider from now on. The person is told by email.
 
 - Identifier: `urn:qauth:event:user.upstream_linked:v1-rc.0`
 - Category: `user` · Severity: `info` · Since: v0.2.0

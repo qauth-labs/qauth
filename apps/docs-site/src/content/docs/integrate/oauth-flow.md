@@ -174,9 +174,11 @@ servers ignore it.
 `qauth_link=<type>` links an account of one of the realm's upstream identity
 providers to the person's QAuth account (#670), as the account console's
 "Link an account" does. The browser goes to that provider first, then the
-person signs in to their QAuth account again, with its own factors and its MFA
-policy, whatever session the browser already has: a session never links an
-account on its own (NIST SP 800-63C-4 §5.4). The identity joins the account
+person signs in to their QAuth account again, under its MFA policy, whatever
+session the browser already has: a session never links an account on its own
+(NIST SP 800-63C-4 §5.4). That sign-in takes the account's own factors, or
+another of the realm's providers whose identity the account already holds,
+never the provider being linked (#1080). The identity joins the account
 that sign-in proved, and the request goes on to the consent or the code as
 after any sign-in. An identity another account already holds is refused on a
 QAuth page, as is a second identity of the same provider; nothing reaches your

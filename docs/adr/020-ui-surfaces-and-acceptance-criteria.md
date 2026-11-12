@@ -1,6 +1,6 @@
 # ADR-020: 1.0 UI Surfaces and Acceptance Criteria
 
-**Status:** Accepted 2026-10-11 — records the maintainer's decisions of 2026-10-09 and 2026-10-10, together with the other 1.0 records. Amended 2026-10-19: the component foundation (§6). Amended 2026-10-23: every passkey ceremony runs on the realm origin (§1).  
+**Status:** Accepted 2026-10-11 — records the maintainer's decisions of 2026-10-09 and 2026-10-10, together with the other 1.0 records. Amended 2026-10-19: the component foundation (§6). Amended 2026-10-23: every passkey ceremony runs on the realm origin (§1). Amended 2026-11-12: the sign-in that links an upstream account may use a provider the account already holds (§3).  
 **Date:** 2026-10-10  
 **Authors:** QAuth Team
 
@@ -22,6 +22,12 @@
 > **Amended 2026-10-23:** every passkey ceremony runs in the ceremony app, on the realm origin
 > (§1). A console on another host hands the person to it by an authorization request. The record
 > said where enrolment lives but not how a console on another host reaches it.
+>
+> **Amended 2026-11-12** (the maintainer's decision of that day, #1080): the sign-in that links an
+> upstream account may go through another upstream provider the account already holds (§3,
+> "First sign-in through an upstream"). The record said only that an account is linked when the
+> user signs in to it, and the first build (#670) read that as the account's own factors alone, so
+> an account made through one provider could never link a second.
 
 ## Context
 
@@ -205,6 +211,19 @@ Placement rules that follow from earlier decisions:
 - First sign-in through an upstream never merges accounts automatically. Email is only an attribute
   by default. An account is linked only when the user signs in to the existing account. The one exception is an
   enterprise ID-JAG subject, which an operator links (ADR-011 gate 14, ADR-019 Decision 7).
+- That sign-in may go through another upstream provider the account already holds (decided
+  2026-11-12, #1080). It offers the realm's upstream providers beside its first step, except the
+  provider being linked. A provider sign-in there proves the account only through an identity the
+  account already holds: it never creates an account, and it never links anything else while that
+  sign-in runs, so an identity no account holds signs in to nothing. The downgrade rule and the MFA
+  policy apply as to every sign-in: an account with a passkey still gives it after the provider
+  (ADR-017 Decision 4), and its second factor still applies. The new identity joins the account
+  only once that sign-in completes, in the same browser and interaction, under the account's row
+  lock, and the owner is mailed. The reason: an account made through one provider holds no
+  password and, until its owner adds one, no passkey, so its own factors alone could never link a
+  second provider, and the only other choice, a new account, is the duplicate the no-merge rule
+  exists to avoid. A sign-in through a provider already linked to the account is a sign-in to that
+  account, proved by that provider's subject, never by an attribute (NIST SP 800-63C-4 §5.4).
 - Error, info and expired pages share one design. Each says what happened and what to do, and
   shows a trace id. None reveals detail an attacker could use.
 - Sign-in with an X.509 client certificate and versioned terms acceptance come in 1.x. In 1.0 the
