@@ -68,9 +68,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under `openid`, with no `refresh_token` member, and no refresh token is
   stored; a client with the grant gets one under a covering consent, as
   before. Requesting `offline_access` still changes nothing either way. The
-  rule is in `integrate/oauth-flow`. Refresh tokens already issued to such
-  clients are left as they are: the refresh grant still refuses them, and they
-  go when they expire or the user withdraws the consent.
+  rule is in `integrate/oauth-flow`.
+
+  **Action for operators**: refresh tokens an earlier release issued to such a
+  client are left in place. The refresh grant refuses them while the client's
+  `grant_types` lack `refresh_token`, but adding the grant to the client later
+  makes every one of them that has not expired usable at once. Before you add
+  `refresh_token` to a client registered without it, revoke the refresh tokens
+  it holds:
+
+  ```sql
+  UPDATE refresh_tokens
+     SET revoked = true,
+         revoked_at = (extract(epoch FROM clock_timestamp()) * 1000)::bigint,
+         revoked_reason = 'refresh_grant_added'
+   WHERE oauth_client_id = '<the client row id>' AND NOT revoked;
+  ```
 
 ## [0.2.3] - 2026-11-12
 
