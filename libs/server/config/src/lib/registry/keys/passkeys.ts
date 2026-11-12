@@ -6,6 +6,7 @@ import { defineKeys } from '../types';
  *
  * All `advanced`: passkeys are off by default, and the RP ID and the
  * association files are a deployment's deliberate choice.
+ * `PASSKEY_OFFER_AFTER_SIGN_IN` only seeds a realm's policy (#1083).
  */
 export const PASSKEY_KEYS = defineKeys([
   {
@@ -15,7 +16,17 @@ export const PASSKEY_KEYS = defineKeys([
     owner: 'passkeys',
     default: 'false',
     since: '0.2.0',
-    docs: 'Turn passkeys on: passkey sign-in, the offer to add one after a password sign-in, and sign-up with a passkey alone (no email address) where the realm allows sign-up; only the hosted pages (`INTERACTION_UI_ENABLED`) offer a passkey, and while they are off the server warns at every boot.',
+    docs: 'Turn passkeys on: passkey sign-in, the offer to add one after a password sign-in where the realm keeps it (`passkeys.offerAfterSignIn`), and sign-up with a passkey alone (no email address) where the realm allows sign-up; only the hosted pages (`INTERACTION_UI_ENABLED`) offer a passkey, and while they are off the server warns at every boot.',
+  },
+  {
+    name: 'PASSKEY_OFFER_AFTER_SIGN_IN',
+    tier: 'advanced',
+    role: 'realm-seed',
+    seeds: 'passkeys.offerAfterSignIn',
+    owner: 'passkeys',
+    default: 'true',
+    since: '0.2.4',
+    docs: "Whether the hosted sign-in offers to add a passkey after a password sign-in, to a verified account whose only factor is that password, while `WEBAUTHN_ENABLED` is on (a passkey added from the account page is not affected), that seeds `passkeys.offerAfterSignIn` of a new realm, and of a realm whose stored policies lack it at the first boot of the release that added it; once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
   },
   {
     name: 'WEBAUTHN_RP_ID',

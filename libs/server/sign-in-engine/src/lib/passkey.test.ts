@@ -204,6 +204,19 @@ async function signInWithPassword(built: Built, ctx: Ctx): Promise<RoundResult> 
   return built.engine.advance(kept(first), answer('password', { password: PASSWORD }), ctx);
 }
 
+/**
+ * The realm's `passkeys.offerAfterSignIn` (#1083) on `built`'s port: each
+ * read is recorded, and answers what `verdict` gives then.
+ */
+function realmOffer(built: Built, verdict: () => unknown): { realmId: string; clientId: string }[] {
+  const reads: { realmId: string; clientId: string }[] = [];
+  built.passkeys.offerAfterSignIn = async (input) => {
+    reads.push({ ...input });
+    return verdict() as boolean;
+  };
+  return reads;
+}
+
 /** Every challenge of `result` replaced, so two offers compare by shape. */
 function withoutChallenges(result: RoundResult): unknown {
   return JSON.parse(
@@ -599,6 +612,85 @@ describe('the passkey enrolment', () => {
     expect(reported).toEqual([expect.objectContaining({ port: 'passkeys' })]);
   });
 
+  it('keeps today’s offer by default: a port with no word from the realm, or a realm that keeps it (#1083)', async () => {
+    const silent = build(passwordOnly());
+    expect(offerOf(await signInWithPassword(silent, context(silent))).current).toMatchObject({
+      step: 'webauthn_create',
+      params: { optional: true },
+    });
+    const built = build(passwordOnly());
+    const reads = realmOffer(built, () => true);
+    const offered = await signInWithPassword(built, context(built));
+    expect(offerOf(offered).current).toMatchObject({
+      step: 'webauthn_create',
+      params: { optional: true },
+    });
+    expect(reads).toEqual([{ realmId: REALM, clientId: CLIENT }]);
+  });
+
+  it('is never made while the realm turns it off: the password sign-in completes with ["pwd"] (#1083)', async () => {
+    const built = build(passwordOnly());
+    const reads = realmOffer(built, () => false);
+    const ctx = context(built);
+    const done = await signInWithPassword(built, ctx);
+    expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER, amr: ['pwd'] } });
+    expect(built.passkeys.calls).not.toContain('startRegistration');
+    expect(reads).toHaveLength(1);
+    expect(ctx.records.map((record) => record.step)).not.toContain('webauthn_create');
+  });
+
+  it('binds nothing from an offer made before the realm turned it off (#1083)', async () => {
+    const built = build(passwordOnly());
+    let keeps = true;
+    realmOffer(built, () => keeps);
+    const ctx = context(built);
+    const offered = await signInWithPassword(built, ctx);
+    expect(offerOf(offered).current.step).toBe('webauthn_create');
+    keeps = false;
+    const done = await built.engine.advance(
+      kept(offered),
+      answer('webauthn_create', {
+        webauthn_response: fakeRegistration('credential-new', paramsOf(offered, 'webauthn_create')),
+      }),
+      ctx
+    );
+    expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
+    expect(built.passkeys.passkeys.has('credential-new')).toBe(false);
+    expect(built.passkeys.calls).not.toContain('verifyRegistration');
+  });
+
+  it('is not made again on a later round once the realm turned it off (#1083)', async () => {
+    const built = build(passwordOnly());
+    let keeps = true;
+    realmOffer(built, () => keeps);
+    const ctx = context(built);
+    const offered = await signInWithPassword(built, ctx);
+    expect(kept(offered).ceremony).toMatchObject({ step: 'webauthn_create' });
+    keeps = false;
+    // A round with no answer, which would make the same offer: the sign-in
+    // completes instead.
+    const done = await built.engine.advance(kept(offered), null, ctx);
+    expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
+  });
+
+  it('is not made when the realm’s word cannot be read, and the sign-in completes (#1083)', async () => {
+    for (const verdict of [
+      () => {
+        throw new Error('realm store down');
+      },
+      () => 'false',
+      () => undefined,
+    ]) {
+      const reported: unknown[] = [];
+      const built = build(passwordOnly(), { onUnavailable: (error) => reported.push(error) });
+      realmOffer(built, verdict);
+      const done = await signInWithPassword(built, context(built));
+      expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
+      expect(built.passkeys.calls).not.toContain('startRegistration');
+      expect(reported).toEqual([expect.objectContaining({ port: 'passkeys' })]);
+    }
+  });
+
   it('binds the passkey of a verified account after its fresh password, with no mailed code, tells the user, and shows the first set', async () => {
     const built = build(passwordOnly());
     const ctx = context(built);
@@ -818,6 +910,26 @@ describe('the passkey the person asked for (#844)', () => {
     const declined = await built.engine.advance(kept(offered), answer('webauthn_create', {}), ctx);
     expect(declined).toMatchObject({ kind: 'complete' });
     expect([...built.passkeys.passkeys.keys()]).toEqual([PASSKEY, OTHER_PASSKEY]);
+  });
+
+  it('runs while the realm turns the offer off, and never reads it (#1083)', async () => {
+    const built = build(passwordAccount(USER, PASSWORD));
+    const reads = realmOffer(built, () => false);
+    const ctx = context(built, { enrol: 'passkey' });
+    const offered = await signInWithPassword(built, ctx);
+    expect(offered).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'webauthn_create', params: { optional: true } } },
+    });
+    await built.engine.advance(
+      kept(offered),
+      answer('webauthn_create', {
+        webauthn_response: fakeRegistration('credential-new', paramsOf(offered, 'webauthn_create')),
+      }),
+      ctx
+    );
+    expect(built.passkeys.passkeys.get('credential-new')).toMatchObject({ userId: USER });
+    expect(reads).toEqual([]);
   });
 
   it('binds it to a verified password-only account with no mailed code, as the offer does', async () => {

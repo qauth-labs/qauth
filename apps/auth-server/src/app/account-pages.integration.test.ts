@@ -60,6 +60,11 @@ import type { InteractionEngines } from './helpers/interaction-engines';
  * - and the E2E run with no JavaScript: sign in, change the password, add a
  *   passkey and remove it, set up an authenticator app, sign out everywhere.
  *
+ * And #1083's: while the realm turns its passkey offer off
+ * (`passkeys.offerAfterSignIn`), a password-only account's password sign-in
+ * completes with no `webauthn_create` step, and a passkey added from the
+ * account page still runs one.
+ *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
  */
@@ -148,6 +153,8 @@ interface SignInAnswers {
   readonly created?: (passkey: SoftPasskey) => void;
   /** Collects the secret a `totp_setup` step showed. */
   readonly totpSecret?: (secret: Buffer) => void;
+  /** Collects every step the ceremony was asked, in order (#1083). */
+  readonly seen?: (step: string) => void;
 }
 
 /** RFC 4648 §6 base32, unpadded, as the set-up page shows the secret. */
@@ -409,6 +416,22 @@ describe('the hosted account pages (#844, real containers)', () => {
     return { jar, sid: session.sid };
   }
 
+  /**
+   * The realm's `passkeys.offerAfterSignIn` (#1083), as an operator sets it:
+   * through the policy store at the counter it has now, the resolver's host
+   * cache dropped so the next request reads the row.
+   */
+  async function realmOffersPasskey(offered: boolean): Promise<void> {
+    const current = await server().policyStore.get(realmId);
+    if (current === undefined) throw new Error(`no policies for realm ${realmId}`);
+    await server().policyStore.update(
+      realmId,
+      { passkeys: { offerAfterSignIn: offered } },
+      { expectedVersion: current.version }
+    );
+    server().realmHostCache.clear();
+  }
+
   // ── Pages and forms ────────────────────────────────────────────────────
 
   async function open(browser: Browser, path: string): Promise<LightMyRequestResponse> {
@@ -538,6 +561,7 @@ describe('the hosted account pages (#844, real containers)', () => {
     const flow: Flow = { jar: browser.jar, id: path.slice(CEREMONY_PAGE_PREFIX.length) };
     for (let round = 0; round < 12; round += 1) {
       const view = await read(flow.id);
+      answers.seen?.(view.step);
       let response: LightMyRequestResponse;
       if (view.step === WEBAUTHN_GET && answers.passkey !== undefined) {
         const request = view.params?.[WEBAUTHN_GET];
@@ -1236,5 +1260,67 @@ describe('the hosted account pages (#844, real containers)', () => {
     const after = await open(browser, ACCOUNT);
     expect(after.statusCode, after.body).toBe(303);
     expect(locationOf(after).startsWith(CEREMONY_PAGE_PREFIX)).toBe(true);
+  });
+
+  describe('a realm that turns the passkey offer off (#1083)', () => {
+    afterEach(async () => {
+      // Back to the default for the tests after these.
+      if (booted !== undefined && dockerUp) await realmOffersPasskey(true);
+    });
+
+    it('completes a password-only account’s password sign-in with no webauthn_create step', async () => {
+      // On, the default, the same sign-in is offered a passkey (#651).
+      const offered = await account();
+      const offeredSteps: string[] = [];
+      const first: Browser = { jar: new CookieJar() };
+      expect(
+        await ceremony(first, await open(first, ACCOUNT), offered, {
+          seen: (step) => offeredSteps.push(step),
+        })
+      ).toBe(ACCOUNT);
+      expect(offeredSteps).toContain(WEBAUTHN_CREATE);
+
+      await realmOffersPasskey(false);
+      const who = await account();
+      const steps: string[] = [];
+      const browser: Browser = { jar: new CookieJar() };
+      expect(
+        await ceremony(browser, await open(browser, ACCOUNT), who, {
+          seen: (step) => steps.push(step),
+        })
+      ).toBe(ACCOUNT);
+      expect(steps).toContain(PASSWORD);
+      expect(steps).not.toContain(WEBAUTHN_CREATE);
+      // Signed in, with nothing bound.
+      expect((await overview(browser)).body).toContain(escaped(who.email));
+      expect((await credentialsOf(who.userId)).map((row) => row.provider_type)).toEqual([
+        'password',
+      ]);
+    });
+
+    it('still runs webauthn_create for a passkey added from the account page', async () => {
+      await realmOffersPasskey(false);
+      const who = await account();
+      const browser = await signedIn(who, ['pwd']);
+      const steps: string[] = [];
+      let added: SoftPasskey | undefined;
+      const addition = await submit(browser, `${ACCOUNT}/passkeys/add`);
+      expect(
+        await ceremony(browser, addition, who, {
+          seen: (step) => steps.push(step),
+          created: (passkey) => {
+            added = passkey;
+          },
+        })
+      ).toBe(`${ACCOUNT}?notice=passkey`);
+      expect(steps).toContain(WEBAUTHN_CREATE);
+      if (added === undefined) throw new Error('no passkey was created');
+      expect(
+        await query(
+          "SELECT 1 FROM user_credentials WHERE user_id = $1 AND provider_type = 'webauthn' AND external_sub = $2",
+          [who.userId, added.credentialId]
+        )
+      ).toHaveLength(1);
+    });
   });
 });

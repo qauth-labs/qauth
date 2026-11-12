@@ -924,6 +924,19 @@ export interface PasskeyCeremonies {
     readonly registration: string;
     readonly replacing?: boolean;
   }): Promise<PasskeyBinding>;
+  /**
+   * Whether the realm offers a passkey after a password sign-in (#1083): its
+   * `passkeys.offerAfterSignIn` policy, read on the round the engine would
+   * make the optional offer of rule 8 or take its answer. Never read for a
+   * passkey the person asked for (#844). Absent, the offer is made, as
+   * before #1083. Unlike the ceremonies, a throw here refuses no round: the
+   * offer is optional, so a throw or a verdict that is not a boolean is
+   * reported and the offer is not made.
+   */
+  offerAfterSignIn?(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+  }): Promise<boolean>;
 }
 
 /** One account of a realm, as the TOTP port names it (#653). */

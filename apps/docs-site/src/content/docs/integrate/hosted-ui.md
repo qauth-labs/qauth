@@ -345,8 +345,11 @@ bound factor, so after a right password an account that holds a passkey is
 asked for it. On these pages `/oauth/authorize` starts a sign-in with no
 `login_hint` at that first step, and one with a hint at the identifier step,
 which the hint fills in. After a password sign-in, the engine may offer to add
-one. Two server-rendered pages run the ceremonies for an interaction of the
-Interaction API, until the design-system screens of #652 replace them:
+one, unless the realm turned that offer off (its `passkeys.offerAfterSignIn`
+policy, on by default; #1083); a passkey added from the account page is
+offered either way. Two server-rendered pages run the ceremonies for an
+interaction of the Interaction API, until the design-system screens of #652
+replace them:
 
 - `GET /ui/passkey/{interactionId}`: "Sign in with a passkey", for the
   `webauthn_get` step, current or offered beside the password. Its options

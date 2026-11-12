@@ -119,6 +119,8 @@ describe('the server passkey ceremonies (#651)', () => {
   let mailer: { sendUncounted: ReturnType<typeof vi.fn> };
   let logInfo: ReturnType<typeof vi.fn>;
   let fromName: string;
+  let realm: typeof REALM | undefined;
+  let offerAfterSignIn: boolean;
 
   beforeEach(() => {
     provider = {
@@ -193,20 +195,25 @@ describe('the server passkey ceremonies (#651)', () => {
     mailer = { sendUncounted: vi.fn() };
     logInfo = vi.fn();
     fromName = 'Example Notes';
+    realm = REALM;
+    offerAfterSignIn = true;
   });
 
   const build = () =>
     createServerPasskeys(
       {
         repositories: {
-          realms: { findById: vi.fn(async () => REALM), lockRpIdForEnrolment },
+          realms: { findById: vi.fn(async () => realm), lockRpIdForEnrolment },
           oauthClients: { findByClientId: vi.fn(async () => client) },
           userCredentials: credentials,
           users,
         },
         db: { transaction: async (work: (tx: string) => Promise<unknown>) => work('tx') },
         policyStore: {
-          ofRealm: () => ({ policies: { mail: { fromName } } }),
+          ofRealm: (row: typeof REALM) => {
+            if (row !== REALM) throw new Error('read another row than the realm’s');
+            return { policies: { mail: { fromName }, passkeys: { offerAfterSignIn } } };
+          },
         },
         log: { info: logInfo, warn: vi.fn(), error: vi.fn() },
       } as unknown as FastifyInstance,
@@ -598,6 +605,21 @@ describe('the server passkey ceremonies (#651)', () => {
           registration: JSON.stringify({ externalSub: 'x' }),
         })
       ).rejects.toThrow('not well formed');
+    });
+  });
+
+  describe('the offer after a password sign-in (#1083)', () => {
+    const offers = () => build().offerAfterSignIn?.({ realmId: REALM_ID, clientId: CLIENT_ID });
+
+    it('is the realm’s passkeys.offerAfterSignIn, read from its row', async () => {
+      expect(await offers()).toBe(true);
+      offerAfterSignIn = false;
+      expect(await offers()).toBe(false);
+    });
+
+    it('is not made in a realm that does not exist', async () => {
+      realm = undefined;
+      expect(await offers()).toBe(false);
     });
   });
 });

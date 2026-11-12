@@ -36,6 +36,7 @@ const TABLE_DEFAULTS: RealmPolicies = {
   password: { minLength: 15, minScore: 2, breachListSource: 'off' },
   bruteForce: { enabled: true, maxAttempts: 5, windowSeconds: 900, lockoutSeconds: 900 },
   botChallenge: { requiredAtSignUp: false, difficulty: 18 },
+  passkeys: { offerAfterSignIn: true },
   registration: {
     dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
     cimd: { enabled: true, trustPolicy: 'accept-any-https', trustedDomains: [] },
