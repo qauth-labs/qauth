@@ -212,7 +212,13 @@ describe('the server passkey ceremonies (#651)', () => {
         policyStore: {
           ofRealm: (row: typeof REALM) => {
             if (row !== REALM) throw new Error('read another row than the realm’s');
-            return { policies: { mail: { fromName }, passkeys: { offerAfterSignIn } } };
+            return {
+              policies: {
+                mail: { fromName },
+                passkeys: { offerAfterSignIn },
+                accounts: { newFactorWindowDays: 7 },
+              },
+            };
           },
         },
         log: { info: logInfo, warn: vi.fn(), error: vi.fn() },
@@ -257,7 +263,12 @@ describe('the server passkey ceremonies (#651)', () => {
         response: assertionResponse(),
       });
 
-      expect(outcome).toEqual({ kind: 'verified', userId: USER_ID, userVerified: true });
+      expect(outcome).toEqual({
+        kind: 'verified',
+        userId: USER_ID,
+        userVerified: true,
+        credentialId: 'row-1',
+      });
       expect(credentials.findByRealmProviderSub).toHaveBeenCalledWith(
         REALM_ID,
         'webauthn',
@@ -291,7 +302,12 @@ describe('the server passkey ceremonies (#651)', () => {
         response: assertionResponse(),
       });
 
-      expect(outcome).toEqual({ kind: 'verified', userId: USER_ID, userVerified: false });
+      expect(outcome).toEqual({
+        kind: 'verified',
+        userId: USER_ID,
+        userVerified: false,
+        credentialId: 'row-1',
+      });
     });
 
     it.each([
@@ -512,7 +528,7 @@ describe('the server passkey ceremonies (#651)', () => {
       });
 
     it('writes the passkey under the realm’s RP ID lock, and tells the owner', async () => {
-      expect(await bind()).toEqual({ kind: 'bound' });
+      expect(await bind()).toEqual({ kind: 'bound', credentialId: 'row-1' });
 
       expect(lockRpIdForEnrolment).toHaveBeenCalledWith('tx', REALM_ID);
       expect(credentials.create).toHaveBeenCalledWith(
@@ -537,10 +553,30 @@ describe('the server passkey ceremonies (#651)', () => {
       );
     });
 
+    it('stores when a new binding stops being new, from the realm’s window (#1064)', async () => {
+      const bound = await build().bind({
+        realmId: REALM_ID,
+        clientId: CLIENT_ID,
+        userId: USER_ID,
+        registration: JSON.stringify(ENROLMENT),
+        isNew: true,
+      });
+      expect(bound).toEqual({ kind: 'bound', credentialId: 'row-1' });
+      // The ceremonies' clock reads 1 000 ms; the realm's window is 7 days.
+      expect(credentials.create).toHaveBeenCalledWith(
+        expect.objectContaining({ newUntil: 1_000 + 7 * 86_400_000 }),
+        'tx'
+      );
+      // A binding that is not new writes no window.
+      credentials.create.mockClear();
+      await bind();
+      expect(credentials.create.mock.calls[0]?.[0]).not.toHaveProperty('newUntil');
+    });
+
     it('disables nothing else for a passkey added beside the others', async () => {
       credentials.findAllByUserIdAndType.mockResolvedValue([passkeyRow()]);
 
-      expect(await bind()).toEqual({ kind: 'bound' });
+      expect(await bind()).toEqual({ kind: 'bound', credentialId: 'row-1' });
       expect(credentials.setDisabledAt).not.toHaveBeenCalled();
     });
 
@@ -560,7 +596,7 @@ describe('the server passkey ceremonies (#651)', () => {
         replacing: true,
       });
 
-      expect(bound).toEqual({ kind: 'bound' });
+      expect(bound).toEqual({ kind: 'bound', credentialId: 'row-1' });
       expect(credentials.findAllByUserIdAndType).toHaveBeenCalledWith(USER_ID, 'webauthn', 'tx');
       expect(credentials.setDisabledAt).toHaveBeenCalledTimes(1);
       expect(credentials.setDisabledAt).toHaveBeenCalledWith(
@@ -593,7 +629,7 @@ describe('the server passkey ceremonies (#651)', () => {
     it('binds all the same when the notice cannot be sent', async () => {
       credentials.findByUserIdAndType.mockRejectedValueOnce(new Error('database down'));
 
-      expect(await bind()).toEqual({ kind: 'bound' });
+      expect(await bind()).toEqual({ kind: 'bound', credentialId: 'row-1' });
     });
 
     it('throws for a held registration that is not one', async () => {

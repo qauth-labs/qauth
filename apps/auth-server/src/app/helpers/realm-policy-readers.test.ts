@@ -32,8 +32,9 @@ describe('POLICIES_READ_FROM_REALM_ROW (#516)', () => {
     }
   });
 
-  it('holds the two policies the server read from the row before #516, the token lifetimes (#527), the account policies (#528), the mail transport and sender (#529), CIMD (#534), the minimum password length (#634), the bot challenge (#643) and the passkey offer (#1083)', () => {
+  it('holds the two policies the server read from the row before #516, the token lifetimes (#527), the account policies (#528), the mail transport and sender (#529), CIMD (#534), the minimum password length (#634), the bot challenge (#643), the passkey offer (#1083) and the new-factor window (#1064)', () => {
     expect([...POLICIES_READ_FROM_REALM_ROW].sort()).toEqual([
+      'accounts.newFactorWindowDays',
       'accounts.requireVerifiedAccount',
       'botChallenge.difficulty',
       'botChallenge.requiredAtSignUp',
