@@ -79,6 +79,8 @@ describe('passkeyFirstStarter (#651)', () => {
       realm: { id: REALM.id },
       client: { id: 'client-1' },
       environment: 'production',
+      // An authorization request's interaction: the flows may switch (#1079).
+      switchFlows: true,
     });
     expect(context).not.toHaveProperty('freshSignIn');
     expect(context).not.toHaveProperty('flow');
