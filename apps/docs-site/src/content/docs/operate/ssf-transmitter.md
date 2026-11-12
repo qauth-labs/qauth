@@ -123,8 +123,11 @@ What a stream hears when an operator switches something off ([Accounts](/operate
   and the client's own stream stops while it is suspended. The suspension revokes the client's
   refresh tokens, so the relations they made end with them: a resource server's users related
   only through them, say, are swept from its stream. Lifting the suspension brings no token back.
-- **A disabled realm.** Nothing is sent, and its streams receive nothing while it is off. Enabling
-  it again brings back what the realm held, sessions and tokens alike: disabling a realm is a pause.
+- **A disabled realm.** Nothing is sent for disabling or enabling it. While it is off no request
+  reaches the realm, but delivery does not stop: events still pending, and any an operator's tool
+  records meanwhile (`db:disable-user` on one of its accounts, say), are still pushed to its
+  streams. Enabling it again brings back what the realm held, sessions and tokens alike: disabling
+  a realm is a pause.
 
 A receiver may add any client of the realm, but a client's own credential changes (its secret, its
 API keys) reach only that client's stream. Taking the scope away, disabling or suspending the
