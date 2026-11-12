@@ -4,16 +4,18 @@
 -- secret when that is not the client id (Sign in with Apple's Team ID), and
 -- the algorithm of the key registered there. A preset makes them from its
 -- config with its own code, which the signer's process never loads, so the
--- admin API derives them at each configure and enable, and the signer reads
--- them here.
+-- admin API derives them at each configure and at each enable that switches
+-- the plugin on, and the signer reads them here.
 --
 -- Three nullable columns with no default, so Postgres adds them without
 -- rewriting the table, and every existing row gets NULL in all three: the
--- signer signs nothing for such a row until a configure or an enable writes it
--- again, as it signed nothing before this migration. A release before this one
--- never names the columns: its insert leaves them NULL and its update keeps
--- them, so during a rolling upgrade a configure on an old node can leave a
--- record the new node wrote; a configure after the upgrade writes it again.
+-- signer signs nothing for such a row until a configure, or an enable of a
+-- plugin that is off, writes it again, as it signed nothing before this
+-- migration. An enable of a plugin already on writes nothing. A release
+-- before this one never names the columns: its insert leaves them NULL and
+-- its update keeps them, so during a rolling upgrade a configure on an old
+-- node can leave a record the new node wrote; a configure after the upgrade
+-- writes it again.
 -- Forward-only: nothing is rewritten.
 --
 -- The CHECKs hold the stored forms: a client id and its algorithm together,

@@ -158,7 +158,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   algorithm a preset makes for the realm's config beside it (migration
   0073), and the signer reads them, or a generic `oidc_*` provider's own
   row, with column grants that show it nothing else. A plugin enabled before
-  this release has no record until it is configured again. The
+  this release has no record until it is configured again (an enable of a
+  plugin already on writes nothing). The
   keys page of the operator guide gives the steps for Apple. There is no
   command or realm-file path for the import: a realm file never carries a
   secret value (ADR-019 Decision 11).

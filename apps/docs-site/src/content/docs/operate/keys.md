@@ -451,10 +451,11 @@ The key is handled like a generated one:
   never published in the realm's JWKS, which serves only token signing keys.
 
 The signer reads the client id and the assertion issuer from what the admin
-API stores beside the plugin's configuration at each `plugins.update` and
-`plugins.enable`, since the signer's process loads no plugin code. After
-upgrading a plugin whose mapping of its configuration changed, configure it
-again.
+API stores beside the plugin's configuration at each `plugins.update`, and at
+each `plugins.enable` that switches the plugin on, since the signer's process
+loads no plugin code. An enable of a plugin that is already on writes
+nothing. So after upgrading a plugin whose mapping of its configuration
+changed, or a plugin enabled before this release, configure it again.
 
 The operations run on the process that holds the signer role, which holds the
 KEK: in a deployment that splits the roles, the admin API of a process without
