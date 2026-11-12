@@ -2,7 +2,12 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import { takeValue } from '@qauth-labs/fastify-plugin-cache';
 import { signInTransactionSchema } from '@qauth-labs/fastify-plugin-sign-in-engine';
-import { stepByUrn, stepUrn } from '@qauth-labs/shared-interaction-contract';
+import {
+  RESTART_NOTICES,
+  type RestartNotice,
+  stepByUrn,
+  stepUrn,
+} from '@qauth-labs/shared-interaction-contract';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -74,7 +79,8 @@ const INTERACTION_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
  * without a new version: a record without it reads as before, and a server
  * from before it reads a record that holds it as absent, as any record it
  * cannot parse. The optional `client` (#629) joined version 2 the same way,
- * and so did an authorization record's optional `upstreamLink` (#670).
+ * and so did an authorization record's optional `upstreamLink` (#670), and
+ * the optional `restartNotice` (#1081).
  */
 export const INTERACTION_RECORD_VERSION = 2;
 
@@ -355,6 +361,13 @@ const recordFields = {
    * trusts it once it is well formed, so only the server writes it.
    */
   signInTransaction: signInTransactionSchema.nullable(),
+  /**
+   * Why the sign-in went back to its first step at this revision (#1081),
+   * kept for the next step read after a form post: that read shows it once,
+   * by taking its turn ({@link takeRestartNotice}). A JSON answer's result
+   * shows it itself, and the record keeps none. The next state drops it.
+   */
+  restartNotice: z.enum(RESTART_NOTICES).optional(),
   revision: z.int().min(0).max(1_000_000),
   createdAt: z.int().positive(),
   expiresAt: z.int().positive(),
@@ -593,6 +606,10 @@ function turnKey(realmId: string, idHash: string): string {
   return REDIS_KEYS.INTERACTION_TURN(realmId, idHash);
 }
 
+function noticeKey(realmId: string, idHash: string): string {
+  return REDIS_KEYS.INTERACTION_NOTICE(realmId, idHash);
+}
+
 /** The record's member in the expiry index. */
 function indexMember(record: Pick<InteractionRecord, 'realmId' | 'ref'>, idHash: string): string {
   return `${record.realmId}:${record.ref}:${idHash}`;
@@ -669,6 +686,10 @@ export async function insertInteraction(
  * ({@link interactionDeadline}): the first processed answer lifts the short
  * deadline of an unanswered interaction. The member is moved only if it is
  * there (`ZADD XX`), so one the sweep claimed is not listed again.
+ *
+ * A state that keeps a restart notice (#1081) gives its one read a turn of
+ * its own, in the same `MULTI`; any other state takes back the turn of an
+ * earlier notice nobody read.
  */
 export async function writeInteractionState(
   redis: Redis,
@@ -677,19 +698,20 @@ export async function writeInteractionState(
 ): Promise<boolean> {
   const serialized = serialize(record);
   const deadline = redisDeadline(record);
-  const [stored] = assertExecuted(
-    await redis
-      .multi()
-      .set(recordKey(record.realmId, idHash), serialized, 'PXAT', deadline, 'XX')
-      .set(turnKey(record.realmId, idHash), String(record.revision), 'PXAT', deadline, 'NX')
-      .zadd(
-        REDIS_KEYS.INTERACTION_EXPIRY_INDEX(),
-        'XX',
-        interactionDeadline(record),
-        indexMember(record, idHash)
-      )
-      .exec()
-  );
+  const transaction = redis
+    .multi()
+    .set(recordKey(record.realmId, idHash), serialized, 'PXAT', deadline, 'XX')
+    .set(turnKey(record.realmId, idHash), String(record.revision), 'PXAT', deadline, 'NX')
+    .zadd(
+      REDIS_KEYS.INTERACTION_EXPIRY_INDEX(),
+      'XX',
+      interactionDeadline(record),
+      indexMember(record, idHash)
+    );
+  if (record.restartNotice === undefined) transaction.del(noticeKey(record.realmId, idHash));
+  else
+    transaction.set(noticeKey(record.realmId, idHash), String(record.revision), 'PXAT', deadline);
+  const [stored] = assertExecuted(await transaction.exec());
   if (stored === 'OK') return true;
   // No record to write over: the turn just set opens nothing, so drop it.
   await redis.del(turnKey(record.realmId, idHash));
@@ -725,6 +747,23 @@ export async function readInteractionRecord(
 }
 
 const turnSchema = z.int().min(0);
+
+/**
+ * The restart notice a record keeps (#1081), for its one read: the notice's
+ * turn is taken with `GETDEL`, and the notice is shown only when that turn
+ * names the record's revision. A record without a notice costs no Redis
+ * command; a second read, or a read of a later state, finds no turn.
+ */
+export async function takeRestartNotice(
+  redis: Redis,
+  log: FastifyBaseLogger,
+  record: Pick<InteractionRecord, 'realmId' | 'revision' | 'restartNotice'>,
+  idHash: string
+): Promise<RestartNotice | undefined> {
+  if (record.restartNotice === undefined) return undefined;
+  const turn = await takeValue(redis, noticeKey(record.realmId, idHash), log, turnSchema);
+  return turn === record.revision ? record.restartNotice : undefined;
+}
 
 /**
  * Take the interaction's turn: read the revision that may be answered and
@@ -778,7 +817,11 @@ export async function deleteInteraction(
   const [, unlisted] = assertExecuted(
     await redis
       .multi()
-      .del(recordKey(record.realmId, idHash), turnKey(record.realmId, idHash))
+      .del(
+        recordKey(record.realmId, idHash),
+        turnKey(record.realmId, idHash),
+        noticeKey(record.realmId, idHash)
+      )
       .zrem(REDIS_KEYS.INTERACTION_EXPIRY_INDEX(), indexMember(record, idHash))
       .exec()
   );
@@ -870,7 +913,7 @@ export async function claimExpiredInteraction(
     await redis
       .multi()
       .zrem(index, entry.member)
-      .del(turnKey(parts.realmId, parts.idHash))
+      .del(turnKey(parts.realmId, parts.idHash), noticeKey(parts.realmId, parts.idHash))
       .getdel(recordKey(parts.realmId, parts.idHash))
       .exec()
   );

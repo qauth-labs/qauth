@@ -431,7 +431,12 @@ describe('after the code: a new address', () => {
     const password = await built.engine.advance(kept(code), codeAnswer(built.sender.last), ctx);
     built.registrations.conflict = true;
     const result = await built.engine.advance(kept(password), newPasswordAnswer(NEW_PASSWORD), ctx);
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'registration_conflict',
+    });
     expect(ctx.records.at(-1)).toMatchObject({
       outcome: 'ended',
       step: 'new_password',

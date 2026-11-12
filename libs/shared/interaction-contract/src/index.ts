@@ -1,3 +1,4 @@
+export { RESTART_NOTICES, type RestartNotice } from './lib/envelope';
 export * from './lib/identifiers';
 export { buildInteractionOpenApi, INTERACTION_OPENAPI, type OpenApiDocument } from './lib/openapi';
 export {

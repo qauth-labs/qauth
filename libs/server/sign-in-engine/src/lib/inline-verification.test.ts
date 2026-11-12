@@ -391,7 +391,12 @@ describe('a right code', () => {
     });
     const ctx = context(built);
     const result = await engine.advance(kept(second), codeAnswer(code), ctx);
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'account_disabled',
+    });
     expect(ctx.records).toEqual([
       { outcome: 'ended', step: 'email_code', reason: 'account_disabled', userId: USER },
     ]);
@@ -443,7 +448,12 @@ describe('a wrong, expired or malformed code', () => {
     }
     const ctx = context(built);
     const burned = await built.engine.advance(kept(current), codeAnswer(wrong), ctx);
-    expect(burned).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(burned).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'code_burned',
+    });
     expect(ctx.records).toEqual([
       { outcome: 'ended', step: 'email_code', reason: 'code_burned', userId: USER },
     ]);
@@ -788,7 +798,12 @@ describe('the code is never kept or told', () => {
       codeAnswer(built.sender.last),
       context(built)
     );
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'transaction_invalid',
+    });
   });
 });
 

@@ -9,8 +9,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { readPage } from '../api-conventions/cursor';
 import type { Page } from '../api-conventions/paging';
 import type { EngineMailer, MailRealm } from './engine-mail';
-import type { UpstreamLink } from './interaction-record';
-import { buildRealmUrl } from './realm-url';
+import { refusedLinkStep } from './interaction-outcomes';
+import type { InteractionStep, UpstreamLink } from './interaction-record';
 import type { RealmRow } from './request-realm';
 import { upstreamProviderCatalog } from './upstream-providers';
 import { emitUserEvent } from './user-events';
@@ -189,8 +189,12 @@ export type HeldUpstreamLinkOutcome =
   | { readonly kind: 'none' }
   /** The identity belongs to the account the sign-in proved. */
   | { readonly kind: 'linked' }
-  /** The link was refused and recorded: the browser goes to its page, `location`. */
-  | { readonly kind: 'refused'; readonly location: string };
+  /**
+   * The link was refused and recorded: the person sees `step`, the
+   * `upstream_link` step with the reason (#1081), as the first step of the
+   * request's next interaction (`continueAtStep`).
+   */
+  | { readonly kind: 'refused'; readonly step: InteractionStep };
 
 /** The input of {@link finishHeldUpstreamLink}. */
 export interface HeldUpstreamLinkInput {
@@ -237,10 +241,9 @@ export async function finishHeldUpstreamLink(
     mailer: input.mailer,
   });
   if (linked.kind === 'linked') return { kind: 'linked' };
-  const search = new URLSearchParams({ provider: link.provider, reason: linked.reason });
   return {
     kind: 'refused',
-    location: buildRealmUrl(realm, `/ui/upstream-link-refused?${search.toString()}`),
+    step: refusedLinkStep({ provider: link.provider, name: link.name }, linked.reason),
   };
 }
 

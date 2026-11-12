@@ -413,7 +413,12 @@ describe('a passkey assertion', () => {
     const ctx = { ...context(built), loginHint: IDENTIFIER };
     const first = await built.engine.advance(null, null, ctx);
     const ended = await built.engine.advance(kept(first), assertion(first, OTHER_PASSKEY), ctx);
-    expect(ended).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(ended).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'subject_mismatch',
+    });
     expect(ctx.records.at(-1)).toMatchObject({ outcome: 'ended', reason: 'subject_mismatch' });
   });
 
@@ -728,7 +733,12 @@ describe('the passkey enrolment', () => {
       }),
       ctx
     );
-    expect(ended).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(ended).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'account_disabled',
+    });
   });
 });
 

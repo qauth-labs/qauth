@@ -140,7 +140,7 @@ states:
       In one transaction: the user's row locked, the account's credentials read, the target found among its upstream
       identities of the request's realm, the last-way-in check, then the delete and user.upstream_unlinked. The
       attributes the provider gave when it created the account stay.
-    source: apps/auth-server/src/app/helpers/upstream-links.ts:225
+    source: apps/auth-server/src/app/helpers/upstream-links.ts:229
     invoke: { external: upstreamLinkStore }
     on:
       DONE:
@@ -157,15 +157,15 @@ states:
       - guard: missingTarget
         target: not_found.linked_account
         say: "no upstream identity of the account has that id: another account's reads the same"
-        source: apps/auth-server/src/app/helpers/upstream-links.ts:235
+        source: apps/auth-server/src/app/helpers/upstream-links.ts:239
       - guard: lastWayIn
         target: last_credential
         say: "the identity is the account's last way to sign in"
-        source: apps/auth-server/src/app/helpers/upstream-links.ts:236
+        source: apps/auth-server/src/app/helpers/upstream-links.ts:240
       - target: unlinked
         effect: [unlink]
         say: 'the identity is removed, and the owner is mailed'
-        source: apps/auth-server/src/app/helpers/upstream-links.ts:254
+        source: apps/auth-server/src/app/helpers/upstream-links.ts:257
 
   # Exits
 
@@ -277,8 +277,8 @@ assertions:
   - id: the-last-way-in-stays
     never: 'unlinked and lastWayIn'
     say: 'An unlink never leaves the account without a way to sign in'
-    source: apps/auth-server/src/app/helpers/upstream-links.ts:236
+    source: apps/auth-server/src/app/helpers/upstream-links.ts:240
   - id: only-the-accounts-own-identity
     never: 'unlinked and missingTarget'
     say: "An unlink removes only an upstream identity of the token's own account"
-    source: apps/auth-server/src/app/helpers/upstream-links.ts:235
+    source: apps/auth-server/src/app/helpers/upstream-links.ts:239

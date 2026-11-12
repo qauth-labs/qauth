@@ -306,7 +306,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'The page of an upstream link the finish refused (#670): the identity is already linked to another account, the account already has one of the provider, or the account cannot be linked. Nothing was changed, and nothing goes to the client. `Cache-Control: no-store`.',
+          'The page of an upstream link the finish refused (#670): the identity is already linked to another account, the account already has one of the provider, or the account cannot be linked. Nothing was changed, and nothing goes to the client. No flow sends the browser here any more: a refused link comes back to the ceremony page as the `upstream_link` step with its reason (#1081). It stays until the cut-over (#709). `Cache-Control: no-store`.',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [400],

@@ -355,7 +355,7 @@ describe('picking an upstream provider (#639)', () => {
     expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
   });
 
-  it('offers the step again with provider_unavailable when the provider cannot start', async () => {
+  it('offers the step again with provider_unavailable when the provider cannot start, naming it', async () => {
     const built = build();
     const ctx = context(built, {}, { kind: 'unavailable' });
     const first = await built.engine.advance(null, null, ctx);
@@ -366,7 +366,17 @@ describe('picking an upstream provider (#639)', () => {
     );
     expect(pick).toMatchObject({
       kind: 'step',
-      offer: { current: { step: 'upstream', error: 'provider_unavailable' } },
+      offer: {
+        current: {
+          step: 'upstream',
+          error: 'provider_unavailable',
+          // The page says which provider (#1081); the list is the same as before.
+          params: {
+            providers: [CORP, PARTNER],
+            error_provider: { provider: CORP.provider, name: CORP.name },
+          },
+        },
+      },
     });
     expect(kept(pick).upstream).toBeUndefined();
     expect(ctx.records).toContainEqual({

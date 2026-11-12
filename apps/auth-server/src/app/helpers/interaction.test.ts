@@ -2,7 +2,11 @@ import { Writable } from 'node:stream';
 
 import { base32Encode } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { InvalidRequestError, TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
-import { INTERACTION_API_PREFIX, stepUrn } from '@qauth-labs/shared-interaction-contract';
+import {
+  INTERACTION_API_PREFIX,
+  type RestartNotice,
+  stepUrn,
+} from '@qauth-labs/shared-interaction-contract';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,6 +41,7 @@ import errorHandler from '../plugins/error-handler';
 import {
   answerInteraction,
   cancelInteraction,
+  continueAtStep,
   continueInteraction,
   type InteractionDecision,
   type InteractionState,
@@ -114,6 +119,8 @@ type DecisionSpec =
       /** The sign-in engine's transaction to keep (#616). */
       signInTransaction?: SignInTransaction | null;
       personal?: Record<string, unknown>;
+      /** Why the sign-in went back to its first step (#1081). */
+      restartNotice?: RestartNotice;
     }
   | {
       kind: 'authenticated';
@@ -232,6 +239,10 @@ async function buildHarness(): Promise<Harness> {
   app.get(`${INTERACTION_API_PREFIX}/:id/personal`, async (request) =>
     readInteractionPersonalData(request, (request.params as { id: string }).id)
   );
+  // As the Interaction API's step read reads (#1081): it takes the notice.
+  app.get(`${INTERACTION_API_PREFIX}/:id/noticed`, async (request) =>
+    readInteractionStep(request, (request.params as { id: string }).id, { takeNotice: true })
+  );
   const decideBy =
     (decision: DecisionSpec) =>
     async (state: InteractionState): Promise<InteractionDecision> => {
@@ -291,6 +302,19 @@ async function buildHarness(): Promise<Harness> {
       step: { name: IDENTIFIER_STEP, params: {}, alternatives: [] },
     });
     return { finished: result, next };
+  });
+  // As a refused link continues a finished authorization or account
+  // interaction (#1081): the next one, at the step the finish found.
+  app.post(`${INTERACTION_API_PREFIX}/:id/finish-and-continue-at`, async (request, reply) => {
+    const { step } = request.body as { step: InteractionStep };
+    const result = await answerInteraction(
+      request,
+      reply,
+      { id: (request.params as { id: string }).id, revision: 0 },
+      decideBy({ kind: 'finished' })
+    );
+    if (result.kind !== 'finished' || result.purpose === 'logout') return result;
+    return { location: await continueAtStep(request, reply, result, step) };
   });
   app.post(`${INTERACTION_API_PREFIX}/:id/fail`, async () => {
     throw new InvalidRequestError('the answer names a field twice');
@@ -1194,6 +1218,163 @@ describe('answers (#592)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('the restart notice (#1081)', () => {
+  const noticeKeyOf = (id: string) =>
+    REDIS_KEYS.INTERACTION_NOTICE(REALM.id, interactionIdHash(id));
+
+  it('shows the notice of a state once, to the read that takes it, from the id alone', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const answered = await owner.answer(id, 0, {
+      kind: 'step',
+      step: IDENTIFIER,
+      restartNotice: 'code_burned',
+    });
+    expect(answered.statusCode, answered.body).toBe(200);
+    // The answer's own result carries none: its step view is for the caller.
+    expect(answered.json()).not.toHaveProperty('view.notice');
+    // A read that does not take it leaves it for the one that does.
+    const plain = await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`);
+    expect(plain.json()).not.toHaveProperty('notice');
+    const first = await new Browser().request('GET', `${INTERACTION_API_PREFIX}/${id}/noticed`);
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json()).toMatchObject({ notice: 'code_burned', revision: 1 });
+    const second = await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}/noticed`);
+    expect(second.statusCode, second.body).toBe(200);
+    expect(second.json()).toMatchObject({ revision: 1 });
+    expect(second.json()).not.toHaveProperty('notice');
+  });
+
+  it('drops a notice nobody read with the next state', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    await owner.answer(id, 0, { kind: 'step', step: IDENTIFIER, restartNotice: 'expired' });
+    expect(harness.redis.strings.get(noticeKeyOf(id))?.value).toBe('1');
+    const next = await owner.answer(id, 1, { kind: 'step', step: PASSWORD_STEP });
+    expect(next.statusCode, next.body).toBe(200);
+    expect(harness.redis.strings.has(noticeKeyOf(id))).toBe(false);
+    const record = await readInteractionRecord(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(id)
+    );
+    expect(record).not.toHaveProperty('restartNotice');
+    const read = await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}/noticed`);
+    expect(read.json()).toMatchObject({ revision: 2 });
+    expect(read.json()).not.toHaveProperty('notice');
+  });
+
+  it('gives each restart its own notice, and its own read', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    await owner.answer(id, 0, { kind: 'step', step: IDENTIFIER, restartNotice: 'code_burned' });
+    expect(
+      (await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}/noticed`)).json()
+    ).toMatchObject({ notice: 'code_burned' });
+    await owner.answer(id, 1, {
+      kind: 'step',
+      step: IDENTIFIER,
+      restartNotice: 'subject_mismatch',
+    });
+    expect(
+      (await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}/noticed`)).json()
+    ).toMatchObject({ notice: 'subject_mismatch', revision: 2 });
+  });
+
+  it('keeps no notice on an authenticated state, and none past the interaction', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    await owner.answer(id, 0, { kind: 'step', step: IDENTIFIER, restartNotice: 'expired' });
+    const signedIn = await owner.answer(id, 1, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+      step: CONSENT_STEP,
+    });
+    expect(signedIn.statusCode, signedIn.body).toBe(200);
+    expect(harness.redis.strings.has(noticeKeyOf(id))).toBe(false);
+
+    const other = await owner.start();
+    await owner.answer(other, 0, { kind: 'step', step: IDENTIFIER, restartNotice: 'expired' });
+    const finished = await owner.answer(other, 1, { kind: 'finished' });
+    expect(finished.statusCode, finished.body).toBe(200);
+    expect(harness.redis.strings.has(noticeKeyOf(other))).toBe(false);
+  });
+});
+
+describe('a next interaction at the step a finish found (#1081)', () => {
+  const REFUSED_LINK: InteractionStep = {
+    name: stepUrn('upstream_link'),
+    params: { provider: { provider: 'oidc_corp', name: 'Corp SSO' }, create: false },
+    alternatives: [],
+    error: 'already_linked',
+  };
+
+  it('continues an authorization at the step: the same expiry, the browser bound to it', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const before = await readInteractionRecord(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(id)
+    );
+    const response = await owner.request(
+      'POST',
+      `${INTERACTION_API_PREFIX}/${id}/finish-and-continue-at`,
+      { step: REFUSED_LINK }
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    const { location } = response.json() as { location: string };
+    const next = /\/ui\/interaction\/([A-Za-z0-9_-]{43})$/.exec(new URL(location).pathname)?.[1];
+    expect(next).toBeDefined();
+    expect(next).not.toBe(id);
+    const read = await new Browser().request('GET', `${INTERACTION_API_PREFIX}/${next}`);
+    expect(read.json()).toMatchObject({ step: REFUSED_LINK, expiresAt: before?.expiresAt });
+    expect(
+      (await owner.request('GET', `${INTERACTION_API_PREFIX}/${next}/personal`)).statusCode
+    ).toBe(200);
+    const record = await readInteractionRecord(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(next as string)
+    );
+    expect(record?.purpose).toBe('authorization');
+    expect(record?.request).toMatchObject({
+      client_id: AUTHORIZE_REQUEST.client_id,
+      state: AUTHORIZE_REQUEST.state,
+    });
+    expect(record?.transaction).toEqual({ amr: [] });
+  });
+
+  it("continues an account page's interaction as one of the account page", async () => {
+    const owner = new Browser();
+    const started = await owner.request('POST', '/start-account');
+    const { id } = started.json() as { id: string };
+    const response = await owner.request(
+      'POST',
+      `${INTERACTION_API_PREFIX}/${id}/finish-and-continue-at`,
+      { step: REFUSED_LINK }
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    const { location } = response.json() as { location: string };
+    const next = new URL(location).pathname.split('/').at(-1) as string;
+    const record = await readInteractionRecord(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(next)
+    );
+    expect(record).toMatchObject({
+      purpose: 'account',
+      request: { intent: 'reauthenticate', returnTo: '/ui/account/password' },
+      step: REFUSED_LINK,
+    });
   });
 });
 

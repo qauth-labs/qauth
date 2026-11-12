@@ -353,7 +353,12 @@ describe('the reset’s first code', () => {
     const ctx = context(built);
     const first = await passwordStep(built, ctx);
     const result = await built.engine.advance(kept(first), startAnswer('bob@example.com'), ctx);
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'subject_mismatch',
+    });
     expect(built.sender.sent).toEqual([]);
   });
 });
@@ -529,7 +534,12 @@ describe('a password-only account', () => {
       newPasswordAnswer(NEW_PASSWORD),
       ctx
     );
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'account_disabled',
+    });
     expect(ctx.records.at(-1)).toMatchObject({ outcome: 'ended', reason: 'account_disabled' });
     expect(built.resets.resets).toEqual([]);
   });
@@ -635,7 +645,12 @@ describe('an account with another authenticator', () => {
       answer('totp', { otp: '123456' }),
       ctx
     );
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'subject_mismatch',
+    });
     expect(built.resets.resets).toEqual([]);
   });
 });
@@ -647,11 +662,21 @@ describe('the flow of a transaction', () => {
     const code = await toCode(built, ctx);
     expect(
       await built.engine.advance(kept(code), null, context(built, { flow: 'register' }))
-    ).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    ).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'transaction_invalid',
+    });
     const signIn = await passwordStep(built, context(built));
     expect(
       await built.engine.advance(kept(signIn), null, context(built, { flow: 'reset' }))
-    ).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    ).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'transaction_invalid',
+    });
   });
 
   it('refuses a stored reset that went upstream, and a sign-in that holds a subject with no auth_time', async () => {
@@ -685,7 +710,12 @@ describe('the session epoch', () => {
     built.epochs.advance(USER, built.clock.now());
     const next = context(built);
     const result = await built.engine.advance(kept(proved), codeAnswer(built.sender.last), next);
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'reset_since',
+    });
     expect(next.records).toEqual([
       { outcome: 'ended', step: 'email_code', reason: 'reset_since', userId: USER },
     ]);
@@ -715,7 +745,12 @@ describe('the session epoch', () => {
       newPasswordAnswer('another amber kite over the harbour'),
       ctx
     );
-    expect(stale).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(stale).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'reset_since',
+    });
     expect(built.resets.resets).toHaveLength(1);
   });
 

@@ -214,6 +214,15 @@ export const REDIS_KEYS = {
    */
   INTERACTION_TURN: (realmId: string, idHash: string) => `interaction-turn:${realmId}:${idHash}`,
   /**
+   * The one read of an interaction's restart notice (#1081): the revision of
+   * {@link REDIS_KEYS.INTERACTION} whose `restartNotice` the next step read
+   * shows, as a decimal string. The step read takes it with `GETDEL`, so the
+   * notice is shown once; a record without a notice is never looked up here.
+   * Same components and deadline as the record.
+   */
+  INTERACTION_NOTICE: (realmId: string, idHash: string) =>
+    `interaction-notice:${realmId}:${idHash}`,
+  /**
    * Every live interaction, by its deadline (#592): a sorted set whose score
    * is the deadline in epoch milliseconds (the short one of an unanswered
    * interaction, moved to the absolute expiry by the first processed answer)

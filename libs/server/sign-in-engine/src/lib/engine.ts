@@ -447,11 +447,34 @@ const CHALLENGE_LADDER_COUNTERS = Object.freeze(['password', 'email_code'] as co
 /** An identifier HMAC: HMAC-SHA-256, base64url without padding. */
 const IDENTIFIER_HMAC_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
-const TRANSACTION_ENDED: RoundResult = Object.freeze({
-  kind: 'refused' as const,
-  reason: 'transaction_ended' as const,
-  transaction: null,
-});
+/** The round's result for a transaction that ended, and why: the reason its end was audited under. */
+function transactionEnded(cause: SignInAuditReason): RoundResult {
+  return Object.freeze({
+    kind: 'refused' as const,
+    reason: 'transaction_ended' as const,
+    transaction: null,
+    cause,
+  });
+}
+
+/**
+ * `offer` with its current `upstream` step naming the provider its error is
+ * about (#1081): the one the person picked, which could not be started.
+ */
+function withErrorProvider(offer: StepOffer, entry: UpstreamProviderEntry): StepOffer {
+  if (offer.current.step !== 'upstream') return offer;
+  const params = offer.current.params as StepParams<'upstream'>;
+  return Object.freeze({
+    ...offer,
+    current: Object.freeze({
+      ...offer.current,
+      params: Object.freeze({
+        ...params,
+        error_provider: Object.freeze({ provider: entry.provider, name: entry.name }),
+      }),
+    } as StepOffer['current']),
+  });
+}
 
 /**
  * The steps no role may take: an email code is never an authenticator
@@ -909,7 +932,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           : undefined;
     const step = named !== undefined && knows(named) ? named : 'identifier';
     await context.audit(Object.freeze({ outcome: 'ended', step, reason }));
-    return TRANSACTION_ENDED;
+    return transactionEnded(reason);
   }
 
   async function round(
@@ -1162,7 +1185,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
 
     const ended = async (step: StepName, reason: SignInAuditReason): Promise<RoundResult> => {
       await audit('ended', step, reason);
-      return TRANSACTION_ENDED;
+      return transactionEnded(reason);
     };
     const throttled = (retryAfterSeconds: number): RoundResult =>
       Object.freeze({
@@ -1683,8 +1706,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         const listed = [offer.current, ...offer.alternatives].some(
           (offered) => offered.step === 'upstream'
         );
+        // The step names the provider its error is about (#1081).
         return listed
-          ? offerStep(refusedOffer(offer, 'upstream'), 'provider_unavailable')
+          ? offerStep(
+              withErrorProvider(refusedOffer(offer, 'upstream'), entry),
+              'provider_unavailable'
+            )
           : offerStep(offer);
       }
       if (started?.kind !== 'started' || typeof started.redirectTo !== 'string') {

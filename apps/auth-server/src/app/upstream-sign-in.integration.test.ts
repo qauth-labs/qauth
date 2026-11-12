@@ -842,6 +842,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         csrf: string;
         alternatives: string[];
         params: Record<string, unknown>;
+        error?: string;
       };
     }
 
@@ -976,6 +977,88 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         );
         codeAt(created.headers['location']);
         expect(await credentialsOf(app, HIDDEN_TYPE)).toBe(1);
+      });
+    });
+
+    describe('a provider that did not sign the person in (#1081)', () => {
+      /**
+       * Start the provider, have it answer the callback with the OAuth error
+       * `error`, and check what the browser and the client got: the ceremony
+       * page of the same interaction, and nothing for the client.
+       */
+      async function answeredWith(app: FastifyInstance, error: string) {
+        const usersBefore = await users(app);
+        const jar = new CookieJar();
+        const started = await startProvider(app, jar);
+        const redeemedBefore = provider.tokenRequests.length;
+
+        const back = await callbackAt(app, jar, TYPE, {
+          error,
+          state: started.providerRequest.searchParams.get('state') ?? '',
+          iss: provider.issuer,
+        });
+
+        // Back to the ceremony page, not a page of the auth server's own.
+        expect(back.statusCode, withServerLog(back.body)).toBe(303);
+        expect(ceremonyIdOf(back.headers['location'])).toBe(started.interactionId);
+        expect(back.headers['cache-control']).toBe('no-store');
+        expect(back.body).not.toContain(PROVIDER_ERROR_TITLE);
+        // Nothing for the client: no code, no error at its redirect URI.
+        expect(await codes(app)).toBe(0);
+        expect(provider.tokenRequests).toHaveLength(redeemedBefore);
+        expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+        expect(await users(app)).toBe(usersBefore);
+        return { jar, id: started.interactionId, ...(await stepOf(app, started.interactionId)) };
+      }
+
+      it('brings an access_denied back to the ceremony page, whose step read carries the error and the provider', async () => {
+        const app = server.app();
+
+        const step = await answeredWith(app, 'access_denied');
+
+        expect(step.step).toBe(UPSTREAM);
+        expect(step.error).toBe('provider_declined');
+        expect(step.params[UPSTREAM]).toEqual({
+          providers: [{ provider: TYPE, name: 'Corp' }],
+          error_provider: { provider: TYPE, name: 'Corp' },
+        });
+        // The page offers the other ways in.
+        expect(step.alternatives).toContain(IDENTIFIER);
+        expect(await refusals(app)).toEqual(['declined']);
+      });
+
+      it('brings any other error of the provider back as provider_error', async () => {
+        const app = server.app();
+
+        const step = await answeredWith(app, 'temporarily_unavailable');
+
+        expect(step.step).toBe(UPSTREAM);
+        expect(step.error).toBe('provider_error');
+        expect(step.params[UPSTREAM]).toMatchObject({
+          error_provider: { provider: TYPE, name: 'Corp' },
+        });
+        expect(await refusals(app)).toEqual(['provider_error']);
+      });
+
+      it('leaves the interaction answerable: the person goes on another way from there', async () => {
+        const app = server.app();
+        const { jar, id, csrf } = await answeredWith(app, 'access_denied');
+
+        const answered = await app.inject({
+          method: 'POST',
+          url: `${INTERACTION_API_PREFIX}/${id}/answer`,
+          headers: {
+            'content-type': 'application/json',
+            origin: ORIGIN,
+            'sec-fetch-site': 'same-origin',
+            cookie: jar.header() ?? '',
+          },
+          payload: { type: IDENTIFIER, csrf, login_hint: 'grace@example.com' },
+        });
+
+        expect(answered.statusCode, withServerLog(answered.body)).toBe(200);
+        expect(answered.json()).toMatchObject({ result: 'step' });
+        expect(await codes(app)).toBe(0);
       });
     });
   });

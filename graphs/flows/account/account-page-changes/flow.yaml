@@ -685,7 +685,7 @@ states:
   unlinkingIdentity:
     title: Unlink the identity under the user's row lock
     description: As federation's unlink (account.unlink-upstream) does it, the delete and user.upstream_unlinked together.
-    source: apps/auth-server/src/app/helpers/upstream-links.ts:216
+    source: apps/auth-server/src/app/helpers/upstream-links.ts:220
     invoke: { external: upstreamLinkStore }
     on:
       DONE:

@@ -6,7 +6,7 @@ import type {
 } from '@qauth-labs/server-step-grammar';
 
 import type { EmailCodePurpose } from './email-code';
-import type { AuditSink, UpstreamProviderEntry } from './ports';
+import type { AuditSink, SignInAuditReason, UpstreamProviderEntry } from './ports';
 import type { RoundEnvironment } from './round-limits';
 import type { ProvedAccount } from './steps/handler';
 import type { SignInTransaction } from './transaction';
@@ -368,7 +368,19 @@ export type RoundResult =
       readonly transaction: null;
       readonly reason: 'step_not_available' | 'request';
     }
-  | { readonly kind: 'refused'; readonly reason: 'transaction_ended'; readonly transaction: null }
+  /**
+   * The transaction ended: the transport discards it, and may start a new
+   * one. `cause` is the reason the engine audited the end under (a burned
+   * code, another account, its age), for a transport that tells the person
+   * why the sign-in starts again (#1081). Before a factor succeeded it is the
+   * same for every identifier, as the round's answer is (ADR-017 Decision 4).
+   */
+  | {
+      readonly kind: 'refused';
+      readonly reason: 'transaction_ended';
+      readonly transaction: null;
+      readonly cause: SignInAuditReason;
+    }
   | {
       readonly kind: 'refused';
       readonly reason: 'throttled';
