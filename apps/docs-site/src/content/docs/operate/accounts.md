@@ -1,9 +1,9 @@
 ---
 title: Accounts
-description: How to disable a user account and enable it again, what disabling ends for good, and how an operator verifies an account that cannot confirm its address.
+description: How to disable a user account and enable it again, what disabling ends at once and for good, what suspending a client or disabling a realm ends, and how an operator verifies an account that cannot confirm its address.
 sidebar:
   order: 13
-lastVerified: '2026-11-08'
+lastVerified: '2026-11-13'
 ---
 
 An operator disables an account to stop whoever holds it, for example after
@@ -24,8 +24,32 @@ already holds stops working at its next use:
 - its access tokens: introspection reports them inactive, `/oauth/userinfo`
   answers `401`, and the developer API and token exchange refuse them.
 
+The tool ([Disable or enable an account](#disable-or-enable-an-account))
+also ends what the account holds at once, in the transaction that disables
+it, rather than at its next use:
+
+- every live browser session of the account ends. Each is recorded as a
+  `user.session_revoked` event, which the
+  [SSF transmitter](/operate/ssf-transmitter/) sends as a CAEP
+  `session-revoked` naming the session. Each client a session signed in to
+  that registered a back-channel logout URI is sent a logout token;
+- every live refresh token of the account is revoked, as `account_disabled`;
+- every authorization code of the account not yet redeemed is spent.
+
+An access token cannot be recalled: QAuth keeps no record of it. QAuth's own
+endpoints refuse it, as above. A resource server that verifies access tokens
+itself, without introspection, accepts one until it expires (15 minutes by
+default), unless it acts on the account's signals: `account-disabled` and the
+`session-revoked` of each session.
+
 The account keeps its credentials, consents and clients. Signing out still
 works.
+
+The rule that refuses what the account held at its next use stays the
+authority: it also refuses what is issued while the disabling transaction is
+still open, which that transaction does not see, and what an account disabled
+by hand holds. An `UPDATE` by hand ends nothing at once and records nothing,
+so no receiver hears of it ([Disable or enable an account](#disable-or-enable-an-account)).
 
 ## After a takeover
 
@@ -188,24 +212,57 @@ DATABASE_URL=postgresql://qauth:pw@db:5432/qauth \
 ```
 
 Add `--enable` to enable the account again. The tool changes the account and
-writes the event in one transaction, and prints the time before which sessions
-and tokens stay refused. It changes nothing for an account that is already in
-the state you ask for, or for a realm or a user it does not find, and says so.
+writes the event in one transaction; a disablement ends in it what the account
+holds ([What disabling does](#what-disabling-does)). It prints how many
+browser sessions it ended, and the time before which sessions and tokens stay
+refused. It changes nothing for an account that is already in the state you
+ask for, or for a realm or a user it does not find, and says so. Enabling
+ends nothing.
 
-| Event                                                                 | When                         |
-| --------------------------------------------------------------------- | ---------------------------- |
-| [`user.disabled`](/reference/events/#userdisabled-v1-rc0) (`warning`) | The tool disabled an account |
-| [`user.enabled`](/reference/events/#userenabled-v1-rc0) (`info`)      | The tool enabled it again    |
+| Event                                                                            | When                                                       |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [`user.disabled`](/reference/events/#userdisabled-v1-rc0) (`warning`)            | The tool disabled an account                               |
+| [`user.session_revoked`](/reference/events/#usersession_revoked-v1-rc0) (`info`) | The disablement ended one of its sessions, one per session |
+| [`user.enabled`](/reference/events/#userenabled-v1-rc0) (`info`)                 | The tool enabled it again                                  |
 
-Both are admin events, in the realm's hash chain, with the operating-system
-user who ran the tool as the actor. The [SSF transmitter](/operate/ssf-transmitter/)
-sends them as RISC 1.0 `account-disabled` and `account-enabled` to each stream
-that requested them and has the user as a subject
-([SSF events](/reference/ssf-events/)).
+All three are admin events, in the realm's hash chain, with the
+operating-system user who ran the tool as the actor. The
+[SSF transmitter](/operate/ssf-transmitter/) sends them as RISC 1.0
+`account-disabled`, CAEP 1.0 `session-revoked` (naming the session) and RISC
+1.0 `account-enabled` to each stream that requested them and has the user as
+a subject ([SSF events](/reference/ssf-events/)). Each client sent a logout
+token for an ended session has its own `user.client_session_ended`.
 
 `UPDATE users SET enabled = false WHERE id = '<user id>'` by hand disables the
-account just as well, and the database records the time the same way, but no
-event is written. Use the tool.
+account just as well, and the database records the time the same way, so
+everything the account holds is refused at its next use. But it ends nothing
+at once, no event is written and no signal is sent: a receiver acting on
+signals does not hear of it, and the account's refresh tokens stay unrevoked
+rows until they expire. Use the tool.
+
+## Clients and realms
+
+An operator also switches off a client or a whole realm. Whether what it held
+comes back when it is switched on again differs:
+
+- **A suspended client** (`db:suspend-oauth-client`, or `clients.disable` of
+  the admin API, [Clients](/operate/clients/#suspend-enable-and-delete)) is
+  cut off for good, as a disabled account is. The suspension revokes, in its
+  own transaction, every refresh token the client holds (as
+  `client_suspended`) and spends its authorization codes not yet redeemed.
+  Lifting the suspension brings none of them back: the client's users sign in
+  through it again. Its access tokens are not recalled; they work until they
+  expire, during the suspension too. A suspension sends no Shared Signals
+  event: neither CAEP 1.0 nor RISC 1.0 has one for a client. A suspension by
+  hand (`UPDATE oauth_clients SET suspended = true …`) revokes nothing, so
+  lifting it brings the client's refresh tokens back. Use the tool or the
+  admin API.
+- **A disabled realm** (`UPDATE realms SET enabled = false …`; no tool or API
+  disables one) is paused, not cut off. While it is off, every request to its
+  hosts is refused with `421`, so nothing of it is used. Enabling it again
+  brings back every browser session and token of the realm that has not
+  expired meanwhile, and no signal is sent either way. To end what the
+  realm's accounts hold, disable them with the tool, as above.
 
 ## Verify an account
 

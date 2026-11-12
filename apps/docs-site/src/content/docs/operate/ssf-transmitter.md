@@ -3,7 +3,7 @@ title: SSF transmitter
 description: Turn on QAuth's Shared Signals Framework transmitter, register a receiver, and run the verification event end to end.
 sidebar:
   order: 11
-lastVerified: '2026-11-08'
+lastVerified: '2026-11-13'
 ---
 
 QAuth can be an [OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
@@ -106,6 +106,25 @@ the user again once they are related again. A disablement ends the relation too:
 `account-disabled` reaches the stream the sweep deletes the subject, so `account-enabled` reaches
 only a stream the sweep has not cleared yet, and the receiver adds the user again once they are
 enabled.
+
+What a stream hears when an operator switches something off ([Accounts](/operate/accounts/)):
+
+- **An account disabled with the tool** (`db:disable-user`). The tool ends the account's browser
+  sessions, refresh tokens and unredeemed codes in the disabling transaction, and the stream
+  receives RISC `account-disabled` for the user and one CAEP `session-revoked` for each browser
+  session that ended, naming it (a `complex` subject: the user and the session), with
+  `initiating_entity` `admin`. A receiver that acts on the account ends everything of the user; one
+  that keeps per-session state ends each session it is told of. Both arrive before the sweep
+  deletes the subject. Enabling the account sends `account-enabled` and brings nothing back.
+- **An account disabled by hand** (`UPDATE users SET enabled = false`). Nothing is sent: no event
+  is recorded. QAuth still refuses everything the account held at its next use, but a receiver
+  that verifies tokens itself does not hear of it. Use the tool.
+- **A suspended client.** Nothing is sent: neither CAEP 1.0 nor RISC 1.0 has an event for a client,
+  and the client's own stream stops while it is suspended. The suspension revokes the client's
+  refresh tokens, so the relations they made end with them: a resource server's users related
+  only through them, say, are swept from its stream. Lifting the suspension brings no token back.
+- **A disabled realm.** Nothing is sent, and its streams receive nothing while it is off. Enabling
+  it again brings back what the realm held, sessions and tokens alike: disabling a realm is a pause.
 
 A receiver may add any client of the realm, but a client's own credential changes (its secret, its
 API keys) reach only that client's stream. Taking the scope away, disabling or suspending the

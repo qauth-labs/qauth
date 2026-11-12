@@ -3,7 +3,7 @@ title: Clients
 description: How an admin lists, registers, changes, suspends and deletes any client of a realm through the admin API, and which changes need an approval.
 sidebar:
   order: 15
-lastVerified: '2026-11-12'
+lastVerified: '2026-11-13'
 ---
 
 The admin API manages every client of a realm, whoever owns it: a
@@ -136,7 +136,11 @@ too.
 ## Suspend, enable and delete
 
 `clients.disable` suspends the client: it obtains no token, and its owner
-cannot lift the suspension. It only takes tokens away, so it needs no
+cannot lift the suspension. The suspension revokes every refresh token the
+client holds and spends its authorization codes not yet redeemed, in the same
+transaction, so lifting it brings none of them back: the client's users sign
+in through it again ([Clients and realms](/operate/accounts/#clients-and-realms)).
+It only takes tokens away, so it needs no
 approval, unless the client obtains admin tokens (above). It names the
 client's `ETag` in `If-Match`, so the approval of such a suspension holds for
 the client it was filed for. `clients.enable` lifts the suspension, and
