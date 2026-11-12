@@ -3,7 +3,7 @@ title: Clients
 description: How an admin lists, registers, changes, suspends and deletes any client of a realm through the admin API, and which changes need an approval.
 sidebar:
   order: 15
-lastVerified: '2026-11-13'
+lastVerified: '2026-11-12'
 ---
 
 The admin API manages every client of a realm, whoever owns it: a

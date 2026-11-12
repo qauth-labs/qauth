@@ -3,7 +3,7 @@ title: Accounts
 description: How to disable a user account and enable it again, what disabling ends at once and for good, what suspending a client or disabling a realm ends, and how an operator verifies an account that cannot confirm its address.
 sidebar:
   order: 13
-lastVerified: '2026-11-13'
+lastVerified: '2026-11-12'
 ---
 
 An operator disables an account to stop whoever holds it, for example after

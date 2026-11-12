@@ -3,7 +3,7 @@ title: SSF transmitter
 description: Turn on QAuth's Shared Signals Framework transmitter, register a receiver, and run the verification event end to end.
 sidebar:
   order: 11
-lastVerified: '2026-11-13'
+lastVerified: '2026-11-12'
 ---
 
 QAuth can be an [OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
@@ -115,7 +115,8 @@ What a stream hears when an operator switches something off ([Accounts](/operate
   session that ended, naming it (a `complex` subject: the user and the session), with
   `initiating_entity` `admin`. A receiver that acts on the account ends everything of the user; one
   that keeps per-session state ends each session it is told of. Both arrive before the sweep
-  deletes the subject. Enabling the account sends `account-enabled` and brings nothing back.
+  deletes the subject. Enabling the account brings nothing back, and its `account-enabled`
+  reaches only a stream the sweep has not cleared yet, as above.
 - **An account disabled by hand** (`UPDATE users SET enabled = false`). Nothing is sent: no event
   is recorded. QAuth still refuses everything the account held at its next use, but a receiver
   that verifies tokens itself does not hear of it. Use the tool.
