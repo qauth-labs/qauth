@@ -30,6 +30,10 @@
 #   keeps the transaction as far as the round took it (an identifier it fixed stays, nothing it refused is in it), and
 #   the next round starts from there; the graph ends the walk at the refusal, so that each refusal is one exit. A
 #   completed sign-in, a redirect and an ended transaction return no transaction: nothing can complete twice.
+# - An ended transaction says why (`cause`, the reason its end was audited as, #1081). The Interaction API starts the
+#   sign-in again at its first step, and that step's read carries a notice from a closed set, once: code_burned and
+#   subject_mismatch as such, every other cause as expired. The notice names no account, and reads the same for every
+#   identifier until a factor succeeded (ADR-017 Decision 4): a reset's code step is the same for every address.
 # - The switch to a registration (#1079; ADR-017 Decision 8, ADR-019 Decision 6): on an authorization request's
 #   interaction, the first step offers the register path marker last, while the realm allows sign-up, the client's
 #   hosted_flows name register and the request asks for no fresh sign-in, under the same rules as prompt=create, read
@@ -1070,10 +1074,12 @@ states:
     title: End the transaction
     description: >-
       One subject per transaction: a different identifier, or a factor of another user once one is proven, ends it.
-      The transport discards it; the FiPA endpoint answers invalid_session.
+      The transport discards it; the FiPA endpoint answers invalid_session. The Interaction API starts the sign-in
+      again at its first step, with the notice subject_mismatch (#1081).
+    source: libs/server/sign-in-engine/src/lib/engine.ts:451
     response:
       kind: refused
-      body: { reason: transaction_ended, transaction: null }
+      body: { reason: transaction_ended, transaction: null, cause: subject_mismatch }
 
   verificationThrottled:
     type: final
@@ -1090,10 +1096,16 @@ states:
     title: End the transaction for a burned code or an account that changed
     description: >-
       Audited under the subject, as code_burned or as the account's change. The Interaction API starts the sign-in
-      again; the email-code ladder counts on across transactions.
+      again; the email-code ladder counts on across transactions. The first step's read carries the notice
+      code_burned for the fifth wrong code, subject_mismatch for an address that now names another account, and
+      expired for a disabled account (#1081): no notice says what became of an account.
+    source: libs/server/sign-in-engine/src/lib/engine.ts:451
     response:
       kind: refused
-      body: { reason: transaction_ended, transaction: null }
+      body:
+        reason: transaction_ended
+        transaction: null
+        cause: "code_burned, or the account's change (account_disabled, subject_mismatch)"
 
   throttled:
     type: final

@@ -191,7 +191,7 @@ states:
     description: >-
       An interaction of purpose account and intent sign_in, bound to this browser, whose first step is passkey-first
       while passkeys are on and the identifier step otherwise. It finishes at the page it was started from.
-    source: apps/auth-server/src/app/helpers/account-interaction.ts:217
+    source: apps/auth-server/src/app/helpers/account-interaction.ts:218
     invoke: { external: interactionStore }
     on:
       DONE:
@@ -368,7 +368,7 @@ states:
       bound through the engine's own enrolment step, with its rules (the mailbox of a password-only account's first
       factor, the new recovery codes); a link starts at the provider and attaches the identity it proves to the account
       this same interaction signs in to.
-    source: apps/auth-server/src/app/helpers/account-interaction.ts:217
+    source: apps/auth-server/src/app/helpers/account-interaction.ts:218
     invoke: { external: interactionStore }
     on:
       DONE:
