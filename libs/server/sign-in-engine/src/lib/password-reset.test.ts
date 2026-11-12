@@ -823,4 +823,61 @@ describe('a factor bound after a password-only sign-in (#1064)', () => {
     });
     expect(totp.verify).not.toHaveBeenCalled();
   });
+
+  /** A settled TOTP, a passkey new until `T0 + 7 days`, and a set of recovery codes. */
+  async function withCodesAndNewPasskey() {
+    const totp = fakeTotp();
+    const codes = createMemoryRecoveryCodes();
+    const built = build(
+      [
+        [
+          ADDRESS,
+          passwordAccount(USER, PASSWORD, {
+            others: [
+              { type: 'totp', disabled: false, credentialId: 'totp-1' },
+              {
+                type: 'passkey',
+                disabled: false,
+                credentialId: 'passkey-1',
+                newUntil: T0 + 7 * DAY,
+              },
+            ],
+          }),
+        ],
+      ],
+      { steps: [totp.handler], recoveryCodes: codes }
+    );
+    await codes.replace({ realmId: REALM, userId: USER });
+    return { built, totp, codes };
+  }
+
+  it('takes no recovery code in place of a settled factor while a factor is new, nor offers one', async () => {
+    const { built, totp, codes } = await withCodesAndNewPasskey();
+    const ctx = context(built);
+    const afterCode = await toAfterCode(built, ctx);
+    // The new passkey's binding may have shown the codes to whoever bound
+    // it: only the settled TOTP meets the reset.
+    expect(afterCode).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'totp' }, alternatives: [] },
+    });
+    const proved = await built.engine.advance(
+      kept(afterCode),
+      answer('totp', { otp: '123456' }),
+      ctx
+    );
+    expect(totp.verify).toHaveBeenCalledTimes(1);
+    expect(proved).toMatchObject({ kind: 'step', offer: { current: RESET_PASSWORD_STEP } });
+    expect(codes.usedNotices).toEqual([]);
+  });
+
+  it('offers the recovery code beside the settled factor again once the window is over', async () => {
+    const { built } = await withCodesAndNewPasskey();
+    built.clock.advance(7 * DAY);
+    const afterCode = await toAfterCode(built, context(built));
+    expect(afterCode).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'totp' }, alternatives: [{ step: 'recovery_code' }] },
+    });
+  });
 });

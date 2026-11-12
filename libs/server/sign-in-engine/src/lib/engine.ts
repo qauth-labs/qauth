@@ -1842,11 +1842,17 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * factor, a reset or a forced password update.
      */
     const settled = (current: SignInAccount): SignInAccount => settledAccount(current, clock.now());
+    /** Whether the account holds a factor that is still new (#1064). */
+    const holdsNewFactor = (current: SignInAccount): boolean => {
+      const now = clock.now();
+      return current.factors.some((held) => isNewFactor(held, now));
+    };
     /**
      * Whether this transaction proved a factor beyond the password that is
      * not new (#1064): the passkey that answered (named by the port), the
      * account's TOTP, or a recovery code of an account that holds no new
-     * factor.
+     * factor. It is what a reset or a forced password update asks of an
+     * account with such a factor, and what keeps a factor bound from new.
      *
      * A passkey the port did not name counts as not new, as every passkey did
      * before #1064; one it named that the account no longer holds (removed
@@ -1858,9 +1864,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const provedSettledBeyondPassword = (current: SignInAccount): boolean => {
       const now = clock.now();
       return state.transaction.verified.some((step) => {
-        if (step.step === 'recovery_code') {
-          return !current.factors.some((held) => isNewFactor(held, now));
-        }
+        if (step.step === 'recovery_code') return !holdsNewFactor(current);
         const factor = factorOf(step.step);
         if (factor === 'passkey') {
           const id = state.transaction.passkeyCredential;
@@ -1876,13 +1880,6 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         return false;
       });
     };
-    /**
-     * Whether this transaction met the account's factor beyond the password
-     * for a reset or a forced password update (#1064): a factor that is not
-     * new, or a recovery code in its place. A new factor stands in for none.
-     */
-    const metSettledBeyondPassword = (current: SignInAccount): boolean =>
-      provedSettledBeyondPassword(current) || tookRecoveryCode();
     /**
      * Whether a factor this transaction binds is new (#1064; ADR-017
      * Decision 8, amended 2026-11-12): the account has a password, and the
@@ -3046,9 +3043,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       // here.
       // A new factor (#1064) is not one of them: it stands for no more than
       // the password that bound it, so the reset neither asks for it nor
-      // takes it in place of one that is not new.
+      // takes it in place of one that is not new. While one is new, no
+      // recovery code stands in either: its binding may have shown the set
+      // to whoever bound it.
       const guarded = settled(account);
-      if (boundBeyondPassword(guarded) && !metSettledBeyondPassword(account)) {
+      if (boundBeyondPassword(guarded) && !provedSettledBeyondPassword(account)) {
         const verifiedSteps = new Set(state.transaction.verified.map((step) => step.step));
         const needed: Offerable[] = [...handlers.secondFactors, ...handlers.firstFactors].filter(
           (handler) =>
@@ -3058,7 +3057,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             handler.factor !== 'password' &&
             (handler.usableBy?.(guarded) ?? false)
         );
-        needed.push(...(await recoveryAlternative(subject)));
+        if (!holdsNewFactor(account)) needed.push(...(await recoveryAlternative(subject)));
         if (needed.length === 0) return redirect('step_not_available');
         const offer = await offerOf(needed);
         if (!answers(offer)) return offerStep(offer);
@@ -3068,7 +3067,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         if (!isAccount(reread)) return reread;
         // A passkey names no account before it answers, so a new one of the
         // same account may have answered: it stands in for none.
-        if (!metSettledBeyondPassword(reread)) {
+        if (!provedSettledBeyondPassword(reread)) {
           return ended('password_reset', 'invalid_credentials');
         }
       }
@@ -3811,7 +3810,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       // it: an account whose only factors beyond the password are new proves
       // its mailbox, as a password-only account does.
       if (boundBeyondPassword(settled(current))) {
-        if (!metSettledBeyondPassword(current)) {
+        if (!provedSettledBeyondPassword(current)) {
           throw new Error('sign-in engine: a forced update before the factor beyond the password');
         }
       } else if (!provedMailbox()) {
@@ -4427,7 +4426,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       } else if (
         updateDue(current) &&
         boundBeyondPassword(guarded) &&
-        !metSettledBeyondPassword(current)
+        !provedSettledBeyondPassword(current)
       ) {
         // The forced update (#635): an account with a factor beyond its
         // password proves it first, so a person who knows only the password,
@@ -4436,7 +4435,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         // code may, on the hosted pages; a disabled one still counts as
         // bound, and with no usable one and no code the sign-in cannot go on
         // here.
-        // A new factor (#1064) stands in for none of them.
+        // A new factor (#1064) stands in for none of them, and while one is
+        // new no recovery code does: its binding may have shown the set.
         needed = [
           ...[...handlers.secondFactors, ...handlers.firstFactors].filter(
             (handler) =>
@@ -4445,7 +4445,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
               handler.factor !== undefined &&
               handler.factor !== 'password'
           ),
-          ...(await recoveryAlternative(subject)),
+          ...(holdsNewFactor(current) ? [] : await recoveryAlternative(subject)),
         ];
         if (needed.length > 0 && emailCodes !== undefined && addressPending(current)) {
           const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);

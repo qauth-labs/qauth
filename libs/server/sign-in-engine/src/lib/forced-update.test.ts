@@ -16,6 +16,7 @@ import {
   passwordAccount,
   recordingAudit,
 } from '../testing/fakes';
+import { createMemoryRecoveryCodes } from '../testing/memory-recovery-codes';
 import { createSignInEngine, type SignInEngineDependencies } from './engine';
 import type { Clock } from './ports';
 import type { RoundAnswer, RoundContext, RoundResult } from './round';
@@ -645,5 +646,69 @@ describe('an update the sign-in cannot run', () => {
       }),
     } as unknown as AnyStepHandler;
     expect(() => build(undefined, { steps: [handler] })).toThrow(/never a sign-in step/);
+  });
+});
+
+describe('a recovery code before the update while a factor is new (#1064)', () => {
+  const DAY = 24 * 60 * 60_000;
+
+  /** A listed password and a settled TOTP, a set of codes, and maybe a new passkey. */
+  async function withCodes(newPasskey: boolean) {
+    const totp = fakeTotp();
+    const codes = createMemoryRecoveryCodes();
+    const built = build(
+      passwordAccount(USER, LISTED, {
+        others: [
+          { type: 'totp', disabled: false, credentialId: 'totp-1' },
+          ...(newPasskey
+            ? [
+                {
+                  type: 'passkey' as const,
+                  disabled: false,
+                  credentialId: 'passkey-1',
+                  newUntil: T0 + 7 * DAY,
+                },
+              ]
+            : []),
+        ],
+      }),
+      { steps: [totp.handler], recoveryCodes: codes }
+    );
+    const { codes: set } = await codes.replace({ realmId: REALM, userId: USER });
+    const second = await signIn(built, LISTED);
+    expect(second).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'totp' }, alternatives: [{ step: 'recovery_code' }] },
+    });
+    const third = await built.engine.advance(
+      kept(second),
+      answer('recovery_code', { recovery_code: set[0] as string }),
+      context(built)
+    );
+    return { built, totp, third };
+  }
+
+  it('meets the update in place of the TOTP on an account that holds no new factor', async () => {
+    const { totp, third } = await withCodes(false);
+    expect(third).toMatchObject({ kind: 'step', offer: { current: UPDATE_STEP } });
+    expect(totp.verify).not.toHaveBeenCalled();
+  });
+
+  it('stands in for the TOTP the sign-in owes, but the update still asks for the TOTP', async () => {
+    const { built, totp, third } = await withCodes(true);
+    // The new passkey's binding may have shown the codes to whoever bound
+    // it: the update asks for the settled TOTP, with no code in its place.
+    expect(third).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'totp' }, alternatives: [] },
+    });
+    expect(built.updates.checks).toEqual([]);
+    const fourth = await built.engine.advance(
+      kept(third),
+      answer('totp', { otp: '123456' }),
+      context(built)
+    );
+    expect(totp.verify).toHaveBeenCalledTimes(1);
+    expect(fourth).toMatchObject({ kind: 'step', offer: { current: UPDATE_STEP } });
   });
 });
