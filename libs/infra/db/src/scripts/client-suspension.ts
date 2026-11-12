@@ -167,6 +167,21 @@ export async function setClientSuspension(
     const operator = operatorUser();
     const database = db as unknown as Database;
     const t = tx as unknown as DbTransaction;
+
+    // What the client holds ends with the suspension (#893): codes first, so
+    // none redeemed meanwhile opens a family the revocation misses. Before
+    // the event: recording it takes the realm's chain lock, which an admin
+    // API write takes last, after the rows it changes, so taking it first
+    // could deadlock against one holding a code or token of this client.
+    let revokedTokens = 0;
+    if (args.suspend) {
+      await createAuthorizationCodesRepository(database).invalidateForClient(client.id, t);
+      revokedTokens = await createRefreshTokensRepository(database).revokeAllForClient(
+        client.id,
+        SUSPENDED_CLIENT_REVOKE_REASON,
+        t
+      );
+    }
     await createEventsRepository(database).emit(t, {
       type: args.suspend
         ? 'urn:qauth:event:client.suspended:v1-rc.0'
@@ -178,15 +193,6 @@ export async function setClientSuspension(
       data: {},
     });
     if (!args.suspend) return { status: 'lifted' as const, ...updated };
-
-    // What the client holds ends with the suspension (#893): codes first, so
-    // none redeemed meanwhile opens a family the revocation misses.
-    await createAuthorizationCodesRepository(database).invalidateForClient(client.id, t);
-    const revokedTokens = await createRefreshTokensRepository(database).revokeAllForClient(
-      client.id,
-      SUSPENDED_CLIENT_REVOKE_REASON,
-      t
-    );
     return { status: 'suspended' as const, ...updated, revokedTokens };
   });
 }

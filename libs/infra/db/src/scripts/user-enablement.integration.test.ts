@@ -304,9 +304,10 @@ describe('setUserEnabled (real Postgres)', () => {
       expect(await tokenState(othersToken)).toEqual({ revoked: false, revoked_reason: null });
       expect(await codeUsed(othersCode)).toBe(false);
 
-      // The disablement first, then the logout notice of the one client with
-      // a logout URI, then a session_revoked naming each ended session: all
-      // admin events but the notice, by the operator, about the user.
+      // The logout notice of the one client with a logout URI, written as
+      // the session ends; then the disablement and a session_revoked naming
+      // each ended session, admin events by the operator about the user,
+      // recorded once the rows are changed (the realm's chain lock last).
       const recorded = (await eventsOf(realm.id)).map((event) => ({
         type: event.type,
         category: event.category,
@@ -318,20 +319,20 @@ describe('setUserEnabled (real Postgres)', () => {
       const [first0, second0] = [first, second].sort();
       expect(recorded).toEqual([
         {
-          type: 'urn:qauth:event:user.disabled:v1-rc.0',
-          category: 'admin',
-          actorType: 'operator_cli',
-          subjectId: user.id,
-          clientId: null,
-          data: {},
-        },
-        {
           type: 'urn:qauth:event:user.client_session_ended:v1-rc.0',
           category: 'user',
           actorType: null,
           subjectId: user.id,
           clientId: expect.any(String),
           data: { sid: first, reason: 'admin' },
+        },
+        {
+          type: 'urn:qauth:event:user.disabled:v1-rc.0',
+          category: 'admin',
+          actorType: 'operator_cli',
+          subjectId: user.id,
+          clientId: null,
+          data: {},
         },
         ...[first0, second0].map((sid) => ({
           type: 'urn:qauth:event:user.session_revoked:v1-rc.0',

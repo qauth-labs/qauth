@@ -194,7 +194,7 @@ async function changeEnablement(
           notValidBefore: users.notValidBefore,
         });
 
-      // The event commits with the change. The tool's database handle has a
+      // The events commit with the change. The tool's database handle has a
       // schema generic of its own; at run time it is the same node-postgres
       // database and transaction the repository takes.
       const operator = operatorUser();
@@ -204,7 +204,21 @@ async function changeEnablement(
       };
       const database = db as unknown as Database;
       const t = tx as unknown as DbTransaction;
-      await createEventsRepository(database).emit(t, {
+      const events = createEventsRepository(database);
+
+      // A disablement ends what the account holds before it records its
+      // admin events. Recording one takes the realm's chain lock, which an
+      // admin API write takes last, after the rows it changes: taken before
+      // the account's codes, tokens and sessions, it could deadlock against
+      // such a write holding one of them (a client's suspension, say).
+      const ended = args.enable
+        ? []
+        : await endWhatTheAccountHolds(database, t, {
+            realmId: realm.id,
+            userId: user.userId,
+            events,
+          });
+      await events.emit(t, {
         type: args.enable
           ? 'urn:qauth:event:user.enabled:v1-rc.0'
           : 'urn:qauth:event:user.disabled:v1-rc.0',
@@ -215,12 +229,18 @@ async function changeEnablement(
       });
       if (args.enable) return { status: 'enabled' as const, ...updated };
 
-      const endedSessions = await endWhatTheAccountHolds(database, t, {
-        realmId: realm.id,
-        userId: user.userId,
-        actor,
-      });
-      return { status: 'disabled' as const, ...updated, endedSessions };
+      // One user.session_revoked per ended session, sent to Shared Signals
+      // receivers as CAEP session-revoked naming the session.
+      for (const sid of ended) {
+        await events.emit(t, {
+          type: 'urn:qauth:event:user.session_revoked:v1-rc.0',
+          realm: realm.id,
+          actor,
+          subject: { type: 'user', id: user.userId },
+          data: { sid, reason: 'account_disabled' },
+        });
+      }
+      return { status: 'disabled' as const, ...updated, endedSessions: ended.length };
     },
     { isolationLevel: 'read committed' }
   );
@@ -229,19 +249,19 @@ async function changeEnablement(
 /**
  * End what a disabled account holds, in the disabling transaction `tx`
  * (#893): its unredeemed authorization codes, its live refresh tokens and its
- * live browser sessions, each session with a `user.session_revoked` event
- * (sent to Shared Signals receivers as CAEP `session-revoked`, naming the
- * session) and, through the sessions repository, a back-channel logout notice
- * (`user.client_session_ended`) for each client it served that has a logout
- * URI. The account's row is locked and disabled already, and nothing commits
- * until the disablement does.
+ * browser sessions not yet ended, each session with, through the sessions
+ * repository, a back-channel logout notice (`user.client_session_ended`) for
+ * each client it served that has a logout URI. The account's row is locked
+ * and disabled already, and nothing commits until the disablement does; the
+ * caller records the admin events (`user.disabled`, a `user.session_revoked`
+ * per ended session) after it.
  *
  * A session, token or code issued while the transaction is open, which none
  * of these statements sees, is refused all the same by the auth server: it
  * counts as issued before `not_valid_before`, which takes the time of the
  * commit.
  *
- * @returns how many browser sessions it ended
+ * @returns the ids of the browser sessions it ended
  */
 async function endWhatTheAccountHolds(
   db: Database,
@@ -249,11 +269,10 @@ async function endWhatTheAccountHolds(
   account: {
     readonly realmId: string;
     readonly userId: string;
-    readonly actor: OperatorActor;
+    readonly events: ReturnType<typeof createEventsRepository>;
   }
-): Promise<number> {
-  const { realmId, userId, actor } = account;
-  const events = createEventsRepository(db);
+): Promise<string[]> {
+  const { realmId, userId, events } = account;
   // Codes first, as a sign-out ends them: a code redeemed after the tokens
   // below would open a refresh family they did not reach.
   await createAuthorizationCodesRepository(db).invalidateForUser(userId, tx);
@@ -269,14 +288,5 @@ async function endWhatTheAccountHolds(
     {},
     tx
   );
-  for (const { session } of ended) {
-    await events.emit(tx, {
-      type: 'urn:qauth:event:user.session_revoked:v1-rc.0',
-      realm: realmId,
-      actor,
-      subject: { type: 'user', id: userId },
-      data: { sid: session.id, reason: 'account_disabled' },
-    });
-  }
-  return ended.length;
+  return ended.map(({ session }) => session.id);
 }
