@@ -488,8 +488,9 @@ it answers `503`.
    → 200 { "kid": "ABC123DEFG", "algorithm": "ES256", "status": "active" }
    ```
 
-5. Delete the downloaded `.p8` file from wherever it passed through, once the
-   import answered.
+5. Keep the downloaded `.p8` file until the import answered `200`: Apple
+   offers it once, and a refused import is sent again with the same file.
+   Then delete it from wherever it passed through.
 
 `apple` and `ABC123DEFG` stand for the plugin's name and the Key ID Apple
 showed.
@@ -514,7 +515,11 @@ QAuth-Approval: {approvalId}
 Each process signs with the new key once it reads the realm's key list again,
 within a minute. A switch for a key id that is not the plugin's `next` key is
 refused with `409`, and so is a third import while a `next` key waits. Revoke
-the old key at Apple after the switch.
+the old key at Apple once every process signs with the new one, a minute after
+the switch: a process that has not read the list again still signs with the
+old key, and Apple refuses what it signs. A leaked key may be revoked at once,
+at the cost of sign-ins through Apple failing on such a process for that
+minute.
 
 ### Why there is no command or realm-file path
 
