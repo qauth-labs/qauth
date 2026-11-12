@@ -49,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the `admin` role builds the password hasher. The new **Clients**
   page of the operator guide describes the routes.
 
+- **The docs list QAuth's provider plugins** ([#1074], [#1075]).
+  `operate/images` names each plugin in its own repository (GitHub, Google
+  and Microsoft) with its package and the redirect URI to register at the
+  provider. `extend/auth-method-contract` links the two preset plugins beside
+  the GitHub one.
+
 ## [0.2.3] - 2026-11-12
 
 A patch release that carries a breaking change, as a 0.x release may (see the
