@@ -92,6 +92,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   link; an account with no password, such as one made through a provider, has
   the security log alone. The published descriptions of the `upstream` and
   `upstream_link` steps and of `user.upstream_linked` say so.
+- **The ceremony page reads a provider's refusal, a refused link and a
+  restarted sign-in from the interaction** ([#1081], ADR-019 Decisions 5 and
+  6, ADR-020 §3). With the Interaction API on, a replacement ceremony app
+  could not draw three outcomes, which reached only the auth server's own
+  pages, in English, or nothing. A cancel, `access_denied` or another error
+  at an upstream provider now sends the browser back to the ceremony page,
+  whose step read makes the `upstream` step current with the new errors
+  `provider_declined` or `provider_error` and names the provider in its
+  params (`error_provider`), beside the other ways in; nothing reaches the
+  client. A refused link ([#670]) comes back as the `upstream_link` step with
+  its reason as `error` (`already_linked`, `provider_linked`,
+  `account_unavailable`), where the sign-in had finished the interaction as
+  the first step of the request's next one; it offers only the cancel, and
+  `/ui/upstream-link-refused` is no longer used. When the engine ends a
+  transaction (the fifth wrong code, another account, its age) and the
+  sign-in starts again at its first step, the interaction carries a `notice`
+  (`code_burned`, `subject_mismatch` or `expired`) once: in the result of a
+  JSON answer, or, after a form post, in the next step read. The notice names
+  no account and reads the same for every identifier. The server-rendered
+  pages keep their own pages until the cut-over ([#709]). The published
+  Interaction API contract (`/interaction/v1-rc.0/openapi.json`) and its
+  docs page say so.
 
 ### Fixed
 
@@ -4114,6 +4136,7 @@ It adds migrations 0068 and 0069.
 [#1078]: https://github.com/qauth-labs/qauth/issues/1078
 [#1079]: https://github.com/qauth-labs/qauth/issues/1079
 [#1080]: https://github.com/qauth-labs/qauth/issues/1080
+[#1081]: https://github.com/qauth-labs/qauth/issues/1081
 
 ### Deprecated
 
