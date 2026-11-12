@@ -136,6 +136,10 @@ describe('what each role loads (the boot-time list)', () => {
     expect(repositoriesFor(['admin'])).toEqual([
       'users',
       'realms',
+      // The client operations (#632), and the refresh tokens a removed
+      // first-party profile revokes.
+      'oauthClients',
+      'refreshTokens',
       // An operator's verification of an account (#1052) reads its
       // credentials and records `user.verified`.
       'userCredentials',
@@ -148,8 +152,9 @@ describe('what each role loads (the boot-time list)', () => {
       // The plugin operations (#600).
       'realmAuthMethodPlugins',
     ]);
-    // The token guard verifies with the JWT plugin, which reads `fastify.dpop`.
-    expect([...pluginsFor(['admin'])]).toEqual(['dpop', 'jwt']);
+    // The token guard verifies with the JWT plugin, which reads `fastify.dpop`;
+    // a client the admin API registers gets its secret hashed (#632).
+    expect([...pluginsFor(['admin'])]).toEqual(['dpop', 'jwt', 'password']);
   });
 
   it('gives delivery the event store, the SSF streams and the back-channel logout clients, and no identity data', () => {
