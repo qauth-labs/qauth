@@ -508,8 +508,12 @@ With `passkeys` (a `PasskeyCeremonies` port, #651; ADR-017 Decisions 4, 8 and 10
   `["pwd","pop","mfa"]`; `hwk` and `swk` are never claimed.
 - **`webauthn_create`**, offered once with `optional: true` after a sign-in that proved the password
   of an account whose only factor it is, on a transport that serves it and `recovery_codes`, while
-  the password is at most 5 minutes old (`PASSKEY_BINDING_MAX_AUTH_AGE_MS`). An answer with no
-  response declines it. A verified registration is held in the transaction while the account's
+  the password is at most 5 minutes old (`PASSKEY_BINDING_MAX_AUTH_AGE_MS`) and the realm keeps the
+  offer: the port's optional `offerAfterSignIn` (#1083; the auth server's reads the realm's
+  `passkeys.offerAfterSignIn`, on by default) is read on the round that would make the offer or
+  take its answer, and a port without it keeps the offer. Off, nothing is offered and an answer to
+  an earlier offer binds nothing; a read that fails is reported and makes no offer. A passkey the
+  person asked for (#844) never reads it. An answer with no response declines it. A verified registration is held in the transaction while the account's
   mailbox is proved with an 8-digit `recovery` code, unless this transaction proved it already
   (ADR-017 Decision 8); then, while the password is still that fresh, the port binds the passkey,
   queues the binding notice and writes its event. The new passkey adds no `amr` value, meets the
