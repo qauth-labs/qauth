@@ -51,6 +51,7 @@ import {
 import { ApprovalRequiredError, ApprovalStateError } from '../helpers/approval-required';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
+import { PluginKeyConflictError } from '../helpers/plugin-key-errors';
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import { SsfNotFoundError, SsfStreamExistsError } from '../helpers/ssf-errors';
 import type { OAuthErrorCode } from './oauth-error';
@@ -255,6 +256,13 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // Metadata Document (ADR-012 Decision 3, #632): the answer names it.
   {
     errorClass: ClientManagedByDocumentError,
+    code: 'conflict',
+    oauthError: 'invalid_request',
+  },
+  // A provider plugin's key import or switch the realm's keys or the
+  // plugin's state do not allow as they stand (#1073).
+  {
+    errorClass: PluginKeyConflictError,
     code: 'conflict',
     oauthError: 'invalid_request',
   },

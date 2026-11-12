@@ -918,6 +918,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
         createRepositoryPublishedKeyReader(fastify.repositories.realmPublicKeys)
       )
     );
+    // No KEK here, so no provider key can be sealed: the admin API's
+    // provider key operations answer 503 on this process (#1073).
+    fastify.decorate('upstreamClientKeys', null);
   }
 
   // Request-id propagation (#128), ahead of the realm resolver below: both

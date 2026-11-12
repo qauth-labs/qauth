@@ -134,7 +134,7 @@ export function createUpstreamClientKeys(deps: UpstreamClientKeysDependencies): 
         if (next === undefined) {
           throw new KeyChangeRefusedError(
             'NO_NEXT_KEY',
-            "The provider holds no next key with the kid the request names"
+            'The provider holds no next key with the kid the request names'
           );
         }
         return factory.activateNextKey({
