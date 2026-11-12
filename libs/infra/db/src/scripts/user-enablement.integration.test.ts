@@ -183,9 +183,11 @@ describe('setUserEnabled (real Postgres)', () => {
     async function seedClient(realmId: string, logoutUri: string | null): Promise<string> {
       return one(sql`
         INSERT INTO oauth_clients
-          (realm_id, client_id, client_secret_hash, name, redirect_uris, backchannel_logout_uri)
+          (realm_id, client_id, client_secret_hash, name, redirect_uris,
+           backchannel_logout_uri, backchannel_logout_uri_source)
         VALUES (${realmId}, ${`client-${Math.random().toString(36).slice(2)}`}, 'h', 'app',
-                '["https://app.example.com/cb"]', ${logoutUri})
+                '["https://app.example.com/cb"]', ${logoutUri},
+                ${logoutUri === null ? null : 'admin'})
         RETURNING id::text AS id`);
     }
 
