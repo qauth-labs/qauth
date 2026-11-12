@@ -202,9 +202,12 @@ host. Only the browser that started may complete the sign-in, once; the account
 is found by the provider's subject under its issuer, never by email, and a new
 one is created only when the realm allows sign-up (`ALLOW_SIGN_UP`). On success
 the browser goes back to the authorization request under its new session. A
-cancel or an error at the provider shows a page with a way back to the first
-step; every other failure shows one error page with the request's trace id.
-Nothing of either reaches the client.
+cancel or an error at the provider brings the browser back to the ceremony
+page, whose step read makes the `upstream` step current with the error
+`provider_declined` or `provider_error` and names the provider, beside the
+other ways in (#1081); the server-rendered pages show a page with a way back to
+the first step instead. Every other failure shows one error page with the
+request's trace id. Nothing of either reaches the client.
 
 The provider proves the account as a password does, and the sign-in then asks
 for what the account still owes (ADR-017 Decision 4): an account that holds a
@@ -242,10 +245,14 @@ sign-in completes, the identity joins the account it proved, the security log
 records the link, and the owner gets an email notice at the address of the
 account's password (an account with no password, such as one made through a
 provider, has the security log alone); the authorization
-request goes on as after any sign-in. An identity another account took meanwhile, or an
-account that already has an identity of that provider, is refused: the browser
-goes to `GET /ui/upstream-link-refused`, which says why, and nothing reaches
-the client.
+request goes on as after any sign-in. An identity another account holds, or
+took meanwhile, or an account that already has an identity of that provider,
+is refused, and nothing reaches the client: the ceremony page shows the
+`upstream_link` step again with the reason as its `error` (`already_linked`,
+`provider_linked`, `account_unavailable`), where the sign-in had finished the
+interaction as the first step of the request's next one (#1081). The step
+takes no answer; its cancel ends the request with `access_denied`, or goes back
+to the account page for a link started there.
 
 A signed-in account links a provider through an authorization request with
 [`qauth_link=<type>`](/integrate/oauth-flow/#linking-an-upstream-account): the

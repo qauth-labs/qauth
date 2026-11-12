@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-11-02'
+lastVerified: '2026-11-12'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -785,7 +785,7 @@ bounce.
 | `/ui/upstream/{type}`                   | GET       | A provider button of the login page: back to the request with `qauth_upstream`      |
 | `/ui/upstream/{type}/start`             | GET       | Start the routed upstream provider, then the waiting page that sends the browser on |
 | `/ui/upstream-link/{interactionId}`     | GET       | "I already have an account" or a new one: the `upstream_link` step's form (#670)    |
-| `/ui/upstream-link-refused`             | GET       | The page of a refused upstream link: why, and nothing sent to the client (#670)     |
+| `/ui/upstream-link-refused`             | GET       | The page of a refused upstream link (#670); no flow sends the browser here (#1081)  |
 | `/ui/recovery-code/{interactionId}`     | GET       | "Use a recovery code": the `recovery_code` step's form (#649)                       |
 | `/ui/recovery-codes/{interactionId}`    | GET       | "Save your recovery codes": a new set, shown once, and its confirmation (#649)      |
 | `/ui/passkey/{interactionId}`           | GET       | "Sign in with a passkey": the `webauthn_get` step's ceremony (#651)                 |
