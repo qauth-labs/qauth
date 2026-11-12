@@ -3,7 +3,7 @@ title: Write a preset plugin
 description: How a provider plugin in its own repository builds on QAuth's generic OpenID Connect client through @qauth-labs/plugin-sdk alone — the preset's shape, a minimal example, what a preset may set beyond a realm's provider, the preset test kit, and how a deployment loads it.
 sidebar:
   order: 7
-lastVerified: '2026-11-09'
+lastVerified: '2026-11-12'
 ---
 
 > **Experimental.** A preset is a plugin on the AuthMethod contract, QAuth's plugin API, the
@@ -83,11 +83,19 @@ origins is refused at the admin's configure, naming no value.
 A realm's admin configures a generic provider with an issuer and a client. A preset may also set
 these, which no admin can:
 
-- **A client secret the signer signs** (`clientAuthentication: { method: 'signed_client_secret' }`):
+- **A client secret the signer signs**
+  (`clientAuthentication: { method: 'signed_client_secret', signingAlgorithm, assertionIssuer }`):
   for a provider that takes no static secret but a JWT in the `client_secret` form member. The
   signer role signs it for each token request with the realm's `upstream_client_assertion` key for
-  the preset's type: `iss` is the issuer the provider's client record names (`assertionIssuer`),
-  `sub` the client id, and it lives sixty seconds. No secret is stored and the plugin holds no key.
+  the preset's type: `iss` is `assertionIssuer` when the preset sets it, and the client id
+  otherwise, `sub` the client id, and it lives sixty seconds. `assertionIssuer` is a string of at
+  most 255 characters, such as Sign in with Apple's Team ID, which a preset usually takes from its
+  config; `signingAlgorithm` is `RS256`, `ES256` (the default) or `EdDSA`. The signer's process
+  loads no plugin code, so the admin API stores the client id, the assertion issuer and the
+  algorithm that `upstreamConfig` makes for a realm's config beside that config, at each configure
+  and enable, and the signer reads them there. No secret is stored and the plugin holds no key. A
+  provider that issues the key itself, as Apple does, has it imported into the realm's key store
+  ([A provider-issued client-assertion key](/operate/keys/#a-provider-issued-client-assertion-key)).
 - **A multi-tenant issuer** (`tenantIssuer: { template, tenantClaim }`): for a provider whose shared
   endpoints serve many tenants. The template holds `{tenantid}` once, in its path
   (`https://idp.example.com/{tenantid}/v2.0`), and a token is accepted only when its `iss` is the
@@ -125,6 +133,8 @@ problem:
   path;
 - the client secret is the value of a `writeOnly` member, and no such member's value is anywhere
   else in the provider config;
+- a signed client secret's `assertionIssuer`, when set, is a string of 1 to 255 characters without
+  a control character, and no other client authentication method sets one;
 - each response member's map keeps its output within 1024 characters and gives it back unchanged;
 - `identityClaims` sets neither `sub`, a claim only the ID token carries, nor a claim the provider
   vouches for.
@@ -173,5 +183,6 @@ type, and no plugin's type starts with `oidc_`.
 QAuth's own presets are written this way, each in its own repository: `qauth-labs/plugin-google`
 (#1074), `qauth-labs/plugin-microsoft` (#1075), a multi-tenant provider with an issuer template,
 and `qauth-labs/plugin-apple` (#1076), with a signed client secret and a `form_post` response
-member. Sign in with Apple also needs the signer to hold the key Apple issues and to read the
-client's Team ID and Services ID (#1073).
+member. Its operator imports the key Apple issues
+([Sign in with Apple, step by step](/operate/keys/#sign-in-with-apple-step-by-step)), and its
+config's Team ID is the signed secret's `assertionIssuer`.

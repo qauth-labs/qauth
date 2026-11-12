@@ -136,6 +136,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider. `extend/auth-method-contract` links the two preset plugins beside
   the GitHub one.
 
+- **A provider plugin's client-assertion key can come from the provider, and
+  the signer reads whose client it signs for** ([#1073], ADR-019 Decisions 9
+  and 12). Sign in with Apple accepts a client secret only when the key it
+  issued signed it, and the signer could neither hold that key nor say whose
+  client it signed for: its repository store found no upstream client, so no
+  client assertion was ever signed. The admin API's `plugins.keys.import`
+  takes the provider's private key, sealed with `secrets.seal`, under the
+  provider's key id, checks it against the algorithm the realm's configuration
+  of the plugin asks for (ES256 for Apple), and hands it to the signer, which
+  seals it under the KEK like a generated key; a second key waits as `next`
+  until `plugins.keys.activate` switches to it after the rotation overlap.
+  Both are security operations under `plugins.security`, and no response,
+  approval display, audit row or log line holds the key. A preset's
+  `signed_client_secret` takes `assertionIssuer` (at most 255 characters,
+  such as Apple's Team ID), an additive change to `qauth-auth-method/1-rc.0`
+  that `checkUpstreamOidcPreset` checks. `plugins.update` and
+  `plugins.enable` store the client id, the assertion issuer and the
+  algorithm a preset makes for the realm's config beside it (migration
+  0073), and the signer reads them, or a generic `oidc_*` provider's own
+  row, with column grants that show it nothing else. A plugin enabled before
+  this release has no record until it is configured again. The
+  keys page of the operator guide gives the steps for Apple. There is no
+  command or realm-file path for the import: a realm file never carries a
+  secret value (ADR-019 Decision 11).
+
 ### Changed
 
 - **Disabling an account ends what it holds at once, and each of its sessions
