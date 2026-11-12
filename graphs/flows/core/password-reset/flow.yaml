@@ -23,7 +23,7 @@
 # - An email code never stands in for an authenticator: an account that holds a passkey or a TOTP, disabled or not,
 #   proves it next, or the reset goes on elsewhere (on the hosted pages, a recovery code, once F2c adds them). A new
 #   one (#1064: bound after a sign-in that proved only the password, inside the realm's window) neither blocks the
-#   reset nor meets it.
+#   reset nor meets it, and while one is new no recovery code stands in for the others.
 # - One database transaction replaces the hash, marks the address verified, clears the password's disabled mark and
 #   its update_password required action, revokes every refresh family of the user, advances the user's session
 #   epoch and records the reset. Then the user's browser sessions end, the password's ladder counters clear, and the

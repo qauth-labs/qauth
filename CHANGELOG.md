@@ -27,8 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whoever bound it, ends every sign-in in progress of the account, and
   records `user.credential_removed` with `whileNew`. After the window it is a
   full factor. A factor bound after a sign-in that proved a settled factor
-  beyond the password is never new, and a recovery code counts as one only
-  on an account that holds no new factor. Changing the window either way is a
+  beyond the password is never new, and a recovery code counts as one, in a
+  reset or a forced password update too, only on an account that holds no
+  new factor. Changing the window either way is a
   security operation (`credential-path`). The owner learns of every
   binding through the account's own channels: `user.credential_added` and
   `user.credential_removed` now name the authenticator (`platform`,

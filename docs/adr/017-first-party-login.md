@@ -226,9 +226,10 @@
 >   the realm's `accounts.newFactorWindowDays` (default 7, from 1 to 30). The credential stores
 >   when its window ends. A factor bound after a sign-in that proved a settled factor beyond the
 >   password is never new, and neither is one bound on an account that holds no password. A
->   recovery code counts as a settled factor for this rule only on an account that holds no new
->   factor: the first binding shows the set, so while that factor is new the codes may be its
->   taker's, and a chain of new factors must not settle itself. A passkey the sign-in proved that
+>   recovery code counts as a settled factor, for this rule as for a reset or a forced password
+>   update, only on an account that holds no new factor: the first binding shows the set, so while
+>   that factor is new the codes may be its taker's, and a chain of new factors must not settle
+>   itself. A passkey the sign-in proved that
 >   the account no longer holds proves nothing settled.
 > - While new, the factor signs in as usual, but it is not the account's strongest factor. The
 >   downgrade rule (Decision 4), the TOTP owed after the first factor, a reset, a forced password
