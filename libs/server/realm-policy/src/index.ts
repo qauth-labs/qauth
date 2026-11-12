@@ -19,6 +19,8 @@ export type * from './lib/secret-store';
 export * from './lib/secret-store';
 export type * from './lib/seed-keys';
 export * from './lib/seed-keys';
+export type * from './lib/settings';
+export * from './lib/settings';
 export type * from './lib/upgrades';
 export * from './lib/upgrades';
 export type * from './lib/version';

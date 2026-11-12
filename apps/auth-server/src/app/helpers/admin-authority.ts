@@ -245,6 +245,26 @@ export function grantFitsRealmRule(
 }
 
 /**
+ * Whether a live grant of an account of `accountRealm` gives its role on the
+ * realm `targetRealmId` (rule 3 and the realm rule of
+ * {@link resolveAdminAuthority}): it fits the realm rule, and its target is
+ * that realm, or every realm for an account of the operator realm. Who may
+ * approve a request on a realm is counted with it too
+ * (`admin/approvals/eligibility.ts`), so both read one rule.
+ */
+export function grantCoversRealm(
+  live: LiveAdminGrant,
+  accountRealm: Pick<RealmRow, 'id' | 'isOperator'>,
+  targetRealmId: string
+): boolean {
+  return (
+    grantFitsRealmRule(live, accountRealm) &&
+    (live.grant.targetRealmId === targetRealmId ||
+      (accountRealm.isOperator && live.grant.targetRealmId === null))
+  );
+}
+
+/**
  * Decide what an admin token may do to a realm (ADR-019 Decision 7, #510).
  * The token was verified by the admin family's guard; this reads the
  * database, every time:
@@ -302,11 +322,7 @@ export async function resolveAdminAuthority(
   }
 
   const live = await fastify.repositories.adminGrants.listLive(issuerRealm.id, user.id);
-  const matching = live.filter(
-    (grant) =>
-      grantFitsRealmRule(grant, issuerRealm) &&
-      (grant.grant.targetRealmId === target || (operator && grant.grant.targetRealmId === null))
-  );
+  const matching = live.filter((grant) => grantCoversRealm(grant, issuerRealm, target));
   if (matching.length === 0) {
     return { allowed: false, refusal: 'realm_not_found' };
   }

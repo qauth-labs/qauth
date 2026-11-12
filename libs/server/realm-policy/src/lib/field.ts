@@ -234,10 +234,11 @@ function checkValueFitsDirection(direction: Direction, value: unknown): void {
 }
 
 /**
- * One sentence: a single trimmed line, ending with a full stop, with no
- * second sentence after it.
+ * One sentence: a single trimmed line of at most 300 characters, ending with
+ * a full stop, with no second sentence after it. A field's `doc.summary` is
+ * one (ADR-020 §5 criterion 2).
  */
-function isOneSentence(text: unknown): boolean {
+export function isOneSentence(text: unknown): text is string {
   return (
     typeof text === 'string' &&
     text.length > 0 &&

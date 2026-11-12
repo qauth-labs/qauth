@@ -97,6 +97,22 @@ describe('the realm operations in the registry (#517)', () => {
   });
 });
 
+describe('the policy preview in the registry (#589)', () => {
+  it('is a read with realms.read, which classifies nothing and reads no state of its own', () => {
+    const preview = OPERATION_REGISTRY.get(REALM_OPERATION_IDS.previewPolicies);
+    expect([preview?.id, preview?.class, preview?.effects, preview?.permissions]).toEqual([
+      'realms.policies.preview',
+      'read',
+      [],
+      ['realms.read'],
+    ]);
+    // No If-Match: the preview answers the ETag the save names.
+    expect(preview?.loadState).toBeUndefined();
+    expect(preview?.classify).toBeUndefined();
+    expect(preview?.secretMembers).toBeUndefined();
+  });
+});
+
 describe('the classification of a policy patch (#517)', () => {
   const classify = (body: unknown, state: RealmPolicyState = stateOf()) =>
     classifyPolicyPatch(patchOf(body), state);
@@ -513,7 +529,7 @@ describe('the audit record of a policy change (#517)', () => {
   });
 });
 
-describe('the realm routes in the admin OpenAPI document (#517)', () => {
+describe('the realm routes in the admin OpenAPI document (#517, #589)', () => {
   it("pass the API conventions against the server's own registry", async () => {
     const [{ default: Fastify }, { default: swagger }, zod, { adminOpenapiOptions }, pipeline] =
       await Promise.all([
@@ -548,6 +564,7 @@ describe('the realm routes in the admin OpenAPI document (#517)', () => {
       expect(Object.keys(document.paths).sort()).toEqual([
         '/admin/v1-rc.0/realms/{realmId}',
         '/admin/v1-rc.0/realms/{realmId}/policies',
+        '/admin/v1-rc.0/realms/{realmId}/policies/preview',
       ]);
       const get = document.paths['/admin/v1-rc.0/realms/{realmId}']['get'];
       expect(get).toMatchObject({
@@ -562,9 +579,23 @@ describe('the realm routes in the admin OpenAPI document (#517)', () => {
         'x-qauth-permission': ['realms.policies.write', 'realms.policies.security', 'realms.read'],
         'x-qauth-effects': expect.arrayContaining(['credential-path']),
       });
+      // The preview: a read, of the same body as the patch, answering the
+      // one preview shape (#589).
+      const preview = document.paths['/admin/v1-rc.0/realms/{realmId}/policies/preview']['post'];
+      expect(preview).toMatchObject({
+        operationId: 'realms.policies.preview',
+        'x-qauth-class': 'read',
+        'x-qauth-permission': 'realms.read',
+      });
+      expect(preview).not.toHaveProperty('x-qauth-effects');
+      expect(preview).not.toHaveProperty('x-qauth-two-admin');
+      const bodies = (operation: Record<string, unknown>) =>
+        JSON.stringify((operation['requestBody'] as Record<string, unknown>)['content']);
+      expect(bodies(preview)).toBe(bodies(patch));
+      expect(JSON.stringify(preview['responses'])).toContain('AdminChangePreview');
       const report = checkApiConventions(document, { operations: OPERATION_REGISTRY });
       expect(report.violations).toEqual([]);
-      expect(report.checkedOperations).toBe(2);
+      expect(report.checkedOperations).toBe(3);
     } finally {
       await app.close();
     }

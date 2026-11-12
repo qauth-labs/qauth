@@ -38,7 +38,10 @@ import {
  * here, its classification, its renderer, and the audit record its handler
  * keeps (`./routes.ts`).
  *
- * `realms.get` is a read (`realms.read`). `realms.policies.update` patches the
+ * `realms.get` is a read (`realms.read`). `realms.policies.preview` is one too
+ * (#589): it takes the patch `realms.policies.update` takes and answers what
+ * that patch would change and need, with the same diff and classification,
+ * and writes nothing. `realms.policies.update` patches the
  * policies with a JSON Merge Patch and needs what its change needs, field by
  * field, as the policy annotations say (CFG-02, `@qauth-labs/server-realm-policy`):
  * a change the field's annotation makes a security change (on any change, or
@@ -57,6 +60,7 @@ import {
 export const REALM_OPERATION_IDS = Object.freeze({
   get: 'realms.get',
   updatePolicies: 'realms.policies.update',
+  previewPolicies: 'realms.policies.preview',
 } as const);
 
 /**
@@ -156,8 +160,11 @@ const READ: Classification = Object.freeze({
   permissions: Object.freeze(['realms.read']),
 });
 
-/** What one changed field needs: its annotation decides (CFG-02). */
-function classificationOfChange(change: PolicyChange): Classification {
+/**
+ * What one changed field needs: its annotation decides (CFG-02). The
+ * classification of a patch merges these, and the preview shows each.
+ */
+export function classificationOfPolicyChange(change: PolicyChange): Classification {
   return change.class === 'security'
     ? { class: 'security', effects: [...change.effects], permissions: ['realms.policies.security'] }
     : WRITE;
@@ -182,7 +189,7 @@ export function classifyPolicyPatch(
   for (const entry of REALM_POLICY_REGISTRY.fields()) {
     const pointer = pointerOf(entry.segments);
     const change = byPath.get(entry.path);
-    const rule = change === undefined ? WRITE : classificationOfChange(change);
+    const rule = change === undefined ? WRITE : classificationOfPolicyChange(change);
     fields[pointer] = rule;
     if (entry.field.secret) {
       // A sealed value is `{ sealed }`, whose one member is a leaf too; the
@@ -240,13 +247,53 @@ export async function readPolicyState(
 }
 
 /**
+ * Refuse a patch the policies cannot take, as `realms.policies.update` does
+ * before it classifies one: a patch that sets or clears a secret on a server
+ * with no secret store, and one whose merged document the policy schema
+ * refuses, are answered 422 naming each field. The preview refuses the same
+ * patches the same way.
+ *
+ * @throws UnprocessableContentError naming each refused field
+ */
+export function checkPolicyPatch(
+  request: FastifyRequest,
+  body: unknown,
+  state: RealmPolicyState
+): void {
+  if (request.server.realmSecretStore === null) {
+    const named = secretMembersNamed(body);
+    if (named.length > 0) {
+      throw new UnprocessableContentError(
+        named.map((path) =>
+          unprocessablePolicyField({
+            path,
+            message: 'is a secret, and this server has no secret store to keep it in',
+          })
+        ),
+        REALM_POLICIES_REFUSED_MESSAGE
+      );
+    }
+  }
+  try {
+    policyPatchDiff(body, state);
+  } catch (error) {
+    if (error instanceof PolicyValidationError) {
+      throw new UnprocessableContentError(
+        error.issues.map(unprocessablePolicyField),
+        REALM_POLICIES_REFUSED_MESSAGE
+      );
+    }
+    throw error;
+  }
+}
+
+/**
  * `realms.policies.update`'s `loadState`: the realm's policies, once the
- * patch is checked against them. A patch whose merged document the policy
- * schema refuses is answered 422 here, before it is classified or authorized
+ * patch is checked against them ({@link checkPolicyPatch}). A patch it
+ * refuses is answered 422 here, before it is classified or authorized
  * further, and is never filed for an approval: the fields it names are what
- * it would change, and there is no change to approve. So is one that sets or
- * clears a secret on a server with no secret store. Inside an admin handler
- * it reads in the handler's transaction.
+ * it would change, and there is no change to approve. Inside an admin
+ * handler it reads in the handler's transaction.
  *
  * @throws UnprocessableContentError naming each refused field
  */
@@ -268,31 +315,7 @@ async function loadPolicyState(
     caller.targetRealm.id,
     request.adminPipeline?.transaction
   );
-  if (request.server.realmSecretStore === null) {
-    const named = secretMembersNamed(input.body);
-    if (named.length > 0) {
-      throw new UnprocessableContentError(
-        named.map((path) =>
-          unprocessablePolicyField({
-            path,
-            message: 'is a secret, and this server has no secret store to keep it in',
-          })
-        ),
-        REALM_POLICIES_REFUSED_MESSAGE
-      );
-    }
-  }
-  try {
-    policyPatchDiff(input.body, state);
-  } catch (error) {
-    if (error instanceof PolicyValidationError) {
-      throw new UnprocessableContentError(
-        error.issues.map(unprocessablePolicyField),
-        REALM_POLICIES_REFUSED_MESSAGE
-      );
-    }
-    throw error;
-  }
+  checkPolicyPatch(request, input.body, state);
   return state;
 }
 
@@ -394,4 +417,12 @@ export const REALM_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] = 
     render: renderPolicyPatch,
     secretMembers: REALM_POLICY_SECRET_MEMBERS,
   } as AdminOperationDefinition,
+  {
+    id: REALM_OPERATION_IDS.previewPolicies,
+    class: 'read',
+    effects: [],
+    permissions: ['realms.read'],
+    description:
+      "Preview a change of a realm's policies: what the patch realms.policies.update takes would change, field by field, each before and after with its direction, class, effects and scopes, and what the save would need, its approval included; it writes nothing and shows a secret field only as set or not set.",
+  },
 ]);

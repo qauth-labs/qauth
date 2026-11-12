@@ -1,0 +1,8 @@
+{
+  "name": "shared-admin-settings",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/shared/admin-settings/src",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:utility"],
+  "// targets": "to see all targets run: nx show project shared-admin-settings --web"
+}

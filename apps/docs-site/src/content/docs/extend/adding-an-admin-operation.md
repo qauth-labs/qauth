@@ -19,17 +19,26 @@ new operation does not add a stage. It adds five things, in this order:
 4. [Render](#4-render) it for the approver, when it is a security operation.
 5. [Audit](#5-audit) the change its handler makes.
 
-The two realm operations are the reference, and every later admin operation follows them:
+The realm operations are the reference, and every later admin operation follows them:
 
-| Operation                | Route                                            | Class    | Permissions                                                        |
-| ------------------------ | ------------------------------------------------ | -------- | ------------------------------------------------------------------ |
-| `realms.get`             | `GET /admin/v1-rc.0/realms/{realmId}`            | read     | `realms.read`                                                      |
-| `realms.policies.update` | `PATCH /admin/v1-rc.0/realms/{realmId}/policies` | security | `realms.policies.write`, `realms.policies.security`, `realms.read` |
+| Operation                 | Route                                                   | Class    | Permissions                                                        |
+| ------------------------- | ------------------------------------------------------- | -------- | ------------------------------------------------------------------ |
+| `realms.get`              | `GET /admin/v1-rc.0/realms/{realmId}`                   | read     | `realms.read`                                                      |
+| `realms.policies.update`  | `PATCH /admin/v1-rc.0/realms/{realmId}/policies`        | security | `realms.policies.write`, `realms.policies.security`, `realms.read` |
+| `realms.policies.preview` | `POST /admin/v1-rc.0/realms/{realmId}/policies/preview` | read     | `realms.read`                                                      |
 
-Both are listed with their effects on [Security operations](/reference/security-operations/#operations),
+They are listed with their effects on [Security operations](/reference/security-operations/#operations),
 which is generated from the registry. Their code is in `apps/auth-server/src/app/admin/realms/`:
-`operations.ts` holds the definitions, `routes.ts` the routes, and `realms.test.ts` and
-`apps/auth-server/src/app/admin-realms.integration.test.ts` their tests.
+`operations.ts` holds the definitions, `routes.ts` the routes, `preview.ts` the preview's
+classification, and `realms.test.ts`, `preview.test.ts`,
+`apps/auth-server/src/app/admin-realms.integration.test.ts` and
+`apps/auth-server/src/app/admin-realm-policy-preview.integration.test.ts` their tests.
+
+A preview answers what a save would be without making it: it takes the save's body, classifies it
+with the save's own definition (`classifyRequest`), and answers the shape of
+`apps/auth-server/src/app/admin/change-preview.ts` (`AdminChangePreview` in the OpenAPI document),
+which masks every secret field to `set` or `not set`. It is a read: it needs the save's read
+permission only, and writes nothing but its audit row.
 
 Operation ids and permission ids are part of the published contract: a client names them, an
 approval stores them, and an audit row keeps them. Choose them as you would a route.

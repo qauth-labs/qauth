@@ -88,6 +88,27 @@ export function approvalsRequiredFor(): number {
 }
 
 /**
+ * Whether a second admin's approval is `recommended` or `mandatory`
+ * (ADR-019 Decision 7, ADR-020 §4).
+ */
+export type TwoAdmin = 'recommended' | 'mandatory';
+
+/**
+ * What an approval of a security operation will need, as it is filed
+ * ({@link approvalsRequiredFor}): how many approvals, and so whether a second
+ * admin is mandatory or only recommended, as it is for every security
+ * operation. The policy preview (#589) announces it from here, so it says
+ * what the filing will store; the two-admin rule (#521) changes both at once.
+ */
+export function approvalRequirement(): {
+  readonly approvalsRequired: number;
+  readonly twoAdmin: TwoAdmin;
+} {
+  const approvalsRequired = approvalsRequiredFor();
+  return { approvalsRequired, twoAdmin: approvalsRequired > 1 ? 'mandatory' : 'recommended' };
+}
+
+/**
  * The display data of `approval` while it is open: what the operation's
  * renderer made of the request when it was filed, as stored then
  * ({@link storedDisplay}); `null` once it is used, cancelled, denied or

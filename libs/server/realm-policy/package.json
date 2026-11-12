@@ -6,6 +6,7 @@
   "dependencies": {
     "@qauth-labs/server-config": "workspace:*",
     "@qauth-labs/server-egress": "workspace:*",
+    "@qauth-labs/shared-admin-settings": "workspace:*",
     "@qauth-labs/shared-validation": "workspace:*",
     "tslib": "catalog:",
     "zod": "catalog:"

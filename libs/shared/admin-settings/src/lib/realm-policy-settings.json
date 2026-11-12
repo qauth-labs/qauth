@@ -1,0 +1,617 @@
+{
+  "policySchemaVersion": "1-rc.1",
+  "description": "The realm policy settings, generated from the realm policy schema (libs/server/realm-policy): what the admin console shows beside each setting. Never edited by hand.",
+  "settings": [
+    {
+      "path": "tokens.accessTokenLifespanSeconds",
+      "summary": "How long an access token for a staging or production client is valid, in seconds, at most 86400 (a day).",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#tokens",
+      "default": 900,
+      "secret": false,
+      "direction": "lower-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "posture-loosening"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "tokens.developmentAccessTokenLifespanSeconds",
+      "summary": "How long an access token for a development client is valid, in seconds, at most 86400 (a day); no staging or production client receives it.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#tokens",
+      "default": 28800,
+      "secret": false,
+      "direction": "lower-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "posture-loosening"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "tokens.refreshTokenLifespanSeconds",
+      "summary": "How long a refresh token is valid, in seconds, at most 7776000 (90 days), from its issue; a browser-based client's rotated token (a public client with an `https` redirect URI) never outlives the one it replaces, so its family ends with its first (RFC 10017).",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#tokens",
+      "default": 604800,
+      "secret": false,
+      "direction": "lower-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "posture-loosening"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "tokens.adminAccessTokenLifespanSeconds",
+      "summary": "How long an access token for the admin API is valid, in seconds, at most 900, so a token whose audience is the admin API never lives longer, whatever the other lifetimes say (ADR-019 Decision 7: admin tokens are short-lived).",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#tokens",
+      "default": 600,
+      "secret": false,
+      "direction": "lower-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "posture-loosening"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "accounts.requireVerifiedAccount",
+      "summary": "Whether the legacy login routes (`POST /auth/login`, `POST /ui/login`) refuse an unverified account's right password with the answer a wrong password gets; the Interaction API verifies such an account inline with an emailed code, whatever this says.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#accounts",
+      "default": true,
+      "secret": false,
+      "direction": "true-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "accounts.allowSignUp",
+      "summary": "Whether a person may create a new account through the hosted sign-in, from an unknown upstream identity (#639) or with `prompt=create` (#640, for a client whose `hosted_flows` name `register`), or through the legacy `POST /auth/register` (since 0.2.1; it answers 403 while this is off).",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#accounts",
+      "default": false,
+      "secret": false,
+      "direction": "false-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "password.minLength",
+      "summary": "The fewest characters (Unicode code points, after NFC normalisation) a new password may have, from 8 to 64; below 15 is a recorded deviation from NIST SP 800-63B-4 while a password can be the only factor.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#password",
+      "default": 15,
+      "secret": false,
+      "direction": "higher-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "password.minScore",
+      "summary": "The lowest zxcvbn strength score, from 0 to 4, a new password may have.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#password",
+      "default": 2,
+      "secret": false,
+      "direction": "higher-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "password.breachListSource",
+      "summary": "Which breach list new and presented passwords are checked against: off (the default), a list the operator supplies, or a k-anonymity range lookup through the egress client that sends only the first five hex characters of the password's SHA-1; a failed check never blocks a sign-in.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#password",
+      "default": "off",
+      "secret": false,
+      "direction": "ordered",
+      "order": [
+        "off",
+        "local",
+        "k_anonymity"
+      ],
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "bruteForce.enabled",
+      "summary": "Whether repeated failed sign-ins for one identifier lock it out for a while; when off, failures are only logged.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#bruteforce",
+      "default": true,
+      "secret": false,
+      "direction": "true-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "bruteForce.maxAttempts",
+      "summary": "How many failed sign-ins within the window lock an identifier out.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#bruteforce",
+      "default": 5,
+      "secret": false,
+      "direction": "lower-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "bruteForce.windowSeconds",
+      "summary": "The window, in seconds, over which failed sign-ins are counted, at most 86400 (a day).",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#bruteforce",
+      "default": 900,
+      "secret": false,
+      "direction": "higher-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "bruteForce.lockoutSeconds",
+      "summary": "How long, in seconds, a locked-out identifier is refused before any password check, at most 86400 (a day).",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#bruteforce",
+      "default": 900,
+      "secret": false,
+      "direction": "higher-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "botChallenge.requiredAtSignUp",
+      "summary": "Whether every `prompt=create` registration passes the bot challenge before its address is asked for, whatever the client; it then needs JavaScript, a client that cannot serve the challenge cannot register, and the legacy `POST /auth/register` ignores it.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#botchallenge",
+      "default": false,
+      "secret": false,
+      "direction": "true-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "botChallenge.difficulty",
+      "summary": "How many leading zero bits the built-in proof of work asks for; each one doubles the work of the page that solves it, and 18 takes a browser a second or two.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#botchallenge",
+      "default": 18,
+      "secret": false,
+      "direction": "higher-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "registration.dynamicRegistrationAllowedScopes",
+      "summary": "The scopes a dynamically registered client may hold; a scope outside the list is dropped from the registration, and no scope of the reserved qauth: namespace can be listed.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#registration",
+      "default": [
+        "openid",
+        "profile",
+        "email",
+        "offline_access"
+      ],
+      "secret": false,
+      "direction": "subset-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "token-content"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "registration.cimd.enabled",
+      "summary": "Whether an HTTPS URL is accepted as a client_id, its metadata fetched from that URL (Client ID Metadata Documents).",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#registration",
+      "default": true,
+      "secret": false,
+      "direction": "false-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "token-content"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "registration.cimd.trustPolicy",
+      "summary": "Which hosts a metadata-document client_id may have: any HTTPS host, or only the trusted domains.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#registration",
+      "default": "accept-any-https",
+      "secret": false,
+      "direction": "ordered",
+      "order": [
+        "accept-any-https",
+        "allowlist"
+      ],
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "token-content"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "registration.cimd.trustedDomains",
+      "summary": "The hosts the allowlist policy accepts, stored in lower case; an entry `*.example.com` accepts every subdomain of `example.com` but not `example.com` itself.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#registration",
+      "default": [],
+      "secret": false,
+      "direction": "subset-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "token-content"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.provider",
+      "summary": "Which transport sends the realm mail: mock (logs only), resend or smtp.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": "mock",
+      "secret": false,
+      "direction": "opaque",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.fromAddress",
+      "summary": "The address the realm mail is sent from.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": null,
+      "secret": false,
+      "direction": "opaque",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.fromName",
+      "summary": "The sender name the realm mail shows.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": "QAuth",
+      "secret": false,
+      "direction": "opaque",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.smtp.host",
+      "summary": "The SMTP server the smtp transport connects to.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": null,
+      "secret": false,
+      "direction": "opaque",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.smtp.port",
+      "summary": "The port of the SMTP server.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": null,
+      "secret": false,
+      "direction": "opaque",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.smtp.secure",
+      "summary": "Whether the SMTP connection uses TLS from its start.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": true,
+      "secret": false,
+      "direction": "opaque",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.smtp.user",
+      "summary": "The user name the smtp transport signs in with.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": null,
+      "secret": false,
+      "direction": "opaque",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.smtp.password",
+      "summary": "The password the smtp transport signs in with.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": null,
+      "secret": true,
+      "direction": "opaque",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.resend.apiKey",
+      "summary": "The API key the resend transport sends with.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": null,
+      "secret": true,
+      "direction": "opaque",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.verificationTokenExpirySeconds",
+      "summary": "How long a verification link is valid, in seconds, at least one hour.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": 86400,
+      "secret": false,
+      "direction": "lower-is-stricter",
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "posture-loosening"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "mail.invalidateExistingTokensOnResend",
+      "summary": "Whether sending a new verification link makes the earlier ones invalid, so only the latest works.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+      "default": true,
+      "secret": false,
+      "direction": "true-is-stricter",
+      "securityWhen": "never",
+      "class": {
+        "tightening": "write",
+        "loosening": "write",
+        "neutral": "write"
+      },
+      "effects": [],
+      "environmentBound": true
+    },
+    {
+      "path": "posture.maxEnvironmentLaxity",
+      "summary": "The laxest environment profile a client of the realm may get; a client set to a laxer one gets this one.",
+      "docs": "https://docs.qauth.dev/operate/environment-authorization/",
+      "default": "production",
+      "secret": false,
+      "direction": "ordered",
+      "order": [
+        "development",
+        "staging",
+        "production"
+      ],
+      "securityWhen": "loosening",
+      "class": {
+        "tightening": "write",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "posture-loosening"
+      ],
+      "environmentBound": true
+    },
+    {
+      "path": "admin.twoAdminMandatoryOperations",
+      "summary": "The admin operations that need a second admin approval in this realm, by operation id.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#admin",
+      "default": [],
+      "secret": false,
+      "direction": "superset-is-stricter",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "administration"
+      ],
+      "environmentBound": false
+    },
+    {
+      "path": "admin.workloadIssuers",
+      "summary": "The HTTPS issuers whose workload tokens a CI service account may exchange for admin API tokens.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#admin",
+      "default": [],
+      "secret": false,
+      "direction": "subset-is-stricter",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "administration"
+      ],
+      "environmentBound": true
+    }
+  ]
+}
