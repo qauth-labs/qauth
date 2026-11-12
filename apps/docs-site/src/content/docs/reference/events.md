@@ -935,7 +935,7 @@ A developer replaced a client's secret. The old secret stopped working.
 
 ### client.suspended v1-rc.0
 
-An operator or an admin suspended a client: it can no longer obtain tokens until the suspension is lifted.
+An operator or an admin suspended a client: it can no longer obtain tokens until the suspension is lifted. The refresh tokens and unredeemed authorization codes it held are revoked with it, so lifting the suspension brings none back.
 
 - Identifier: `urn:qauth:event:client.suspended:v1-rc.0`
 - Category: `admin` · Severity: `warning` · Since: v0.2.0

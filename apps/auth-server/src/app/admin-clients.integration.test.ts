@@ -626,6 +626,40 @@ describe('the admin client operations (#632, real containers)', () => {
     const client = await storedClient(realm.id);
     const editor = await adminWith('editor', 'qauth:admin:read qauth:admin:write');
     const securityAdmin = await adminWith('security-admin');
+    // What the client holds for a user: a live refresh token and a code not
+    // yet redeemed, which the suspension ends for good (#893).
+    const { rows: users } = await app().dbPool.query<{ id: string }>(
+      'INSERT INTO users (realm_id) VALUES ($1) RETURNING id::text AS id',
+      [realm.id]
+    );
+    const held = await app().repositories.refreshTokens.create({
+      userId: users[0].id,
+      oauthClientId: client.id,
+      tokenHash: app().jwtUtils.hashRefreshToken(`rt-${randomUUID()}`),
+      familyCreatedAt: Date.now(),
+      familySessionExpiresAt: null,
+      authTime: null,
+      amr: null,
+      expiresAt: Date.now() + 3_600_000,
+    });
+    const { rows: codes } = await app().dbPool.query<{ id: string }>(
+      `INSERT INTO authorization_codes
+         (code, oauth_client_id, user_id, redirect_uri, code_challenge, expires_at)
+       VALUES ($1, $2, $3, 'https://stored.example.com/callback', 'c', $4)
+       RETURNING id::text AS id`,
+      [`code-${randomUUID()}`, client.id, users[0].id, Date.now() + 60_000]
+    );
+    async function heldState() {
+      const token = await app().dbPool.query<{ revoked: boolean; revoked_reason: string | null }>(
+        'SELECT revoked, revoked_reason FROM refresh_tokens WHERE id = $1',
+        [held.id]
+      );
+      const code = await app().dbPool.query<{ used: boolean }>(
+        'SELECT used FROM authorization_codes WHERE id = $1',
+        [codes[0].id]
+      );
+      return { ...token.rows[0], codeUsed: code.rows[0].used };
+    }
 
     const unnamed = await send(
       'POST',
@@ -644,6 +678,8 @@ describe('the admin client operations (#632, real containers)', () => {
     expect(suspended.statusCode, suspended.body).toBe(200);
     expect(suspended.json<ClientBody>().suspended).toBe(true);
     expect(await storedRow(client.id)).toMatchObject({ suspended: true });
+    const ended = { revoked: true, revoked_reason: 'client_suspended', codeUsed: true };
+    expect(await heldState()).toEqual(ended);
 
     const etag = String(suspended.headers['etag']);
     const byEditor = await send(
@@ -672,6 +708,8 @@ describe('the admin client operations (#632, real containers)', () => {
     );
     expect(enabled.statusCode, enabled.body).toBe(200);
     expect(enabled.json<ClientBody>().suspended).toBe(false);
+    // Lifting the suspension brings back nothing the client held.
+    expect(await heldState()).toEqual(ended);
 
     const current = String(enabled.headers['etag']);
     const deleteApproval = await fileAndApprove(realm.id, securityAdmin, 'clients.delete', {

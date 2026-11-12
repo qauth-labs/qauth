@@ -3,20 +3,26 @@
  *
  * `suspended` is the operator's cut-off, separate from the owner's `enabled`.
  * These cases pin what the tool writes (and what it leaves alone) on the real
- * migrated schema, and that a CIMD re-resolution can never clear it.
+ * migrated schema, that a CIMD re-resolution can never clear it, and that a
+ * suspension ends the client's refresh tokens and codes for good (#893).
  *
  * Requires Docker; skips locally without it, fails on CI (requireDockerOrSkip).
  */
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
-import { eq } from 'drizzle-orm';
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { createOAuthClientsRepository, createRealmsRepository } from '../lib/repositories';
+import {
+  createOAuthClientsRepository,
+  createRealmsRepository,
+  createRefreshTokensRepository,
+  createUsersRepository,
+} from '../lib/repositories';
 import { type IntegrationDb, setupIntegrationDb } from '../lib/repositories/integration-setup';
 import { auditLogs } from '../lib/schema/audit';
 import { oauthClients } from '../lib/schema/core';
 import { events } from '../lib/schema/events';
-import { setClientSuspension } from './client-suspension';
+import { setClientSuspension, SUSPENDED_CLIENT_REVOKE_REASON } from './client-suspension';
 
 describe('setClientSuspension (real Postgres)', () => {
   let ctx: IntegrationDb | undefined;
@@ -176,5 +182,126 @@ describe('setClientSuspension (real Postgres)', () => {
     const stored = await row(client.id);
     expect(stored.enabled).toBe(true);
     expect(stored.suspended).toBe(true);
+  });
+  describe('what a suspension ends with it (#893)', () => {
+    const HOUR = 3_600_000;
+
+    async function seedClient(realmId: string, clientId: string): Promise<string> {
+      const client = await createOAuthClientsRepository(db()).create({
+        realmId,
+        clientId,
+        clientSecretHash: 'h',
+        name: clientId,
+        redirectUris: ['https://app.example.com/cb'],
+        enabled: true,
+      });
+      return client.id;
+    }
+
+    async function seedUser(realmId: string): Promise<string> {
+      const user = await createUsersRepository(db()).create({ realmId }, testPrimaryCredential());
+      return user.id;
+    }
+
+    async function seedToken(userId: string, oauthClientId: string): Promise<string> {
+      const created = await createRefreshTokensRepository(db()).create({
+        tokenHash: `hash-${Math.random().toString(36).slice(2)}`,
+        userId,
+        oauthClientId,
+        familyId: crypto.randomUUID(),
+        familyCreatedAt: Date.now(),
+        familySessionExpiresAt: null,
+        authTime: null,
+        amr: null,
+        scopes: ['openid'],
+        expiresAt: Date.now() + HOUR,
+      });
+      return created.id;
+    }
+
+    async function seedCode(oauthClientId: string, userId: string): Promise<string> {
+      const { rows } = await db().execute<{ id: string }>(sql`
+        INSERT INTO authorization_codes
+          (code, oauth_client_id, user_id, redirect_uri, code_challenge, expires_at)
+        VALUES (${`code-${Math.random().toString(36).slice(2)}`}, ${oauthClientId}, ${userId},
+                'https://app.example.com/cb', 'c', ${Date.now() + 60_000})
+        RETURNING id::text AS id`);
+      return rows[0].id;
+    }
+
+    async function tokenState(id: string) {
+      const { rows } = await db().execute<{ revoked: boolean; revoked_reason: string | null }>(
+        sql`SELECT revoked, revoked_reason FROM refresh_tokens WHERE id = ${id}`
+      );
+      return rows[0];
+    }
+
+    async function codeUsed(id: string): Promise<boolean> {
+      const { rows } = await db().execute<{ used: boolean }>(
+        sql`SELECT used FROM authorization_codes WHERE id = ${id}`
+      );
+      return rows[0].used;
+    }
+
+    it("revokes every user's refresh tokens of the client and spends its codes, and lifting brings none back", async () => {
+      const realm = await createRealmsRepository(db()).create({ name: 'susp-end-1' });
+      const suspended = await seedClient(realm.id, 'app-end-1');
+      const other = await seedClient(realm.id, 'app-end-2');
+      const alice = await seedUser(realm.id);
+      const bob = await seedUser(realm.id);
+      const tokens = [await seedToken(alice, suspended), await seedToken(bob, suspended)];
+      const codes = [await seedCode(suspended, alice), await seedCode(suspended, bob)];
+      const othersToken = await seedToken(alice, other);
+      const othersCode = await seedCode(other, alice);
+
+      const result = await setClientSuspension(db(), {
+        realm: 'susp-end-1',
+        clientId: 'app-end-1',
+        suspend: true,
+      });
+      expect(result).toMatchObject({ status: 'suspended', revokedTokens: 2 });
+      await setClientSuspension(db(), {
+        realm: 'susp-end-1',
+        clientId: 'app-end-1',
+        suspend: false,
+      });
+
+      for (const id of tokens) {
+        expect(await tokenState(id)).toEqual({
+          revoked: true,
+          revoked_reason: SUSPENDED_CLIENT_REVOKE_REASON,
+        });
+      }
+      for (const id of codes) expect(await codeUsed(id)).toBe(true);
+      // Another client of the realm keeps what it holds.
+      expect(await tokenState(othersToken)).toEqual({ revoked: false, revoked_reason: null });
+      expect(await codeUsed(othersCode)).toBe(false);
+    });
+
+    it('revokes nothing on a run that changes nothing, nor when it lifts a suspension', async () => {
+      const realm = await createRealmsRepository(db()).create({ name: 'susp-end-2' });
+      const client = await seedClient(realm.id, 'app-end-3');
+      const user = await seedUser(realm.id);
+      // Suspended by hand: no tool run revoked what it holds.
+      await db().update(oauthClients).set({ suspended: true }).where(eq(oauthClients.id, client));
+      const token = await seedToken(user, client);
+      const code = await seedCode(client, user);
+
+      const again = await setClientSuspension(db(), {
+        realm: 'susp-end-2',
+        clientId: 'app-end-3',
+        suspend: true,
+      });
+      expect(again.status).toBe('unchanged');
+      const lifted = await setClientSuspension(db(), {
+        realm: 'susp-end-2',
+        clientId: 'app-end-3',
+        suspend: false,
+      });
+      expect(lifted.status).toBe('lifted');
+
+      expect(await tokenState(token)).toEqual({ revoked: false, revoked_reason: null });
+      expect(await codeUsed(code)).toBe(false);
+    });
   });
 });

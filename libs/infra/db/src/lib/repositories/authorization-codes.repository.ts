@@ -196,6 +196,30 @@ export function createAuthorizationCodesRepository(
     },
 
     /**
+     * Invalidate every unredeemed code of one client, for every user (#893:
+     * a suspension ends them). Same predicate as `invalidateForUser`, on the
+     * client instead: expiry is not part of it, for the same reason.
+     *
+     * @param oauthClientId - Client (internal id) the codes were issued to
+     * @param tx - Optional transaction client
+     * @returns Number of invalidated codes
+     */
+    async invalidateForClient(oauthClientId: string, tx?: DbClient): Promise<number> {
+      const invoker = tx ?? defaultDb;
+      const result = await invoker
+        .update(authorizationCodes)
+        .set({ used: true, usedAt: Date.now() })
+        .where(
+          and(
+            eq(authorizationCodes.oauthClientId, oauthClientId),
+            eq(authorizationCodes.used, false)
+          )
+        )
+        .returning({ id: authorizationCodes.id });
+      return result.length;
+    },
+
+    /**
      * Invalidate all unredeemed codes a user holds for one client
      * (consent revocation). Same predicate as `invalidateForUser`, narrowed
      * to the client.

@@ -774,7 +774,7 @@ export const CLIENT_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
     effects: ['administration'],
     permissions: ['clients.write', 'clients.security'],
     description:
-      'Suspend a client, against the version it names: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it; a write, unless the client holds an admin scope.',
+      'Suspend a client, against the version it names: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it; its refresh tokens and unredeemed codes end with the suspension, so lifting it brings none back; a write, unless the client holds an admin scope.',
     loadState: loadClientDisableState,
     stateVersion: clientStateVersion,
     classify: (_request: ClassifyInput, state: unknown) =>

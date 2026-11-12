@@ -106,6 +106,12 @@ import {
  * the same transaction (#631).
  */
 
+/**
+ * The `revoked_reason` of the refresh tokens a suspension revokes (#893), as
+ * the operator tool `db:suspend-oauth-client` writes it.
+ */
+const SUSPENDED_CLIENT_REVOKE_REASON = 'client_suspended';
+
 const CLIENTS_PATH = '/admin/v1-rc.0/realms/:realmId/clients';
 const CLIENT_PATH = `${CLIENTS_PATH}/:clientId`;
 
@@ -920,7 +926,7 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: 'Suspend a client',
         description:
-          'Suspends the client: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it. A write, which only takes tokens away, needing clients.write and no approval; for a client that holds an admin scope (qauth:admin:*), a security operation, needing clients.security and an approval, since no new admin token is issued through it once it is suspended. If-Match names its ETag (428 without it, 412 when it moved). It takes no body, or an empty object. A client already suspended is answered as it is.',
+          'Suspends the client: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it. The suspension revokes every refresh token the client holds and spends its unredeemed authorization codes, so lifting it brings none of them back. A write, which only takes tokens away, needing clients.write and no approval; for a client that holds an admin scope (qauth:admin:*), a security operation, needing clients.security and an approval, since no new admin token is issued through it once it is suspended. If-Match names its ETag (428 without it, 412 when it moved). It takes no body, or an empty object. A client already suspended is answered as it is.',
         'x-qauth-errors': [400, 401, 403, 404, 412, 428],
         params: clientParams,
         headers: ifMatchHeadersSchema,
@@ -938,13 +944,24 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
       );
       let after = state;
       if (!state.suspended) {
+        const tx = adminTransaction(request);
         const updated = await request.server.repositories.oauthClients.updateByAdmin(
           realmId,
           row.id,
           { suspended: true, suspendedAt: Date.now() },
-          adminTransaction(request)
+          tx
         );
         after = adminClientOf(updated);
+        // What the client holds ends with the suspension (#893), as the
+        // operator tool ends it: codes first, so none redeemed meanwhile
+        // opens a family the revocation misses. The row was read FOR NO KEY
+        // UPDATE, so the client's token lock cannot deadlock against it.
+        await request.server.repositories.authorizationCodes.invalidateForClient(row.id, tx);
+        await request.server.repositories.refreshTokens.revokeAllForClient(
+          row.id,
+          SUSPENDED_CLIENT_REVOKE_REASON,
+          tx
+        );
         await emitUserEvent(
           request,
           'urn:qauth:event:client.suspended:v1-rc.0',
