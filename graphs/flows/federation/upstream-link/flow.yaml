@@ -299,7 +299,7 @@ states:
     description: >-
       The Interaction API checks the origin, the flow cookie and the step's CSRF value on every answer; another
       browser holds no flow cookie of the interaction.
-    source: apps/auth-server/src/app/helpers/interaction.ts:494
+    source: apps/auth-server/src/app/helpers/interaction.ts:499
     always:
       - guard: answeredElsewhere
         target: interaction_expired.other_browser

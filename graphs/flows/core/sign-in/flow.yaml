@@ -54,7 +54,8 @@ summary: >-
   after one Argon2id verification and the 500 ms floor. A correct password fixes the subject; an account whose
   address is not proved yet then verifies it with an emailed code under the realm's gate, where a code can arrive (with
   the gate off it signs in unverified; under it, where no code can arrive, it is refused); the sign-in
-  completes when the account's strongest bound factor and the MFA policy are met, and the transport then mints the
+  completes when the account's strongest bound factor (a new one, #1064, is not) and the MFA policy are met, and the
+  transport then mints the
   session or the code. A right password on the realm's breach list, or an update the account owes, first asks for a
   new password, after a mailed code when the password is the account's only factor. A different identifier in a later
   round ends the transaction.
@@ -143,10 +144,13 @@ context:
     initial: any
     say:
       unknown: 'no account in the realm holds the identifier'
-      passwordOnly: 'an enabled, verified account whose only factor is its password'
+      passwordOnly: >-
+        an enabled, verified account whose only factor is its password, or whose every other factor is new (#1064:
+        bound after a sign-in that proved only the password, inside the realm's window), which signs in as usual but
+        is not the strongest factor
       passwordAndPasskey: >-
-        an enabled, verified account with a password and a passkey; the passkey counts as bound even while it is
-        disabled
+        an enabled, verified account with a password and a passkey that is not new; the passkey counts as bound even
+        while it is disabled
       passkeyOnly: 'an enabled account with a passkey and no password'
       passwordDisabled: >-
         an enabled account whose password the ladder's hard action disabled (user_credentials.disabled_at, #615): it
@@ -157,7 +161,7 @@ context:
         inline after its correct password
       passwordAndSecondFactor: >-
         an enabled, verified account with a password and a second factor (TOTP, #653), which the MFA policy may or may
-        not ask for
+        not ask for; a new one (#1064) is asked for only by the MFA policy
   password:
     values: [right, wrong]
     initial: any
@@ -702,7 +706,8 @@ states:
     title: Apply the rules after a first factor (rule 8)
     description: >-
       The downgrade rule: the transaction must prove the account's strongest bound factor (a passkey above a password),
-      and a disabled factor still counts as bound. Then the MFA policy just read: when it requires a second factor, the
+      and a disabled factor still counts as bound; a factor bound after a password-only sign-in does not while it is
+      new (#1064), though the MFA policy reads every factor. Then the MFA policy just read: when it requires a second factor, the
       transaction's amr must carry mfa, and an account with no usable second factor gets the set-up step, never a
       code. Then an address not proved yet is verified inline, before a second factor the account has is asked for
       (ADR-017 Decision 4, rule 8). flows/core/passkey draws the passkey the first rule asks for; the second factor the
@@ -1076,7 +1081,7 @@ states:
       One subject per transaction: a different identifier, or a factor of another user once one is proven, ends it.
       The transport discards it; the FiPA endpoint answers invalid_session. The Interaction API starts the sign-in
       again at its first step, with the notice subject_mismatch (#1081).
-    source: libs/server/sign-in-engine/src/lib/engine.ts:451
+    source: libs/server/sign-in-engine/src/lib/engine.ts:454
     response:
       kind: refused
       body: { reason: transaction_ended, transaction: null, cause: subject_mismatch }
@@ -1099,7 +1104,7 @@ states:
       again; the email-code ladder counts on across transactions. The first step's read carries the notice
       code_burned for the fifth wrong code, subject_mismatch for an address that now names another account, and
       expired for a disabled account (#1081): no notice says what became of an account.
-    source: libs/server/sign-in-engine/src/lib/engine.ts:451
+    source: libs/server/sign-in-engine/src/lib/engine.ts:454
     response:
       kind: refused
       body:

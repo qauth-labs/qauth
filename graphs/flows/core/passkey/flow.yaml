@@ -33,7 +33,9 @@ summary: >-
   the sign-in: the next step is the passkey, a disabled one still counting as bound, and a transport that cannot serve
   it is sent to the hosted pages. After a sign-in that proved only a password, the hosted pages offer a passkey, unless
   the realm turned that offer off; a verified account's passkey is bound after the fresh factor with no emailed code (the account decides, never a
-  channel), an unclaimed account's never, the user is told, and the first set of recovery codes is shown.
+  channel), an unclaimed account's never, the user is told, and the first set of recovery codes is shown. A passkey
+  bound after a sign-in that proved only the password is new for the realm's window (#1064): it signs in as usual,
+  the downgrade rule does not ask for it, and the user's Shared Signals streams hear of the binding.
 
 scope:
   shows: >-
@@ -120,6 +122,17 @@ context:
   passkeyUsable:
     values: [false, true]
     initial: any
+  # Every passkey the account holds is new (#1064; ADR-017 Decision 8, amended 2026-11-12): bound after a sign-in that
+  # proved only the password, inside the realm's accounts.newFactorWindowDays. A new passkey proves the account as
+  # any passkey does, but it is not the account's strongest factor.
+  passkeyNew:
+    values: [false, true]
+    initial: any
+  # The transaction proved a factor beyond the password that is not new: an authenticator app (core.totp). A recovery
+  # code is not one, so a chain of new factors never settles itself.
+  settledBeyondPassword:
+    values: [false, true]
+    initial: any
   # How long ago the transaction's last factor was proved, when a binding is offered or stored.
   authAge:
     values: [fresh, stale]
@@ -168,6 +181,11 @@ context:
   enrolmentDeclined: { values: [false, true], initial: false }
   # a passkey was bound to the account
   passkeyStored: { values: [false, true], initial: false }
+  # The passkey being bound is new: it stores when the realm's window ends.
+  storedNew: { values: [false, true], initial: false }
+  # The binding's user.credential_added is committed with it, for the user's Shared Signals streams (a CAEP
+  # credential-change).
+  signalled: { values: [false, true], initial: false }
   # the binding notice was queued (the security log's own event comes with #686)
   bindingNoticed: { values: [false, true], initial: false }
   # this round wrote an audit record of the step
@@ -187,7 +205,7 @@ guards:
   disabledBeforeFactor: 'not accountEnabled and not passwordProved'
   disabledAfterFactor: 'not accountEnabled'
   wrongPassword: "password == 'wrong'"
-  passkeyOwed: 'passkeyBound and not passkeyProved'
+  passkeyOwed: 'passkeyBound and not passkeyNew and not passkeyProved'
   passkeyAskable: 'servesGet and passkeyUsable'
   enrolmentOffered: >-
     hostedPages and passwordProved and not passkeyProved and not passkeyBound and not enrolmentDeclined and authAge ==
@@ -195,6 +213,7 @@ guards:
   badRegistration: "registration == 'refused'"
   alreadyBound: "registration == 'bound'"
   unclaimed: 'not accountVerified'
+  bindsNew: 'not settledBeyondPassword'
   stale: "authAge == 'stale'"
 
 effects:
@@ -213,7 +232,8 @@ effects:
   provePassword: { set: { passwordProved: true } }
   readAccount: { set: { accountRead: true } }
   declineEnrolment: { set: { enrolmentDeclined: true } }
-  storePasskey: { set: { passkeyStored: true, bindingNoticed: true } }
+  storePasskey: { set: { passkeyStored: true, bindingNoticed: true, signalled: true } }
+  markNew: { set: { storedNew: true } }
   audit: { set: { audited: true } }
   waitFloor: { set: { floorWaited: true } }
   # what the person, another transaction or the clock may have changed by the next answer
@@ -405,14 +425,15 @@ states:
     title: Apply the downgrade rule, then offer a passkey (rule 8)
     description: >-
       A sign-in completes only after the account's strongest bound factor: a passkey above a password, a disabled one
-      still counting. An emailed code never stands in for it; on the hosted pages a recovery code may
+      still counting, a new one not (#1064). An emailed code never stands in for it; on the hosted pages a recovery
+      code may
       (flows/core/recovery-code). After the rest of rule 8, a sign-in that proved a password on an account with no
       passkey is offered one, on the hosted pages, while the password is at most 5 minutes old and the realm keeps the
       offer (passkeys.offerAfterSignIn, #1083), read last.
     always:
       - guard: passkeyOwed and passkeyAskable
         target: startingDowngrade
-        say: 'a passkey-bound account proved its password only: the next step is webauthn_get'
+        say: 'an account with a passkey that is not new proved its password only: the next step is webauthn_get'
       - guard: passkeyOwed
         target: passkeyUnavailable
         effect: [waitFloor]
@@ -499,16 +520,22 @@ states:
         say: >-
           the last factor is more than 5 minutes old: nothing is bound, and the sign-in completes; the account page
           binds one after a fresh sign-in
+      - guard: bindsNew
+        target: storingPasskey
+        effect: [markNew]
+        say: "only the password was proved: the passkey is bound new, until the end of the realm's window"
       - target: storingPasskey
-        say: 'the binding may go ahead'
+        say: 'a factor beyond the password that is not new was proved: the passkey is a full factor'
 
   storingPasskey:
     title: Bind the passkey to the account
     description: >-
       One insert under the realm's RP ID, which a passkey of another RP ID never passes, named by its credential id.
-      Then the binding notice of NIST SP 800-63B-4 §4.1.2.1 is mailed, and webauthn_create is audited as passed; the
-      transaction records the binding, not a verified step, so it adds no amr value. The security log's own event of
-      the binding comes with the account pages (#686).
+      A new one stores when the realm's window ends, read from the realm's row, and the transaction names it, so the
+      session the sign-in opens does too. user.credential_added, naming the authenticator (platform or roaming),
+      commits with the insert and goes to every Shared Signals stream subscribed to the user as a CAEP
+      credential-change (#1064). Then the binding notice of NIST SP 800-63B-4 §4.1.2.1 is mailed, and webauthn_create
+      is audited as passed; the transaction records the binding, not a verified step, so it adds no amr value.
     invoke: { external: userCredentials }
     on:
       DONE:
@@ -801,10 +828,21 @@ assertions:
     never: "passkeyProved and assertion != 'verified'"
     say: 'A passkey is proved only by an assertion whose signed authenticator data carries the UV flag'
   - id: the-downgrade-rule
-    never: "state == 'completed' and passkeyBound and not passkeyProved"
+    never: "state == 'completed' and passkeyBound and not passkeyNew and not passkeyProved"
     say: >-
       A sign-in of a passkey-bound account completes only after its passkey, a disabled one counting as bound; a
-      password or an emailed code never completes it
+      password or an emailed code never completes it. Only a passkey that is new (#1064) is not asked for
+  - id: new-after-the-password-alone
+    never: 'passkeyStored and not settledBeyondPassword and not storedNew'
+    say: >-
+      A passkey bound after a sign-in that proved only the password is always new: the owner can remove it with the
+      password, and it blocks no reset
+  - id: never-new-after-a-settled-factor
+    never: 'storedNew and settledBeyondPassword'
+    say: 'A passkey bound after a sign-in that proved a factor beyond the password that is not new is never new'
+  - id: every-binding-is-signalled
+    never: 'passkeyStored and not signalled'
+    say: "Every bound passkey reaches the user's Shared Signals streams as a CAEP credential-change"
   - id: a-verified-account-before-the-first-passkey
     never: 'passkeyStored and not accountVerified'
     say: 'A passkey is bound only to a verified account, with no emailed code: the account decides, never a channel'

@@ -12,6 +12,10 @@
 #   the account's strongest bound factor (a passkey, else an authenticator app, else the password); a removal of a
 #   passkey or of the app also takes a sign-in that used a recovery code in place of it. Renaming a passkey, ending
 #   a session, signing out everywhere and confirming a code set ask none, as the contract states.
+# - A passkey or an authenticator app bound after a sign-in that proved only the password is new for the realm's
+#   window (#1064; ADR-017 Decision 8, amended 2026-11-12). It is never the strongest factor, and a factor the
+#   session proved only through a new credential is not fresh. The password alone removes a new one, and the removal
+#   revokes what the sign-ins that bound or proved it opened.
 # - Each exit is a final state named <error>.<cause>, one per distinct cause, or after what happened, with the response
 #   the browser gets. A refusal is a page with Cache-Control: no-store; a change answers 303 to the overview with its
 #   notice, except the two that show a page of their own (the new recovery codes, a signed-out browser).
@@ -26,7 +30,8 @@ summary: >-
   authenticator app off, gets a new set of recovery codes shown once, unlinks an upstream account, signs one session
   out or signs out everywhere. Every post is checked for its origin, its session and its CSRF value; a change that
   asks for a fresh sign-in without one is refused with "Confirm it's you". A removal never leaves the account without
-  a way to sign in, nor without the second factor the realm requires. Each change is recorded as a user event, and an
+  a way to sign in, nor without the second factor the realm requires. A passkey or app bound after a password-only
+  sign-in is removed with the password alone while it is new, and takes the sessions it opened with it. Each change is recorded as a user event, and an
   ended session tells every relying party with a back-channel logout URI.
 
 scope:
@@ -52,12 +57,15 @@ context:
       noSession: 'it carries no live session'
       wrongCsrf: "it carries no CSRF value, or another than the session's"
   signIn:
-    values: [freshStrongest, freshRecoveryCode, freshWeaker, stale]
+    values: [freshStrongest, freshPassword, freshRecoveryCode, freshWeaker, stale]
     initial: any
     say:
-      freshStrongest: "the session signed in at most five minutes ago, with the account's strongest bound factor"
+      freshStrongest: >-
+        the session signed in at most five minutes ago, with the account's strongest bound factor that is not new,
+        proved through a credential that is not new either
+      freshPassword: 'at most five minutes ago, with the password, but not with the strongest factor'
       freshRecoveryCode: 'at most five minutes ago, with a recovery code in place of the strongest factor'
-      freshWeaker: 'at most five minutes ago, with neither'
+      freshWeaker: 'at most five minutes ago, with none of these'
       stale: 'more than five minutes ago'
   password:
     values: [changes, noPassword, ladderWaits, wrongCurrent, breaksPolicy, breached]
@@ -77,6 +85,12 @@ context:
       missing: "it names nothing, or another account's credential"
       lastWayIn: 'it is the last way to sign in: nothing but an authenticator app, at most, would remain'
       lastSecondFactor: "it is the last passkey or app, and the realm's MFA policy requires one of the account"
+  removalTarget:
+    values: [settled, new]
+    initial: any
+    say:
+      settled: 'the passkey or authenticator app a removal names is a full factor'
+      new: "it is new: bound after a sign-in that proved only the password, inside the realm's window"
   secondFactorHeld:
     values: [yes, no]
     initial: any
@@ -113,6 +127,8 @@ context:
     initial: none
   changed: { values: [false, true], initial: false }
   sessionsEnded: { values: [false, true], initial: false }
+  # Whether the codes and refresh families of the sessions that bound or proved a removed new credential are revoked.
+  openedRevoked: { values: [false, true], initial: false }
 
 guards:
   foreignOrigin: "gate == 'foreignOrigin'"
@@ -126,6 +142,8 @@ guards:
   changingPassword: "change == 'password'"
   renamingPasskey: "change == 'passkeyRename'"
   removingCredential: "change in ['passkeyRemove', 'totpRemove']"
+  removingNew: "removalTarget == 'new'"
+  passwordRemovesNew: "removingCredential and removalTarget == 'new' and signIn == 'freshPassword'"
   regenerating: "change == 'recoveryCodes'"
   confirmingCodes: "change == 'recoveryCodesConfirm'"
   unlinking: "change == 'unlink'"
@@ -155,6 +173,7 @@ effects:
   askEndAll: { set: { change: sessionsEndAll } }
   makeChange: { set: { changed: true } }
   endSessions: { set: { changed: true, sessionsEnded: true } }
+  removeNew: { set: { changed: true, openedRevoked: true } }
 
 failures:
   resolvingSession: { from: browserSessionStore, server: [server_error] }
@@ -171,6 +190,7 @@ failures:
   endingOtherSessions: { from: browserSessionStore, server: [server_error] }
   renaming: { from: accountStore, server: [server_error] }
   removing: { from: accountStore, server: [server_error] }
+  endingOpened: { from: browserSessionStore, server: [server_error] }
   readingSecondFactors: { from: UserCredential.findAllByUserId, server: [server_error] }
   regeneratingCodes: { from: recoveryCodeStore, server: [server_error] }
   recordingRegeneration: { from: eventStore, server: [server_error] }
@@ -190,70 +210,70 @@ initial: idle
 states:
   idle:
     title: Wait for a change posted from the account page
-    source: apps/auth-server/src/app/routes/ui/account.ts:99
+    source: apps/auth-server/src/app/routes/ui/account.ts:100
     on:
       CHANGE_PASSWORD:
         target: checkingOrigin
         effect: [askPassword]
         say: 'POST /ui/account/password, with the current password and the new one'
-        source: apps/auth-server/src/app/routes/ui/account.ts:286
+        source: apps/auth-server/src/app/routes/ui/account.ts:295
       RENAME_PASSKEY:
         target: checkingOrigin
         effect: [askRename]
         say: 'POST /ui/account/passkeys/{passkeyId}/rename, with the new name'
-        source: apps/auth-server/src/app/routes/ui/account.ts:400
+        source: apps/auth-server/src/app/routes/ui/account.ts:409
       REMOVE_PASSKEY:
         target: checkingOrigin
         effect: [askPasskeyRemoval]
         say: 'POST /ui/account/passkeys/{passkeyId}/remove'
-        source: apps/auth-server/src/app/routes/ui/account.ts:450
+        source: apps/auth-server/src/app/routes/ui/account.ts:459
       REMOVE_TOTP:
         target: checkingOrigin
         effect: [askTotpRemoval]
         say: 'POST /ui/account/totp/remove'
-        source: apps/auth-server/src/app/routes/ui/account.ts:518
+        source: apps/auth-server/src/app/routes/ui/account.ts:530
       REGENERATE_CODES:
         target: checkingOrigin
         effect: [askRecoveryCodes]
         say: 'POST /ui/account/recovery-codes/regenerate'
-        source: apps/auth-server/src/app/routes/ui/account.ts:552
+        source: apps/auth-server/src/app/routes/ui/account.ts:567
       CONFIRM_CODES:
         target: checkingOrigin
         effect: [askConfirmation]
         say: 'POST /ui/account/recovery-codes/confirm, with the set shown'
-        source: apps/auth-server/src/app/routes/ui/account.ts:594
+        source: apps/auth-server/src/app/routes/ui/account.ts:609
       UNLINK:
         target: checkingOrigin
         effect: [askUnlink]
         say: 'POST /ui/account/linked-accounts/{linkedAccountId}/unlink'
-        source: apps/auth-server/src/app/routes/ui/account.ts:721
+        source: apps/auth-server/src/app/routes/ui/account.ts:736
       END_SESSION:
         target: checkingOrigin
         effect: [askSessionEnd]
         say: 'POST /ui/account/sessions/{sessionId}/end'
-        source: apps/auth-server/src/app/routes/ui/account.ts:624
+        source: apps/auth-server/src/app/routes/ui/account.ts:639
       END_ALL:
         target: checkingOrigin
         effect: [askEndAll]
         say: 'POST /ui/account/sessions/end-all: "Sign out everywhere"'
-        source: apps/auth-server/src/app/routes/ui/account.ts:660
+        source: apps/auth-server/src/app/routes/ui/account.ts:675
 
   # The checks of every post
 
   checkingOrigin:
     title: Refuse a post from another site
-    source: apps/auth-server/src/app/routes/ui/account.ts:173
+    source: apps/auth-server/src/app/routes/ui/account.ts:175
     always:
       - guard: foreignOrigin
         target: forbidden.foreign_origin
         say: 'not from a page of the realm origin'
-        source: apps/auth-server/src/app/routes/ui/account.ts:93
+        source: apps/auth-server/src/app/routes/ui/account.ts:94
       - target: resolvingSession
         say: 'from a page of the realm origin'
 
   resolvingSession:
     title: Read the browser session of the cookie
-    source: apps/auth-server/src/app/routes/ui/account.ts:184
+    source: apps/auth-server/src/app/routes/ui/account.ts:186
     invoke: { external: browserSessionStore }
     on:
       DONE:
@@ -265,7 +285,7 @@ states:
 
   checkingSession:
     title: Send a post with no session to the overview, which signs the person in
-    source: apps/auth-server/src/app/routes/ui/account.ts:185
+    source: apps/auth-server/src/app/routes/ui/account.ts:187
     always:
       - guard: noSession
         target: see_other.no_session
@@ -275,7 +295,7 @@ states:
 
   readingCsrf:
     title: Read the session's account CSRF value
-    source: apps/auth-server/src/app/helpers/account-changes.ts:175
+    source: apps/auth-server/src/app/helpers/account-changes.ts:231
     invoke: { external: sessionSideRecord }
     on:
       DONE:
@@ -287,34 +307,34 @@ states:
 
   checkingCsrf:
     title: Refuse a form without the session's CSRF value
-    source: apps/auth-server/src/app/routes/ui/account.ts:190
+    source: apps/auth-server/src/app/routes/ui/account.ts:192
     always:
       - guard: wrongCsrf
         target: forbidden.csrf
         say: 'none, or another, compared in constant time'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:182
+        source: apps/auth-server/src/app/helpers/account-changes.ts:238
       - target: checkingRule
         say: 'the right value'
 
   checkingRule:
     title: Ask for a fresh sign-in where the contract asks one
-    source: apps/auth-server/src/app/helpers/account-changes.ts:129
+    source: apps/auth-server/src/app/helpers/account-changes.ts:160
     always:
       - guard: needsNoFreshSignIn
         target: choosingChange
         say: 'renaming a passkey, ending a session, signing out everywhere or confirming a code set'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:129
+        source: apps/auth-server/src/app/helpers/account-changes.ts:160
       - guard: stale
         target: recordingTooOld
         say: 'a sign-in older than five minutes'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:149
+        source: apps/auth-server/src/app/helpers/account-changes.ts:182
       - target: readingFactors
         say: 'a sign-in of the last five minutes'
 
   recordingTooOld:
     title: Record the refusal of a stale sign-in
     description: request.account_operation_refused, with the operation, the reason authentication_too_old and max_age 300.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:135
+    source: apps/auth-server/src/app/helpers/account-changes.ts:168
     invoke: { external: eventStore }
     on:
       DONE:
@@ -326,7 +346,7 @@ states:
 
   readingFactors:
     title: Read the account's bound factors
-    source: apps/auth-server/src/app/helpers/account-changes.ts:130
+    source: apps/auth-server/src/app/helpers/account-changes.ts:161
     invoke: { action: UserCredential.findAllByUserId }
     on:
       DONE:
@@ -338,21 +358,29 @@ states:
 
   checkingFactor:
     title: Ask for the account's strongest factor
-    source: apps/auth-server/src/app/helpers/account-changes.ts:150
+    description: >-
+      A new credential is not the strongest factor. Where the account holds a new one of the factor's kind, the
+      session's row names the new credentials its sign-in bound or proved, and a factor proved only through one of
+      them does not count.
+    source: apps/auth-server/src/app/helpers/account-changes.ts:199
     always:
       - guard: strongest
         target: choosingChange
-        say: "the session's amr holds the strongest factor"
+        say: "the session's amr holds the strongest factor, proved through a credential that is not new"
+      - guard: passwordRemovesNew
+        target: choosingChange
+        say: 'it does not, but the removal names a new credential, and the password alone removes one'
+        source: apps/auth-server/src/app/helpers/account-changes.ts:183
       - guard: recoveryCodeTakes
         target: readingSessionRow
         say: 'it does not, and the removal takes a recovery code in its place'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:151
+        source: apps/auth-server/src/app/helpers/account-changes.ts:211
       - target: recordingWeakFactor
         say: 'it does not'
 
   readingSessionRow:
     title: Read whether the session's sign-in used a recovery code
-    source: apps/auth-server/src/app/helpers/account-changes.ts:152
+    source: apps/auth-server/src/app/helpers/account-changes.ts:195
     invoke: { external: sessionStore }
     on:
       DONE:
@@ -364,7 +392,7 @@ states:
 
   checkingRecoveryCode:
     title: Take a recovery code in place of the lost factor
-    source: apps/auth-server/src/app/helpers/account-changes.ts:153
+    source: apps/auth-server/src/app/helpers/account-changes.ts:212
     always:
       - guard: recoveryCodeSignIn
         target: choosingChange
@@ -377,7 +405,7 @@ states:
     description: >-
       request.account_operation_refused, with the operation, the reason strongest_factor_missing, the factor required
       and max_age 0.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:155
+    source: apps/auth-server/src/app/helpers/account-changes.ts:214
     invoke: { external: eventStore }
     on:
       DONE:
@@ -418,7 +446,7 @@ states:
 
   readingPassword:
     title: Read the account's password credential
-    source: apps/auth-server/src/app/helpers/account-changes.ts:394
+    source: apps/auth-server/src/app/helpers/account-changes.ts:502
     invoke: { action: UserCredential.findByUserIdAndType }
     on:
       DONE:
@@ -430,7 +458,7 @@ states:
 
   checkingPassword:
     title: Change only a password the account has
-    source: apps/auth-server/src/app/helpers/account-changes.ts:398
+    source: apps/auth-server/src/app/helpers/account-changes.ts:506
     always:
       - guard: noPassword
         target: not_found.no_password
@@ -440,7 +468,7 @@ states:
 
   reservingAttempt:
     title: Reserve the current password's check on the failure ladder
-    source: apps/auth-server/src/app/helpers/account-changes.ts:405
+    source: apps/auth-server/src/app/helpers/account-changes.ts:513
     invoke: { external: failureLadder }
     on:
       DONE:
@@ -452,7 +480,7 @@ states:
 
   checkingReservation:
     title: Hold the check back while the ladder asks to wait
-    source: apps/auth-server/src/app/helpers/account-changes.ts:415
+    source: apps/auth-server/src/app/helpers/account-changes.ts:523
     always:
       - guard: ladderWaits
         target: too_many_requests.ladder_wait
@@ -465,7 +493,7 @@ states:
     description: >-
       A credential the ladder marked counts as wrong while the realm's hard action is armed; a wrong password counts on
       the ladder, a right one settles it.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:422
+    source: apps/auth-server/src/app/helpers/account-changes.ts:530
     invoke: { external: passwordVerifier }
     on:
       DONE:
@@ -477,22 +505,22 @@ states:
 
   checkingNewPassword:
     title: Hold the new password to the realm's one password policy
-    source: apps/auth-server/src/app/helpers/account-changes.ts:432
+    source: apps/auth-server/src/app/helpers/account-changes.ts:540
     always:
       - guard: wrongCurrent
         target: bad_request.wrong_password
         say: 'the current password is wrong'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:426
+        source: apps/auth-server/src/app/helpers/account-changes.ts:534
       - guard: breaksPolicy
         target: bad_request.password_policy
         say: 'the new password breaks the policy (#634): its minimum length and strength'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:440
+        source: apps/auth-server/src/app/helpers/account-changes.ts:548
       - target: checkingBreachList
         say: 'it meets the policy'
 
   checkingBreachList:
     title: Look the new password up on the realm's breach list
-    source: apps/auth-server/src/app/helpers/account-changes.ts:441
+    source: apps/auth-server/src/app/helpers/account-changes.ts:549
     invoke: { external: breachedPasswords }
     on:
       DONE:
@@ -501,11 +529,11 @@ states:
       FAIL.unreachable:
         target: writingPassword
         say: 'the list cannot be read: user.password_breach_check_failed is recorded, and the change goes on'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:443
+        source: apps/auth-server/src/app/helpers/account-changes.ts:551
 
   decidingBreach:
     title: Refuse a password on the breach list
-    source: apps/auth-server/src/app/helpers/account-changes.ts:442
+    source: apps/auth-server/src/app/helpers/account-changes.ts:550
     always:
       - guard: breached
         target: bad_request.breached_password
@@ -519,7 +547,7 @@ states:
       In one transaction: the new hash, the account's update_password action cleared, its unredeemed authorization
       codes and every refresh token revoked (a refresh family names no session, so none is this session's to keep), and
       user.password_changed.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:453
+    source: apps/auth-server/src/app/helpers/account-changes.ts:561
     invoke: { external: accountStore }
     on:
       DONE:
@@ -533,7 +561,7 @@ states:
   endingOtherSessions:
     title: End every other session of the account
     description: Each ended session that served a relying party with a back-channel logout URI queues a logout token.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:476
+    source: apps/auth-server/src/app/helpers/account-changes.ts:584
     invoke: { external: browserSessionStore }
     on:
       DONE:
@@ -542,14 +570,14 @@ states:
       FAIL.server:
         target: password_changed
         say: 'the store fails: it is logged, and the change stands'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:480
+        source: apps/auth-server/src/app/helpers/account-changes.ts:588
 
   # Passkeys and the authenticator app
 
   renaming:
     title: Rename the passkey under the user's row lock
     description: The name is tidied as an enrolment tidies it; an empty one removes it. The write and user.passkey_renamed commit together.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:574
+    source: apps/auth-server/src/app/helpers/account-changes.ts:730
     invoke: { external: accountStore }
     on:
       DONE:
@@ -561,7 +589,7 @@ states:
 
   decidingRename:
     title: Answer as the rename did
-    source: apps/auth-server/src/app/routes/ui/account.ts:426
+    source: apps/auth-server/src/app/routes/ui/account.ts:435
     always:
       - guard: missingTarget
         target: not_found.credential
@@ -575,9 +603,12 @@ states:
     description: >-
       The realm's MFA policy is read first. In one transaction: the user's row locked, the credentials of the realm
       read, the target found, the last-way-in and second-factor checks, then the delete and user.credential_removed.
-      A credential the failure ladder or a rebind marked counts as no way in and no second factor. After the commit,
-      the owner is mailed at the password's address, when the account has one.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:510
+      A credential the failure ladder or a rebind marked counts as no way in and no second factor. A credential removed
+      while new also takes, in the same transaction, the unredeemed codes and the refresh families of every live
+      session whose sign-in bound or proved it, and user.credential_removed says whileNew. The event names the
+      authenticator, and goes to the user's Shared Signals streams as a CAEP credential-change. After the commit, the
+      owner is mailed at the password's address, when the account has one.
+    source: apps/auth-server/src/app/helpers/account-changes.ts:657
     invoke: { external: accountStore }
     on:
       DONE:
@@ -589,29 +620,50 @@ states:
 
   decidingRemoval:
     title: Answer as the removal did
-    source: apps/auth-server/src/app/routes/ui/account.ts:479
+    source: apps/auth-server/src/app/routes/ui/account.ts:491
     always:
       - guard: missingTarget
         target: not_found.credential
         say: 'the account holds no such passkey, or no authenticator app'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:532
+        source: apps/auth-server/src/app/helpers/account-changes.ts:665
       - guard: lastWayIn
         target: conflict.last_credential
         say: 'nothing that signs in on its own would remain: an authenticator app is a second factor, never a way in'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:535
+        source: apps/auth-server/src/app/helpers/account-changes.ts:669
       - guard: lastSecondFactor
         target: conflict.second_factor_required
         say: "no second factor would remain, and the realm's MFA policy requires one of the account"
-        source: apps/auth-server/src/app/helpers/account-changes.ts:536
+        source: apps/auth-server/src/app/helpers/account-changes.ts:670
+      - guard: removingNew
+        target: endingOpened
+        effect: [removeNew]
+        say: 'removed while new: the codes and refresh families its sign-ins opened are revoked with it'
+        source: apps/auth-server/src/app/helpers/account-changes.ts:676
       - target: credential_removed
         effect: [makeChange]
         say: 'removed: it no longer signs the person in'
+
+  endingOpened:
+    title: End the sessions whose sign-in bound or proved the removed credential
+    description: >-
+      After the commit, each such session ends with the reason reset, which queues a back-channel logout to each of its
+      clients; then their codes and families are swept once more, for one a session minted meanwhile. This browser's
+      session is among them only if its own sign-in bound or proved the credential.
+    source: apps/auth-server/src/app/helpers/account-changes.ts:708
+    invoke: { external: browserSessionStore }
+    on:
+      DONE:
+        target: credential_removed
+        say: 'they end'
+      FAIL.server:
+        target: credential_removed
+        say: 'the store fails: it is logged, and the removal stands, its codes and families already revoked'
 
   # Recovery codes
 
   readingSecondFactors:
     title: Read whether the account holds a second factor
-    source: apps/auth-server/src/app/helpers/account-changes.ts:626
+    source: apps/auth-server/src/app/helpers/account-changes.ts:807
     invoke: { action: UserCredential.findAllByUserId }
     on:
       DONE:
@@ -623,7 +675,7 @@ states:
 
   checkingSecondFactor:
     title: Issue a set only where it stands in for a second factor
-    source: apps/auth-server/src/app/helpers/account-changes.ts:629
+    source: apps/auth-server/src/app/helpers/account-changes.ts:810
     always:
       - guard: noSecondFactor
         target: conflict.no_second_factor
@@ -634,7 +686,7 @@ states:
   regeneratingCodes:
     title: Replace the code set with a new one
     description: Ten codes, stored as salted hashes; every code of the old set stops working, and the owner is mailed.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:630
+    source: apps/auth-server/src/app/helpers/account-changes.ts:811
     invoke: { external: recoveryCodeStore }
     on:
       DONE:
@@ -647,7 +699,7 @@ states:
 
   recordingRegeneration:
     title: Record the new set
-    source: apps/auth-server/src/app/helpers/account-changes.ts:634
+    source: apps/auth-server/src/app/helpers/account-changes.ts:815
     invoke: { external: eventStore }
     on:
       DONE:
@@ -656,11 +708,11 @@ states:
       FAIL.server:
         target: recovery_codes_shown
         say: 'the record fails: it is logged, and the codes are still shown, as the old set is gone either way'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:641
+        source: apps/auth-server/src/app/helpers/account-changes.ts:822
 
   confirming:
     title: Confirm the set the page showed
-    source: apps/auth-server/src/app/routes/ui/account.ts:610
+    source: apps/auth-server/src/app/routes/ui/account.ts:625
     invoke: { external: recoveryCodeStore }
     on:
       DONE:
@@ -672,7 +724,7 @@ states:
 
   decidingConfirmation:
     title: Say whether the set shown is the one that works
-    source: apps/auth-server/src/app/routes/ui/account.ts:617
+    source: apps/auth-server/src/app/routes/ui/account.ts:632
     always:
       - guard: setReplaced
         target: recovery_codes_replaced
@@ -697,7 +749,7 @@ states:
 
   decidingUnlink:
     title: Answer as the unlink did
-    source: apps/auth-server/src/app/routes/ui/account.ts:749
+    source: apps/auth-server/src/app/routes/ui/account.ts:764
     always:
       - guard: missingTarget
         target: not_found.credential
@@ -717,7 +769,7 @@ states:
       Its cookie stops working, its side record is dropped, and every relying party it signed in to with a
       back-channel logout URI is queued a logout token in the same revocation (#624). user.signed_out is recorded with
       its sid.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:654
+    source: apps/auth-server/src/app/helpers/account-changes.ts:835
     invoke: { external: browserSessionStore }
     on:
       DONE:
@@ -729,7 +781,7 @@ states:
 
   decidingSessionEnd:
     title: Answer as the session end did
-    source: apps/auth-server/src/app/routes/ui/account.ts:648
+    source: apps/auth-server/src/app/routes/ui/account.ts:663
     always:
       - guard: missingSession
         target: not_found.session
@@ -747,7 +799,7 @@ states:
     description: >-
       Every session ends, each queues its back-channel logout tokens, every unredeemed authorization code and then every
       refresh token of the account is revoked, and user.signed_out is recorded without a sid.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:686
+    source: apps/auth-server/src/app/helpers/account-changes.ts:867
     invoke: { external: browserSessionStore }
     on:
       DONE:
@@ -764,7 +816,7 @@ states:
     type: final
     title: Change the password
     description: The "password changed" notice is mailed to the account's address after the answer.
-    source: apps/auth-server/src/app/routes/ui/account.ts:329
+    source: apps/auth-server/src/app/routes/ui/account.ts:338
     response:
       status: 303
       headers:
@@ -773,7 +825,7 @@ states:
   passkey_renamed:
     type: final
     title: Rename the passkey
-    source: apps/auth-server/src/app/routes/ui/account.ts:427
+    source: apps/auth-server/src/app/routes/ui/account.ts:436
     response:
       status: 303
       headers:
@@ -782,7 +834,7 @@ states:
   credential_removed:
     type: final
     title: Remove the passkey, or turn the authenticator app off
-    source: apps/auth-server/src/app/routes/ui/account.ts:481
+    source: apps/auth-server/src/app/routes/ui/account.ts:493
     response:
       status: 303
       headers:
@@ -791,7 +843,7 @@ states:
   recovery_codes_shown:
     type: final
     title: Show the new recovery codes, once
-    source: apps/auth-server/src/app/routes/ui/account.ts:582
+    source: apps/auth-server/src/app/routes/ui/account.ts:597
     response:
       status: 200
       headers:
@@ -802,7 +854,7 @@ states:
   recovery_codes_saved:
     type: final
     title: Confirm the set
-    source: apps/auth-server/src/app/routes/ui/account.ts:617
+    source: apps/auth-server/src/app/routes/ui/account.ts:632
     response:
       status: 303
       headers:
@@ -811,7 +863,7 @@ states:
   recovery_codes_replaced:
     type: final
     title: Say the set shown was replaced by a newer one
-    source: apps/auth-server/src/app/routes/ui/account.ts:618
+    source: apps/auth-server/src/app/routes/ui/account.ts:633
     response:
       status: 303
       headers:
@@ -820,7 +872,7 @@ states:
   linked_account_removed:
     type: final
     title: Unlink the upstream account
-    source: apps/auth-server/src/app/routes/ui/account.ts:751
+    source: apps/auth-server/src/app/routes/ui/account.ts:766
     response:
       status: 303
       headers:
@@ -829,7 +881,7 @@ states:
   session_ended:
     type: final
     title: Sign the other session out
-    source: apps/auth-server/src/app/routes/ui/account.ts:656
+    source: apps/auth-server/src/app/routes/ui/account.ts:671
     response:
       status: 303
       headers:
@@ -838,7 +890,7 @@ states:
   signed_out.this_browser:
     type: final
     title: Sign this browser out
-    source: apps/auth-server/src/app/routes/ui/account.ts:650
+    source: apps/auth-server/src/app/routes/ui/account.ts:665
     response:
       status: 200
       headers:
@@ -849,7 +901,7 @@ states:
   signed_out.everywhere:
     type: final
     title: Sign out everywhere
-    source: apps/auth-server/src/app/routes/ui/account.ts:682
+    source: apps/auth-server/src/app/routes/ui/account.ts:697
     response:
       status: 200
       headers:
@@ -860,7 +912,7 @@ states:
   see_other.no_session:
     type: final
     title: Send a post with no session to the overview
-    source: apps/auth-server/src/app/routes/ui/account.ts:187
+    source: apps/auth-server/src/app/routes/ui/account.ts:189
     response:
       status: 303
       headers:
@@ -870,7 +922,7 @@ states:
     type: final
     title: Refuse a post from another site
     description: request.csrf_rejected is recorded with the form account.
-    source: apps/auth-server/src/app/routes/ui/account.ts:181
+    source: apps/auth-server/src/app/routes/ui/account.ts:183
     response:
       status: 403
       headers:
@@ -881,7 +933,7 @@ states:
     type: final
     title: Refuse a form without the session's CSRF value
     description: request.csrf_rejected is recorded with the form account, for the session's account.
-    source: apps/auth-server/src/app/routes/ui/account.ts:191
+    source: apps/auth-server/src/app/routes/ui/account.ts:193
     response:
       status: 403
       headers:
@@ -891,7 +943,7 @@ states:
   fresh_sign_in_required.too_old:
     type: final
     title: Ask for a fresh sign-in
-    source: apps/auth-server/src/app/routes/ui/account.ts:202
+    source: apps/auth-server/src/app/routes/ui/account.ts:211
     response:
       status: 403
       headers:
@@ -903,7 +955,7 @@ states:
   fresh_sign_in_required.strongest_factor:
     type: final
     title: Ask for a sign-in with the account's strongest factor
-    source: apps/auth-server/src/app/routes/ui/account.ts:202
+    source: apps/auth-server/src/app/routes/ui/account.ts:211
     response:
       status: 403
       headers:
@@ -913,7 +965,7 @@ states:
   not_found.no_password:
     type: final
     title: Say the account has no password to change
-    source: apps/auth-server/src/app/routes/ui/account.ts:331
+    source: apps/auth-server/src/app/routes/ui/account.ts:340
     response:
       status: 404
       headers:
@@ -923,7 +975,7 @@ states:
   service_unavailable.ladder:
     type: final
     title: Answer a ladder that cannot be reached
-    source: apps/auth-server/src/app/routes/ui/account.ts:339
+    source: apps/auth-server/src/app/routes/ui/account.ts:348
     response:
       status: 503
       headers:
@@ -934,7 +986,7 @@ states:
   too_many_requests.ladder_wait:
     type: final
     title: Hold the password back while the ladder waits
-    source: apps/auth-server/src/app/routes/ui/account.ts:336
+    source: apps/auth-server/src/app/routes/ui/account.ts:345
     response:
       status: 429
       headers:
@@ -945,7 +997,7 @@ states:
   bad_request.wrong_password:
     type: final
     title: Refuse a wrong current password
-    source: apps/auth-server/src/app/routes/ui/account.ts:332
+    source: apps/auth-server/src/app/routes/ui/account.ts:341
     response:
       status: 400
       headers:
@@ -955,7 +1007,7 @@ states:
   bad_request.password_policy:
     type: final
     title: Refuse a new password that breaks the policy, with its message
-    source: apps/auth-server/src/app/routes/ui/account.ts:334
+    source: apps/auth-server/src/app/routes/ui/account.ts:343
     response:
       status: 400
       headers:
@@ -965,7 +1017,7 @@ states:
   bad_request.breached_password:
     type: final
     title: Refuse a new password on the breach list
-    source: apps/auth-server/src/app/routes/ui/account.ts:334
+    source: apps/auth-server/src/app/routes/ui/account.ts:343
     response:
       status: 400
       headers:
@@ -975,7 +1027,7 @@ states:
   not_found.credential:
     type: final
     title: Answer an id that names nothing of the account
-    source: apps/auth-server/src/app/routes/ui/account.ts:146
+    source: apps/auth-server/src/app/routes/ui/account.ts:147
     response:
       status: 404
       headers:
@@ -985,7 +1037,7 @@ states:
   not_found.session:
     type: final
     title: Answer an id that names no live session of the account
-    source: apps/auth-server/src/app/routes/ui/account.ts:648
+    source: apps/auth-server/src/app/routes/ui/account.ts:663
     response:
       status: 404
       headers:
@@ -995,7 +1047,7 @@ states:
   conflict.last_credential:
     type: final
     title: Refuse to remove the account's last way to sign in
-    source: apps/auth-server/src/app/routes/ui/account.ts:437
+    source: apps/auth-server/src/app/routes/ui/account.ts:446
     response:
       status: 409
       headers:
@@ -1005,7 +1057,7 @@ states:
   conflict.second_factor_required:
     type: final
     title: Refuse to remove the last second factor the realm requires
-    source: apps/auth-server/src/app/routes/ui/account.ts:443
+    source: apps/auth-server/src/app/routes/ui/account.ts:452
     response:
       status: 409
       headers:
@@ -1015,7 +1067,7 @@ states:
   conflict.no_second_factor:
     type: final
     title: Refuse a code set to an account with no second factor
-    source: apps/auth-server/src/app/routes/ui/account.ts:575
+    source: apps/auth-server/src/app/routes/ui/account.ts:590
     response:
       status: 409
       headers:
@@ -1033,50 +1085,62 @@ assertions:
   - id: no-change-from-another-site
     never: 'changed and foreignOrigin'
     say: 'A post from another site changes nothing'
-    source: apps/auth-server/src/app/routes/ui/account.ts:173
+    source: apps/auth-server/src/app/routes/ui/account.ts:175
   - id: no-change-without-a-session
     never: 'changed and noSession'
     say: 'A post with no session changes nothing'
-    source: apps/auth-server/src/app/routes/ui/account.ts:185
+    source: apps/auth-server/src/app/routes/ui/account.ts:187
   - id: no-change-without-the-csrf-value
     never: 'changed and wrongCsrf'
     say: "A post without the session's CSRF value changes nothing"
-    source: apps/auth-server/src/app/routes/ui/account.ts:190
+    source: apps/auth-server/src/app/routes/ui/account.ts:192
   - id: no-change-on-a-stale-sign-in
     never: 'changed and stale and not needsNoFreshSignIn'
     say: 'A sign-in older than five minutes makes no change that asks for a fresh one'
-    source: apps/auth-server/src/app/helpers/account-changes.ts:149
+    source: apps/auth-server/src/app/helpers/account-changes.ts:182
   - id: no-change-without-the-strongest-factor
     never: "changed and signIn == 'freshWeaker' and not needsNoFreshSignIn"
     say: "Only a sign-in with the account's strongest factor makes a change that asks for a fresh one"
-    source: apps/auth-server/src/app/helpers/account-changes.ts:150
+    source: apps/auth-server/src/app/helpers/account-changes.ts:199
+  - id: the-password-removes-only-a-new-factor
+    never: "changed and signIn == 'freshPassword' and not needsNoFreshSignIn and not (removingCredential and removingNew)"
+    say: >-
+      A sign-in with the password but not the strongest factor changes nothing that asks for a fresh one, but the
+      removal of a new passkey or authenticator app
+    source: apps/auth-server/src/app/helpers/account-changes.ts:183
+  - id: a-new-factor-takes-what-it-opened
+    never: 'changed and removingCredential and removingNew and not openedRevoked'
+    say: >-
+      A credential removed while new never leaves the codes or refresh families of the sign-ins that bound or proved
+      it
+    source: apps/auth-server/src/app/helpers/account-changes.ts:676
   - id: a-recovery-code-only-for-a-removal
     never: "changed and recoveryCodeSignIn and change in ['password', 'recoveryCodes', 'unlink']"
     say: 'A recovery code stands in for the lost factor only to remove a passkey or the authenticator app'
-    source: apps/auth-server/src/app/helpers/account-changes.ts:151
+    source: apps/auth-server/src/app/helpers/account-changes.ts:211
   - id: the-last-way-in-stays
     never: "changed and lastWayIn and change in ['passkeyRemove', 'totpRemove', 'unlink']"
     say: 'A removal never leaves the account without a way to sign in'
-    source: apps/auth-server/src/app/helpers/account-changes.ts:535
+    source: apps/auth-server/src/app/helpers/account-changes.ts:669
   - id: the-required-second-factor-stays
     never: 'changed and lastSecondFactor and removingCredential'
     say: "A removal never leaves the account without the second factor the realm's policy requires"
-    source: apps/auth-server/src/app/helpers/account-changes.ts:536
+    source: apps/auth-server/src/app/helpers/account-changes.ts:670
   - id: only-the-accounts-own
     never: "changed and missingTarget and change in ['passkeyRename', 'passkeyRemove', 'totpRemove', 'unlink']"
     say: "A change touches only a credential of the session's own account"
-    source: apps/auth-server/src/app/helpers/account-changes.ts:532
+    source: apps/auth-server/src/app/helpers/account-changes.ts:665
   - id: the-password-meets-the-policy
     never: "changed and changingPassword and password in ['noPassword', 'ladderWaits', 'wrongCurrent', 'breaksPolicy']"
     say: >-
       A password changes only with the right current one, to a new one that meets the policy. The breach list is the
       one check that fails open: a list that cannot be read is recorded, and the change goes on
-    source: apps/auth-server/src/app/helpers/account-changes.ts:440
+    source: apps/auth-server/src/app/helpers/account-changes.ts:548
   - id: a-set-only-for-a-second-factor
     never: 'changed and regenerating and noSecondFactor'
     say: 'No recovery code set is issued to an account with no passkey and no authenticator app'
-    source: apps/auth-server/src/app/helpers/account-changes.ts:629
+    source: apps/auth-server/src/app/helpers/account-changes.ts:810
   - id: only-the-accounts-own-sessions
     never: 'sessionsEnded and endingSession and missingSession'
     say: "Ending a session ends only one of the session's own account"
-    source: apps/auth-server/src/app/helpers/browser-session.ts:283
+    source: apps/auth-server/src/app/helpers/browser-session.ts:294
