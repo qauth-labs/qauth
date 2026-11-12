@@ -11,6 +11,7 @@ import {
   normalizeSmtpHost,
   smtpHostRefusal,
 } from './mail';
+import { PASSKEYS_POLICY_GROUP } from './passkeys';
 import { PASSWORD_POLICY_GROUP } from './password';
 import { POSTURE_POLICY_GROUP } from './posture';
 import { REGISTRATION_POLICY_GROUP } from './registration';
@@ -27,6 +28,7 @@ export {
   mailTransportGaps,
   mailTransportIssues,
   normalizeSmtpHost,
+  PASSKEYS_POLICY_GROUP,
   PASSWORD_POLICY_GROUP,
   POSTURE_POLICY_GROUP,
   REGISTRATION_POLICY_GROUP,
@@ -46,6 +48,7 @@ export const BUILT_IN_POLICY_GROUPS = Object.freeze({
   password: PASSWORD_POLICY_GROUP,
   bruteForce: BRUTE_FORCE_POLICY_GROUP,
   botChallenge: BOT_CHALLENGE_POLICY_GROUP,
+  passkeys: PASSKEYS_POLICY_GROUP,
   registration: REGISTRATION_POLICY_GROUP,
   mail: MAIL_POLICY_GROUP,
   posture: POSTURE_POLICY_GROUP,
