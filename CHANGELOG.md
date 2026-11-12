@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-12
+
+A patch release that carries a breaking change, as a 0.x release may (see the
+**Action for operators** under Fixed). A provider plugin can now live in its
+own repository and build on the server's OpenID Connect client through the
+plugin SDK alone. The admin API previews a realm policy change before it is
+saved, an operator can verify an account on a deployment without mail, and a
+CIMD client gets no token without a user unless the operator lists its scopes.
+
 ### Added
 
 - **The admin API previews a realm policy change before it is saved**
@@ -4845,7 +4854,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/qauth-labs/qauth/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/qauth-labs/qauth/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/qauth-labs/qauth/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/qauth-labs/qauth/compare/v0.1.3...v0.2.0
