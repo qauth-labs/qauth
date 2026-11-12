@@ -19,7 +19,7 @@ import type { Classification, ClassifyInput } from '../../helpers/admin-operatio
 import { ENVIRONMENTS } from '../../helpers/environment-policy';
 import { AGENT_MODES } from '../../helpers/scope-modes';
 import type { ChangeDirection } from '../change-preview';
-import type { AdminClient } from './representation';
+import { type AdminClient, shownFirstPartyPolicy, storedFirstPartyPolicy } from './representation';
 
 /**
  * THE FIELD TABLE OF A CLIENT (ADR-020 §3 and its Appendix, ADR-019 Decision
@@ -158,7 +158,7 @@ const SECURITY_WHEN = (
  */
 export const CLIENT_FIELDS = Object.freeze({
   id: READ_ONLY('The id the server gave the client.'),
-  clientId: READ_ONLY('The OAuth client_id, which tokens and grants name: never changed.'),
+  client_id: READ_ONLY('The OAuth client_id, which tokens and grants name: never changed.'),
   name: WRITE_FIELD('The name the client is shown under: display data.'),
   description: WRITE_FIELD('A description for admins: display data.'),
   developerId: READ_ONLY('Who owns the client: the developer API keeps it (ADR-012).'),
@@ -295,7 +295,7 @@ export const PATCHABLE_CLIENT_FIELDS: readonly ClientFieldName[] = Object.freeze
 export type PatchableClientField = Exclude<
   ClientFieldName,
   | 'id'
-  | 'clientId'
+  | 'client_id'
   | 'developerId'
   | 'provisionedByOperator'
   | 'dynamicallyRegistered'
@@ -433,9 +433,11 @@ export function applyClientPatch(state: AdminClient, body: unknown): AppliedClie
   } else if (profile === 'web_redirect' && !named.has('firstPartyPolicy')) {
     client['firstPartyPolicy'] = null;
   } else if (profile === 'native_backend') {
-    const policy = firstPartyPolicySchema.safeParse(client['firstPartyPolicy'] ?? {});
+    const policy = firstPartyPolicySchema.safeParse(
+      storedFirstPartyPolicy(client['firstPartyPolicy'] ?? {})
+    );
     // A policy that does not parse is kept as sent: the check refuses it.
-    if (policy.success) client['firstPartyPolicy'] = policy.data;
+    if (policy.success) client['firstPartyPolicy'] = shownFirstPartyPolicy(policy.data);
   }
 
   if (client['backchannelLogoutUri'] !== state.backchannelLogoutUri) {

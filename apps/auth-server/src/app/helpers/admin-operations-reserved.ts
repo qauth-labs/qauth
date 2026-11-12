@@ -177,7 +177,7 @@ const REALM_POLICIES = (() => {
  */
 const CLIENT_STATE = {
   id: CLIENT.clientId,
-  clientId: 'app',
+  client_id: 'app',
   name: 'App',
   description: null,
   developerId: null,

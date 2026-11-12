@@ -38,6 +38,7 @@ import {
   adminClientOf,
   adminClientVersion,
   CLIENT_URI_MAX_LENGTH,
+  storedFirstPartyPolicy,
 } from './representation';
 
 /**
@@ -394,7 +395,9 @@ function firstPartyProblems(client: AdminClient): ClientFieldProblem[] {
     }
     return problems;
   }
-  if (!firstPartyPolicySchema.safeParse(client.firstPartyPolicy ?? {}).success) {
+  if (
+    !firstPartyPolicySchema.safeParse(storedFirstPartyPolicy(client.firstPartyPolicy ?? {})).success
+  ) {
     refuse('/firstPartyPolicy', 'firstPartyPolicy is not a valid native_backend policy');
   }
   if (!(client.grantTypes as readonly string[]).includes('authorization_code')) {
@@ -512,7 +515,7 @@ export function shownValue(value: unknown): string {
 /** The client an approval is about, as its first lines. */
 function clientLines(client: AdminClient): RenderedField[] {
   return [
-    { label: 'client', value: `${client.clientId} (${client.name})` },
+    { label: 'client', value: `${client.client_id} (${client.name})` },
     {
       label: 'owner',
       value:

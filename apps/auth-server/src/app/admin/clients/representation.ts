@@ -82,8 +82,8 @@ const jwkSetSchema = z.object({ keys: z.array(z.record(z.string(), z.unknown()))
 export const adminFirstPartyPolicySchema = z
   .object({
     flows: z.array(z.enum(FIRST_PARTY_FLOWS)),
-    email_code_after_password: z.boolean(),
-    pkce_required: z.boolean(),
+    emailCodeAfterPassword: z.boolean(),
+    pkceRequired: z.boolean(),
   })
   .meta({ id: 'AdminClientFirstPartyPolicy' });
 
@@ -91,7 +91,7 @@ export const adminFirstPartyPolicySchema = z
 export const adminClientSchema = z
   .object({
     id: z.uuid().meta({ description: 'The id the admin API names the client by.' }),
-    clientId: z.string().meta({
+    client_id: z.string().meta({
       description:
         'The OAuth client_id. For a client registered from a Client ID Metadata Document, the URL of that document.',
     }),
@@ -220,9 +220,40 @@ function publicJwks(jwks: OAuthClientRecord['jwks']): AdminClient['jwks'] {
   };
 }
 
+/**
+ * A first-party policy in the names the representation gives its members
+ * (camelCase), from the names `oauth_clients.first_party_policy` stores them
+ * under (#631). A member it does not know is kept as it is, so the check
+ * still refuses it.
+ */
+export function shownFirstPartyPolicy(policy: unknown): unknown {
+  if (typeof policy !== 'object' || policy === null || Array.isArray(policy)) return policy;
+  const { email_code_after_password, pkce_required, ...rest } = policy as Record<string, unknown>;
+  return {
+    ...rest,
+    ...(email_code_after_password === undefined
+      ? {}
+      : { emailCodeAfterPassword: email_code_after_password }),
+    ...(pkce_required === undefined ? {} : { pkceRequired: pkce_required }),
+  };
+}
+
+/** A first-party policy in the names the column stores (#631): {@link shownFirstPartyPolicy} undone. */
+export function storedFirstPartyPolicy(policy: unknown): unknown {
+  if (typeof policy !== 'object' || policy === null || Array.isArray(policy)) return policy;
+  const { emailCodeAfterPassword, pkceRequired, ...rest } = policy as Record<string, unknown>;
+  return {
+    ...rest,
+    ...(emailCodeAfterPassword === undefined
+      ? {}
+      : { email_code_after_password: emailCodeAfterPassword }),
+    ...(pkceRequired === undefined ? {} : { pkce_required: pkceRequired }),
+  };
+}
+
 /** A stored first-party policy, as the representation shows it, or `null`. */
 function firstPartyPolicyOf(policy: unknown): AdminClient['firstPartyPolicy'] {
-  const parsed = adminFirstPartyPolicySchema.safeParse(policy);
+  const parsed = adminFirstPartyPolicySchema.safeParse(shownFirstPartyPolicy(policy));
   return parsed.success ? parsed.data : null;
 }
 
@@ -230,7 +261,7 @@ function firstPartyPolicyOf(policy: unknown): AdminClient['firstPartyPolicy'] {
 export function adminClientOf(row: OAuthClientRecord): AdminClient {
   return {
     id: row.id,
-    clientId: row.clientId,
+    client_id: row.clientId,
     name: row.name,
     description: row.description,
     developerId: row.developerId,

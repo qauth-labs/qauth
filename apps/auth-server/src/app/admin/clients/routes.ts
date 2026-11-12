@@ -68,6 +68,7 @@ import {
   CLIENT_RESPONSE_TYPES,
   CLIENT_URI_MAX_LENGTH,
   type OAuthClientRecord,
+  storedFirstPartyPolicy,
 } from './representation';
 
 /**
@@ -158,8 +159,8 @@ const VALUE_SCHEMAS = {
   firstPartyProfile: z.enum(FIRST_PARTY_PROFILES),
   firstPartyPolicy: z.strictObject({
     flows: flows.optional(),
-    email_code_after_password: z.boolean().optional(),
-    pkce_required: z.boolean().optional(),
+    emailCodeAfterPassword: z.boolean().optional(),
+    pkceRequired: z.boolean().optional(),
   }),
   firstPartyReason: z.string().min(1).max(FIRST_PARTY_REASON_MAX_LENGTH),
   accessTokenLifespanSeconds: z.int().min(1).max(CLIENT_ACCESS_TOKEN_LIFESPAN_MAX),
@@ -187,8 +188,8 @@ export function clientPatchBodySchema(): z.ZodType {
       name === 'firstPartyPolicy'
         ? z.strictObject({
             flows: flows.nullable().optional(),
-            email_code_after_password: z.boolean().nullable().optional(),
-            pkce_required: z.boolean().nullable().optional(),
+            emailCodeAfterPassword: z.boolean().nullable().optional(),
+            pkceRequired: z.boolean().nullable().optional(),
           })
         : VALUE_SCHEMAS[name];
     shape[name] = value.nullable().optional();
@@ -206,6 +207,10 @@ export function clientCreateBodySchema(): z.ZodType {
   }
   return z.strictObject(shape).meta({ id: 'AdminClientCreateRequest' });
 }
+
+/** The body of an operation that takes none: absent, or an empty object. */
+const emptyBody = (id: string) =>
+  z.strictObject({}).optional().meta({ id, description: 'No body, or an empty object.' });
 
 /** A new client's representation, and its secret once. */
 const registeredClientSchema = adminClientSchema
@@ -285,7 +290,9 @@ function columnsOf(client: AdminClient) {
     maxAgentMode: client.maxAgentMode,
     verifiedDomain: client.verifiedDomain,
     firstPartyProfile: client.firstPartyProfile,
-    firstPartyPolicy: client.firstPartyPolicy as OAuthClientRecord['firstPartyPolicy'],
+    firstPartyPolicy: storedFirstPartyPolicy(
+      client.firstPartyPolicy
+    ) as OAuthClientRecord['firstPartyPolicy'],
     firstPartyReason: client.firstPartyReason,
     accessTokenLifespanSeconds: client.accessTokenLifespanSeconds,
     refreshTokenLifespanSeconds: client.refreshTokenLifespanSeconds,
@@ -306,12 +313,12 @@ function changedColumns(before: AdminClient, after: AdminClient) {
 function clientEventOptions(
   request: FastifyRequest,
   realmId: string,
-  client: { readonly clientId: string }
+  client: Pick<AdminClient, 'client_id'>
 ) {
   return {
     tx: adminTransaction(request),
     realmId,
-    subject: { type: 'client' as const, id: client.clientId },
+    subject: { type: 'client' as const, id: client.client_id },
     actor: { type: 'user' as const, id: requestAdminCaller(request).userId },
   };
 }
@@ -321,7 +328,7 @@ function policyMembersOf(client: AdminClient) {
   return client.firstPartyProfile === 'native_backend' && client.firstPartyPolicy !== null
     ? {
         flows: [...client.firstPartyPolicy.flows],
-        pkceRequired: client.firstPartyPolicy.pkce_required,
+        pkceRequired: client.firstPartyPolicy.pkceRequired,
       }
     : {};
 }
@@ -406,7 +413,7 @@ function requireWithin(
 function newClientTemplate(): AdminClient {
   return {
     id: '00000000-0000-0000-0000-000000000000',
-    clientId: '',
+    client_id: '',
     name: '',
     description: null,
     developerId: null,
@@ -776,6 +783,9 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
         'x-qauth-errors': [400, 401, 403, 404, 409, 412, 428],
         params: clientParams,
         headers: ifMatchHeadersSchema,
+        // No body; an approval binds the request as it is sent, so one that
+        // sends `{}` is approved only as filed with `{}`.
+        body: emptyBody('AdminClientDeleteRequest'),
         response: { 204: z.null().meta({ description: 'The client is deleted.' }) },
       },
     },
@@ -817,11 +827,11 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: 'Enable a client',
         description:
-          "Lifts the client's suspension, and switches on a client no developer owns; a developer's own switch stays theirs. A security operation: the client obtains tokens again, so it needs clients.security and an approval, filed against the client as it stands; If-Match names its ETag (428 without it, 412 when it moved). Its body is an empty object. A client already enabled is answered as it is.",
+          "Lifts the client's suspension, and switches on a client no developer owns; a developer's own switch stays theirs. A security operation: the client obtains tokens again, so it needs clients.security and an approval, filed against the client as it stands; If-Match names its ETag (428 without it, 412 when it moved). It takes no body, or an empty object. A client already enabled is answered as it is.",
         'x-qauth-errors': [400, 401, 403, 404, 412, 428],
         params: clientParams,
         headers: ifMatchHeadersSchema,
-        body: z.strictObject({}).meta({ id: 'AdminClientEnableRequest' }),
+        body: emptyBody('AdminClientEnableRequest'),
         response: { 200: adminClientSchema },
       },
     },
@@ -870,10 +880,10 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: 'Suspend a client',
         description:
-          'Suspends the client: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it. A write: it only takes tokens away, so it needs no approval and no If-Match. Its body is an empty object. A client already suspended is answered as it is.',
+          'Suspends the client: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it. A write: it only takes tokens away, so it needs no approval and no If-Match. It takes no body, or an empty object. A client already suspended is answered as it is.',
         'x-qauth-errors': [400, 401, 403, 404],
         params: clientParams,
-        body: z.strictObject({}).meta({ id: 'AdminClientDisableRequest' }),
+        body: emptyBody('AdminClientDisableRequest'),
         response: { 200: adminClientSchema },
       },
     },
