@@ -18,10 +18,11 @@ which changes are security operations all come from it, and so does this page.
 Most of them already live on the realm row: the access, development access and refresh token
 lifetimes, the verified-account, password and brute-force policy, the environment ceiling, the
 scopes a dynamically registered client may hold, whether and from which hosts the realm accepts a
-Client ID Metadata Document, and the mail transport and sender. The rest are still read from the
-environment, for every realm: the verification link's lifetime and resend rule. Nothing reads the
-`admin` group yet. Once a policy lives on the realm row, the environment only seeds a new
-realm's value, and the realm row owns it from then on.
+Client ID Metadata Document, the mail transport and sender, and whether the hosted sign-in offers
+a passkey after a password sign-in. The rest are still read from the environment, for every realm:
+the verification link's lifetime and resend rule. Nothing reads the `admin` group yet. Once a
+policy lives on the realm row, the environment only seeds a new realm's value, and the realm row
+owns it from then on.
 
 A secret field, such as the SMTP password, is never in the policies: the realm keeps its value in
 its secret store, encrypted with the realm's data-at-rest key, and the representation shows only
@@ -113,6 +114,12 @@ needs what its strictest change needs.
 | ------------------------------- | ------- | ----------------------------------- | ------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `botChallenge.requiredAtSignUp` | `false` | `BOT_CHALLENGE_REQUIRED_AT_SIGN_UP` | `true`        | `security` when loosened (`credential-path`), else `write` | Whether every `prompt=create` registration passes the bot challenge before its address is asked for, whatever the client; it then needs JavaScript, a client that cannot serve the challenge cannot register, and the legacy `POST /auth/register` ignores it. |
 | `botChallenge.difficulty`       | `18`    | `BOT_CHALLENGE_DIFFICULTY`          | higher        | `security` when loosened (`credential-path`), else `write` | How many leading zero bits the built-in proof of work asks for; each one doubles the work of the page that solves it, and 18 takes a browser a second or two.                                                                                                  |
+
+### `passkeys`
+
+| Field                       | Default | Seeded from                   | Stricter when | Class   | Description                                                                                                                                                                                                                               |
+| --------------------------- | ------- | ----------------------------- | ------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `passkeys.offerAfterSignIn` | `true`  | `PASSKEY_OFFER_AFTER_SIGN_IN` | `true`        | `write` | Whether the hosted sign-in offers to add a passkey after a password sign-in, to a verified account whose only factor is that password, while passkeys are on (`WEBAUTHN_ENABLED`); a passkey added from the account page is not affected. |
 
 ### `registration`
 

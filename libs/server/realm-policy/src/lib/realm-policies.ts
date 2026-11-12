@@ -8,6 +8,7 @@ import {
   jwtEnvSchema,
   observabilityEnvSchema,
   passwordEnvSchema,
+  webauthnEnvSchema,
 } from '@qauth-labs/server-config';
 import type { z } from 'zod';
 
@@ -82,6 +83,7 @@ const SERVER_ENV_PARSERS: ReadonlyMap<string, z.ZodType> = new Map(
     observabilityEnvSchema,
     emailEnvSchema,
     botChallengeEnvSchema,
+    webauthnEnvSchema,
   ].flatMap((schema) => Object.entries(envSchemaShape(schema)))
 );
 

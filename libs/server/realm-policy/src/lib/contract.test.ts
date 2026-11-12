@@ -62,6 +62,9 @@ const TABLE: Readonly<Record<string, readonly [string | null, string, string]>> 
     'loosening',
   ],
   'botChallenge.difficulty': ['BOT_CHALLENGE_DIFFICULTY', 'higher-is-stricter', 'loosening'],
+  // #1083: the offer moves an account toward a passkey, so on is stricter,
+  // but turning it off changes no effect of the closed list.
+  'passkeys.offerAfterSignIn': ['PASSKEY_OFFER_AFTER_SIGN_IN', 'true-is-stricter', 'never'],
   'registration.dynamicRegistrationAllowedScopes': [
     'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
     'subset-is-stricter',

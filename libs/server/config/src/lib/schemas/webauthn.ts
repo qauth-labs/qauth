@@ -172,6 +172,16 @@ export const webauthnEnvSchema = z.object({
   WEBAUTHN_ENABLED: strictBoolean(false),
 
   /**
+   * Seeds a new realm's `passkeys.offerAfterSignIn` (#1083): whether the
+   * hosted sign-in offers to add a passkey after a password sign-in of a
+   * verified account whose only factor is that password. The auth server
+   * reads each realm's own policy from the realm row. Defaults to `true`, the
+   * offer of #651; a passkey added from the account page (#844) does not
+   * read it. Parsed by {@link strictBoolean}; unset and blank mean `true`.
+   */
+  PASSKEY_OFFER_AFTER_SIGN_IN: strictBoolean(true),
+
+  /**
    * The default realm's passkey RP ID (ADR-019 Decision 2). Unset: the realm's
    * exact host, the host of `JWT_ISSUER`. A parent domain of that host needs
    * `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN=true` and logs a warning at every

@@ -278,6 +278,22 @@
       "environmentBound": false
     },
     {
+      "path": "passkeys.offerAfterSignIn",
+      "summary": "Whether the hosted sign-in offers to add a passkey after a password sign-in, to a verified account whose only factor is that password, while passkeys are on (`WEBAUTHN_ENABLED`); a passkey added from the account page is not affected.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#passkeys",
+      "default": true,
+      "secret": false,
+      "direction": "true-is-stricter",
+      "securityWhen": "never",
+      "class": {
+        "tightening": "write",
+        "loosening": "write",
+        "neutral": "write"
+      },
+      "effects": [],
+      "environmentBound": false
+    },
+    {
       "path": "registration.dynamicRegistrationAllowedScopes",
       "summary": "The scopes a dynamically registered client may hold; a scope outside the list is dropped from the registration, and no scope of the reserved qauth: namespace can be listed.",
       "docs": "https://docs.qauth.dev/reference/realm-policies/#registration",
