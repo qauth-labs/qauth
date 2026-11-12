@@ -31,8 +31,8 @@ summary: >-
   none. An assertion is reserved on the limiters, its ceremony is taken, and it is verified with user verification; a
   right one proves its account with ["pop","mfa"]. A password on a passkey-bound account proves nothing that completes
   the sign-in: the next step is the passkey, a disabled one still counting as bound, and a transport that cannot serve
-  it is sent to the hosted pages. After a sign-in that proved only a password, the hosted pages offer a passkey; a
-  verified account's passkey is bound after the fresh factor with no emailed code (the account decides, never a
+  it is sent to the hosted pages. After a sign-in that proved only a password, the hosted pages offer a passkey, unless
+  the realm turned that offer off; a verified account's passkey is bound after the fresh factor with no emailed code (the account decides, never a
   channel), an unclaimed account's never, the user is told, and the first set of recovery codes is shown.
 
 scope:
@@ -55,6 +55,9 @@ scope:
       and removing one (ACC-02)'
     - 'the enrolment offer after a sign-in that proved no password (an upstream sign-in), which the account page
       serves instead'
+    - "a realm that turns the offer off while it is offered (#1083): the realm's word is read again on every round that
+      would offer it or take its answer, so the next round makes no offer, an answer to it binds nothing, and the
+      sign-in completes"
     - 'a failure to settle a reservation, to update a sign counter or to send a notice: reported, and it changes no
       answer'
     - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
@@ -139,6 +142,16 @@ context:
   accountVerified:
     values: [false, true]
     initial: any
+  # The realm's passkeys.offerAfterSignIn (#1083; on by default), read on the round that would make the offer. A
+  # passkey the person asks for from the account page (#844) is drawn elsewhere and never reads it.
+  realmOffers:
+    values: [false, true]
+    initial: any
+    say:
+      'false': >-
+        the realm turned the offer off, or its word could not be read (a store failure, or no boolean): reported, and
+        the offer is optional, so it is not made
+      'true': 'the realm keeps the offer: its passkeys.offerAfterSignIn is on, the default'
   # this round reserved the assertion on the limiters, which count it until it settles
   attemptReserved: { values: [false, true], initial: false }
   # this round took the held ceremony from the challenge store
@@ -178,7 +191,7 @@ guards:
   passkeyAskable: 'servesGet and passkeyUsable'
   enrolmentOffered: >-
     hostedPages and passwordProved and not passkeyProved and not passkeyBound and not enrolmentDeclined and authAge ==
-    'fresh' and accountVerified
+    'fresh' and accountVerified and realmOffers
   badRegistration: "registration == 'refused'"
   alreadyBound: "registration == 'bound'"
   unclaimed: 'not accountVerified'
@@ -394,7 +407,8 @@ states:
       A sign-in completes only after the account's strongest bound factor: a passkey above a password, a disabled one
       still counting. An emailed code never stands in for it; on the hosted pages a recovery code may
       (flows/core/recovery-code). After the rest of rule 8, a sign-in that proved a password on an account with no
-      passkey is offered one, on the hosted pages, while the password is at most 5 minutes old.
+      passkey is offered one, on the hosted pages, while the password is at most 5 minutes old and the realm keeps the
+      offer (passkeys.offerAfterSignIn, #1083), read last.
     always:
       - guard: passkeyOwed and passkeyAskable
         target: startingDowngrade
@@ -410,7 +424,9 @@ states:
         say: 'a password-only sign-in on the hosted pages: a passkey is offered'
       - target: completed
         effect: [waitFloor]
-        say: 'the strongest bound factor is proved, and no passkey is offered'
+        say: >-
+          the strongest bound factor is proved, and no passkey is offered: none is owed, or the realm turned the offer
+          off
 
   startingDowngrade:
     title: Start, or keep, the ceremony for the passkey the account must prove
@@ -792,6 +808,11 @@ assertions:
   - id: a-verified-account-before-the-first-passkey
     never: 'passkeyStored and not accountVerified'
     say: 'A passkey is bound only to a verified account, with no emailed code: the account decides, never a channel'
+  - id: the-realm-decides-the-offer
+    never: "state in ['startingRegistration', 'offeringEnrolment'] and not realmOffers"
+    say: >-
+      The optional passkey offer is made only while the realm keeps it (passkeys.offerAfterSignIn, #1083): a realm
+      that turned it off never shows the page it decided against
   - id: a-fresh-factor-before-a-binding
     never: "passkeyStored and authAge == 'stale'"
     say: 'A passkey is bound only within 5 minutes of the factor the transaction proved'
