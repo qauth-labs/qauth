@@ -95,7 +95,8 @@ are unique, and every JWK `kid` starts with `throwaway-test-`.
   step with the step's name as its id. Until QAuth 1.0.0 the contract is a release candidate, and
   the file is replaced whole whenever its source changes, so its cases may change under the same
   ids; the two rules above do not bind it yet. From 1.0.0 on its cases are fixed, and those rules
-  apply to it as to every other file.
+  apply to it as to every other file. The `contract-example` case of `interaction/proof-of-work.json`
+  is the `captcha` step's example in the same contract, and follows it the same way.
 - **The format is a release candidate until QAuth 1.0.0**, `qauth-vectors/1-rc.<M>`, and nothing
   about it is promised yet. A breaking change before then raises `<M>` and comes with its own
   schema, so a format id never names two formats. The release that ships 1.0.0 drops the suffix,

@@ -46,7 +46,7 @@
         "accepted": true,
         "smallest_solution": true
       },
-      "notes": "The example of the captcha step in the Interaction API contract (/interaction/v1-rc.0/openapi.json): its params and its answer."
+      "notes": "The example of the captcha step in the Interaction API contract (/interaction/v1-rc.0/openapi.json): its params and its answer. Until QAuth 1.0.0 this case follows the example, as interaction/steps.json does."
     },
     {
       "id": "exactly-the-difficulty",
@@ -196,7 +196,7 @@
         "accepted": false,
         "smallest_solution": false
       },
-      "notes": "Its digest would pass; a line feed is not a digit. A pattern whose end anchor also matches before a final line feed, as `$` does in Python, PCRE and Perl, takes it: match the whole string."
+      "notes": "Its digest would pass; a line feed is not a digit. A pattern whose end anchor also matches before a final line feed, as `$` does in Python, PCRE and Perl, takes it: match the whole string. On the wire the answer schema (printable ASCII) refuses it first, as an invalid answer."
     },
     {
       "id": "non-ascii-digits",
@@ -211,7 +211,7 @@
         "accepted": false,
         "smallest_solution": false
       },
-      "notes": "Its digest would pass; Arabic-Indic digits match \\d in some pattern engines, Python's and .NET's among them, but a nonce is ASCII 0 to 9."
+      "notes": "Its digest would pass; Arabic-Indic digits match \\d in some pattern engines, Python's and .NET's among them, but a nonce is ASCII 0 to 9. On the wire the answer schema (printable ASCII) refuses it first, as an invalid answer."
     }
   ]
 }
