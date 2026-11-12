@@ -1,5 +1,8 @@
+import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 
 import {
   createFixtureNetwork,
@@ -59,6 +62,11 @@ import type { ServiceRole } from './service-roles';
  * delivered, not before. Every delivered SET is checked for the claims
  * RFC 8417 §2.2 requires.
  *
+ * And the user half of #893: disabling an account with the operator tool
+ * ends its browser sessions and its refresh tokens at once, and delivers
+ * RISC `account-disabled` and one CAEP `session-revoked` naming each session
+ * it ended.
+ *
  * The suite runs twice. Once as one process holding every role on one
  * database user; once with the roles apart, each process on a database user
  * of its own that `db:grants` gave exactly its roles' grants (#498): `api`
@@ -99,7 +107,12 @@ const SESSION_REVOKED = `${CAEP}session-revoked`;
 const CREDENTIAL_CHANGE = `${CAEP}credential-change`;
 const TOKEN_CLAIMS_CHANGE = `${CAEP}token-claims-change`;
 const TOKEN_REVOKED = 'urn:qauth:secevent:token-revoked:v1-rc.0';
+const ACCOUNT_DISABLED = 'https://schemas.openid.net/secevent/risc/event-type/account-disabled';
 const ALL_EVENTS = [SESSION_REVOKED, CREDENTIAL_CHANGE, TOKEN_CLAIMS_CHANGE, TOKEN_REVOKED];
+
+/** The operator tools' library, and the `tsx` that runs one as an operator does. */
+const DB_LIB = path.resolve(process.cwd(), 'libs/infra/db');
+const TSX_CLI = createRequire(path.join(DB_LIB, 'package.json')).resolve('tsx/cli');
 
 /** Public addresses the fixture DNS hands out; each is served by a local server. */
 const RECEIVER_ADDRESS = '93.184.215.14';
@@ -349,15 +362,16 @@ describe.each<Deployment>(['one process', 'split roles'])(
     async function createStream(
       app: FastifyInstance,
       who: Receiver,
-      endpoint = 'https://receiver.egress.test/events'
+      endpoint = 'https://receiver.egress.test/events',
+      events: readonly string[] = ALL_EVENTS
     ): Promise<string> {
       const response = await call(app, who, '/ssf/stream', {
-        events_requested: ALL_EVENTS,
+        events_requested: events,
         delivery: { method: PUSH, endpoint_url: endpoint },
       });
       expect(response.statusCode, response.body).toBe(201);
       const created = response.json<{ stream_id: string; events_delivered: string[] }>();
-      expect([...created.events_delivered].sort()).toEqual([...ALL_EVENTS].sort());
+      expect([...created.events_delivered].sort()).toEqual([...events].sort());
       return created.stream_id;
     }
 
@@ -507,6 +521,144 @@ describe.each<Deployment>(['one process', 'split roles'])(
         SESSION_REVOKED
       ];
       expect(members).toEqual({ event_timestamp: set.claims['iat'], initiating_entity: 'user' });
+    });
+
+    /**
+     * Run the `db:disable-user` operator tool as an operator does, on the
+     * tables' owner's connection: its exit code and what it printed.
+     */
+    async function disableWithTheTool(
+      userId: string
+    ): Promise<{ code: number | null; stdout: string; stderr: string }> {
+      if (!infra) throw new Error('infrastructure not started');
+      const child = spawn(
+        process.execPath,
+        [
+          TSX_CLI,
+          'src/scripts/disable-user.ts',
+          `--realm=${E2E_REALM_NAME}`,
+          `--user-id=${userId}`,
+        ],
+        {
+          cwd: DB_LIB,
+          env: { PATH: process.env['PATH'] ?? '', DATABASE_URL: infra.postgres.connectionString },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      );
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
+      child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')));
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.on('error', reject);
+        child.on('close', resolve);
+      });
+      return { code, stdout, stderr };
+    }
+
+    it('ends a disabled account’s sessions and refresh tokens at once, and delivers account-disabled and a session-revoked naming each session (#893)', async () => {
+      const { app, realmId } = await boot();
+      const who = await newReceiver(app, realmId);
+      const streamId = await createStream(app, who, 'https://receiver.egress.test/events', [
+        SESSION_REVOKED,
+        ACCOUNT_DISABLED,
+      ]);
+      const user = await newUser(app, realmId, who.id);
+      // Two browser sessions and a refresh token the receiver's client holds,
+      // written as the sign-in and the code exchange write them.
+      const sids: string[] = [];
+      for (let i = 0; i < 2; i++) {
+        const { rows } = await ownerPool().query<{ id: string }>(
+          `INSERT INTO sessions (realm_id, user_id, auth_time, amr, expires_at)
+           VALUES ($1, $2, $3, '["pwd"]', $4) RETURNING id::text AS id`,
+          [realmId, user.userId, Date.now(), Date.now() + 3_600_000]
+        );
+        sids.push(rows[0].id);
+      }
+      const token = await app.repositories.refreshTokens.create({
+        userId: user.userId,
+        oauthClientId: who.id,
+        tokenHash: app.jwtUtils.hashRefreshToken(`rt-${randomUUID()}`),
+        familyCreatedAt: Date.now(),
+        familySessionExpiresAt: null,
+        authTime: null,
+        amr: null,
+        expiresAt: Date.now() + 3_600_000,
+      });
+      const added = await addSubject(app, who, streamId, userSubject(user.userId));
+      expect(added.statusCode, added.body).toBe(200);
+      await fanOutStarted(realmId);
+
+      const run = await disableWithTheTool(user.userId);
+      expect(run.code, run.stderr).toBe(0);
+      expect(run.stdout).toContain('Ended 2 browser sessions');
+
+      // Ended in the disabling transaction, not at their next use.
+      const sessions = await ownerPool().query<{ id: string; revoked_reason: string | null }>(
+        `SELECT id::text AS id, revoked_reason FROM sessions WHERE user_id = $1 ORDER BY id`,
+        [user.userId]
+      );
+      expect(sessions.rows).toEqual(
+        [...sids].sort().map((id) => ({ id, revoked_reason: 'admin' }))
+      );
+      const revoked = await ownerPool().query<{ revoked: boolean; revoked_reason: string | null }>(
+        'SELECT revoked, revoked_reason FROM refresh_tokens WHERE id = $1',
+        [token.id]
+      );
+      expect(revoked.rows).toEqual([{ revoked: true, revoked_reason: 'account_disabled' }]);
+
+      // RISC account-disabled for the account, as before (#892).
+      const disabled = await waitForSet(app, receiver, who.clientId, ACCOUNT_DISABLED);
+      expectRfc8417Claims(disabled);
+      expect(disabled.claims).toMatchObject({
+        jti: await eventIdOf('urn:qauth:event:user.disabled:v1-rc.0', user.userId),
+        sub_id: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
+      });
+      expect(
+        (disabled.claims['events'] as Record<string, Record<string, unknown>>)[ACCOUNT_DISABLED]
+      ).toEqual({ event_timestamp: disabled.claims['iat'], initiating_entity: 'admin' });
+
+      // And one CAEP session-revoked per ended session, naming it, so a
+      // receiver that acts per session ends each.
+      let revokedSets: DeliveredSet[] = [];
+      await vi.waitFor(
+        async () => {
+          revokedSets = (await deliveredSets(app, receiver, who.clientId)).filter((set) =>
+            Object.hasOwn(set.claims['events'] as object, SESSION_REVOKED)
+          );
+          expect(revokedSets).toHaveLength(2);
+        },
+        { timeout: 20_000, interval: 200 }
+      );
+      const { rows: recorded } = await ownerPool().query<{ id: string; sid: string }>(
+        `SELECT id::text AS id, data->>'sid' AS sid FROM events
+         WHERE type = 'urn:qauth:event:user.session_revoked:v1-rc.0' AND subject_id = $1`,
+        [user.userId]
+      );
+      const eventOf = new Map(recorded.map((row) => [row.sid, row.id]));
+      expect([...eventOf.keys()].sort()).toEqual([...sids].sort());
+      const named = revokedSets.map((set) => {
+        expectRfc8417Claims(set);
+        const subject = set.claims['sub_id'] as { session: { id: string } };
+        expect(set.claims).toMatchObject({
+          jti: eventOf.get(subject.session.id),
+          aud: who.clientId,
+          sub_id: {
+            format: 'complex',
+            user: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
+            session: { format: 'opaque', id: subject.session.id },
+          },
+        });
+        expect(
+          (set.claims['events'] as Record<string, Record<string, unknown>>)[SESSION_REVOKED]
+        ).toEqual({
+          event_timestamp: set.claims['iat'],
+          initiating_entity: 'admin',
+          reason_admin: { en: 'The account was disabled; every session it held was revoked.' },
+        });
+        return subject.session.id;
+      });
+      expect(named.sort()).toEqual([...sids].sort());
     });
 
     it('delivers a revoked API key as credential-change to its own client’s stream, and to no other receiver', async () => {
