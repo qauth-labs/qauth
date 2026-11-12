@@ -821,8 +821,9 @@ export interface RefreshTokensRepository {
   revokeAllForUser(userId: string, reason?: string, tx?: DbClient): Promise<void>;
   /**
    * Revoke the refresh families the given sign-ins of a user opened
-   * (#1064): every active token of the user whose `auth_time` is one of
-   * `authTimes`, the `auth_time` of each sign-in's browser session.
+   * (#1064): every unrevoked token, expired ones too, of each family of the
+   * user one of whose tokens carries one of `authTimes`, the `auth_time` of
+   * each sign-in's browser session.
    *
    * @returns Count of rows revoked by this call.
    */

@@ -1158,20 +1158,37 @@ describe('repository integration (real Postgres)', () => {
       const client = await seedClient(realm.id);
       const tokens = createRefreshTokensRepository(db().database.db);
       const openedAt = Date.now() - 60_000;
-      const seedToken = (tokenHash: string, userId: string, authTime: number | null) =>
+      const seedToken = (
+        tokenHash: string,
+        userId: string,
+        authTime: number | null,
+        family: { familyId?: string; expiresAt?: number } = {}
+      ) =>
         tokens.create({
           tokenHash,
           userId,
           oauthClientId: client.id,
-          familyCreatedAt: Date.now(),
+          familyCreatedAt: openedAt,
           familySessionExpiresAt: null,
           authTime,
           amr: authTime === null ? null : ['pwd'],
           scopes: ['read:foo'],
           expiresAt: Date.now() + 600_000,
+          ...family,
         });
       const opened = await seedToken('opened-hash', user.id, openedAt);
-      const rotated = await seedToken('rotated-hash', user.id, openedAt);
+      // A token a previous release rotated carries no auth_time: its family
+      // is found through the token before it.
+      const rotated = await seedToken('rotated-hash', user.id, null, {
+        familyId: opened.familyId,
+      });
+      // An expired member of the family is revoked too.
+      const expired = await seedToken('expired-hash', user.id, openedAt, {
+        familyId: opened.familyId,
+        expiresAt: Date.now() - 1_000,
+      });
+      expect(rotated.familyId).toBe(opened.familyId);
+      expect(expired.familyId).toBe(opened.familyId);
       const kept = await seedToken('kept-hash', user.id, openedAt - 1);
       // A family from before #662 carries no auth_time, and is not found.
       const legacy = await seedToken('legacy-hash', user.id, null);
@@ -1179,7 +1196,7 @@ describe('repository integration (real Postgres)', () => {
 
       expect(
         await tokens.revokeFamiliesOfSignIns(user.id, [openedAt], 'new_credential_removed')
-      ).toBe(2);
+      ).toBe(3);
       const rows = await db()
         .database.db.select({
           id: refreshTokens.id,
@@ -1188,7 +1205,7 @@ describe('repository integration (real Postgres)', () => {
         })
         .from(refreshTokens);
       const byId = new Map(rows.map((row) => [row.id, row]));
-      for (const token of [opened, rotated]) {
+      for (const token of [opened, rotated, expired]) {
         expect(byId.get(token.id)).toMatchObject({
           revoked: true,
           revokedReason: 'new_credential_removed',
