@@ -204,15 +204,21 @@ one is created only when the realm allows sign-up (`ALLOW_SIGN_UP`). On success
 the browser goes back to the authorization request under its new session. A
 cancel or an error at the provider shows a page with a way back to the first
 step; every other failure shows one error page with the request's trace id.
-Nothing of either reaches the client. These pages show no further step, so an
-account that needs one is refused here: an account the provider's verified
-switch left unverified, whose address the Interaction API's ceremony page
-(`INTERACTION_UI_ENABLED`) verifies with an emailed code, whatever
-`REQUIRE_VERIFIED_ACCOUNT` says. With that switch off, these pages create no
-account at all, and neither does the ceremony page for a provider that gives no
-email: such an account could never sign in. An account that holds a passkey is
-refused in both, since a passkey outranks an upstream sign-in and no passkey
-step is served yet (#651).
+Nothing of either reaches the client.
+
+The provider proves the account as a password does, and the sign-in then asks
+for what the account still owes (ADR-017 Decision 4): an account that holds a
+passkey gives it after the provider, since a passkey outranks an upstream
+sign-in, and a recovery code may stand in for it; the realm's MFA policy
+applies; and where the realm requires verified accounts
+(`REQUIRE_VERIFIED_ACCOUNT`), an account the provider's verified switch left
+unverified has its address verified with an emailed code. The Interaction
+API's ceremony page (`INTERACTION_UI_ENABLED`) shows each of these steps, the
+passkey while passkey sign-in is on (`WEBAUTHN_ENABLED`). With the Interaction
+API off, the server-rendered pages show none, so an account that needs one is
+refused there. With the provider's verified switch off, these pages create no
+account at all, and neither does the ceremony page for a provider that gives
+no email: such an account could never sign in.
 
 ### Linking an upstream account to an existing one
 
