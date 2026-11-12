@@ -31,7 +31,7 @@ import { ladderEndUserIp } from './password-attempts';
 import { buildRealmUrl } from './realm-url';
 import { type RealmRow, requestRealm } from './request-realm';
 import { roundEnvironment } from './round-limits';
-import { linkUpstreamIdentity } from './upstream-links';
+import { finishHeldUpstreamLink } from './upstream-links';
 import { upstreamProviderCatalog } from './upstream-providers';
 import { emitUserEvent } from './user-events';
 
@@ -51,7 +51,9 @@ import { emitUserEvent } from './user-events';
  *   enrolment step (`RoundContext.enrol`), with its own rules.
  * - Linking an upstream account (#670) starts at the provider; the fresh
  *   sign-in to this account in the same interaction attaches the identity it
- *   proved. Nothing is matched by an email or anything else.
+ *   proved. That sign-in may go through another provider the account
+ *   already holds (#1080), never the one it links. Nothing is matched by an
+ *   email or anything else.
  *
  * The engine binds an account interaction's transaction to
  * {@link ACCOUNT_PAGES_ENGINE_CLIENT_ID}, which no client can hold, and every
@@ -285,26 +287,18 @@ export async function finishAccountInteraction(
     { method: options.method },
     { realmId: realm.id, userId, clientId: null, actor: 'user' }
   );
-  const link = result.upstreamLink;
   // A link whose provider proved nobody yet holds no identity: the person
   // came back from the provider, and signed in another way. Nothing is
   // attached.
-  if (link !== undefined && link.state !== 'requested') {
-    if (link.state !== 'signing_in') {
-      throw new Error('an account interaction finished with a link it never signed in for');
-    }
-    const linked = await linkUpstreamIdentity(fastify, request, {
-      realm,
-      userId,
-      identity: { provider: link.provider, externalSub: link.externalSub, iss: link.iss },
-      providerName: link.name,
-      clientId: null,
-      mailer: options.mailer,
-    });
-    if (linked.kind === 'refused') {
-      const search = new URLSearchParams({ provider: link.provider, reason: linked.reason });
-      return buildRealmUrl(realm, `/ui/upstream-link-refused?${search.toString()}`);
-    }
+  const held = await finishHeldUpstreamLink(fastify, request, {
+    realm,
+    link: result.upstreamLink,
+    transaction: result.transaction,
+    clientId: null,
+    mailer: options.mailer,
+  });
+  if (held.kind === 'refused') return held.location;
+  if (held.kind === 'linked') {
     return accountPageUrl(realm, result.request.returnTo, ACCOUNT_FINISH_NOTICES.link);
   }
   return accountPageUrl(

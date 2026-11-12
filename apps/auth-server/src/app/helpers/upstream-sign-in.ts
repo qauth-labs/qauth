@@ -61,7 +61,7 @@ import { buildRealmUrl } from './realm-url';
 import { type RealmRow, requestRealm } from './request-realm';
 import { roundEnvironment } from './round-limits';
 import { upstreamAttributeProvenance } from './upstream-attribute-provenance';
-import type { UpstreamLinkRefusal } from './upstream-links';
+import { finishHeldUpstreamLink, type UpstreamLinkRefusal } from './upstream-links';
 import {
   sendUpstreamPage,
   upstreamErrorPage,
@@ -104,6 +104,10 @@ import { emitUserEvent } from './user-events';
  *    only when the provider said so and the switch is on. An authorization
  *    request that asks to link (`qauth_link`) goes straight to the sign-in
  *    to the existing account, and refuses an identity another account holds.
+ *    That sign-in offers the realm's other providers (#1080): a callback
+ *    while it runs proves only the account that holds the identity it
+ *    proved, never creates one and never links anything else, and an
+ *    identity no account holds signs in to nothing.
  * 4. The engine takes the account as proved by the `upstream` step, which
  *    ranks with the password (below a passkey), and goes on: the passkey of
  *    an account that has one, the MFA policy, the inline verification of an
@@ -387,17 +391,30 @@ export function upstreamLinkStep(entry: UpstreamProviderEntry, create: boolean):
 }
 
 /**
- * What a round of the sign-in to the account to link changes (#670): it asks
- * for a fresh sign-in, so no password reset stands in for one (ADR-017
- * Decision 8); it offers no upstream provider, so the person proves the
- * account with its own factors; it registers nobody. The MFA policy and the
- * account's second factor apply as to every sign-in.
+ * What a round of the sign-in to the account to link `provider` changes, on
+ * the providers' callback (#670): it asks for a fresh sign-in, so no password
+ * reset stands in for one (ADR-017 Decision 8); it registers nobody. It
+ * offers the realm's upstream providers but `provider` (#1080; ADR-020 §3):
+ * one the account already holds proves it, as its own factors do, never the
+ * provider it links. The callback's rounds pick no provider, so the starter
+ * only tells the engine that this transport can start one; the Interaction
+ * API's answer round starts the one picked, with its own. The downgrade
+ * rule, the MFA policy and the account's second factor apply as to every
+ * sign-in.
  */
 export function linkSignInRound(
   engines: Pick<InteractionEngines, 'sendCode'>,
-  request: FastifyRequest
-): Pick<RoundContext, 'freshSignIn' | 'sendCode'> {
-  return { freshSignIn: true, sendCode: engines.sendCode(request) };
+  request: FastifyRequest,
+  provider: string
+): Pick<RoundContext, 'freshSignIn' | 'sendCode' | 'startUpstream' | 'withheldUpstream'> {
+  return {
+    freshSignIn: true,
+    sendCode: engines.sendCode(request),
+    withheldUpstream: provider,
+    startUpstream: async () => {
+      throw new Error('a callback round of a link’s sign-in starts no upstream provider');
+    },
+  };
 }
 
 /** The identity a `signing_in` link carries to the finish. */
@@ -699,9 +716,9 @@ export interface UpstreamLinkChoice {
   readonly receivedAt: number;
   /**
    * The context of a round of this interaction, as the Interaction API builds
-   * it; `linking`, for the sign-in to the account to link
-   * ({@link linkSignInRound}): no upstream provider, no reset, no
-   * registration.
+   * it; `linking`, for the sign-in to the account to link: no reset, no
+   * registration, and the realm's upstream providers but the one it links
+   * (#1080).
    */
   readonly context: (receivedAt: number, options: { readonly linking: boolean }) => RoundContext;
   /** The new account signed in: an upstream provider proved it. */
@@ -714,9 +731,10 @@ export interface UpstreamLinkChoice {
  * choice leads to.
  *
  * - `link`: the sign-in to the existing account starts afresh at the
- *   engine's round 0, with no upstream provider and no reset
- *   ({@link linkSignInRound}); the identity waits in the record as a
- *   `signing_in` link until that sign-in finishes the interaction.
+ *   engine's round 0, with no reset, and with the realm's other upstream
+ *   providers (#1080), each of which proves only an account that holds its
+ *   identity; the identity waits in the record as a `signing_in` link until
+ *   that sign-in finishes the interaction.
  * - `create`: only while the step offered it and the realm still allows
  *   sign-up; the new account is created as a first upstream sign-in creates
  *   one, and the engine takes the provider's proof for it.
@@ -943,7 +961,19 @@ export function upstreamRouteHost(
           }
           const environment = await roundEnvironment(fastify, realm, engineClientIdOf(state));
           const link = state.upstreamLink;
-          if (link !== undefined) {
+          if (link?.state === 'signing_in') {
+            // The sign-in to the account an identity joins (#670), through
+            // another provider (#1080; ADR-020 §3): it proves only the
+            // account that already holds the identity this provider proved,
+            // and the proof goes on as any sign-in's below, with the identity
+            // to link kept in the record. It never creates an account and
+            // never links anything else: an identity no account holds signs
+            // in to nothing. The provider being linked was never offered.
+            if (link.provider === type || pending.mode !== 'interaction') {
+              throw new UpstreamSignInRefusal('transaction_mismatch');
+            }
+            if (account === null) throw new UpstreamSignInRefusal('unknown_identity');
+          } else if (link !== undefined) {
             // A link the request asked for (`qauth_link`, #670): only the
             // provider it named, only before the provider proved anyone.
             if (
@@ -963,7 +993,7 @@ export function upstreamRouteHost(
                 upstreamRoundContext(request, state, {
                   receivedAt,
                   environment,
-                  ...linkSignInRound(engines, request),
+                  ...linkSignInRound(engines, request, type),
                 })
               ),
               receivedAt,
@@ -1025,10 +1055,13 @@ export function upstreamRouteHost(
               receivedAt,
               environment,
               // The pages show no further step: the sign-in completes here,
-              // or fails closed (a passkey, a code to verify the address).
+              // or fails closed (a passkey, a code to verify the address). A
+              // link's sign-in (#1080) goes on as its rounds do.
               ...(pending.mode === 'pages'
                 ? { serves: ['upstream'] }
-                : { sendCode: engines.sendCode(request) }),
+                : link?.state === 'signing_in'
+                  ? linkSignInRound(engines, request, link.provider)
+                  : { sendCode: engines.sendCode(request) }),
             })
           );
           return upstreamRoundDecision(reply, round, receivedAt);
@@ -1075,6 +1108,20 @@ export function upstreamRouteHost(
           { method: 'upstream' },
           { realmId: realm.id, userId, clientId: eventClientIdOf(result), actor: 'user' }
         );
+        // A link's sign-in the provider's proof finished (#1080): the
+        // identity the interaction holds joins the account it proved, as at
+        // the Interaction API's finish, or its refusal's page is shown.
+        const held = await finishHeldUpstreamLink(fastify, request, {
+          realm,
+          link: result.upstreamLink,
+          transaction: { userId, registered: result.transaction.registered },
+          clientId: eventClientIdOf(result),
+          mailer: engines.mailer,
+        });
+        if (held.kind === 'refused') {
+          reply.header('Cache-Control', 'no-store');
+          return reply.redirect(held.location, 303);
+        }
         // The pages start the authorization request again under the new
         // session; an interaction finishes it as the Interaction API does.
         const location =

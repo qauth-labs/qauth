@@ -58,7 +58,7 @@ import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-ra
 import { buildRealmUrl, realmIssuer } from '../helpers/realm-url';
 import { type RealmRow, requestRealm } from '../helpers/request-realm';
 import { roundEnvironment } from '../helpers/round-limits';
-import { linkUpstreamIdentity } from '../helpers/upstream-links';
+import { finishHeldUpstreamLink } from '../helpers/upstream-links';
 import {
   type UpstreamProviderCatalog,
   upstreamProviderCatalog,
@@ -98,10 +98,11 @@ import { emitUserEvent } from '../helpers/user-events';
  * `finishLogout` ends the session, or not, as the person decided. An
  * answer to the `upstream_link` step (#670) is decided by the host too
  * (`decideUpstreamLinkChoice`): a new account, or the sign-in to the existing
- * one, whose rounds offer no upstream provider and no reset. When that
- * sign-in finishes the interaction, the identity the provider proved joins
- * the account it signed in to (`linkUpstreamIdentity`) before the
- * authorization request goes on; a refused link goes to its page, and
+ * one, whose rounds offer no reset, and no upstream provider but the realm's
+ * others, which prove only an account that holds their identity (#1080).
+ * When that sign-in finishes the interaction, the identity the provider
+ * proved joins the account it signed in to (`finishHeldUpstreamLink`) before
+ * the authorization request goes on; a refused link goes to its page, and
  * nothing goes to the client.
  *
  * A JSON answer gets the next step view, or the final redirect, as JSON. A
@@ -569,23 +570,24 @@ async function decideAnswer(
     // A pick of an upstream provider (#639) starts it, bound to this
     // interaction once the round's state is written; the way back from the
     // provider is this ceremony page. A sign-in to link an upstream account
-    // (#670) offers none: the account's own factors prove it.
-    ...(linking
-      ? {}
-      : {
-          startUpstream: upstreamStarter(
-            request.server,
-            request,
-            catalog,
-            {
-              interactionId: interactionIdOf(request),
-              revision: state.revision + 1,
-              mode: 'interaction',
-              wayBack: ceremonyPageUrl(request),
-            },
-            answered.upstream
-          ),
-        }),
+    // (#670) offers the realm's other providers (#1080; ADR-020 §3), never
+    // the one it links: the callback takes one only as proof of an account
+    // that already holds the identity it proves.
+    ...(linking && state.upstreamLink !== undefined
+      ? { withheldUpstream: state.upstreamLink.provider }
+      : {}),
+    startUpstream: upstreamStarter(
+      request.server,
+      request,
+      catalog,
+      {
+        interactionId: interactionIdOf(request),
+        revision: state.revision + 1,
+        mode: 'interaction',
+        wayBack: ceremonyPageUrl(request),
+      },
+      answered.upstream
+    ),
     audit: async (record) => {
       const event = signInAuditEvent(record);
       await emitUserEvent(request, event.type, event.data, {
@@ -859,35 +861,22 @@ export default async function (fastify: FastifyInstance) {
               { realmId: realm.id, userId, clientId: eventClientIdOf(result), actor: 'user' }
             );
           }
-          const link = result.upstreamLink;
-          // A link the request asked for (`qauth_link`, #670) whose provider
-          // proved nobody yet holds no identity: the person came back from
-          // the provider, or never went, and signed in another way. Nothing
-          // is attached, and the sign-in finishes as any other.
-          if (link !== undefined && link.state !== 'requested') {
-            // The interaction holds an upstream identity (#670): only the
-            // sign-in to an existing account, just finished in this browser
-            // and this interaction, attaches it, to the account it proved.
-            if (link.state !== 'signing_in' || userId === undefined || registered === true) {
-              throw new Error('an interaction finished with a link it never signed in for');
-            }
-            const linked = await linkUpstreamIdentity(fastify, request, {
-              realm,
-              userId,
-              identity: { provider: link.provider, externalSub: link.externalSub, iss: link.iss },
-              providerName: link.name,
-              clientId: eventClientIdOf(result),
-              mailer: engines.mailer,
-            });
-            if (linked.kind === 'refused') {
-              const search = new URLSearchParams({
-                provider: link.provider,
-                reason: linked.reason,
-              });
-              return respond(request, reply, parsed.encoding, {
-                location: buildRealmUrl(realm, `/ui/upstream-link-refused?${search.toString()}`),
-              });
-            }
+          // The interaction holds an upstream identity (#670): only the
+          // sign-in to an existing account, just finished in this browser
+          // and this interaction, attaches it, to the account it proved. A
+          // link the request asked for (`qauth_link`) whose provider proved
+          // nobody yet holds no identity: the person came back from the
+          // provider, or never went, and signed in another way. Nothing is
+          // attached, and the sign-in finishes as any other.
+          const held = await finishHeldUpstreamLink(fastify, request, {
+            realm,
+            link: result.upstreamLink,
+            transaction: result.transaction,
+            clientId: eventClientIdOf(result),
+            mailer: engines.mailer,
+          });
+          if (held.kind === 'refused') {
+            return respond(request, reply, parsed.encoding, { location: held.location });
           }
           // The authorization request goes on (#628): the code, minted only
           // now that the interaction has ended, or the request's next

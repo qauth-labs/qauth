@@ -9,6 +9,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { readPage } from '../api-conventions/cursor';
 import type { Page } from '../api-conventions/paging';
 import type { EngineMailer, MailRealm } from './engine-mail';
+import type { UpstreamLink } from './interaction-record';
+import { buildRealmUrl } from './realm-url';
 import type { RealmRow } from './request-realm';
 import { upstreamProviderCatalog } from './upstream-providers';
 import { emitUserEvent } from './user-events';
@@ -18,10 +20,12 @@ import { emitUserEvent } from './user-events';
  * 800-63C-4 §5.4 "an authenticated session for all linking functions").
  *
  * An upstream identity joins an existing account only once the person signed
- * in to that account with its own factors and its MFA policy, in the browser
- * and the interaction in which the provider proved the identity: the
- * Interaction API calls {@link linkUpstreamIdentity} after such a sign-in
- * finished (`routes/interaction-api.ts`). The account API removes one with
+ * in to that account, with its own factors or through another upstream
+ * provider it already holds (#1080), under its MFA policy, in the browser
+ * and the interaction in which the provider proved the identity:
+ * {@link finishHeldUpstreamLink} calls {@link linkUpstreamIdentity} once such
+ * a sign-in finished (`routes/interaction-api.ts`, or the provider's callback
+ * when the provider's proof finished it). The account API removes one with
  * {@link unlinkUpstreamIdentity}, behind its fresh-authentication guard. An
  * admin never links one (ADR-019 Decision 7).
  *
@@ -177,6 +181,67 @@ export async function linkUpstreamIdentity(
     });
   }
   return result;
+}
+
+/** What {@link finishHeldUpstreamLink} did. */
+export type HeldUpstreamLinkOutcome =
+  /** The interaction held no identity to attach: no link, or one whose provider proved nobody yet. */
+  | { readonly kind: 'none' }
+  /** The identity belongs to the account the sign-in proved. */
+  | { readonly kind: 'linked' }
+  /** The link was refused and recorded: the browser goes to its page, `location`. */
+  | { readonly kind: 'refused'; readonly location: string };
+
+/** The input of {@link finishHeldUpstreamLink}. */
+export interface HeldUpstreamLinkInput {
+  readonly realm: RealmRow;
+  /** The upstream link the finished interaction holds, if any. */
+  readonly link: UpstreamLink | undefined;
+  /** Who the interaction's sign-in proved, and whether it was a registration. */
+  readonly transaction: { readonly userId?: string; readonly registered?: boolean };
+  /** The `client_id` the interaction is for, for the events; `null` when it cannot be carried. */
+  readonly clientId: string | null;
+  readonly mailer: EngineMailer;
+}
+
+/**
+ * Attach the upstream identity a finished interaction holds (#670) to the
+ * account its sign-in proved, in that interaction and its browser: by the
+ * account's own factors, or through another upstream provider the account
+ * already holds (#1080). The Interaction API and the providers' callback
+ * both finish such a sign-in, the latter when the provider's proof completes
+ * it. A link whose provider proved nobody yet (`requested`) holds no
+ * identity, and nothing is attached. A held identity after anything but a
+ * sign-in is a record no server writes: thrown, before anything is linked.
+ */
+export async function finishHeldUpstreamLink(
+  fastify: UpstreamLinkServer,
+  request: FastifyRequest,
+  input: HeldUpstreamLinkInput
+): Promise<HeldUpstreamLinkOutcome> {
+  const { link, transaction, realm } = input;
+  if (link === undefined || link.state === 'requested') return { kind: 'none' };
+  if (
+    link.state !== 'signing_in' ||
+    transaction.userId === undefined ||
+    transaction.registered === true
+  ) {
+    throw new Error('an interaction finished with a link it never signed in for');
+  }
+  const linked = await linkUpstreamIdentity(fastify, request, {
+    realm,
+    userId: transaction.userId,
+    identity: { provider: link.provider, externalSub: link.externalSub, iss: link.iss },
+    providerName: link.name,
+    clientId: input.clientId,
+    mailer: input.mailer,
+  });
+  if (linked.kind === 'linked') return { kind: 'linked' };
+  const search = new URLSearchParams({ provider: link.provider, reason: linked.reason });
+  return {
+    kind: 'refused',
+    location: buildRealmUrl(realm, `/ui/upstream-link-refused?${search.toString()}`),
+  };
 }
 
 /** What {@link unlinkUpstreamIdentity} did. */
