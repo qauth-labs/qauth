@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/client.suspended.v1-rc.0.json",
   "title": "urn:qauth:event:client.suspended:v1-rc.0",
-  "description": "The client.suspended event, v1-rc.0. An operator suspended a client: it can no longer obtain tokens until the suspension is lifted.",
+  "description": "The client.suspended event, v1-rc.0. An operator or an admin suspended a client: it can no longer obtain tokens until the suspension is lifted.",
   "type": "object",
   "properties": {
     "id": {
