@@ -219,7 +219,9 @@ Placement rules that follow from earlier decisions:
   policy apply as to every sign-in: an account with a passkey still gives it after the provider
   (ADR-017 Decision 4), and its second factor still applies. The new identity joins the account
   only once that sign-in completes, in the same browser and interaction, under the account's row
-  lock, and the owner is mailed. The reason: an account made through one provider holds no
+  lock, and the owner is told as after every link: by email at the address of the account's
+  password. An account with no password, such as one made through a provider, has the security
+  log alone, as for every security notice. The reason: an account made through one provider holds no
   password and, until its owner adds one, no passkey, so its own factors alone could never link a
   second provider, and the only other choice, a new account, is the duplicate the no-merge rule
   exists to avoid. A sign-in through a provider already linked to the account is a sign-in to that

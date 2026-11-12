@@ -238,8 +238,10 @@ links a second by signing in with the first. Such a provider proves the
 account only through an identity the account already holds: one no account
 holds signs in to nothing and creates nothing, whatever address the provider
 gives, and a passkey the account holds is still asked for after it. Once that
-sign-in completes, the identity joins the account it proved, the owner gets an
-email notice, and the security log records the link; the authorization
+sign-in completes, the identity joins the account it proved, the security log
+records the link, and the owner gets an email notice at the address of the
+account's password (an account with no password, such as one made through a
+provider, has the security log alone); the authorization
 request goes on as after any sign-in. An identity another account took meanwhile, or an
 account that already has an identity of that provider, is refused: the browser
 goes to `GET /ui/upstream-link-refused`, which says why, and nothing reaches
