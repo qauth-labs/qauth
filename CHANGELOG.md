@@ -90,8 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that sign-in completes, in the same browser and interaction, as before. The
   owner is mailed at the address of the account's password, as after every
   link; an account with no password, such as one made through a provider, has
-  the security log alone. The published descriptions of the `upstream` and `upstream_link` steps and of
-  `user.upstream_linked` say so.
+  the security log alone. The published descriptions of the `upstream` and
+  `upstream_link` steps and of `user.upstream_linked` say so.
 
 ### Fixed
 
