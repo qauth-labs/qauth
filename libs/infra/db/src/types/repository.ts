@@ -81,10 +81,69 @@ export type UpdateOAuthClient = Partial<
     // #643: so is the registration's bot challenge (ADR-017 Decision 7), so a
     // client cannot lift its own.
     | 'registrationChallenge'
+    // #632: a client's own token lifetimes are admin state, written only by
+    // the admin API's client operations, so no owner can lengthen them.
+    | 'accessTokenLifespanSeconds'
+    | 'refreshTokenLifespanSeconds'
   >
 > & {
   updatedAt?: number;
 };
+
+/**
+ * The columns the admin API's client operations write (#632, ADR-019
+ * Decision 7): a client's settings, its operator-set trust (the first-party
+ * profile, its policy and reason, the verified domain, DPoP binding, the
+ * `client_credentials` scopes, the agent fields, the environment) and its
+ * suspension. Left out: the identity and ownership of the row, its secret
+ * (rotated by DEV-04), and what only the seed manifest writes (ID-JAG
+ * targets, passkey origins, hosted flows, the registration challenge, the
+ * audience) or what records how it was made (`metadata`,
+ * `dynamicRegisteredAt`, `provisionedByOperator`). The repository drops any
+ * other key at run time too.
+ */
+export type AdminUpdateOAuthClient = Partial<
+  Pick<
+    NewOAuthClient,
+    | 'name'
+    | 'description'
+    | 'redirectUris'
+    | 'postLogoutRedirectUris'
+    | 'backchannelLogoutUri'
+    | 'backchannelLogoutUriSource'
+    | 'backchannelLogoutSessionRequired'
+    | 'scopes'
+    | 'clientCredentialsScopes'
+    | 'grantTypes'
+    | 'responseTypes'
+    | 'tokenEndpointAuthMethod'
+    | 'jwks'
+    | 'jwksUri'
+    | 'requirePkce'
+    | 'dpopBoundAccessTokens'
+    | 'environment'
+    | 'isAgent'
+    | 'maxAgentMode'
+    | 'verifiedDomain'
+    | 'firstPartyProfile'
+    | 'firstPartyPolicy'
+    | 'firstPartyReason'
+    | 'accessTokenLifespanSeconds'
+    | 'refreshTokenLifespanSeconds'
+    | 'enabled'
+    | 'suspended'
+    | 'suspendedAt'
+  >
+>;
+
+/** A page of a realm's clients, filtered (#632). */
+export interface RealmClientFilter {
+  /**
+   * Keep the clients whose `client_id` or name holds this text, compared
+   * case-insensitively and literally: `%`, `_` and a backslash match themselves.
+   */
+  readonly search?: string;
+}
 
 /**
  * Static developer API key types (ADR-008 §6, issue #97).
@@ -539,6 +598,56 @@ export interface OAuthClientsRepository extends RealmScopedRepository<
    * conditional on what it read (#524, `If-Match`).
    */
   findByIdForUpdate(realmId: string, id: string, tx: DbClient): Promise<OAuthClient | undefined>;
+
+  /**
+   * Find an OAuth client of the realm by ID and lock its row
+   * `FOR NO KEY UPDATE` until `tx` ends (#632): the admin API's client
+   * operations read through this. It does not block the key-share lock a
+   * token insert's foreign-key check takes on the row, so removing a
+   * first-party profile can wait for the client's token lock
+   * (`revokeAllForClient`) without a deadlock (#631).
+   */
+  findByIdForAdminUpdate(
+    realmId: string,
+    id: string,
+    tx: DbClient
+  ): Promise<OAuthClient | undefined>;
+
+  /**
+   * One page of every OAuth client of the realm, whoever owns it, newest first
+   * (#632): the admin API's list. Ordered by `created_at` and then `id`, both
+   * descending, starting after `page.after`. NEVER used by a developer route:
+   * the developer API lists by {@link pageByDeveloper} alone (ADR-012
+   * Decision 4).
+   */
+  pageByRealm(
+    realmId: string,
+    page: KeysetPage,
+    filter?: RealmClientFilter,
+    tx?: DbClient
+  ): Promise<OAuthClient[]>;
+
+  /**
+   * Create a client an admin registered (#632): `data` as given, the
+   * operator-set columns included, which {@link create} writes empty. The
+   * database's CHECKs still hold the first-party rules.
+   *
+   * @throws UniqueConstraintError if the realm already has the `client_id`
+   */
+  createByAdmin(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient>;
+
+  /**
+   * Update a client as the admin API does (#632): the columns of
+   * {@link AdminUpdateOAuthClient} only, every other key dropped.
+   *
+   * @throws NotFoundError if the realm has no such OAuth client
+   */
+  updateByAdmin(
+    realmId: string,
+    id: string,
+    data: AdminUpdateOAuthClient,
+    tx?: DbClient
+  ): Promise<OAuthClient>;
 
   /**
    * Count the OAuth clients owned by a developer: the rows

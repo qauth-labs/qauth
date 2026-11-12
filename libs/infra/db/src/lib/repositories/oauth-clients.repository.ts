@@ -7,10 +7,12 @@ import {
 import { and, asc, count, desc, eq, gt, lt, or, sql } from 'drizzle-orm';
 
 import type {
+  AdminUpdateOAuthClient,
   KeysetPage,
   NewOAuthClient,
   OAuthClient,
   OAuthClientsRepository,
+  RealmClientFilter,
   UnshowableRedirectUriScan,
   UnshowableRedirectUriScanOptions,
   UpdateOAuthClient,
@@ -57,6 +59,54 @@ function withoutFirstPartyColumns<T extends object>(data: T): T {
   const copy = { ...data } as Record<string, unknown>;
   for (const column of Object.keys(NOT_FIRST_PARTY)) delete copy[column];
   return copy as T;
+}
+
+/** The columns {@link AdminUpdateOAuthClient} names, which `updateByAdmin` writes and no other. */
+const ADMIN_UPDATE_COLUMNS: ReadonlySet<string> = new Set<keyof AdminUpdateOAuthClient>([
+  'name',
+  'description',
+  'redirectUris',
+  'postLogoutRedirectUris',
+  'backchannelLogoutUri',
+  'backchannelLogoutUriSource',
+  'backchannelLogoutSessionRequired',
+  'scopes',
+  'clientCredentialsScopes',
+  'grantTypes',
+  'responseTypes',
+  'tokenEndpointAuthMethod',
+  'jwks',
+  'jwksUri',
+  'requirePkce',
+  'dpopBoundAccessTokens',
+  'environment',
+  'isAgent',
+  'maxAgentMode',
+  'verifiedDomain',
+  'firstPartyProfile',
+  'firstPartyPolicy',
+  'firstPartyReason',
+  'accessTokenLifespanSeconds',
+  'refreshTokenLifespanSeconds',
+  'enabled',
+  'suspended',
+  'suspendedAt',
+]);
+
+/**
+ * `data` with only the columns of {@link ADMIN_UPDATE_COLUMNS}: the type
+ * leaves the others out at compile time only, and a caller that spreads a
+ * wider object would otherwise rewrite a client's secret or owner.
+ */
+function adminColumnsOf(data: AdminUpdateOAuthClient): AdminUpdateOAuthClient {
+  return Object.fromEntries(
+    Object.entries(data).filter(([key]) => ADMIN_UPDATE_COLUMNS.has(key))
+  ) as AdminUpdateOAuthClient;
+}
+
+/** `text` as a `LIKE` pattern that matches it literally, anywhere. */
+function containsPattern(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
 }
 
 /**
@@ -255,6 +305,116 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         .where(clientOfRealm(realmId, id))
         .limit(1)
         .for('update');
+      return client;
+    },
+
+    /**
+     * Find an OAuth client of the realm by ID and lock its row
+     * `FOR NO KEY UPDATE` until `tx` ends (#632): the admin API's client
+     * operations read through this, so a first-party profile's removal can
+     * wait for the client's token lock without a deadlock (#631).
+     */
+    async findByIdForAdminUpdate(
+      realmId: string,
+      id: string,
+      tx: DbClient
+    ): Promise<OAuthClient | undefined> {
+      const [client] = await tx
+        .select()
+        .from(oauthClients)
+        .where(clientOfRealm(realmId, id))
+        .limit(1)
+        .for('no key update');
+      return client;
+    },
+
+    /**
+     * One page of every OAuth client of the realm, whoever owns it (#632):
+     * the admin API's list, newest first by `created_at` and then `id`.
+     * `filter.search` keeps the clients whose `client_id` or name holds it,
+     * case-insensitively, its `%`, `_` and backslash taken literally. Never
+     * called by a developer route (ADR-012 Decision 4).
+     */
+    async pageByRealm(
+      realmId: string,
+      page: KeysetPage,
+      filter: RealmClientFilter = {},
+      tx?: DbClient
+    ): Promise<OAuthClient[]> {
+      const invoker = tx ?? defaultDb;
+      const after = page.after;
+      const search =
+        filter.search === undefined || filter.search === ''
+          ? undefined
+          : containsPattern(filter.search);
+      return invoker
+        .select()
+        .from(oauthClients)
+        .where(
+          and(
+            eq(oauthClients.realmId, realmId),
+            search === undefined
+              ? undefined
+              : or(
+                  sql`${oauthClients.clientId} ILIKE ${search} ESCAPE '\\'`,
+                  sql`${oauthClients.name} ILIKE ${search} ESCAPE '\\'`
+                ),
+            after === undefined
+              ? undefined
+              : or(
+                  lt(oauthClients.createdAt, after.at),
+                  and(eq(oauthClients.createdAt, after.at), lt(oauthClients.id, after.id))
+                )
+          )
+        )
+        .orderBy(desc(oauthClients.createdAt), desc(oauthClients.id))
+        .limit(page.limit);
+    },
+
+    /**
+     * Create a client an admin registered (#632), its operator-set columns
+     * as given: the admin API is the operator's path, as the seed manifest
+     * is. The CHECKs of the table still hold the first-party rules.
+     *
+     * @throws UniqueConstraintError if the realm already has the `client_id`
+     */
+    async createByAdmin(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient> {
+      const invoker = tx ?? defaultDb;
+      try {
+        const [client] = await invoker.insert(oauthClients).values(data).returning();
+        return client;
+      } catch (error) {
+        if (isUniqueConstraintError(error)) {
+          const constraint =
+            extractConstraintName(error) || 'idx_oauth_clients_realm_client_id_unique';
+          throw new UniqueConstraintError(constraint, error);
+        }
+        throw error;
+      }
+    },
+
+    /**
+     * Update a client as the admin API does (#632): the columns of
+     * `AdminUpdateOAuthClient` alone, every other key dropped, and
+     * `updated_at`.
+     *
+     * @throws NotFoundError if the realm has no such OAuth client
+     */
+    async updateByAdmin(
+      realmId: string,
+      id: string,
+      data: AdminUpdateOAuthClient,
+      tx?: DbClient
+    ): Promise<OAuthClient> {
+      const invoker = tx ?? defaultDb;
+      const [client] = await invoker
+        .update(oauthClients)
+        .set({ ...adminColumnsOf(data), updatedAt: Date.now() })
+        .where(clientOfRealm(realmId, id))
+        .returning();
+      if (!client) {
+        throw new NotFoundError('OAuthClient', id);
+      }
       return client;
     },
 
