@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A realm can turn off the passkey offer after a password sign-in**
+  ([#1083], ADR-017 Decisions 4 and 8, ADR-020 §3). With passkeys on
+  (`WEBAUTHN_ENABLED`), the sign-in engine offers to add a passkey
+  (`webauthn_create`, `optional: true`) after a password sign-in of a
+  verified account whose only factor is that password ([#651]). A realm that
+  adds passkeys from the account page only had no way to stop it: a ceremony
+  app had to draw the page or decline it with a script. The new realm policy
+  `passkeys.offerAfterSignIn`, on by default, says whether the offer is
+  made; off, a password sign-in completes with no `webauthn_create` step, and
+  an answer to an offer made before the switch binds nothing. A passkey the
+  person adds from the account page ([#844]) still runs. The new
+  `PASSKEY_OFFER_AFTER_SIGN_IN` seeds it for a new realm, and for an existing
+  realm at the first boot of this release; after that the realm row owns it.
+  The server reads it from the realm row on the round that would make the
+  offer. No change of it is a security operation: it changes neither which
+  credentials can sign in nor what a token says.
 - **The Interaction API contract states the built-in proof of work, and how a
   replacement ceremony app gets a typed client** ([#1082], ADR-017 Decision 7,
   ADR-019 Decisions 5 and 6). A replacement app ([#618]) could not pass the
@@ -4157,6 +4173,7 @@ It adds migrations 0068 and 0069.
 [#1080]: https://github.com/qauth-labs/qauth/issues/1080
 [#1081]: https://github.com/qauth-labs/qauth/issues/1081
 [#1082]: https://github.com/qauth-labs/qauth/issues/1082
+[#1083]: https://github.com/qauth-labs/qauth/issues/1083
 
 ### Deprecated
 
