@@ -63,7 +63,7 @@ export const PROOF_OF_WORK_RULE = [
   'The engine takes the SHA-256 digest of the UTF-8 bytes of the challenge, a colon and the nonce, `<challenge>:<nonce>`, with the challenge as the text it is, not base64url-decoded.',
   'It accepts the nonce when that digest starts with at least `difficulty` zero bits, read from the most significant bit of its first byte.',
   'Any such nonce passes; trying 0, 1, 2 and so on finds one after about 2^`difficulty` hashes.',
-  'A puzzle takes one answer: a wrong one gets the step back with `captcha_failed` and a new challenge.',
+  'A puzzle takes one answer: a wrong nonce gets the step back with `captcha_failed` and a new challenge. A token the answer’s schema refuses is an invalid answer: it is not checked, and the challenge stays.',
   'QAuth’s shared test vectors, `test-vectors/interaction/proof-of-work.json` in its repository, hold cases to check a solver against.',
 ].join(' ');
 

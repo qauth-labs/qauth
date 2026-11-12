@@ -90,7 +90,7 @@ const cases = [
       captcha_token: smallest(CONTRACT_EXAMPLE, 18),
     },
     notes:
-      'The example of the captcha step in the Interaction API contract (/interaction/v1-rc.0/openapi.json): its params and its answer.',
+      'The example of the captcha step in the Interaction API contract (/interaction/v1-rc.0/openapi.json): its params and its answer. Until QAuth 1.0.0 this case follows the example, as interaction/steps.json does.',
   },
   {
     id: 'exactly-the-difficulty',
@@ -169,7 +169,7 @@ const cases = [
     id: 'trailing-newline',
     input: { challenge: CHALLENGE, difficulty: 4, captcha_token: formOnly((n) => `${n}\n`) },
     notes:
-      'Its digest would pass; a line feed is not a digit. A pattern whose end anchor also matches before a final line feed, as `$` does in Python, PCRE and Perl, takes it: match the whole string.',
+      'Its digest would pass; a line feed is not a digit. A pattern whose end anchor also matches before a final line feed, as `$` does in Python, PCRE and Perl, takes it: match the whole string. On the wire the answer schema (printable ASCII) refuses it first, as an invalid answer.',
   },
   {
     id: 'non-ascii-digits',
@@ -181,7 +181,7 @@ const cases = [
       ),
     },
     notes:
-      "Its digest would pass; Arabic-Indic digits match \\d in some pattern engines, Python's and .NET's among them, but a nonce is ASCII 0 to 9.",
+      "Its digest would pass; Arabic-Indic digits match \\d in some pattern engines, Python's and .NET's among them, but a nonce is ASCII 0 to 9. On the wire the answer schema (printable ASCII) refuses it first, as an invalid answer.",
   },
 ];
 
