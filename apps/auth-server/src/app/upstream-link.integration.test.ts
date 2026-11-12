@@ -860,10 +860,18 @@ describe('linking an upstream account to an existing one (#670, real containers)
       // person in (#1081).
       expect(cancelled.statusCode, withServerLog(cancelled.body)).toBe(303);
       expect(ceremonyIdOf(cancelled.headers['location'])).toBe(started.interactionId);
+      const refused = await read(started.interactionId);
+      expect(refused.step).toBe(UPSTREAM);
+      expect(refused.error).toBe('provider_declined');
+      expect(refused.alternatives).toContain(IDENTIFIER);
 
-      // The way back is the interaction's first step: an ordinary sign-in,
+      // The way back is the identifier step beside it: an ordinary sign-in,
       // which the provider never proved an identity for.
-      const done = await signInWithPassword(jar, started.interactionId);
+      const next = await answerToNext(jar, started.interactionId, IDENTIFIER, {
+        login_hint: EMAIL,
+      });
+      expect(next.step).toBe(PASSWORD);
+      const done = await answer(jar, started.interactionId, PASSWORD, { password: E2E_PASSWORD });
 
       expect(done.statusCode, withServerLog(done.body)).toBe(303);
       codeAt(done.headers['location']);
