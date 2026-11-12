@@ -237,8 +237,16 @@ export function clientCreateBodySchema(): z.ZodType {
 }
 
 /** The body of an operation that takes none: absent, or an empty object. */
+/**
+ * No body, or an empty object. A call that sends no body reaches the handler
+ * with `null` (Fastify), as the approval it carries files it (`null` too).
+ */
 const emptyBody = (id: string) =>
-  z.strictObject({}).optional().meta({ id, description: 'No body, or an empty object.' });
+  z
+    .strictObject({})
+    .nullable()
+    .optional()
+    .meta({ id, description: 'No body, or an empty object.' });
 
 /** A new client's representation, and its secret once. */
 const registeredClientSchema = adminClientSchema

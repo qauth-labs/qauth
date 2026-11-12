@@ -300,6 +300,9 @@ export async function installAdminApi(
   // (#517). The secret store's values stay with the app's mail sender.
   admin.decorate('policyStore', source.policyStore);
   admin.decorate('realmSecretStore', source.realmSecretStore);
+  // The password hasher, which hashes the secret of a client an admin
+  // registers (#632).
+  admin.decorate('passwordHasher', source.passwordHasher);
   // The realm of a request: the one its token's issuer names while the token
   // guard runs, then the one its path names. Never a host's.
   admin.decorateRequest('realm', null);
