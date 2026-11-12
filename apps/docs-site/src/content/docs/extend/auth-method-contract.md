@@ -3,7 +3,7 @@ title: The AuthMethod contract
 description: The experimental plugin API for sign-in methods — what an AuthMethod adds to CredentialProvider, the upstream step it serves, what a method is handed, where its routes mount, the test kit that checks a method against the contract, and how to write a plugin in its own repository with @qauth-labs/plugin-sdk.
 sidebar:
   order: 6
-lastVerified: '2026-11-08'
+lastVerified: '2026-11-09'
 experimental: true
 ---
 
@@ -251,6 +251,10 @@ export const authMethod: AuthMethod<CorpSsoConfig, CorpSsoTransaction> = {
   // display, configSchema, steps, routes, start, verify, extractAttributes
 };
 ```
+
+A package for an OpenID Connect provider may export an `upstreamOidcPreset` instead, whose method
+the server builds on its own client ([Preset plugins](#preset-plugins-on-the-generic-client)). It
+exports one of the two, never both: the loader refuses a package with both, or with neither.
 
 One package holds one method. Its `id` is the name the admin API gives the plugin, and stays the
 same across versions of the package; its `type` is the segment of its routes,
@@ -516,16 +520,17 @@ Each use checks again, since every call goes through the egress client.
 ## Preset plugins on the generic client
 
 A preset is a plugin for one named provider that runs the generic client's code under its own id,
-type and config (#951); the first-party provider plugins of #671 are built this way.
-`createUpstreamOidcPresetMethod` of `@qauth-labs/server-upstream-oidc` builds its AuthMethod, which
-the package exports as `authMethod`. That library is QAuth's own and is not published, so a preset
-is built in QAuth's repository:
+type and config (#951). It lives in its own repository and depends only on the SDK (#671): its
+package exports the preset as `upstreamOidcPreset`, made with `defineUpstreamOidcPreset`, and the
+plugin loader builds its AuthMethod on the server's client (`createUpstreamOidcPresetMethod`). The
+protocol code is the server's, so the plugin carries none of it.
+[Write a preset plugin](/extend/preset-plugins/) is the guide:
 
 ```ts
-import { createUpstreamOidcPresetMethod } from '@qauth-labs/server-upstream-oidc';
+import { defineUpstreamOidcPreset } from '@qauth-labs/plugin-sdk';
 import { z } from 'zod';
 
-export const authMethod = createUpstreamOidcPresetMethod({
+export const upstreamOidcPreset = defineUpstreamOidcPreset({
   id: 'example-idp',
   type: 'example_idp',
   display: { name: 'Example IdP' },
@@ -542,10 +547,10 @@ export const authMethod = createUpstreamOidcPresetMethod({
 });
 ```
 
-- **Its own names.** Its `id` is never `oidc` and its `type` never `oidc_<alias>`, so the plugin
-  loader takes it as any plugin, and on QAuth's first-party list it loads with
-  `PLUGIN_API_ENABLED` off. Its callback is `/upstream/<type>/callback` on the realm host: the
-  `redirect_uri` to register at the provider.
+- **Its own names.** Its `id` is never `oidc` and its `type` never starts with `oidc_`, so the plugin
+  loader takes it as any plugin: it loads only while `PLUGIN_API_ENABLED` is on, as no provider
+  plugin is on the server's first-party list. Its callback is `/upstream/<type>/callback` on the
+  realm host: the `redirect_uri` to register at the provider.
 - **Its own config.** An admin configures it with the plugin operations
   ([above](#installing-and-enabling-a-plugin)). `upstreamConfig` turns the parsed config into the
   generic client's config at every use; discovery, PKCE with S256, the callback, the ID token
@@ -580,7 +585,17 @@ export const authMethod = createUpstreamOidcPresetMethod({
   preset's own config names its origin (the context's rule, [above](#what-a-method-is-handed)), so
   a preset whose config names no URL never reaches a private address the egress allowlist opens.
 
-A preset passes the contract test kit as the generic client does.
+- **What only a preset sets.** A client secret the signer signs (`signed_client_secret`), a
+  multi-tenant issuer template (`tenantIssuer`), response members its `form_post` bounce carries,
+  identity claims and attribute rules ([Write a preset plugin](/extend/preset-plugins/)). A realm's
+  admin, who writes the generic client's config, sets none of them.
+- **Its attributes rank with `oidc_*`.** Claim resolution ranks the attributes of a method the
+  loader built from a preset with an `oidc_*` provider's, since the server's client checked the ID
+  token. A plugin that exports its own `authMethod` keeps an unknown rank, whatever its type.
+
+A preset's method passes the contract test kit as the generic client does, and
+`checkUpstreamOidcPreset` of the SDK's `/testing` entry point checks the preset itself
+([Write a preset plugin](/extend/preset-plugins/#check-it-with-the-preset-kit)).
 
 ## Checking a method: the contract test kit
 

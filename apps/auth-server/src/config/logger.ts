@@ -123,6 +123,12 @@ export const LOG_REDACT_PATHS = [
  * Add to this list rather than to `LOG_REDACT_PATHS` when the next bearer
  * value has to ride in a URL.
  *
+ * The boot adds to it the response members a loaded upstream OpenID Connect
+ * preset's callback reads (#671, {@link censorLoggedQueryParameters}): its
+ * `form_post` bounce carries them on to the GET callback in the query, and a
+ * provider's own member may hold the person's name. The core names no such
+ * member itself: they are the presets' (ADR-018 §3).
+ *
  * Every consumer of a request-target that reaches the log must go through
  * {@link redactLoggedUrl}: Fastify's own request/response lines do via the
  * `req` serializer below, and the global error handler
@@ -199,8 +205,14 @@ export function percentEncodingTolerantPattern(name: string): string {
 }
 
 /**
- * One regular expression over {@link LOG_REDACTED_QUERY_PARAMETERS}, compiled
- * once: the separator, the name (in any spelling
+ * The names the boot added to {@link LOG_REDACTED_QUERY_PARAMETERS}
+ * ({@link censorLoggedQueryParameters}), in the order it added them.
+ */
+const bootRedactedQueryParameters: string[] = [];
+
+/**
+ * One regular expression over {@link LOG_REDACTED_QUERY_PARAMETERS} and the
+ * names the boot added: the separator, the name (in any spelling
  * {@link percentEncodingTolerantPattern} admits) and the `=` captured (and
  * kept), then everything up to the next `&` (censored).
  *
@@ -208,10 +220,41 @@ export function percentEncodingTolerantPattern(name: string): string {
  * left alone, and stopping at `&` so the parameters after the censored one
  * stay readable in the line.
  */
-const REDACTED_QUERY_VALUE_PATTERN = new RegExp(
-  `([?&](?:${LOG_REDACTED_QUERY_PARAMETERS.map(percentEncodingTolerantPattern).join('|')})=)[^&]*`,
-  'g'
-);
+function redactedQueryValuePattern(): RegExp {
+  const names = [...LOG_REDACTED_QUERY_PARAMETERS, ...bootRedactedQueryParameters];
+  return new RegExp(`([?&](?:${names.map(percentEncodingTolerantPattern).join('|')})=)[^&]*`, 'g');
+}
+
+/** Compiled at module load, and again each time the boot adds a name. */
+let redactedQueryValues = redactedQueryValuePattern();
+
+/**
+ * Censor the values of the query parameters `names` in every logged URL from
+ * now on, beside {@link LOG_REDACTED_QUERY_PARAMETERS}: the boot calls it with
+ * the response members of the upstream OpenID Connect presets it loaded
+ * (#671), which their `form_post` bounce carries in the callback's URL.
+ *
+ * Only ever adds, for the life of the process: a name censored once stays
+ * censored, so a line is never less censored than an earlier one. A name
+ * already censored is skipped. Every name is checked first, so a bad one
+ * changes nothing.
+ *
+ * @throws TypeError for a name outside the RFC 3986 unreserved set
+ *   ({@link percentEncodingTolerantPattern})
+ */
+export function censorLoggedQueryParameters(names: Iterable<string>): void {
+  const known = new Set<string>([...LOG_REDACTED_QUERY_PARAMETERS, ...bootRedactedQueryParameters]);
+  const added: string[] = [];
+  for (const name of names) {
+    percentEncodingTolerantPattern(name);
+    if (known.has(name)) continue;
+    known.add(name);
+    added.push(name);
+  }
+  if (added.length === 0) return;
+  bootRedactedQueryParameters.push(...added);
+  redactedQueryValues = redactedQueryValuePattern();
+}
 
 /**
  * An interaction id in a path of the Interaction API (#592, ADR-019 Decision
@@ -258,7 +301,7 @@ const INTERACTION_ID_IN_PATH_PATTERN = new RegExp(
  */
 export function redactLoggedUrl(url: string): string {
   const redacted = url
-    .replace(REDACTED_QUERY_VALUE_PATTERN, `$1${LOG_REDACT_CENSOR}`)
+    .replace(redactedQueryValues, `$1${LOG_REDACT_CENSOR}`)
     .replace(INTERACTION_ID_IN_PATH_PATTERN, `$1${LOG_REDACT_CENSOR}`);
   return keepsAnInteractionSegment(redacted) ? LOG_REDACT_CENSOR : redacted;
 }

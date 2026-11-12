@@ -80,14 +80,19 @@ the host opens a stored config as `api`, or as `local` in a single deployment. T
 
 ## Preset plugins
 
-`createUpstreamOidcPresetMethod` builds a **preset plugin** (#951): an AuthMethod for one named
-provider (the first-party provider plugins of #671) that runs this client's code under its own
-`id`, `type` and config, so the plugin runtime (#600) loads it as any plugin, from the first-party
-list with `PLUGIN_API_ENABLED` off too. The generic client's `id` `oidc` and its `oidc_<alias>`
-types stay reserved for the realm's provider rows.
+`createUpstreamOidcPresetMethod` builds a **preset plugin's** method (#951, #671): an AuthMethod
+for one named provider that runs this client's code under its own `id`, `type` and config. A
+preset lives in its own repository and depends only on the plugin SDK: its package exports an
+`upstreamOidcPreset` (`defineUpstreamOidcPreset` of `@qauth-labs/plugin-sdk`), and the plugin
+loader (#600) builds its method with this function, so the plugin runtime loads it as any plugin,
+only while `PLUGIN_API_ENABLED` is on. The preset's shape, its options type, limits and claim
+lists are the SDK's, which this library re-exports; `src/lib/config-shape.test.ts` holds the SDK's
+provider config and this library's schema to one shape. The generic client's `id` `oidc` and its
+`oidc_<alias>` types stay reserved for the realm's provider rows.
 
 ```ts
-export const authMethod = createUpstreamOidcPresetMethod({
+// What the loader does with a package's upstreamOidcPreset; a server test may call it on options.
+const method = createUpstreamOidcPresetMethod({
   id: 'example-idp',
   type: 'example_idp',
   display: { name: 'Example IdP' },
@@ -129,6 +134,39 @@ export const authMethod = createUpstreamOidcPresetMethod({
   origin, so a preset never reaches a private address through the egress allowlist.
 - `src/testing/example-preset.ts` is a preset on the fake provider, its client secret inside a
   discriminated union of client authentication methods; it passes the contract test kit.
+
+What a named provider needs beyond the generic client, a preset sets in its options (#671), never
+a realm's admin, whose config for the generic client has none of it. This library names no
+provider:
+
+- **A signed client secret** (`clientAuthentication: { method: 'signed_client_secret' }`, ES256
+  unless it names another algorithm): the signer role signs a JWT with the realm's
+  `upstream_client_assertion` key for the plugin's type, with the claims and the 60-second
+  lifetime of a client assertion, and the client sends it as the `client_secret` of a
+  `client_secret_post` request, for a provider that takes no static secret. Its `iss` is the
+  signer's configuration of the provider: the client id, or the assertion issuer it names.
+- **An issuer template** (`tenantIssuer: { template, tenantClaim }`) for a multi-tenant provider
+  whose shared endpoint serves many tenants: the discovery document names the template (e.g.
+  `https://idp.example.com/{tenantid}/v2.0`), and an ID token is accepted only when its
+  `iss` is the template with the token's own tenant claim in place. The tenant id is letters,
+  digits and `-` (`UPSTREAM_TENANT_ID_PATTERN`), so it never reaches past its path segment, and
+  the template's origin must be among the preset's origins.
+- **Response members** (`responseMembers`): members of the authorization response besides the
+  protocol's own that the callback reads, such as a member that carries the person's name, each
+  mapped to the value the `form_post` bounce carries on in the callback's URL (at most 1024
+  characters). The map must give its own output back unchanged, since the callback maps the
+  carried value again. The browser chooses that value: whatever is made of it is an unverified
+  claim. The auth server censors each loaded preset's members in its request log.
+- **Identity claims** (`identityClaims`): claims set over the provider's from the response members
+  and the preset's config. `sub` and the claims only the ID token may carry stay the validated
+  ones; a claim set to `undefined` is removed. A claim the provider vouches for (`email`,
+  `phone_number`) and its `*_verified` flag may be removed, never set, so a value the preset makes
+  up is never taken as verified. Any other claim the preset sets never makes an attribute
+  verified either: the client checked only the provider's claims.
+- **Attribute rules** (`attributes`, `UpstreamClaimAttribute`): the claims the identity maps to
+  as attributes and the claim that marks each verified, in place of the standard rules
+  (`UPSTREAM_STANDARD_ATTRIBUTES`). A rule's `verified` sees the provider's claims only, never
+  one the preset set, and an attribute read from a claim the preset set is never verified.
 
 ## Registration check
 

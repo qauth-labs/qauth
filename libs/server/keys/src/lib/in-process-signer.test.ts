@@ -1856,6 +1856,40 @@ describe('signClientAssertion', () => {
     });
   });
 
+  it("takes iss from the configuration's assertion issuer when it names one, sub from the client id", async () => {
+    const { signer, store } = await setup({ scoped: true });
+    store.upstreamClients.set(`${REALM_A}/${PROVIDER}`, {
+      clientId: 'com.example.services',
+      assertionIssuer: 'TEAM123456',
+    });
+
+    const token = await signer.signClientAssertion('api', assertion());
+
+    const jwks = await signer.getUpstreamJwks('api', REALM_A, PROVIDER);
+    const { claims } = await verifyWithJwks(token, jwks, 'TEAM123456');
+    expect(claims).toMatchObject({
+      iss: 'TEAM123456',
+      sub: 'com.example.services',
+      aud: 'https://idp.example.test',
+    });
+  });
+
+  it.each([
+    ['an empty assertion issuer', ''],
+    ['an assertion issuer that is not a string', 7],
+  ])('refuses a configuration with %s', async (_case, assertionIssuer) => {
+    const { signer, store, unwrap } = await setup({ scoped: true });
+    store.upstreamClients.set(`${REALM_A}/${PROVIDER}`, {
+      clientId: 'com.example.services',
+      assertionIssuer: assertionIssuer as string,
+    });
+
+    await expect(signer.signClientAssertion('api', assertion())).rejects.toBeInstanceOf(
+      UpstreamClientNotFoundError
+    );
+    expect(unwrap).not.toHaveBeenCalled();
+  });
+
   it('takes iss and sub from the provider configuration, and refuses a provider without one', async () => {
     const { signer, store, unwrap } = await setup({ scoped: true });
     store.upstreamClients.delete(`${REALM_A}/${PROVIDER}`);

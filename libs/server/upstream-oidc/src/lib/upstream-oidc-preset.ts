@@ -1,28 +1,27 @@
 import {
-  AUTH_METHOD_ID_PATTERN,
-  AUTH_METHOD_TYPE_PATTERN,
+  AUTH_METHOD_CONTRACT,
   type AuthMethod,
-  type AuthMethodDisplay,
   authMethodSecretPaths,
   configMemberAt,
-  UPSTREAM_OIDC_METHOD_ID,
-  UPSTREAM_OIDC_TYPE_PATTERN,
+  UPSTREAM_TENANT_PLACEHOLDER,
+  type UpstreamOidcPresetOptions,
+  upstreamOidcPresetProblems,
 } from '@qauth-labs/server-federation';
-import type { z } from 'zod';
 
-import {
-  type UpstreamOidcConfig,
-  type UpstreamOidcConfigInput,
-  upstreamOidcConfigSchema,
-} from './config';
+import { type UpstreamOidcClientConfig, upstreamOidcClientConfigSchema } from './config';
 import { upstreamClientSecretDestination } from './stored-config';
 import { upstreamOidcClientMethod, type UpstreamOidcTransaction } from './upstream-oidc-method';
 
+export type { UpstreamOidcPresetOptions };
+export { MAX_UPSTREAM_OIDC_PRESET_ORIGINS } from '@qauth-labs/server-federation';
+
 /**
- * A PRESET PLUGIN on the generic upstream OpenID Connect client (#951): an
- * AuthMethod for one named provider (the first-party presets of #671), which
- * the plugin runtime (#600) loads as any plugin, from its package's
- * `authMethod` export.
+ * A PRESET PLUGIN on the generic upstream OpenID Connect client (#951, #671):
+ * an AuthMethod for one named provider, which the plugin runtime (#600)
+ * builds from its package's `upstreamOidcPreset` export. The preset's shape,
+ * `UpstreamOidcPresetOptions`, is the plugin SDK's (`@qauth-labs/plugin-sdk`),
+ * so a preset written in its own repository against the SDK alone is what
+ * this function builds; this library declares none of it again.
  *
  * The generic client (`createUpstreamOidcMethod`) is one method per provider
  * a realm configures, every one with the id `oidc` and a type `oidc_<alias>`,
@@ -70,6 +69,13 @@ import { upstreamOidcClientMethod, type UpstreamOidcTransaction } from './upstre
  * S256, `state` and `nonce`, the ID token checks, the callback and its
  * `form_post` bounce, `verify()` and the attributes, under the preset's type.
  *
+ * What a named provider needs beyond that, a preset sets in its options
+ * (#671), never a realm's admin: a client secret the signer role signs
+ * (`signed_client_secret`), an issuer template for a multi-tenant provider
+ * whose shared endpoints serve many tenants (`tenantIssuer`), response
+ * members its callback reads, claims from them and its config
+ * (`identityClaims`) and its own attribute rules (`attributes`).
+ *
  * Every call the client makes goes as a `remote_document` destination unless
  * the preset's own config names its origin (the context's rule), so the
  * deployment's egress allowlist never opens a private address for a preset.
@@ -79,85 +85,8 @@ import { upstreamOidcClientMethod, type UpstreamOidcTransaction } from './upstre
  * @experimental
  */
 
-/**
- * Options of {@link createUpstreamOidcPresetMethod}.
- *
- * @typeParam TConfig - the preset's parsed config, the output of `configSchema`
- * @experimental
- */
-export interface UpstreamOidcPresetOptions<TConfig> {
-  /**
-   * The plugin's AuthMethod id, such as `example-idp`: its name in the admin API
-   * and its realm state. Never `oidc`, the generic client's.
-   */
-  readonly id: string;
-  /**
-   * The plugin's AuthMethod type, such as `example_idp`: its registry key, its
-   * route segment and the credential type it writes. Never `oidc_<alias>`,
-   * the generic client's namespace.
-   */
-  readonly type: string;
-  /** What the sign-in page shows. */
-  readonly display: AuthMethodDisplay;
-  /**
-   * The `https` origins the provider answers on, such as
-   * `https://idp.example.com`: bare origins, at most eight. The issuer
-   * and every endpoint the client calls must be on one of them, those the
-   * discovery document names included: a provider whose token endpoint or
-   * key set is on another host lists that host's origin too.
-   */
-  readonly origins: readonly string[];
-  /**
-   * The preset's config for one realm: a Zod object schema, its client
-   * secret a string member marked `.meta({ writeOnly: true })` (inside a
-   * discriminated union of client authentication methods too).
-   */
-  readonly configSchema: z.ZodType<TConfig>;
-  /**
-   * The generic client's config for a config `configSchema` parsed: the
-   * issuer (or the endpoints) of the provider, and the client id and client
-   * authentication, the secret passed on as the preset's secret member
-   * holds it. Called at every use; it must not throw for a parsed config.
-   */
-  upstreamConfig(config: TConfig): UpstreamOidcConfigInput;
-}
-
-/**
- * The most origins a preset may name.
- *
- * @experimental
- */
-export const MAX_UPSTREAM_OIDC_PRESET_ORIGINS = 8;
-
 /** Where the generic client's config holds the client secret. */
 const CLIENT_SECRET_PATH = 'clientAuthentication.clientSecret';
-
-/** The preset's origins, checked: each a bare `https` origin. */
-function presetOrigins(origins: unknown): ReadonlySet<string> {
-  if (
-    !Array.isArray(origins) ||
-    origins.length === 0 ||
-    origins.length > MAX_UPSTREAM_OIDC_PRESET_ORIGINS
-  ) {
-    throw new TypeError(
-      `origins must list the provider's https origins, at least one and at most ${MAX_UPSTREAM_OIDC_PRESET_ORIGINS}`
-    );
-  }
-  for (const origin of origins) {
-    let url: URL | undefined;
-    try {
-      url = typeof origin === 'string' ? new URL(origin) : undefined;
-    } catch {
-      url = undefined;
-    }
-    if (url === undefined || url.protocol !== 'https:' || url.origin !== origin) {
-      throw new TypeError(
-        'each of origins must be a bare https origin, such as https://idp.example.com'
-      );
-    }
-  }
-  return new Set(origins as string[]);
-}
 
 /** The origin of `value`, or `undefined` for a value that is no URL. */
 function originOf(value: string): string | undefined {
@@ -168,9 +97,18 @@ function originOf(value: string): string | undefined {
   }
 }
 
-/** The URLs of a provider config the preset's origins must hold: its issuer and its endpoints. */
-function providerUrls(config: UpstreamOidcConfig): [name: string, url: string][] {
+/**
+ * The URLs of a provider config the preset's origins must hold: its issuer,
+ * its issuer template (with a tenant id in place) and its endpoints.
+ */
+function providerUrls(config: UpstreamOidcClientConfig): [name: string, url: string][] {
   const urls: [string, string][] = [['issuer', config.issuer]];
+  if (config.tenantIssuer !== undefined) {
+    urls.push([
+      'tenantIssuer.template',
+      config.tenantIssuer.template.replace(UPSTREAM_TENANT_PLACEHOLDER, 'tenant'),
+    ]);
+  }
   for (const [name, url] of Object.entries(config.endpoints ?? {})) {
     if (typeof url === 'string') urls.push([`endpoints.${name}`, url]);
   }
@@ -196,10 +134,12 @@ function providerStrings(
 
 /**
  * Create a preset plugin's method on the generic upstream OpenID Connect
- * client (#951). A preset package exports it as `authMethod`.
+ * client (#951). The plugin loader calls it for a package that exports an
+ * `upstreamOidcPreset` (`defineUpstreamOidcPreset` of the plugin SDK, #671);
+ * the server's own tests call it on options too.
  *
  * ```ts
- * export const authMethod = createUpstreamOidcPresetMethod({
+ * const method = createUpstreamOidcPresetMethod({
  *   id: 'example-idp',
  *   type: 'example_idp',
  *   display: { name: 'Example IdP' },
@@ -216,37 +156,25 @@ function providerStrings(
  * });
  * ```
  *
- * @throws TypeError when `id` is `oidc` or no AuthMethod id, `type` is in
- *   the generic client's namespace or no AuthMethod type, `origins` is not a
- *   list of bare `https` origins, or `upstreamConfig` is not a function
+ * @throws TypeError listing the problems `upstreamOidcPresetProblems` of the
+ *   plugin SDK finds: `id` is `oidc` or no AuthMethod id, `type` is in the
+ *   generic client's namespace or no AuthMethod type, `origins` is not a
+ *   list of bare `https` origins, `upstreamConfig` or `identityClaims` is
+ *   not a function, `responseMembers` names a protocol parameter or more
+ *   than four members, or `attributes` is not a list of rules
  * @experimental
  */
 export function createUpstreamOidcPresetMethod<TConfig>(
   options: UpstreamOidcPresetOptions<TConfig>
 ): AuthMethod<TConfig, UpstreamOidcTransaction> {
+  // The SDK's static checks, the ones the plugin loader runs on a package's
+  // preset: one implementation for the loader, the test kit and this.
+  const problems = upstreamOidcPresetProblems({ ...options, contract: AUTH_METHOD_CONTRACT });
+  if (problems.length > 0) {
+    throw new TypeError(`The preset cannot be built:\n- ${problems.join('\n- ')}`);
+  }
   const { id, type, display, configSchema, upstreamConfig } = options;
-  if (
-    typeof id !== 'string' ||
-    !AUTH_METHOD_ID_PATTERN.test(id) ||
-    id === UPSTREAM_OIDC_METHOD_ID
-  ) {
-    throw new TypeError(
-      `id must be the preset's own AuthMethod id, such as example-idp: never ${UPSTREAM_OIDC_METHOD_ID}, the generic client's`
-    );
-  }
-  if (
-    typeof type !== 'string' ||
-    !AUTH_METHOD_TYPE_PATTERN.test(type) ||
-    UPSTREAM_OIDC_TYPE_PATTERN.test(type)
-  ) {
-    throw new TypeError(
-      "type must be the preset's own AuthMethod type, such as example_idp: never oidc_<alias>, the generic client's namespace"
-    );
-  }
-  const origins = presetOrigins(options.origins);
-  if (typeof upstreamConfig !== 'function') {
-    throw new TypeError('upstreamConfig must be a function of the parsed config');
-  }
+  const origins: ReadonlySet<string> = new Set(options.origins);
 
   // The preset's secret members, read once from its schema. A schema the
   // reader refuses fails the plugin loader too; here it means no member is
@@ -266,14 +194,14 @@ export function createUpstreamOidcPresetMethod<TConfig>(
   /** The provider config of a parsed preset config, or the problems with it. */
   const resolve = (
     config: TConfig
-  ): { readonly config: UpstreamOidcConfig } | { readonly problems: readonly string[] } => {
+  ): { readonly config: UpstreamOidcClientConfig } | { readonly problems: readonly string[] } => {
     let input: unknown;
     try {
       input = upstreamConfig(config);
     } catch {
       return { problems: ['upstreamConfig threw for the config'] };
     }
-    const parsed = upstreamOidcConfigSchema.safeParse(input);
+    const parsed = upstreamOidcClientConfigSchema.safeParse(input);
     if (!parsed.success) {
       return {
         problems: parsed.error.issues.map(
@@ -327,6 +255,11 @@ export function createUpstreamOidcPresetMethod<TConfig>(
     // Discovered endpoints too: the document is the provider's, but a path
     // of its origin an admin's config points the issuer at may serve one.
     endpointOrigins: origins,
+    ...(options.responseMembers === undefined ? {} : { responseMembers: options.responseMembers }),
+    ...(options.identityClaims === undefined ? {} : { identityClaims: options.identityClaims }),
+    ...(options.attributes === undefined
+      ? {}
+      : { attributes: Object.freeze([...options.attributes]) }),
     providerConfig(config) {
       const resolved = resolve(config);
       if ('problems' in resolved) {

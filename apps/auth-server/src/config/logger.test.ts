@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { answerRouteNotFound } from '../app/helpers/request-bounds';
 import {
   buildLoggerOptions,
+  censorLoggedQueryParameters,
   LOG_REDACT_CENSOR,
   LOG_REDACT_PATHS,
   LOG_REDACTED_QUERY_PARAMETERS,
@@ -319,6 +320,30 @@ describe('redactLoggedUrl', () => {
       'logout_hint',
       'pass',
     ]);
+  });
+
+  // #671: the response members of the presets the boot loaded, which their
+  // form_post bounce carries in the callback's URL. The core names none.
+  it('censors from then on the names the boot adds, in every spelling, and nothing else', () => {
+    const member = encodeURIComponent(JSON.stringify({ name: 'Ada' }));
+    const url = `/upstream/example_idp/callback?code=abc&state=s&preset_member=${member}`;
+    expect(redactLoggedUrl(url)).toContain('Ada');
+
+    censorLoggedQueryParameters(['preset_member', 'code']);
+
+    expect(redactLoggedUrl(url)).toBe(
+      `/upstream/example_idp/callback?code=${LOG_REDACT_CENSOR}&state=s&preset_member=${LOG_REDACT_CENSOR}`
+    );
+    expect(redactLoggedUrl(`/x?preset%5Fmember=${member}&y=1`)).toBe(
+      `/x?preset%5Fmember=${LOG_REDACT_CENSOR}&y=1`
+    );
+    // The fixed list is unchanged: the added names are the boot's.
+    expect(LOG_REDACTED_QUERY_PARAMETERS).not.toContain('preset_member');
+  });
+
+  it('refuses a name it cannot spell tolerantly, and adds none of the names it was given', () => {
+    expect(() => censorLoggedQueryParameters(['other_member', 'a b'])).toThrow(TypeError);
+    expect(redactLoggedUrl('/x?other_member=v')).toBe('/x?other_member=v');
   });
 
   it('censors the mailed pass a notice link carries (#637)', () => {

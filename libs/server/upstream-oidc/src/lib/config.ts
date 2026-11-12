@@ -1,4 +1,23 @@
+import {
+  UPSTREAM_ASSERTION_ALGORITHMS,
+  UPSTREAM_ID_TOKEN_ALGORITHMS,
+  UPSTREAM_SIGNED_CLIENT_SECRET,
+  UPSTREAM_TENANT_PLACEHOLDER,
+  type UpstreamIdTokenAlgorithm,
+} from '@qauth-labs/server-federation';
 import { z } from 'zod';
+
+// The preset's provider config is the plugin SDK's (#671): its algorithms,
+// its signed client secret and its tenant placeholder are declared there, so
+// a preset written against the SDK alone and the schema below describe one
+// shape (`config-shape.test.ts`).
+export {
+  UPSTREAM_ASSERTION_ALGORITHMS,
+  UPSTREAM_ID_TOKEN_ALGORITHMS,
+  UPSTREAM_SIGNED_CLIENT_SECRET,
+  UPSTREAM_TENANT_PLACEHOLDER,
+};
+export type { UpstreamIdTokenAlgorithm };
 
 /**
  * The config of one upstream OpenID Connect provider in one realm (#601):
@@ -48,33 +67,9 @@ export const UPSTREAM_CLIENT_AUTHENTICATION_METHODS = Object.freeze([
 export type UpstreamClientAuthenticationMethod =
   (typeof UPSTREAM_CLIENT_AUTHENTICATION_METHODS)[number];
 
-/**
- * The algorithms an ID token may be signed with: asymmetric JWS algorithms
- * only. `none` and every MAC algorithm (`HS*`) are absent by construction: a
- * MAC would be checked with the client secret, which the provider also holds,
- * so it proves nothing about who signed.
- */
-export const UPSTREAM_ID_TOKEN_ALGORITHMS = Object.freeze([
-  'RS256',
-  'RS384',
-  'RS512',
-  'PS256',
-  'PS384',
-  'PS512',
-  'ES256',
-  'ES384',
-  'ES512',
-  'EdDSA',
-] as const);
-
-export type UpstreamIdTokenAlgorithm = (typeof UPSTREAM_ID_TOKEN_ALGORITHMS)[number];
-
 /** The ID token algorithms a provider's config allows unless it names its own. */
 export const DEFAULT_UPSTREAM_ID_TOKEN_ALGORITHMS: readonly UpstreamIdTokenAlgorithm[] =
   Object.freeze(['RS256', 'PS256', 'ES256', 'EdDSA']);
-
-/** The algorithms the signer signs a client assertion with. */
-export const UPSTREAM_ASSERTION_ALGORITHMS = Object.freeze(['RS256', 'ES256', 'EdDSA'] as const);
 
 /** The scopes an authorization request asks for unless the config names its own. */
 export const DEFAULT_UPSTREAM_SCOPES: readonly string[] = Object.freeze([
@@ -150,6 +145,70 @@ export const upstreamClientAuthenticationSchema = z.discriminatedUnion('method',
   }),
 ]);
 
+/**
+ * How a preset plugin's client authenticates at the token endpoint: the
+ * generic client's methods, and {@link UPSTREAM_SIGNED_CLIENT_SECRET}, a
+ * client secret the signer role signs for each token request, which only a
+ * preset may name.
+ */
+export const upstreamPresetClientAuthenticationSchema = z.discriminatedUnion('method', [
+  ...upstreamClientAuthenticationSchema.options,
+  z.strictObject({
+    method: z.literal(UPSTREAM_SIGNED_CLIENT_SECRET),
+    /** The algorithm of the key registered with the provider. */
+    signingAlgorithm: z.enum(UPSTREAM_ASSERTION_ALGORITHMS).default('ES256'),
+  }),
+]);
+
+/**
+ * A tenant id as an issuer template takes it: letters, digits and `-`, as a
+ * GUID is, 1 to 64 characters. Never `/`, `.` or `%`, so a tenant id cannot
+ * reach past its path segment.
+ */
+export const UPSTREAM_TENANT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+
+/**
+ * Why `template` cannot be a tenant issuer template, or `undefined` when it
+ * can: an issuer identifier ({@link upstreamIssuerProblem}) once a tenant id
+ * takes the place of its one {@link UPSTREAM_TENANT_PLACEHOLDER}, which lies
+ * in its path, so the tenant never names the host.
+ */
+export function upstreamTenantIssuerProblem(template: unknown): string | undefined {
+  if (typeof template !== 'string') return 'is not a string';
+  const at = template.indexOf(UPSTREAM_TENANT_PLACEHOLDER);
+  if (at < 0 || template.indexOf(UPSTREAM_TENANT_PLACEHOLDER, at + 1) >= 0) {
+    return `does not hold ${UPSTREAM_TENANT_PLACEHOLDER} once`;
+  }
+  const sample = template.replace(UPSTREAM_TENANT_PLACEHOLDER, 'tenant');
+  const problem = upstreamIssuerProblem(sample);
+  if (problem !== undefined) return problem;
+  if (at <= new URL(sample).origin.length) return 'holds the tenant id outside its path';
+  return undefined;
+}
+
+/**
+ * The issuer of a multi-tenant provider (#671), whose shared endpoints
+ * serve many tenants: the discovery document names the template (e.g.
+ * `https://idp.example.com/{tenantid}/v2.0`), and
+ * each ID token the template with its own tenant id, the value of its
+ * `tenantClaim`. A token is accepted only when its `iss` is the template
+ * with that tenant id in place: never a token whose issuer names one tenant
+ * and whose tenant claim another.
+ */
+export const upstreamTenantIssuerSchema = z.strictObject({
+  template: z.string().superRefine((value, context) => {
+    const problem = upstreamTenantIssuerProblem(value);
+    if (problem !== undefined) {
+      context.addIssue({ code: 'custom', message: `the issuer template ${problem}` });
+    }
+  }),
+  /** The ID token claim that names the tenant, such as `tid`. */
+  tenantClaim: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
+});
+
+/** A multi-tenant provider's issuer template, parsed. */
+export type UpstreamTenantIssuer = z.output<typeof upstreamTenantIssuerSchema>;
+
 /** The provider's endpoints, set by hand: no discovery document is read. */
 export const upstreamEndpointsSchema = z.strictObject({
   authorization: endpointUrl,
@@ -208,7 +267,30 @@ const upstreamOidcConfigMembers = z.strictObject({
  * as `invalid_config` rather than each `start()` failing: userinfo reads
  * with endpoints set by hand that name no userinfo endpoint.
  */
-export const upstreamOidcConfigSchema = upstreamOidcConfigMembers.superRefine((config, context) => {
+export const upstreamOidcConfigSchema = upstreamOidcConfigMembers.superRefine(userinfoReachable);
+
+/**
+ * The provider config a preset plugin's `upstreamConfig` makes (#671): the
+ * generic client's, with what only a preset may set, since the preset's own
+ * code, not a realm's admin, chooses it:
+ * {@link UPSTREAM_SIGNED_CLIENT_SECRET} among the client authentication
+ * methods, and a `tenantIssuer` for a multi-tenant provider.
+ */
+export const upstreamOidcClientConfigSchema = upstreamOidcConfigMembers
+  .extend({
+    clientAuthentication: upstreamPresetClientAuthenticationSchema,
+    tenantIssuer: upstreamTenantIssuerSchema.optional(),
+  })
+  .superRefine(userinfoReachable);
+
+/** Refuse userinfo reads with endpoints set by hand that name no userinfo endpoint. */
+function userinfoReachable(
+  config: {
+    readonly fetchUserinfo: boolean;
+    readonly endpoints?: { readonly userinfo?: string };
+  },
+  context: z.RefinementCtx
+): void {
   if (
     config.fetchUserinfo &&
     config.endpoints !== undefined &&
@@ -220,13 +302,22 @@ export const upstreamOidcConfigSchema = upstreamOidcConfigMembers.superRefine((c
       message: 'fetchUserinfo needs a userinfo endpoint among the endpoints set by hand',
     });
   }
-});
+}
 
 /** A provider's config as the method reads it, after parsing. */
 export type UpstreamOidcConfig = z.output<typeof upstreamOidcConfigSchema>;
 
 /** A provider's config as an admin writes it, before parsing. */
 export type UpstreamOidcConfigInput = z.input<typeof upstreamOidcConfigSchema>;
+
+/**
+ * The config the client runs on: the generic client's, or the one a preset
+ * plugin makes ({@link upstreamOidcClientConfigSchema}), parsed.
+ */
+export type UpstreamOidcClientConfig = z.output<typeof upstreamOidcClientConfigSchema>;
+
+/** A preset plugin's provider config, before parsing. */
+export type UpstreamOidcClientConfigInput = z.input<typeof upstreamOidcClientConfigSchema>;
 
 /**
  * The discovery document URL of an issuer: the issuer with a terminating `/`

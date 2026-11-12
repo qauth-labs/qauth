@@ -30,6 +30,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   direction) for the admin console; `pnpm nx test server-realm-policy -- -u`
   regenerates it, and a field without an explanation, a docs link or a
   default fails the generation.
+- **Upstream OpenID Connect presets in the plugin SDK** ([#671], ADR-018 §3,
+  experimental). A provider plugin in its own repository can now build on the
+  server's generic OpenID Connect client through `@qauth-labs/plugin-sdk`
+  alone: its package exports an `upstreamOidcPreset`, made with
+  `defineUpstreamOidcPreset`, and the plugin loader builds the method on the
+  server's client, so discovery, PKCE, the ID token checks and the token
+  request stay the server's. The SDK adds the preset's types, its limits, the
+  export name and `checkUpstreamOidcPreset` under `/testing`, which checks a
+  preset's config schema, its secret mark, the provider config it makes and
+  its claim rules without the server; the contract stays
+  `qauth-auth-method/1-rc.0`. Such a package loads only when
+  `AUTH_METHOD_PLUGINS` names it and `PLUGIN_API_ENABLED` is on, and the boot
+  logs how each plugin's method was built. A preset may set what a realm's
+  admin cannot: a client secret the signer role signs
+  (`signed_client_secret`, with the issuer the provider's client record names,
+  `assertionIssuer`), a multi-tenant issuer template, response members its
+  `form_post` bounce carries (at most 1024 characters, censored in the request
+  log), identity claims that never set `sub`, an ID-token-only claim or a
+  claim the provider vouches for, and attribute rules. A claim a preset sets
+  never makes an attribute verified: a rule's `verified` sees only the
+  provider's claims. In claim resolution, the rows a method built from a
+  preset writes rank with `oidc_*`, by the provenance the sign-in records on
+  them, on every role; a plugin that exports its own `authMethod` keeps an
+  unknown rank, and the loader refuses any plugin type that starts with
+  `oidc_`. The Google, Microsoft and Apple
+  plugins are presets in their own repositories ([#1074], [#1075], [#1076]);
+  Apple sign-in also needs the signer to hold the key Apple issues ([#1073]).
 
 ### Changed
 
@@ -3852,6 +3879,7 @@ It adds migrations 0068 and 0069.
 [#662]: https://github.com/qauth-labs/qauth/issues/662
 [#663]: https://github.com/qauth-labs/qauth/issues/663
 [#670]: https://github.com/qauth-labs/qauth/issues/670
+[#671]: https://github.com/qauth-labs/qauth/issues/671
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689
@@ -3886,6 +3914,10 @@ It adds migrations 0068 and 0069.
 [#1044]: https://github.com/qauth-labs/qauth/issues/1044
 [#1051]: https://github.com/qauth-labs/qauth/issues/1051
 [#1064]: https://github.com/qauth-labs/qauth/issues/1064
+[#1073]: https://github.com/qauth-labs/qauth/issues/1073
+[#1074]: https://github.com/qauth-labs/qauth/issues/1074
+[#1075]: https://github.com/qauth-labs/qauth/issues/1075
+[#1076]: https://github.com/qauth-labs/qauth/issues/1076
 
 ### Deprecated
 

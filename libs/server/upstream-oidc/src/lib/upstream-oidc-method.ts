@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import {
   AUTH_METHOD_CONTRACT,
+  AUTH_METHOD_TYPE_PATTERN,
   type AuthMethod,
   type AuthMethodBounce,
   type AuthMethodCallbackRequest,
@@ -12,10 +13,18 @@ import {
   type AuthMethodRouteRequest,
   MAX_AUTH_METHOD_RAW_CLAIMS_BYTES,
   MAX_UPSTREAM_REDIRECT_LENGTH,
+  MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH,
+  MAX_UPSTREAM_RESPONSE_MEMBERS,
+  UPSTREAM_ID_TOKEN_ONLY_CLAIMS,
   UPSTREAM_OIDC_METHOD_ID,
   UPSTREAM_OIDC_TYPE_PATTERN,
+  UPSTREAM_RESPONSE_MEMBER_NAME_PATTERN,
+  UPSTREAM_RESPONSE_PARAMETERS,
   UPSTREAM_STEP_URN,
+  UPSTREAM_VERIFIED_CLAIM_PAIRS,
   type UpstreamCallbackOutcome,
+  type UpstreamIdentityClaims,
+  type UpstreamResponseMembers,
   type UpstreamStart,
   type UpstreamStartRequest,
   type UserAttribute,
@@ -23,10 +32,18 @@ import {
 } from '@qauth-labs/server-federation';
 import type { z } from 'zod';
 
-import { claimAttributes } from './attributes';
-import { type UpstreamOidcConfig, upstreamOidcConfigSchema } from './config';
+import {
+  UPSTREAM_STANDARD_ATTRIBUTES,
+  type UpstreamClaimAttribute,
+  upstreamClaimAttributes,
+} from './attributes';
+import {
+  type UpstreamOidcClientConfig,
+  type UpstreamOidcConfig,
+  upstreamOidcConfigSchema,
+} from './config';
 import { invalidResponse, UpstreamOidcError } from './errors';
-import { sameText, validateIdToken } from './id-token';
+import { isTenantIssuer, sameText, validateIdToken } from './id-token';
 import { UpstreamJwksCache } from './jwks';
 import {
   fetchDiscoveryDocument,
@@ -87,15 +104,17 @@ export const UPSTREAM_OIDC_CALLBACK_PATH = '/callback';
 /**
  * The redirect URI an operator registers at the provider for a realm:
  * `<realm origin>/upstream/<type>/callback`. One per provider, so a response
- * meant for one provider cannot be replayed at another's callback.
+ * meant for one provider cannot be replayed at another's callback. `type` is
+ * a generic client's `oidc_<alias>` or a preset plugin's own type (#671),
+ * e.g. `example_idp`.
  */
 export function upstreamOidcRedirectUri(realmOrigin: string, type: string): string {
   const origin = new URL(realmOrigin);
   if (origin.origin !== realmOrigin) {
     throw new TypeError('realmOrigin must be a bare origin, such as https://auth.example.com');
   }
-  if (!UPSTREAM_OIDC_TYPE_PATTERN.test(type)) {
-    throw new TypeError('type must be oidc_ and a lower-case alias');
+  if (typeof type !== 'string' || !AUTH_METHOD_TYPE_PATTERN.test(type)) {
+    throw new TypeError('type must be an AuthMethod type, such as oidc_corp or example_idp');
   }
   return `${origin.origin}${authMethodRoutePrefix(type)}${UPSTREAM_OIDC_CALLBACK_PATH}`;
 }
@@ -139,8 +158,10 @@ export const UPSTREAM_DISCOVERY_FAILURE_TTL_MS = 30 * 1000;
 /** How many discovery documents one method keeps. */
 const MAX_CACHED_DOCUMENTS = 256;
 
-/** The authorization response parameters a `form_post` bounce carries on. */
-const RESPONSE_PARAMETERS = ['code', 'state', 'iss', 'error', 'error_description', 'error_uri'];
+// What a preset's response members are (#671) is the plugin SDK's: their
+// names, their cap and the protocol's own parameters, which the bounce
+// carries on and no member may be.
+export { MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH };
 
 /** A BCP 47 tag as `ui_locales` may carry it. */
 const LOCALE_TAG = /^[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8}){0,7}$/;
@@ -155,6 +176,16 @@ const MAX_CODE_LENGTH = 4096;
 interface UpstreamOidcResult {
   readonly sub: string;
   readonly claims: Readonly<Record<string, unknown>>;
+  /** The names of `claims` a preset's `identityClaims` set (#671). */
+  readonly presetClaims: ReadonlySet<string>;
+}
+
+/** How many verified identities a method keeps the preset's claims of, at most. */
+const MAX_PENDING_ATTRIBUTES = 256;
+
+/** The key of an identity `verify()` resolved: its subject and its claims as JSON. */
+function identityKey(externalSub: string, rawClaims: Readonly<Record<string, unknown>>): string {
+  return `${externalSub}\u0000${JSON.stringify(rawClaims)}`;
 }
 
 /**
@@ -196,14 +227,24 @@ export interface UpstreamOidcClientParts<TConfig> {
    * config itself for the generic client, a preset's mapping for a preset
    * plugin (#951).
    */
-  readonly providerConfig: (config: TConfig) => UpstreamOidcConfig;
+  readonly providerConfig: (config: TConfig) => UpstreamOidcClientConfig;
   /**
    * The only origins the provider's endpoints may be on, discovered ones
    * included: a preset's `origins` (#951). Without it, as for the generic
    * client, a discovered endpoint may be on any host.
    */
   readonly endpointOrigins?: ReadonlySet<string>;
+  /** A preset's response members (#671): see `UpstreamOidcPresetOptions`. */
+  readonly responseMembers?: UpstreamResponseMembers;
+  /** A preset's claims from the response and its config (#671): see `UpstreamOidcPresetOptions`. */
+  readonly identityClaims?: UpstreamIdentityClaims<TConfig>;
+  /** A preset's attribute rules (#671); the standard ones unless set. */
+  readonly attributes?: readonly UpstreamClaimAttribute[];
 }
+
+// A preset's response members and identity claims are the plugin SDK's
+// types (#671).
+export type { UpstreamIdentityClaims, UpstreamResponseMembers };
 
 /**
  * The client as an AuthMethod under the names and the config `parts` give
@@ -217,8 +258,20 @@ export function upstreamOidcClientMethod<TConfig>(
   parts: UpstreamOidcClientParts<TConfig>
 ): AuthMethod<TConfig, UpstreamOidcTransaction> {
   const { type, display } = parts;
+  const responseMembers = checkedResponseMembers(parts.responseMembers);
+  const attributeRules = parts.attributes ?? UPSTREAM_STANDARD_ATTRIBUTES;
   /** Results the callback produced and `verify()` has not taken yet. */
   const issued = new WeakSet<object>();
+  /**
+   * The claims a preset set, of the identities `verify()` resolved and
+   * `extractAttributes()` has not mapped yet (#671). The host checks the
+   * identity between the two calls and hands on a JSON copy, so it is found
+   * again by its subject and its claims, never by the object. Two sign-ins
+   * that end in the same claims keep the union of what the preset set in
+   * each: more claims of unknown provenance, never fewer. A missing entry
+   * makes every claim one of unknown provenance.
+   */
+  const presetClaimsOf = new Map<string, ReadonlySet<string>>();
   const documents = new TtlCache<Record<string, unknown>>(
     UPSTREAM_DISCOVERY_TTL_MS,
     MAX_CACHED_DOCUMENTS,
@@ -235,7 +288,7 @@ export function upstreamOidcClientMethod<TConfig>(
    * checks against the config run at every use.
    */
   const metadataFor = async (
-    context: AuthMethodContext<UpstreamOidcConfig>
+    context: AuthMethodContext<UpstreamOidcClientConfig>
   ): Promise<UpstreamProviderMetadata> => {
     const { config } = context;
     const scope = context.routeUrl(UPSTREAM_OIDC_CALLBACK_PATH);
@@ -315,10 +368,19 @@ export function upstreamOidcClientMethod<TConfig>(
 
     const metadata = await metadataFor(context);
     // RFC 9207 §2.4: a response that names another issuer is refused, and
-    // so is one without `iss` from a provider that says it sends it.
+    // so is one without `iss` from a provider that says it sends it. A
+    // multi-tenant provider's must fit its issuer template. It is not
+    // compared with the ID token's issuer, which the token's own check binds
+    // to the token's tenant claim: which tenant such a provider names here
+    // is not specified.
     if (Object.hasOwn(query, 'iss')) {
       const iss = single(query, 'iss');
-      if (iss === undefined || iss !== metadata.issuer) {
+      if (
+        iss === undefined ||
+        (config.tenantIssuer === undefined
+          ? iss !== metadata.issuer
+          : !isTenantIssuer(config.tenantIssuer, iss))
+      ) {
         throw invalidResponse('the response names another issuer (RFC 9207)');
       }
     } else if (metadata.issParameterSupported) {
@@ -344,7 +406,7 @@ export function upstreamOidcClientMethod<TConfig>(
     const idTokenClaims = await validateIdToken(
       tokens.idToken,
       {
-        issuer: metadata.issuer,
+        issuer: config.tenantIssuer ?? metadata.issuer,
         clientId: config.clientId,
         nonce: transaction.nonce,
         algorithms: metadata.idTokenSigningAlgorithms,
@@ -361,11 +423,20 @@ export function upstreamOidcClientMethod<TConfig>(
     const userinfo = config.fetchUserinfo
       ? await readUserinfo(context, metadata, tokens.accessToken, sub)
       : {};
-    const claims = mergedClaims(idTokenClaims, userinfo);
+    const { claims, presetClaims } = withIdentityClaims(
+      mergedClaims(idTokenClaims, userinfo),
+      parts.identityClaims,
+      responseMembers === undefined ? {} : readResponseMembers(query, responseMembers),
+      methodContext.config
+    );
     if (Buffer.byteLength(JSON.stringify(claims), 'utf8') > MAX_AUTH_METHOD_RAW_CLAIMS_BYTES) {
       throw invalidResponse('the claims are larger than an identity may carry');
     }
-    const result: UpstreamOidcResult = Object.freeze({ sub, claims: Object.freeze(claims) });
+    const result: UpstreamOidcResult = Object.freeze({
+      sub,
+      claims: Object.freeze(claims),
+      presetClaims,
+    });
     issued.add(result);
     return { kind: 'result', result };
   }
@@ -405,9 +476,14 @@ export function upstreamOidcClientMethod<TConfig>(
           // state, code or iss, and takes any `error` as an error, so a
           // response with two `error` values cannot become a plain code.
           const carried: Record<string, string> = {};
-          for (const name of RESPONSE_PARAMETERS) {
+          for (const name of UPSTREAM_RESPONSE_PARAMETERS) {
             if (!Object.hasOwn(request.form, name)) continue;
             carried[name] = single(request.form, name) ?? '';
+          }
+          // A preset's own members, as its map makes them; a repeated or
+          // unreadable one is dropped: none is a protocol parameter.
+          if (responseMembers !== undefined) {
+            Object.assign(carried, readResponseMembers(request.form, responseMembers));
           }
           return { to: UPSTREAM_OIDC_CALLBACK_PATH, query: carried };
         },
@@ -419,11 +495,43 @@ export function upstreamOidcClientMethod<TConfig>(
         throw new Error("not a result of this method's callback");
       }
       issued.delete(input);
-      const { sub, claims } = input as UpstreamOidcResult;
-      return { externalSub: sub, assuranceLevel: 'low', rawClaims: { ...claims } };
+      const { sub, claims, presetClaims } = input as UpstreamOidcResult;
+      const rawClaims = { ...claims };
+      if (parts.identityClaims !== undefined) {
+        const key = identityKey(sub, rawClaims);
+        const known = presetClaimsOf.get(key);
+        presetClaimsOf.delete(key);
+        // Bounded, the oldest going first: an entry is needed only until the
+        // host maps the identity, right after this call.
+        if (presetClaimsOf.size >= MAX_PENDING_ATTRIBUTES) {
+          const oldest = presetClaimsOf.keys().next();
+          if (oldest.done !== true) presetClaimsOf.delete(oldest.value);
+        }
+        presetClaimsOf.set(
+          key,
+          known === undefined ? presetClaims : new Set([...known, ...presetClaims])
+        );
+      }
+      return { externalSub: sub, assuranceLevel: 'low', rawClaims };
     },
     extractAttributes(identity: VerifiedIdentity): UserAttribute[] {
-      return claimAttributes(type, identity);
+      if (parts.identityClaims === undefined) {
+        return upstreamClaimAttributes(type, identity.rawClaims, attributeRules);
+      }
+      // A preset with identity claims: which claims it set is known only for
+      // an identity this method verified. Any other identity's claims are
+      // all of unknown provenance, so none of its attributes is verified.
+      const key = identityKey(identity.externalSub, identity.rawClaims);
+      const presetClaims = presetClaimsOf.get(key);
+      // Read once: the host maps an identity's attributes once, and the
+      // entry holds the person's claims.
+      presetClaimsOf.delete(key);
+      return upstreamClaimAttributes(
+        type,
+        identity.rawClaims,
+        attributeRules,
+        presetClaims ?? new Set(Object.keys(identity.rawClaims))
+      );
     },
   };
   return Object.freeze(method);
@@ -467,11 +575,11 @@ function requireEndpointsOn(
  */
 function providerContext<TConfig>(
   context: AuthMethodContext<TConfig>,
-  providerConfig: (config: TConfig) => UpstreamOidcConfig
-): AuthMethodContext<UpstreamOidcConfig> {
+  providerConfig: (config: TConfig) => UpstreamOidcClientConfig
+): AuthMethodContext<UpstreamOidcClientConfig> {
   const config = providerConfig(context.config);
   if ((config as unknown) === context.config) {
-    return context as unknown as AuthMethodContext<UpstreamOidcConfig>;
+    return context as unknown as AuthMethodContext<UpstreamOidcClientConfig>;
   }
   return Object.freeze({ ...context, config });
 }
@@ -484,8 +592,8 @@ function providerContext<TConfig>(
 function ownTransaction(
   value: unknown,
   type: string,
-  config: UpstreamOidcConfig,
-  context: AuthMethodContext<UpstreamOidcConfig>
+  config: UpstreamOidcClientConfig,
+  context: AuthMethodContext<UpstreamOidcClientConfig>
 ): UpstreamOidcTransaction {
   const mismatch = (problem: string) => new UpstreamOidcError('transaction_mismatch', problem);
   if (typeof value !== 'object' || value === null) throw mismatch('no transaction');
@@ -503,45 +611,17 @@ function ownTransaction(
 }
 
 /**
- * The claims only the ID token may carry: its own validity (`iss`, `aud`,
- * `azp`, `exp`, `iat`, `nbf`, `jti`, `nonce`, the hashes) and the facts of
- * the authentication (`acr`, `amr`, `auth_time`, `sid`, `cnf`). A userinfo
- * answer is not signed, so one of these from it is dropped, never merged
- * where the ID token lacks it. `sub` is not here: userinfo's must equal the
- * ID token's, which `readUserinfo` checks.
+ * Every claim of `UPSTREAM_VERIFIED_CLAIM_PAIRS` (the plugin SDK's): a value
+ * or its flag. The claims only the ID token may carry,
+ * `UPSTREAM_ID_TOKEN_ONLY_CLAIMS`, are the SDK's too, so the test kit holds a
+ * preset to the same lists.
  */
-const ID_TOKEN_ONLY_CLAIMS: readonly string[] = [
-  'iss',
-  'aud',
-  'azp',
-  'exp',
-  'iat',
-  'nbf',
-  'jti',
-  'nonce',
-  'at_hash',
-  'c_hash',
-  's_hash',
-  'acr',
-  'amr',
-  'auth_time',
-  'sid',
-  'cnf',
-];
-
-/**
- * Claims whose truth another claim of the same source vouches for: a value
- * and its `*_verified` flag (OpenID Connect Core 1.0 §5.1).
- */
-const VERIFIED_CLAIM_PAIRS: readonly (readonly [value: string, flag: string])[] = [
-  ['email', 'email_verified'],
-  ['phone_number', 'phone_number_verified'],
-];
+const VOUCHED_CLAIMS: ReadonlySet<string> = new Set(UPSTREAM_VERIFIED_CLAIM_PAIRS.flat());
 
 /**
  * The identity's claims: the ID token's over the userinfo answer's. The ID
  * token's win: they are signed, and `iss`, `sub` and `aud` stay the checked
- * ones. The protocol claims ({@link ID_TOKEN_ONLY_CLAIMS}) come from the ID
+ * ones. The protocol claims ({@link UPSTREAM_ID_TOKEN_ONLY_CLAIMS}) come from the ID
  * token alone: an `acr` or `auth_time` the ID token lacks is not filled in
  * from userinfo. A value and its `*_verified` flag are taken together, from
  * the source that holds the value: an ID token's unverified `email` never
@@ -552,9 +632,9 @@ function mergedClaims(
   answer: Readonly<Record<string, unknown>>
 ): Record<string, unknown> {
   const userinfo: Record<string, unknown> = { ...answer };
-  for (const name of ID_TOKEN_ONLY_CLAIMS) delete userinfo[name];
+  for (const name of UPSTREAM_ID_TOKEN_ONLY_CLAIMS) delete userinfo[name];
   const claims: Record<string, unknown> = { ...userinfo, ...idToken };
-  for (const [value, flag] of VERIFIED_CLAIM_PAIRS) {
+  for (const [value, flag] of UPSTREAM_VERIFIED_CLAIM_PAIRS) {
     const source = Object.hasOwn(idToken, value)
       ? idToken
       : Object.hasOwn(userinfo, value)
@@ -564,6 +644,103 @@ function mergedClaims(
     if (source !== undefined && Object.hasOwn(source, flag)) claims[flag] = source[flag];
   }
   return claims;
+}
+
+/** A preset's response members, checked: at most four, each a lower-case name and a function. */
+function checkedResponseMembers(
+  members: UpstreamResponseMembers | undefined
+): UpstreamResponseMembers | undefined {
+  if (members === undefined) return undefined;
+  const entries = typeof members === 'object' && members !== null ? Object.entries(members) : [];
+  if (
+    entries.length === 0 ||
+    entries.length > MAX_UPSTREAM_RESPONSE_MEMBERS ||
+    entries.some(
+      ([name, map]) =>
+        !UPSTREAM_RESPONSE_MEMBER_NAME_PATTERN.test(name) ||
+        UPSTREAM_RESPONSE_PARAMETERS.includes(name) ||
+        typeof map !== 'function'
+    )
+  ) {
+    throw new TypeError(
+      `responseMembers must map one to ${MAX_UPSTREAM_RESPONSE_MEMBERS} lower-case member names, none a protocol parameter, to functions`
+    );
+  }
+  return Object.freeze(Object.fromEntries(entries));
+}
+
+/**
+ * The preset's response members `parameters` carry, each a single value of
+ * at most {@link MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH} characters as its map
+ * makes it. A member whose map throws, or makes no such value, is left out.
+ */
+function readResponseMembers(
+  parameters: AuthMethodParameters,
+  members: UpstreamResponseMembers
+): Record<string, string> {
+  const read: Record<string, string> = {};
+  for (const [name, map] of Object.entries(members)) {
+    const value = single(parameters, name);
+    if (value === undefined || value.length > MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH) continue;
+    let mapped: unknown;
+    try {
+      mapped = map(value);
+    } catch {
+      continue;
+    }
+    if (
+      typeof mapped === 'string' &&
+      mapped.length > 0 &&
+      mapped.length <= MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH
+    ) {
+      read[name] = mapped;
+    }
+  }
+  return read;
+}
+
+/**
+ * The provider's claims with a preset's own over them
+ * ({@link UpstreamIdentityClaims}): never `sub` or a claim only the ID token
+ * may carry, and a claim the provider vouches for removed at most. A preset
+ * whose function throws fails the callback.
+ */
+function withIdentityClaims<TConfig>(
+  claims: Record<string, unknown>,
+  identityClaims: UpstreamIdentityClaims<TConfig> | undefined,
+  response: Readonly<Record<string, string>>,
+  config: TConfig
+): { claims: Record<string, unknown>; presetClaims: ReadonlySet<string> } {
+  const presetClaims = new Set<string>();
+  if (identityClaims === undefined) return { claims, presetClaims };
+  let extra: unknown;
+  try {
+    // A deep copy: a hook that changes a nested claim changes only its copy,
+    // so no value of the provider's moves without being recorded below.
+    extra = identityClaims({ claims: Object.freeze(structuredClone(claims)), response, config });
+  } catch (cause) {
+    throw invalidResponse("the preset's identity claims failed", { cause });
+  }
+  if (typeof extra !== 'object' || extra === null || Array.isArray(extra)) {
+    throw invalidResponse("the preset's identity claims are not an object");
+  }
+  const merged: Record<string, unknown> = { ...claims };
+  for (const [name, value] of Object.entries(extra)) {
+    if (name === 'sub' || UPSTREAM_ID_TOKEN_ONLY_CLAIMS.includes(name)) continue;
+    if (value === undefined) {
+      delete merged[name];
+      presetClaims.delete(name);
+    }
+    // A claim the provider vouches for, or its flag, is the provider's to
+    // set: a preset only removes one, so a value it makes up, such as one
+    // from a response member, is never taken as verified. Every other claim
+    // it sets is recorded, and never makes an attribute verified either.
+    else if (!VOUCHED_CLAIMS.has(name)) {
+      merged[name] = value;
+      presetClaims.add(name);
+    }
+  }
+  return { claims: merged, presetClaims };
 }
 
 /** One parameter's single value; a missing or repeated one is `undefined`. */

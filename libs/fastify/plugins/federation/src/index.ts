@@ -38,11 +38,13 @@ export type {
   AuthMethodIcon,
   AuthMethodLogger,
   AuthMethodParameters,
+  AuthMethodPluginKind,
   AuthMethodRoute,
   AuthMethodRouteRequest,
   AuthMethodSecretPath,
   AuthMethodSigner,
   AuthMethodStepUrn,
+  BuildUpstreamOidcPreset,
   ImportAuthMethodPlugin,
   InstalledAuthMethodPlugin,
   LoadAuthMethodPluginsOptions,
@@ -110,7 +112,12 @@ export {
   VERIFIED_OWNER_REFUSAL_REASONS,
 } from '@qauth-labs/server-federation';
 export type { UpstreamOidcConfig } from '@qauth-labs/server-upstream-oidc';
-export { createUpstreamOidcMethod, openUpstreamOidcConfig } from '@qauth-labs/server-upstream-oidc';
+export {
+  createUpstreamOidcMethod,
+  // The loader builds a preset package's method with it (#671).
+  createUpstreamOidcPresetMethod,
+  openUpstreamOidcConfig,
+} from '@qauth-labs/server-upstream-oidc';
 
 // Re-exported provider surface: app code (scope:app) may only depend on
 // fastify plugins (scope:fastify), never on server libs directly — routes and
@@ -231,10 +238,13 @@ export {
   assertEmailVerifyingIssuersUsable,
   issuerVouchesForEmail,
 } from '@qauth-labs/server-federation';
+// The upstream sign-in writes the provenance of a preset-built method's rows,
+// which the rank reads (#671).
 export {
   buildPasswordCredentialData,
   createPasswordProvider,
   EMAIL_ATTR_KEY,
+  isUpstreamPresetProvenance,
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
   presentedPasswordFor,
@@ -242,6 +252,7 @@ export {
   readWalletBinding,
   selectTrustedAttribute,
   SELF_REPORTED_SOURCE,
+  UPSTREAM_PRESET_PROVENANCE,
   WALLET_PROVIDER_TYPE,
   WALLET_SOURCE,
 } from '@qauth-labs/server-federation';

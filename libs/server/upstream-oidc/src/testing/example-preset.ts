@@ -5,8 +5,8 @@ import { createUpstreamOidcPresetMethod } from '../lib/upstream-oidc-preset';
 
 /**
  * TEST SUPPORT — a preset plugin on the generic upstream OpenID Connect
- * client (#951), shaped as the first-party presets of #671 will be: its own
- * id, type and config, a fixed provider, and its client secret inside a
+ * client (#951), shaped as a provider preset in its own repository is (#671):
+ * its own id, type and config, a fixed provider, and its client secret inside a
  * discriminated union of client authentication methods. The provider is the
  * fake one (`createFakeProvider({ issuer: EXAMPLE_PRESET_ISSUER })`).
  */

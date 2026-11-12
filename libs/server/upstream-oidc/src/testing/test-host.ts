@@ -48,6 +48,11 @@ export interface TestHostOptions {
   readonly realmName?: string;
   /** The client id the signer's upstream client record names. */
   readonly signerClientId?: string;
+  /**
+   * The `iss` the signer's upstream client record names for its assertions,
+   * such as a developer account's team id: the client id unless set.
+   */
+  readonly signerAssertionIssuer?: string;
   /** Answers instead of the provider. */
   readonly egress?: (call: HostEgressCall) => Promise<AuthMethodEgressResponse>;
   /**
@@ -60,16 +65,23 @@ export interface TestHostOptions {
 export const TEST_ORIGIN = 'https://auth.example.com';
 export const TEST_REALM_ID = '0190a5c4-0000-7000-8000-000000000001';
 
-/** The signer role's own key: created here, never handed to the method. */
-const signerKey = generateKeyPair('RS256', { extractable: true }).then(async (pair) => ({
-  ...pair,
-  publicJwk: {
-    ...(await exportJWK(pair.publicKey)),
-    kid: 'upstream-assertion-1',
-    alg: 'RS256',
-    use: 'sig',
-  } as JWK,
-}));
+/** One of the signer role's own keys: created here, never handed to the method. */
+const signerKeyOf = (algorithm: 'RS256' | 'ES256', kid: string) =>
+  generateKeyPair(algorithm, { extractable: true }).then(async (pair) => ({
+    ...pair,
+    publicJwk: {
+      ...(await exportJWK(pair.publicKey)),
+      kid,
+      alg: algorithm,
+      use: 'sig',
+    } as JWK,
+  }));
+
+/** The signer role's keys, by the algorithm a request names: RS256 unless it names ES256. */
+const signerKeys = Promise.all([
+  signerKeyOf('RS256', 'upstream-assertion-1'),
+  signerKeyOf('ES256', 'upstream-assertion-es256'),
+]);
 
 export async function testHost<TConfig>(
   method: AuthMethod<TConfig>,
@@ -77,12 +89,12 @@ export async function testHost<TConfig>(
   provider: FakeProvider | undefined,
   options: TestHostOptions = {}
 ): Promise<TestHost<TConfig>> {
-  const key = await signerKey;
+  const [rsaKey, ecKey] = await signerKeys;
   const egressCalls: HostEgressCall[] = [];
   const signerCalls: HostSignerCall[] = [];
   const logLines: TestHost<TConfig>['logLines'] = [];
   const signedAssertions: string[] = [];
-  const upstreamJwks = { keys: [key.publicJwk] };
+  const upstreamJwks = { keys: [rsaKey.publicJwk, ecKey.publicJwk] };
   const realmId = options.realmId ?? TEST_REALM_ID;
 
   const egress: AuthMethodHostEgress = {
@@ -103,13 +115,14 @@ export async function testHost<TConfig>(
         request: { ...request },
       });
       const clientId = options.signerClientId ?? 'qauth-client';
+      const key = request.algorithm === 'ES256' ? ecKey : rsaKey;
       const assertion = await new SignJWT({ ...request.claims })
         .setProtectedHeader({
-          alg: 'RS256',
+          alg: key.publicJwk.alg as string,
           kid: key.publicJwk.kid as string,
           typ: 'client-authentication+jwt',
         })
-        .setIssuer(clientId)
+        .setIssuer(options.signerAssertionIssuer ?? clientId)
         .setSubject(clientId)
         .setAudience(request.audience)
         .sign(key.privateKey);
