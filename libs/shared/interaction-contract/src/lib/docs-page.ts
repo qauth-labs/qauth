@@ -1,4 +1,4 @@
-import { BRAND_FONTS } from './envelope';
+import { BRAND_FONTS, RESTART_NOTICES } from './envelope';
 import {
   FLOW_COOKIE_NAME,
   INTERACTION_API_PREFIX,
@@ -118,10 +118,12 @@ ${operationRows(document).join('\n')}
 
 An answer is ${code('application/json')} or a plain HTML form post (${code('application/x-www-form-urlencoded')}) with the same members, so the password, email-code and TOTP steps work without JavaScript. A JSON answer gets one of two results:
 
-- **Next step** (${code('"result": "step"')}): the interaction as a step read now returns it. A refused answer, such as a wrong password, gets the same step back with its ${code('error')} set and a new CSRF value.
+- **Next step** (${code('"result": "step"')}): the interaction as a step read now returns it. A refused answer, such as a wrong password, gets the same step back with its ${code('error')} set and a new CSRF value. An answer after which the sign-in starts again at its first step, because the engine ended its transaction, gets that first step with a ${code('notice')} saying why: ${RESTART_NOTICES.map(code).join(', ')}.
 - **Final redirect** (${code('"result": "redirect"')}): the ${code('location')} the browser goes to, taken from the interaction record and the realm, never from the request.
 
-A form post gets the same as a ${code('303 See Other')}. Anything the API refuses is an **error**: a problem document (below).`,
+A form post gets the same as a ${code('303 See Other')}. Anything the API refuses is an **error**: a problem document (below).
+
+A ${code('notice')} is carried once: by the result of the JSON answer, or, after a form post, by the next step read; every later read carries none. It names no account, and before a factor succeeded it is the same for every identifier (ADR-017 Decision 4). An upstream provider that did not sign the person in, and a refused upstream link, come back the same way, as the ${code('upstream')} and ${code('upstream_link')} steps' ${code('error')} (#1081): the auth server shows no page of its own for them.`,
     `## Steps
 
 Each step is named ${code(`urn:qauth:ia:<name>:${INTERACTION_API_VERSION}`)}. A step read names the current step (${code('step')}), the other steps the engine accepts next (${code('alternatives')}), their params keyed by step name (${code('params')}) and, after a refused answer, the reason (${code('error')}): the shape of the FiPA endpoint's answer, so a new step is a new name and a new member, not a break. A step's params are what any reader of the interaction id may see; its personal data needs the flow cookie. Each step's schema file holds the whole step as one record (params, answer, personal data, errors and ${code('amr')}) with its example, which the implementation reuses as a test vector. The params and answer fields keep the step grammar's names on both transports, which is why they are ${code('snake_case')} while the envelope is ${code('camelCase')}.

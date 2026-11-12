@@ -218,10 +218,21 @@ export const upstream = defineStep({
       16,
       'The realm’s upstream identity providers, in the order the screen shows them.'
     ),
+    error_provider: object(
+      {
+        provider: upstreamProvider('The provider’s name: the AuthMethod `type`.'),
+        name: displayText(
+          'realm',
+          64,
+          'The provider’s name as the operator set it, for the screen’s text.'
+        ),
+      },
+      'With an `error`, the provider it is about (#1081): the one the person picked, which did not sign them in or could not be started. It may be one the list does not show, such as a provider the operator hides that the authorization request routed to. Absent without an `error`.'
+    ).optional(),
   }),
   personal: EMPTY_OBJECT,
   answer: object({ provider: upstreamProvider('The `provider` of the entry the person picked.') }),
-  errors: ['provider_unavailable'],
+  errors: ['provider_unavailable', 'provider_declined', 'provider_error'],
   amr: [],
 });
 
@@ -249,7 +260,7 @@ export const upstreamLink = defineStep({
       'A new account with the identity, or the existing account the person signs in to next.'
     ),
   }),
-  errors: [],
+  errors: ['already_linked', 'provider_linked', 'account_unavailable'],
   amr: [],
 });
 

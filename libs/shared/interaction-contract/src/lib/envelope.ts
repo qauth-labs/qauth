@@ -239,6 +239,16 @@ export const clientDisplaySchema = object(
   ]
 );
 
+/**
+ * Why a sign-in is back at its first step (#1081): the notice the step read
+ * carries once after the engine ended the sign-in's transaction. A set that
+ * may grow within the major version, so it is published as an extensible
+ * enum.
+ */
+export const RESTART_NOTICES = ['code_burned', 'subject_mismatch', 'expired'] as const;
+
+export type RestartNotice = (typeof RESTART_NOTICES)[number];
+
 export const interactionSchema = object(
   {
     step: {
@@ -250,6 +260,12 @@ export const interactionSchema = object(
       description:
         'Why the last answer to the current step was refused, from that step’s closed error set. Absent otherwise.',
     },
+    notice: extensibleEnum(
+      RESTART_NOTICES,
+      '^[a-z][a-z0-9_]{0,63}$',
+      64,
+      'Why the sign-in is back at its first step (#1081): the sign-in engine ended its transaction, and the current step is the first of a new one in the same interaction. `code_burned`: an emailed code was answered wrong too often, and no new code was sent. `subject_mismatch`: an answer named another account than the one the sign-in had, by another identifier or by a passkey of another account. `expired`: the sign-in outlived its age, or what it held could no longer be used. It names no account, and before a factor succeeded it is the same for every identifier, known or unknown (ADR-017 Decision 4). Carried once: by the result of the JSON answer that went back to the first step or, after a form post, by the next step read; every later read carries none. Absent otherwise. A page that does not know the value shows the step without it.'
+    ),
     alternatives: {
       type: 'array',
       description:

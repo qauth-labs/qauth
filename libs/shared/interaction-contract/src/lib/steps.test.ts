@@ -127,6 +127,10 @@ describe('the steps', () => {
       'captcha_failed',
       'account_unavailable',
       'provider_unavailable',
+      'provider_declined',
+      'provider_error',
+      'already_linked',
+      'provider_linked',
       'invalid_user_code',
     ]);
     for (const step of STEPS) {
