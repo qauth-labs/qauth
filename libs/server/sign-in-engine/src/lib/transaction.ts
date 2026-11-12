@@ -121,7 +121,8 @@ export interface SignInTransaction {
    * the owner's password reset (#642), set at round 0 by a transport that
    * starts one, or by the answer to the `password_reset` step a sign-in's
    * password step offered. Once set it never changes; a round of another
-   * flow ends the transaction.
+   * flow ends the transaction. A switch between a sign-in and a registration
+   * (#1079) starts a new transaction of the other flow instead.
    *
    * A reset's subject is fixed by its mailbox, an emailed code that is no
    * factor: it holds a subject with no `authTime` until another

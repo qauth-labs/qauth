@@ -30,6 +30,11 @@
 #   keeps the transaction as far as the round took it (an identifier it fixed stays, nothing it refused is in it), and
 #   the next round starts from there; the graph ends the walk at the refusal, so that each refusal is one exit. A
 #   completed sign-in, a redirect and an ended transaction return no transaction: nothing can complete twice.
+# - The switch to a registration (#1079; ADR-017 Decision 8, ADR-019 Decision 6): on an authorization request's
+#   interaction, the first step offers the register path marker last, while the realm allows sign-up, the client's
+#   hosted_flows name register and the request asks for no fresh sign-in, under the same rules as prompt=create, read
+#   on every round. No account is read for it. Answering it turns the transaction into a registration, which
+#   flows/core/sign-up draws, at its first round; the held request is the same, and so is the code it ends in.
 schema: delurio-graph/0
 kind: flow
 id: core.sign-in
@@ -69,6 +74,9 @@ scope:
       the send caps, its ladder, its expiry and its burn. An engine built without email codes, which no transport of
       the auth server is, refuses an unverified account under REQUIRE_VERIFIED_ACCOUNT like a wrong password instead'
     - 'the per-transaction budgets of the FiPA auth_session (#647): rounds and failures per step'
+    - "the registration a register answer switches to, drawn by flows/core/sign-up from its gate: the bot challenge
+      first where the realm or the client requires one, and the sign_in marker beside its address step, which leads
+      back here; the Interaction API's start, which offers the marker beside the identifier step under the same gate"
     - "the forced update's screens, which the CER issue adds as this flow's ui.yaml; and the legacy /auth/login and
       /ui/login, which keep their own rules (flows/core/sign-in-token, flows/core/sign-in-page) and check no breach
       list until the browser sign-in runs on this engine (#709)"
@@ -115,7 +123,7 @@ context:
       given: 'the authorization request carries a login_hint, a valid email address of at most 254 bytes'
   # What the round's answer is. Set by the round's event.
   answer:
-    values: [none, identifier, password, passwordWithHint, malformed]
+    values: [none, identifier, password, passwordWithHint, malformed, register]
     initial: none
   # The account the identifier names, if any. The engine never tells these apart before a factor succeeds.
   account:
@@ -198,10 +206,17 @@ context:
   # The checks of rules 3 to 5 run in a fixed order and each refuses on its own, so one variable says which of them a
   # round fails first, if any; the ladder's check is the last before the password is verified.
   gate:
-    values: [open, limited, requestRefused, botChallengeDue, lockedOut]
+    values: [open, switchClosed, limited, requestRefused, botChallengeDue, lockedOut]
     initial: any
     say:
-      open: 'every hook lets the round through'
+      open: >-
+        every hook lets the round through, and so would the switch to a registration's gate (#1079): the transport lets
+        the flows switch (an authorization request's interaction, never a sign-in to link an upstream account) and
+        serves the registration's steps, the request has no max_age and no prompt=login, the realm allows sign-up and
+        the client's hosted_flows name register
+      switchClosed: >-
+        every hook lets the round through, and the switch to a registration's gate does not hold (#1079); the realm's
+        part is read only when the rest holds
       limited: 'a limiter refuses the round (per client, per end-user IP): a 429 with Retry-After'
       requestRefused: >-
         the transport's request checks refuse the round, such as acr_values, prompt=none or a frozen parameter at the
@@ -274,6 +289,8 @@ guards:
   challengeUnanswerable: "gate == 'botChallengeDue' and captchaServed and challengeProvider == 'down'"
   lockedOut: "gate == 'lockedOut'"
   malformedAnswer: "answer == 'malformed'"
+  registerAnswered: "answer == 'register'"
+  switchOpen: "gate == 'open'"
   roundBringsIdentifier: "loginHint == 'given' or answer in ['identifier', 'passwordWithHint']"
   answerBringsIdentifier: "answer in ['identifier', 'passwordWithHint']"
   identifierMismatch: >-
@@ -313,6 +330,7 @@ effects:
   answerPassword: { set: { answer: password } }
   answerPasswordWithHint: { set: { answer: passwordWithHint } }
   answerMalformed: { set: { answer: malformed } }
+  answerRegister: { set: { answer: register } }
   holdIdentifier: { set: { identifierHeld: true } }
   ignoreAnswer: { set: { answerIgnored: true } }
   reserveAttempt: { set: { attemptReserved: true } }
@@ -331,6 +349,7 @@ effects:
 
 failures:
   readingPolicy: { from: mfaPolicy, store: [unavailable] }
+  readingSwitchGate: { from: accountRegistrations, store: [unavailable] }
   reservingAttempt: { from: ladder, store: [unavailable] }
   readingAccount: { from: accountDirectory, store: [unavailable] }
   readingProvenAccount: { from: accountDirectory, store: [unavailable] }
@@ -400,6 +419,10 @@ states:
         target: readingPolicy
         effect: [newRound, answerMalformed]
         say: 'the first round carries an answer whose login_hint is not an identifier'
+      REGISTER:
+        target: readingPolicy
+        effect: [newRound, answerRegister]
+        say: "the first round answers the register marker the Interaction API's start offered (#1079)"
 
   readingPolicy:
     title: Read the realm's and the client's MFA policy
@@ -441,8 +464,46 @@ states:
         target: requestRefused
         effect: [waitFloor]
         say: 'the request checks refuse the round; the floor is waited out'
+      - guard: registerAnswered
+        target: checkingSwitch
+        say: 'the request checks let the round through, and it answers the register marker'
       - target: checkingBotChallenge
         say: 'the request checks let the round through'
+
+  checkingSwitch:
+    title: Ask whether the sign-in can still switch to a registration (#1079)
+    description: >-
+      The register marker is offered at the sign-in's first step only. Once the transaction holds an identifier, an
+      answer naming it is refused as a malformed one is; the Interaction API refuses it before the engine, since its
+      step did not offer it.
+    always:
+      - guard: 'identifierHeld or subjectFixed'
+        target: answerRefused
+        effect: [waitFloor]
+        say: 'the transaction holds an identifier: refused as invalid_answer, audited'
+      - target: readingSwitchGate
+        say: 'nobody is named yet'
+
+  readingSwitchGate:
+    title: Read the switch's gate again
+    description: >-
+      On every round, as for prompt=create (ADR-017 Decision 8): the transport, the request, the realm's sign-up and
+      the client's hosted_flows. Nothing about any account is read (ADR-017 Decision 4), so the answer is the same
+      for every identifier. A gate that closed since the step was offered refuses the answer with the generic
+      invalid_answer, and the transaction stays as it was. A store error refuses the round.
+    invoke: { external: accountRegistrations }
+    on:
+      DONE:
+        - guard: switchOpen
+          target: switchedToRegistration
+          say: 'the gate holds: the register marker is recorded as a passed step'
+        - target: answerRefused
+          effect: [waitFloor]
+          say: 'the gate no longer holds: refused as invalid_answer, audited, the transaction unchanged'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: "the realm's sign-up cannot be read"
 
   checkingBotChallenge:
     title: Ask whether a bot challenge is due (rule 5)
@@ -807,12 +868,13 @@ states:
     title: Ask for the identifier
     description: >-
       The same for everyone: no account was read. Try another way offers nothing before a factor succeeds but what
-      this first step offers every account, which in this issue is nothing.
+      this first step offers every account: here, the register marker while the switch's gate holds (#1079), and
+      nothing otherwise.
     response:
       kind: step
       body:
         current: { step: identifier, params: {} }
-        alternatives: []
+        alternatives: "register, last, while the switch's gate holds (#1079); none otherwise"
         personal: {}
     on:
       ROUND:
@@ -835,6 +897,10 @@ states:
         target: readingPolicy
         effect: [newRound, answerMalformed]
         say: 'the next round carries an answer whose login_hint is not an identifier'
+      REGISTER:
+        target: readingPolicy
+        effect: [newRound, answerRegister]
+        say: 'the person picks "Create an account": the register marker (#1079)'
 
   offeringPassword:
     title: Ask for the password
@@ -868,6 +934,10 @@ states:
         target: readingPolicy
         effect: [newRound, answerMalformed]
         say: 'the next round carries an answer whose login_hint is not an identifier'
+      REGISTER:
+        target: readingPolicy
+        effect: [newRound, answerRegister]
+        say: 'the next round answers the register marker, which this step did not offer'
 
   passwordRefused:
     title: Ask for the password again
@@ -1074,12 +1144,25 @@ states:
         alternatives: []
         personal: {}
 
+  switchedToRegistration:
+    type: final
+    title: Switch to a registration, in this same round (#1079)
+    description: >-
+      The engine starts a registration transaction for the same realm and client, keeping the transaction's creation
+      time, and runs the registration's rules in this same round, from its gate (flows/core/sign-up): the bot
+      challenge first where the realm or the client requires one, then the address step with the sign_in marker
+      beside it. The held request is unchanged, so the interaction ends in a code for it, as prompt=create's does.
+    response:
+      kind: continue
+      body:
+        transaction: 'a registration transaction: the same realm, client and creation time, nothing verified'
+
   answerRefused:
     type: final
     title: Refuse a malformed answer
     description: >-
       A fault of the request, audited as invalid_answer (under the identifier HMAC when the transaction holds one); the
-      transaction stays as far as the round took it.
+      transaction stays as far as the round took it. So is a register marker the round can no longer take (#1079).
     response:
       kind: refused
       body: { reason: invalid_answer }
@@ -1095,6 +1178,14 @@ states:
       body: { reason: unavailable }
 
 assertions:
+  - id: the-switch-only-under-its-gate
+    never: "state == 'switchedToRegistration' and (identifierHeld or subjectFixed or gate != 'open')"
+    say: >-
+      A sign-in becomes a registration only under the same gate as prompt=create, read on the round, and only before
+      the transaction names anyone (#1079)
+  - id: the-switch-reads-no-account
+    never: "state == 'switchedToRegistration' and (accountRead or provenAccountRead or hashVerified or decoyVerified)"
+    say: 'Nothing about any account decides the switch: it reads none and verifies nothing (ADR-017 Decision 4)'
   - id: same-first-response-for-every-account
     never: "state in ['offeringIdentifier', 'offeringPassword'] and accountRead"
     say: >-

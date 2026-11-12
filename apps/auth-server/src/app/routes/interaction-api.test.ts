@@ -1351,6 +1351,67 @@ describe('a registration, through the engine (#640)', () => {
   });
 });
 
+describe('the switch between a sign-in and a registration (#1079)', () => {
+  const REGISTER = stepUrn('register');
+  const SIGN_IN = stepUrn('sign_in');
+
+  it('lets the engine switch on an authorization request’s rounds, and hands it an offered marker', async () => {
+    await app.close();
+    app = await buildApp({ step: { name: IDENTIFIER, params: {}, alternatives: [REGISTER] } });
+    engine.advance.mockResolvedValueOnce(PASSWORD_ROUND);
+    const browser = new Browser();
+    const id = await browser.start();
+    const response = await browser.send(id, 'answer', {
+      type: REGISTER,
+      csrf: (await browser.read(id)).csrf,
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(engine.advance).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ step: REGISTER }),
+      expect.objectContaining({ switchFlows: true })
+    );
+    expect(engine.advance.mock.calls[0]?.[2]).not.toHaveProperty('flow');
+  });
+
+  it.each([
+    ['register', REGISTER],
+    ['sign_in', SIGN_IN],
+  ])('refuses a %s answer its step did not offer with 400, before the engine', async (_, type) => {
+    const browser = new Browser();
+    const id = await browser.start();
+    const response = await browser.send(id, 'answer', {
+      type,
+      csrf: (await browser.read(id)).csrf,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'invalid_answer' });
+    expect(engine.advance).not.toHaveBeenCalled();
+  });
+
+  it('answers the engine’s refusal of a marker the gate no longer allows with the same 400', async () => {
+    await app.close();
+    app = await buildApp({ step: { name: IDENTIFIER, params: {}, alternatives: [REGISTER] } });
+    engine.advance.mockResolvedValueOnce({
+      kind: 'refused',
+      reason: 'invalid_answer',
+      transaction: PASSWORD_ROUND.transaction,
+    });
+    const browser = new Browser();
+    const id = await browser.start();
+    const response = await browser.send(id, 'answer', {
+      type: REGISTER,
+      csrf: (await browser.read(id)).csrf,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'invalid_answer' });
+    expect(finishAuthorization).not.toHaveBeenCalled();
+  });
+});
+
 describe('the rate limits (#616)', () => {
   beforeEach(async () => {
     await app.close();

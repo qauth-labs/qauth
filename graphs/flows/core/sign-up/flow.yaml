@@ -1,8 +1,9 @@
 # The registration of a password account inside the sign-in engine (PRO-16, #640; ADR-017 Decisions 3 and 8, ADR-020
 # §3): the mailbox first, then the password, then the account. Written before the code (status: proposed), as ADR-021
 # Decision 4 asks of a new core flow. A transport starts it from an authorization request with prompt=create (OpenID
-# Connect Prompt Create 1.0), which the Interaction API turns into a registration interaction; the CER issue adds the
-# screens (ui.yaml), and PRO-22 the FiPA endpoint's wire form.
+# Connect Prompt Create 1.0), which the Interaction API turns into a registration interaction, or a sign-in's
+# register path marker switches to it (#1079, drawn by flows/core/sign-in); the CER issue adds the screens (ui.yaml),
+# and PRO-22 the FiPA endpoint's wire form.
 #
 # - Like the sign-in engine (flows/core/sign-in), this flow has no screen and no HTTP route of its own: a transport
 #   calls the engine once a round, and every round runs the sign-in's rules up to rule 4 first (the transaction, the
@@ -22,6 +23,9 @@
 # - No account exists before the code and the password pass. It is created in one database transaction: the users
 #   row, the verified password credential with its NFC marker, the verified email attribute and the user.registered
 #   event. A registration signs nobody in: it completes with no amr and no auth_time (ADR-017 Decision 10).
+# - The way back (#1079): on an authorization request's interaction, the address step offers the sign_in path marker
+#   while the transaction names no address. Answering it turns the transaction back into a sign-in at its first step,
+#   before the registration's gate is read, and nothing is mailed or written; after the address it is refused.
 schema: delurio-graph/0
 kind: flow
 id: core.sign-up
@@ -48,6 +52,9 @@ scope:
     - "the authorization endpoint's prompt=create checks, drawn with the Interaction API's start of a registration in
       flows/core/authorization: the openid scope, the realm and the client allowing sign-up, no max_age; this flow
       starts once the interaction is open"
+    - "the switch from a sign-in (#1079), drawn by flows/core/sign-in: its register marker, under the same gate, starts
+      this flow's first round in the same interaction, for the same request; and the sign-in the sign_in marker leads
+      back to"
     - "the identifier step's own rules, drawn by flows/core/sign-in: an answer that is not an address, a login_hint
       prefilled, a different address on a later round, which ends the transaction"
     - "the code's own rules, drawn by flows/core/account-verification: the 10 minutes, the minute before a resend, the
@@ -147,9 +154,17 @@ context:
     say:
       'false': 'nobody took the address since the round read it'
       'true': 'another transaction created an account with the address since the round read it'
+  # Whether the transport lets the flows switch (#1079): an authorization request's interaction does, unless it is a
+  # sign-in to link an upstream account; the FiPA endpoint does not.
+  switchFlows:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the transport does not let a registration switch to a sign-in'
+      'true': 'the transport lets the flows switch and serves the sign_in marker'
   # What the round brings: set by the event that starts it.
   answer:
-    values: [none, address, rightCode, wrongCode, resend, newPassword]
+    values: [none, address, rightCode, wrongCode, resend, newPassword, signIn]
     initial: none
   # the transaction holds the address the person gave
   addressTaken: { values: [false, true], initial: false }
@@ -211,6 +226,7 @@ effects:
   answerWrong: { set: { answer: wrongCode } }
   answerResend: { set: { answer: resend } }
   answerNewPassword: { set: { answer: newPassword } }
+  answerSignIn: { set: { answer: signIn } }
   takeAddress: { set: { addressTaken: true } }
   countStart: { set: { startCounted: true } }
   holdCode: { set: { codeHeld: true } }
@@ -269,8 +285,26 @@ main:
       DONE,
     ]
 
-initial: checkingSteps
+initial: checkingSwitch
 states:
+  checkingSwitch:
+    title: Ask whether the round switches back to a sign-in (#1079)
+    description: >-
+      After the sign-in's rules up to rule 4 and before the registration's own: an answer to the sign_in marker, on a
+      transport that lets the flows switch, while the transaction names no address, starts the sign-in again. Once
+      the address is named, the marker is no longer offered, and an answer naming it is refused as malformed; the
+      Interaction API refuses it before the engine, since its step did not offer it.
+    always:
+      - guard: "answer == 'signIn' and switchFlows and not addressTaken"
+        target: switchedToSignIn
+        say: 'the way back: the sign_in marker is recorded as a passed step'
+      - guard: "answer == 'signIn'"
+        target: answerRefused
+        effect: [audit, waitFloor]
+        say: 'the address is named, or the transport does not switch: refused as invalid_answer, audited'
+      - target: checkingSteps
+        say: 'the round does not answer the sign_in marker'
+
   checkingSteps:
     title: Ask whether the registration can be served at all
     description: >-
@@ -555,22 +589,27 @@ states:
   offeringAddress:
     title: Ask for the address
     description: >-
-      The identifier step alone: no first factor, no upstream provider. The request's login_hint fills it in.
+      The identifier step, with no first factor and no upstream provider: only the sign_in marker beside it, the way
+      back to a sign-in, while the transport lets the flows switch (#1079). The request's login_hint fills it in.
     response:
       kind: step
       body:
         current: { step: identifier, params: {} }
-        alternatives: []
+        alternatives: 'sign_in, while the transport lets the flows switch (#1079); none otherwise'
         personal: { identifier: "the request's login_hint, if it has one" }
     on:
       ROUND:
-        target: checkingSteps
+        target: checkingSwitch
         effect: [newRound, moveOn]
         say: 'the next round carries no answer'
       ADDRESS:
-        target: checkingSteps
+        target: checkingSwitch
         effect: [newRound, moveOn, answerAddress]
         say: 'the person types an address'
+      SIGN_IN:
+        target: checkingSwitch
+        effect: [newRound, moveOn, answerSignIn]
+        say: 'the person picks "I have an account": the sign_in marker (#1079)'
 
   offeringChallenge:
     title: Ask for the bot challenge
@@ -629,6 +668,10 @@ states:
         target: checkingSteps
         effect: [newRound, moveOn, answerResend]
         say: 'the person asks for a new code: an answer with no otp'
+      SIGN_IN:
+        target: checkingSwitch
+        effect: [newRound, moveOn, answerSignIn]
+        say: 'the next round answers the sign_in marker, which this step did not offer'
 
   codeRefused:
     title: Ask for the code again
@@ -747,6 +790,28 @@ states:
       body:
         verified: 'the transaction verified email_code with purpose verify_account; it adds no amr value'
 
+  switchedToSignIn:
+    type: final
+    title: Switch back to a sign-in, in this same round (#1079)
+    description: >-
+      The engine starts a sign-in transaction for the same realm and client, keeping the transaction's creation time,
+      and runs the sign-in's rules in this same round (flows/core/sign-in): its first step, with the register marker
+      beside it while that gate holds. Nothing was mailed or written, and the held request is unchanged.
+    response:
+      kind: continue
+      body:
+        transaction: 'a sign-in transaction: the same realm, client and creation time, nothing verified'
+
+  answerRefused:
+    type: final
+    title: Refuse a sign_in marker the round cannot take
+    description: >-
+      Audited as invalid_answer; the transaction stays as the round found it. The Interaction API answers the generic
+      invalid_answer problem.
+    response:
+      kind: refused
+      body: { reason: invalid_answer }
+
   registrationClosed:
     type: final
     title: Refuse a registration the realm or the client does not allow
@@ -803,6 +868,14 @@ states:
       body: { reason: unavailable }
 
 assertions:
+  - id: the-way-back-only-before-the-address
+    never: "state == 'switchedToSignIn' and (addressTaken or not switchFlows)"
+    say: >-
+      A registration turns back into a sign-in only on a transport that lets the flows switch, and only before the
+      transaction names an address (#1079)
+  - id: nothing-mailed-on-the-way-back
+    never: "state == 'switchedToSignIn' and (mailQueued or codeHeld or mailboxProved or accountCreated)"
+    say: 'The way back to a sign-in mails nothing and writes nothing'
   - id: nothing-before-the-gate
     never: >-
       state in ['offeringAddress', 'offeringCode', 'codeRefused', 'offeringNewPassword', 'newPasswordRefused',
@@ -847,13 +920,13 @@ assertions:
   - id: every-refusal-is-audited
     never: >-
       state in ['registrationClosed', 'startThrottled', 'sendCapped', 'codeRefused', 'newPasswordRefused',
-      'registrationConflict', 'registered'] and not audited
+      'registrationConflict', 'registered', 'answerRefused'] and not audited
     say: 'Every refused answer and the created account write an audit record'
   - id: every-round-waits-the-floor
     never: >-
       state in ['offeringAddress', 'offeringChallenge', 'offeringCode', 'codeRefused', 'offeringNewPassword',
       'newPasswordRefused', 'registered', 'registrationClosed', 'redirected', 'startThrottled', 'sendCapped',
-      'registrationConflict', 'unavailable'] and not floorWaited
+      'registrationConflict', 'unavailable', 'answerRefused'] and not floorWaited
     say: >-
       Every round that ends here answers no earlier than 500 ms after it arrived, so a new address and an existing one
       take the same time

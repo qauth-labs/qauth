@@ -3,7 +3,7 @@ title: Hosted UI
 description: The server-rendered login, consent, and resume screens an integrator's users see during authorization_code + PKCE.
 sidebar:
   order: 3
-lastVerified: '2026-11-07'
+lastVerified: '2026-11-12'
 ---
 
 `authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
@@ -245,6 +245,35 @@ A signed-in account links a provider through an authorization request with
 provider first, then the same fresh sign-in. The pages of the Interaction API
 off (`INTERACTION_UI_ENABLED`) offer no link, and create the account at once as
 before.
+
+## Creating an account from the sign-in
+
+With the Interaction API on (`INTERACTION_UI_ENABLED`), the ceremony page's
+sign-in offers "Create an account" beside its first step (#1079), so a person
+who opens a sign-in without an account need not go back to the client for a
+[`prompt=create`](/integrate/oauth-flow/#registration-promptcreate) request.
+It is offered while the realm allows sign-up (`accounts.allowSignUp`), the
+client's operator-set `hosted_flows` name `register`, and the authorization
+request carries no `max_age` and no `prompt=login`: the rules of
+`prompt=create`, but for the `openid` scope, which only `prompt=create` needs.
+It is offered before anyone is named and reads no account, so it is the same
+for every person.
+
+Picking it turns the sign-in into the registration `prompt=create` starts, in
+the same interaction and for the same authorization request: the bot challenge
+first where the realm or the client requires one, then the address, its mailed
+code and a new password. The registration ends as one `prompt=create` started:
+in a code for that request, with no `amr` and no `auth_time`, and no browser
+session. Until the address is given, the registration's address step offers
+"I have an account", which leads back to the sign-in's first step; a
+registration `prompt=create` started offers it too.
+
+The rules are read again on every answer: once the realm or the client stops
+allowing sign-up, picking "Create an account" is refused, and the sign-in
+stays where it was. A sign-in to
+[link an upstream account](#linking-an-upstream-account-to-an-existing-one)
+never offers it, nor does the account page's sign-in. `/ui/login`, the page
+the Interaction API off serves, offers neither.
 
 ## `/ui/resume/{handle}`
 

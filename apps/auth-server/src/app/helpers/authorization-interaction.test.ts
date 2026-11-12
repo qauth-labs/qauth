@@ -30,7 +30,9 @@ const {
   readSessionSideRecord: vi.fn(),
 }));
 
-vi.mock('../../config/env', () => ({ env: { DYNAMIC_CLIENT_BADGE_DAYS: 30 } }));
+vi.mock('../../config/env', () => ({
+  env: { DYNAMIC_CLIENT_BADGE_DAYS: 30, INTERACTION_UI_ENABLED: true },
+}));
 vi.mock('./authorization-request', () => ({ checkAuthorizationRequest, decideAuthorization }));
 vi.mock('./authorization-code', () => ({ mintAuthorizationCode }));
 vi.mock('./browser-session', () => ({ liveBrowserSession }));
@@ -38,6 +40,7 @@ vi.mock('./interaction', () => ({ continueInteraction }));
 vi.mock('./session-side-record', () => ({ readSessionSideRecord }));
 vi.mock('./user-events', () => ({ emitUserEvent }));
 
+import { testPolicyStore } from '../../testing/realm-policies';
 import { testRealm } from '../../testing/request-realm';
 import { MINT_TRANSACTION, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../constants';
 import {
@@ -357,6 +360,56 @@ describe('authorizationInteractionStart', () => {
     ).toEqual({
       step: { name: stepUrn('identifier'), params: {}, alternatives: [] },
       personal: { login_hint: 'alice@example.com' },
+    });
+  });
+
+  describe('the switch to a registration (#1079)', () => {
+    const REGISTERING = targetOf({ hostedFlows: ['register'] } as Partial<TestClient>);
+
+    function withSignUp(allowSignUp: boolean): FastifyInstance {
+      return Object.assign(Object.create(fastify), {
+        policyStore: testPolicyStore({}, { accounts: { allowSignUp } }),
+      }) as FastifyInstance;
+    }
+
+    it('offers it beside the identifier while the realm and the client allow a registration', async () => {
+      const start = await authorizationInteractionStart(
+        withSignUp(true),
+        { kind: 'sign_in' },
+        REQUEST,
+        REGISTERING as never,
+        null
+      );
+      expect(start).toEqual({
+        step: { name: stepUrn('identifier'), params: {}, alternatives: [stepUrn('register')] },
+        personal: {},
+      });
+    });
+
+    it.each([
+      ['the realm’s sign-up is off', false, REGISTERING, REQUEST, {}],
+      ['the client names no register flow', true, TARGET, REQUEST, {}],
+      ['the request has a max_age', true, REGISTERING, { ...REQUEST, max_age: 300 }, {}],
+      ['the request has prompt=login', true, REGISTERING, { ...REQUEST, prompt: 'login' }, {}],
+      [
+        'the sign-in links an upstream account (#670)',
+        true,
+        REGISTERING,
+        REQUEST,
+        { linking: true },
+      ],
+    ])('does not offer it when %s', async (_, allowSignUp, target, query, options) => {
+      const start = await authorizationInteractionStart(
+        withSignUp(allowSignUp),
+        { kind: 'sign_in' },
+        query as InteractionRequest,
+        target as never,
+        null,
+        options
+      );
+      expect(start).toMatchObject({
+        step: { name: stepUrn('identifier'), alternatives: [] },
+      });
     });
   });
 
@@ -851,7 +904,8 @@ describe('a registration (#640)', () => {
     expect(
       registrationInteractionStart({ ...CREATE_REQUEST, login_hint: 'a@b.example' }, null)
     ).toEqual({
-      step: { name: stepUrn('identifier'), params: {}, alternatives: [] },
+      // The way back to a sign-in (#1079) beside the address.
+      step: { name: stepUrn('identifier'), params: {}, alternatives: [stepUrn('sign_in')] },
       personal: { login_hint: 'a@b.example' },
     });
     expect(registrationInteractionStart(CREATE_REQUEST, SESSION as never).carriedSession).toEqual({

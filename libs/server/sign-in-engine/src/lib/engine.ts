@@ -201,7 +201,11 @@ import {
  * new address and an existing one, and a new address sets its password and
  * the account is created (ADR-017 Decision 8). An account that holds the
  * address is helped to sign in to it: rule 7 on. The flow is graphed in
- * `graphs/flows/core/sign-up/flow.yaml`.
+ * `graphs/flows/core/sign-up/flow.yaml`. On a transport that lets the
+ * person switch (`RoundContext.switchFlows`, #1079), a sign-in's first step
+ * offers the `register` path marker under the same gate, and a
+ * registration's address step `sign_in`, the way back: either starts a new
+ * transaction of the other flow at its first round.
  *
  * A password reset (#642; ADR-017 Decision 8) starts from rule 7's password
  * step, which offers `password_reset` beside the password while the client
@@ -671,6 +675,23 @@ function checkedPolicy(policy: unknown): MfaPolicy {
   return { realm: value.realm as MfaPolicy['realm'], client: value.client as MfaPolicy['client'] };
 }
 
+/** The offer of a lone path marker (#1079), to read its answer against: the marker, with no params. */
+function markerOffer(step: FlowSwitch): StepOffer {
+  return Object.freeze({
+    current: Object.freeze({ step, params: Object.freeze({}) }),
+    alternatives: Object.freeze([]),
+  }) as StepOffer;
+}
+
+/**
+ * Whether `context`'s transport lets the person switch between a sign-in and
+ * a registration (#1079): `switchFlows`, on a round that is not a reset's
+ * start.
+ */
+function flowsSwitch(context: RoundContext): boolean {
+  return context.switchFlows === true && context.flow !== 'reset';
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -698,6 +719,35 @@ const RESET_START: Offerable = Object.freeze({
   step: 'password_reset',
   params: () => Object.freeze({}),
 });
+
+/** The switch from a sign-in to a registration (#1079): the `register` path marker, with no params. */
+const REGISTER_SWITCH: Offerable = Object.freeze({
+  step: 'register',
+  params: () => Object.freeze({}),
+});
+
+/** The way back from a registration to a sign-in (#1079): the `sign_in` path marker, with no params. */
+const SIGN_IN_SWITCH: Offerable = Object.freeze({
+  step: 'sign_in',
+  params: () => Object.freeze({}),
+});
+
+/** The path markers that switch a transaction between a sign-in and a registration (#1079). */
+type FlowSwitch = 'register' | 'sign_in';
+
+/** Whether `step` is a switch between a sign-in and a registration (#1079). */
+function isFlowSwitch(step: StepName | undefined): step is FlowSwitch {
+  return step === 'register' || step === 'sign_in';
+}
+
+/**
+ * Whether `transaction` is at its flow's first step (#1079): nobody is named,
+ * by an identifier or by a factor, so nothing proved about an account would
+ * be lost by starting over in another flow.
+ */
+function atFirstStep(transaction: SignInTransaction): boolean {
+  return transaction.identifier === undefined && transaction.subject === undefined;
+}
 
 /** The params of an `upstream` step listing `providers`, or `null` outside the step's schema. */
 function upstreamParams(
@@ -762,6 +812,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     (step === 'new_password' && deps.passwordUpdates !== undefined) ||
     (step === 'upstream' && deps.upstream !== undefined) ||
     (step === 'password_reset' && deps.resets !== undefined) ||
+    (isFlowSwitch(step) && deps.registrations !== undefined) ||
     ((step === 'recovery_code' || step === 'recovery_codes') && recoveryCodes !== undefined) ||
     (step === 'webauthn_create' && deps.passkeys !== undefined) ||
     (step === 'totp_setup' && deps.totp !== undefined);
@@ -895,8 +946,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     // A transaction runs the flow it began with (#640): a sign-in never
     // becomes a registration, nor a registration a sign-in. A sign-in may
     // become a reset at its password step (#642), and goes on as one on the
-    // rounds of the sign-in it was.
-    if (found.flow !== context.flow && !(found.flow === 'reset' && context.flow === undefined)) {
+    // rounds of the sign-in it was. On a transport that lets the person switch
+    // between a sign-in and a registration (#1079), a switch starts a new
+    // transaction of the other flow, so the transaction's flow, not the
+    // request's, is the round's.
+    if (
+      !flowsSwitch(context) &&
+      found.flow !== context.flow &&
+      !(found.flow === 'reset' && context.flow === undefined)
+    ) {
       return endUnusable(answer, context, 'transaction_invalid', proof);
     }
     // A subject without an identifier comes only from a discoverable factor,
@@ -949,12 +1007,66 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     // ADR-008 §5: only `development` relaxes the limiters; anything else is production.
     const environment = roundEnvironmentOf(context.environment ?? 'production');
     const served = new Set<StepName>(context.serves ?? STEP_NAMES);
-    /** A registration (#640), not a sign-in. */
-    const registering = state.transaction.flow === 'register';
-    /** A password reset (#642), not a sign-in: one this round turns into a reset is not, yet. */
-    const resetting = state.transaction.flow === 'reset';
     const answeredName =
       answer !== null && typeof answer.step === 'string' ? stepNameOfUrn(answer.step) : undefined;
+
+    let signUpGate: Promise<boolean> | undefined;
+    /**
+     * The registration gate (#640; ADR-017 Decision 8): the realm and the
+     * client both allow sign-up, read once a round. A verdict that is not a
+     * boolean is a store fault.
+     */
+    const signUpAllowed = (): Promise<boolean> => {
+      signUpGate ??= (async () => {
+        const { registrations } = deps;
+        if (registrations === undefined) return false;
+        const allowed: unknown = await fromStore('registrations', () =>
+          registrations.allowed({ realmId, clientId })
+        );
+        if (typeof allowed !== 'boolean') {
+          throw new SignInStoreUnavailableError('registrations', new Error('not a gate verdict'));
+        }
+        return allowed;
+      })();
+      return signUpGate;
+    };
+    /**
+     * Whether `transaction`, a sign-in, may turn into a registration this
+     * round (#1079; ADR-017 Decision 8): the transport lets the flows switch,
+     * the sign-in is at its first step, the engine holds a registration's
+     * ports and the transport serves its steps and the marker, the request
+     * asks for no fresh sign-in (`max_age` and `prompt=login`, which a
+     * registration never satisfies), and the realm and the client both allow
+     * sign-up, read on this round. Nothing of any account decides it (ADR-017
+     * Decision 4).
+     */
+    const registrationSwitchOpen = async (transaction: SignInTransaction): Promise<boolean> => {
+      if (!flowsSwitch(context) || transaction.flow !== undefined || !atFirstStep(transaction)) {
+        return false;
+      }
+      if (
+        deps.registrations === undefined ||
+        emailCodes === undefined ||
+        deps.passwordUpdates === undefined ||
+        context.freshSignIn === true ||
+        !served.has('register') ||
+        !REGISTRATION_STEPS.every((step) => served.has(step))
+      ) {
+        return false;
+      }
+      return signUpAllowed();
+    };
+    /**
+     * Whether `transaction`, a registration, may turn back into a sign-in this
+     * round (#1079): the transport lets the flows switch and serves the
+     * marker, and the registration is at its address step, before any mailbox
+     * is proved. A sign-in needs no gate of its own.
+     */
+    const signInSwitchOpen = (transaction: SignInTransaction): boolean =>
+      flowsSwitch(context) &&
+      transaction.flow === 'register' &&
+      served.has('sign_in') &&
+      atFirstStep(transaction);
     /** The round's answer while no step has taken it. */
     const turn: { pending: { readonly name: StepName; readonly answer: RoundAnswer } | null } = {
       pending:
@@ -2919,6 +3031,52 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (verdict.kind === 'redirect') return redirect('request');
     }
 
+    /**
+     * The switch this round's answer asks for (#1079): the marker, when the
+     * transaction it found may take it; `refused` for a marker it may not
+     * take (offered on an earlier round, before the gate closed); `null` for
+     * any other answer. The round runs the rules of the flow it switches to.
+     * Read only once the limiters and the request checks let the round
+     * through, so a throttled round reads no gate.
+     */
+    const switchTo: FlowSwitch | 'refused' | null = !isFlowSwitch(answeredName)
+      ? null
+      : (
+            answeredName === 'register'
+              ? await registrationSwitchOpen(found)
+              : signInSwitchOpen(found)
+          )
+        ? answeredName
+        : 'refused';
+    /** The flow of the round: the transaction's, or the one this round switches to (#1079). */
+    const roundFlow =
+      switchTo === 'register' ? 'register' : switchTo === 'sign_in' ? undefined : found.flow;
+    /** A registration (#640), not a sign-in. */
+    const registering = roundFlow === 'register';
+    /** A password reset (#642), not a sign-in: one this round turns into a reset is not, yet. */
+    const resetting = roundFlow === 'reset';
+
+    // The switch between a sign-in and a registration (#1079), once the
+    // limiters and the transport's checks let the round through: a marker
+    // the transaction may not take is refused like a malformed answer, and
+    // nothing changes. One it may take starts a new transaction of the other
+    // flow, as old as the one it replaces, which keeps nothing of it: nobody
+    // was named, and a bot challenge passed for one flow is not carried into
+    // the other. The rules below are that flow's first round.
+    if (switchTo === 'refused') return invalidAnswer(answeredName as FlowSwitch);
+    if (switchTo !== null) {
+      const read = readPending(markerOffer(switchTo));
+      if (read === null) return invalidAnswer(switchTo);
+      turn.pending = null;
+      await audit('passed', switchTo);
+      state.transaction = newSignInTransaction({
+        realmId,
+        clientId,
+        createdAt: found.createdAt,
+        ...(switchTo === 'register' ? { flow: 'register' as const } : {}),
+      });
+    }
+
     // Rule 4, for a registration (#640; ADR-017 Decision 8): the realm and
     // the client must both allow it, on every round, before anything is
     // mailed or written. A transport or an engine that cannot serve its steps
@@ -2933,13 +3091,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       ) {
         return redirect('step_not_available');
       }
-      const allowed: unknown = await fromStore('registrations', () =>
-        registrations.allowed({ realmId, clientId })
-      );
-      if (allowed !== true) {
-        if (allowed !== false) {
-          throw new SignInStoreUnavailableError('registrations', new Error('not a gate verdict'));
-        }
+      if (!(await signUpAllowed())) {
         await audit('refused', roundStep(), 'registration_closed');
         return Object.freeze({
           kind: 'refused',
@@ -3256,10 +3408,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (state.transaction.identifier === undefined && registering) {
         // A registration asks for the address (#640): no factor, no upstream
         // provider. On the hosted pages a passkey comes first, preferred,
-        // with the address beside it (#655).
+        // with the address beside it (#655), and the way back to the
+        // sign-in after them (#1079).
         const byPasskey = passkeyRegistration();
+        const wayBack: Offerable[] = signInSwitchOpen(state.transaction) ? [SIGN_IN_SWITCH] : [];
         let offer: StepOffer | null = null;
-        const steps: Offerable[] = byPasskey === null ? [] : [byPasskey, handlers.identifier];
+        const steps: Offerable[] =
+          byPasskey === null ? [] : [byPasskey, handlers.identifier, ...wayBack];
         if (byPasskey !== null) {
           try {
             offer = await offerOf(steps, { preferred: true });
@@ -3272,7 +3427,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             state.transaction = { ...state.transaction, ceremony: undefined };
           }
         }
-        if (offer === null) return offerStep(await offerOf([handlers.identifier]));
+        if (offer === null) return offerStep(await offerOf([handlers.identifier, ...wayBack]));
         if (turn.pending?.name !== 'webauthn_create') return offerStep(offer);
         const result = await registerByPasskey(offer, steps);
         if (result !== null) return result;
@@ -3302,10 +3457,17 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             : [...discoverable, ...others, handlers.identifier];
         // On the hosted pages a recovery code comes last, for every account
         // alike (#655; ADR-017 Decision 4): it finds an account with no
-        // address whose passkey was lost.
+        // address whose passkey was lost. The switch to a registration comes
+        // after it, under the registration's own gate (#1079).
         const codeOffered = codeBeforeFirstFactor();
+        const registerOffered = await registrationSwitchOpen(state.transaction);
         const offer = await offerOf(
-          [...firstSteps, ...upstreamStep, ...(codeOffered ? [RECOVERY_CODE_STEP] : [])],
+          [
+            ...firstSteps,
+            ...upstreamStep,
+            ...(codeOffered ? [RECOVERY_CODE_STEP] : []),
+            ...(registerOffered ? [REGISTER_SWITCH] : []),
+          ],
           { preferred: true }
         );
         const pendingName = turn.pending?.name;

@@ -3,7 +3,7 @@ title: Docker Guide
 description: Running QAuth with Docker Compose — production and development, service details, and troubleshooting.
 sidebar:
   order: 1
-lastVerified: '2026-11-08'
+lastVerified: '2026-11-12'
 ---
 
 This guide covers the Docker setup for QAuth: **production** (prod build, no watch) and **development** (dev image, Compose Watch + `nx serve --watch`).
@@ -821,7 +821,9 @@ client on `/oauth/authorize`. Set the profile on the client's entry in the
 ### Clients that may start a registration (`hosted_flows`)
 
 A client sends a person to register with `prompt=create` on
-`/oauth/authorize` ([Registration](/integrate/oauth-flow/#registration-promptcreate)).
+`/oauth/authorize` ([Registration](/integrate/oauth-flow/#registration-promptcreate)),
+and the person can pick "Create an account" on that client's sign-in
+([Creating an account from the sign-in](/integrate/hosted-ui/#creating-an-account-from-the-sign-in)).
 Registration is off unless two operators' switches both allow it:
 
 - the realm's `accounts.allowSignUp` policy, seeded by `ALLOW_SIGN_UP` and off

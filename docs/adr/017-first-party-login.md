@@ -200,6 +200,24 @@
 >   receiver and to the connected apps) and on the account's other sessions, and a window in which
 >   a factor bound after a password-only sign-in can be removed with the password and does not
 >   block a reset (#1064).
+>
+> **Amended 2026-11-12** with #1079, which lets a hosted sign-in become a registration and back.
+> Question 14 stands for the authorization challenge endpoint: a native app starts a registration
+> with `prompt=create` alone. The Interaction API (ADR-019 Decision 6) serves two path markers of
+> its own, which this endpoint does not:
+>
+> - `register`, offered beside the first step of an authorization request's sign-in, before anyone
+>   is named and alike for every account (Decision 4). It is offered under the rules `prompt=create`
+>   meets at `/oauth/authorize`, read again on every round: the realm's sign-up, the client's
+>   `hosted_flows` naming `register`, and no `max_age` and no `prompt=login`. The `openid` scope is
+>   not among them. Prompt Create requires it of a `prompt=create` request, which this is not, and
+>   a client that asks no `openid`, as an MCP client may not, still gets its code.
+> - `sign_in`, the way back, offered beside a registration's address step until an address is
+>   given.
+>
+> Answering one starts a transaction of the other flow at its first round, for the same request,
+> and the interaction ends in the code that request would have had. A sign-in to link an upstream
+> account (#670) offers neither. Decision 8's registration paragraph is edited in place.
 
 ## Context
 
@@ -1109,8 +1127,9 @@ primary identity is a passkey, with no address. They are in 1.0. Their registrat
 them. Recovery codes are mandatory for them (question 30, decided 2026-10-09).
 
 Registration. From F1 the signal is the standard `prompt=create` of Initiating User Registration via
-OpenID Connect 1.0, an OIDF specification. There is no path marker (question 14, decided
-2026-10-09).
+OpenID Connect 1.0, an OIDF specification. There is no path marker at this endpoint (question 14,
+decided 2026-10-09). The Interaction API's hosted sign-in offers one, `register`, and its way back,
+`sign_in` (amended 2026-11-12, #1079).
 
 - Registration needs both the realm's `registration_allowed` and the client's `flows` containing
   `register`. This holds for native sign-up here and for hosted sign-up (F2a), which extends the

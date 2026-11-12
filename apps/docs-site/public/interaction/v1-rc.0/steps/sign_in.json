@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/sign_in.json",
+  "title": "urn:qauth:ia:sign_in:v1-rc.0",
+  "description": "A path marker (#1079), the way back from `register`: answering it turns the registration into a sign-in in the same interaction, for the same authorization request, at the sign-in’s first round: the `identifier` step, with a passkey before it while passkey sign-in is on and the realm’s upstream providers beside it. Offered as an alternative of a registration’s address step, before anyone is named and before any mailbox is proved, whether the registration began with `prompt=create` or with `register`. Nothing the registration kept carries over: the sign-in starts empty. After the mailbox is proved, an address an account holds goes on to that account’s sign-in by itself, as before. The page shows it as “I have an account”. Works without JavaScript.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:sign_in:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:sign_in:v1-rc.0",
+      "params": {},
+      "answer": {},
+      "personal": {},
+      "amr": []
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

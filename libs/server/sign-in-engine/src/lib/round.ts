@@ -169,11 +169,27 @@ export interface RoundContext {
    * `prompt=create` (#640; ADR-017 Decision 8), `reset` for a transport that
    * starts a reset on its own (the FiPA endpoint's `password_reset` start,
    * #642), absent for a sign-in. A round of another flow than its
-   * transaction's ends the transaction, with one exception: a sign-in that
+   * transaction's ends the transaction, with two exceptions: a sign-in that
    * turned into a reset at its password step (#642) goes on as a reset on
-   * the rounds of a sign-in.
+   * the rounds of a sign-in; and with {@link RoundContext.switchFlows} the
+   * transaction's own flow is the round's, `flow` only the one a new
+   * transaction begins with.
    */
   readonly flow?: SignInFlow;
+  /**
+   * The transport lets the person switch between a sign-in and a
+   * registration within one transaction's interaction (#1079; ADR-017
+   * Decision 8): the Interaction API, for an authorization request, never
+   * for a sign-in to join an upstream identity to an account (#670) nor for
+   * the account page's (#844). A sign-in's first step then offers `register`
+   * beside it, before anyone is named, while the registration gate holds,
+   * the transport serves a registration's steps and the request asks for no
+   * fresh sign-in; and a registration's address step offers `sign_in`, the
+   * way back. Answering either starts a new transaction of the other flow,
+   * at its first round, in the same round. A marker the transaction may no
+   * longer take is refused as an invalid answer. Ignored on a reset's start.
+   */
+  readonly switchFlows?: boolean;
   /**
    * The request asks for a fresh sign-in: `max_age` or `prompt=login`. A
    * reset proves no authenticator, so it can never satisfy one (ADR-017

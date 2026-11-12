@@ -30,8 +30,9 @@ import {
  * The sign-in steps: who is signing in, and the factors that prove it.
  * `identifier`, `password`, `captcha`, `webauthn_get` and `totp` are the
  * steps of ADR-017 Decision 3 and may be served by both transports;
- * `recovery_code`, `select_account`, `upstream` and `upstream_link` only by the
- * Interaction API.
+ * `recovery_code`, `select_account`, `upstream`, `upstream_link` and the two
+ * path markers between a sign-in and a registration, `register` and
+ * `sign_in` (#1079), only by the Interaction API.
  */
 
 /** The identifier step's personal data: the request's `login_hint` as a prefill (#628). */
@@ -248,6 +249,28 @@ export const upstreamLink = defineStep({
       'A new account with the identity, or the existing account the person signs in to next.'
     ),
   }),
+  errors: [],
+  amr: [],
+});
+
+/** A path marker (#1079): turns a sign-in at its first step into a registration. */
+export const register = defineStep({
+  name: 'register',
+  transports: ['interaction'],
+  params: EMPTY_OBJECT,
+  personal: EMPTY_OBJECT,
+  answer: EMPTY_OBJECT,
+  errors: [],
+  amr: [],
+});
+
+/** A path marker (#1079): turns a registration at its address step back into a sign-in. */
+export const signIn = defineStep({
+  name: 'sign_in',
+  transports: ['interaction'],
+  params: EMPTY_OBJECT,
+  personal: EMPTY_OBJECT,
+  answer: EMPTY_OBJECT,
   errors: [],
   amr: [],
 });

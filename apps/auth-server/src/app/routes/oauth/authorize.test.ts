@@ -3446,7 +3446,12 @@ describe('GET /oauth/authorize — prompt=create (#640)', () => {
 
     expect(state.redirected).toBe(ceremonyPagePath(INTERACTION_ID));
     const input = takeStartedInteraction();
-    expect(input.step).toEqual({ name: stepUrn('identifier'), params: {}, alternatives: [] });
+    // The way back to a sign-in (#1079) beside the address.
+    expect(input.step).toEqual({
+      name: stepUrn('identifier'),
+      params: {},
+      alternatives: [stepUrn('sign_in')],
+    });
     expect(input.personal).toEqual({ login_hint: 'new@example.com' });
     // The held request asks for `create`: the engine's rounds register.
     expect(input.request).toMatchObject({ prompt: 'create', client_id: BASE_QUERY.client_id });
@@ -3491,7 +3496,12 @@ describe('GET /oauth/authorize — prompt=create (#640)', () => {
     await create({ login_hint: 'new@example.com' }, { passkeys: true });
 
     const input = takeStartedInteraction();
-    expect(input.step).toEqual({ name: stepUrn('identifier'), params: {}, alternatives: [] });
+    // The way back to a sign-in (#1079) beside the address.
+    expect(input.step).toEqual({
+      name: stepUrn('identifier'),
+      params: {},
+      alternatives: [stepUrn('sign_in')],
+    });
     expect(input.personal).toEqual({ login_hint: 'new@example.com' });
     expect(input.signInTransaction).toBeUndefined();
   });
