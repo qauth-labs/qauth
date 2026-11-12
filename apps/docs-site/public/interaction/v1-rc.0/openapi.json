@@ -1128,6 +1128,124 @@
                       "expiresAt": "2026-10-26T10:00:00Z"
                     }
                   },
+                  "register": {
+                    "summary": "urn:qauth:ia:register:v1-rc.0",
+                    "value": {
+                      "step": "urn:qauth:ia:register:v1-rc.0",
+                      "alternatives": [],
+                      "params": {
+                        "urn:qauth:ia:register:v1-rc.0": {}
+                      },
+                      "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
+                      "client": {
+                        "kind": "cimd",
+                        "verifiedDomain": {
+                          "host": "app.example.com",
+                          "registrableDomain": "example.com",
+                          "sharedHosting": false
+                        },
+                        "redirect": {
+                          "target": "host",
+                          "host": "app.example.com"
+                        },
+                        "declaredName": "Example Notes",
+                        "newClient": false
+                      },
+                      "brand": {
+                        "logo": {
+                          "light": {
+                            "url": "/ui/assets/logo-3f9a1c2e.svg",
+                            "width": 160,
+                            "height": 40
+                          }
+                        },
+                        "colors": {
+                          "light": {
+                            "primary": "#1f5fbf"
+                          },
+                          "dark": {
+                            "primary": "#7aa7ef",
+                            "background": "#10141a"
+                          }
+                        },
+                        "font": "inter",
+                        "links": {
+                          "privacy": "https://example.com/privacy",
+                          "help": "https://example.com/help"
+                        },
+                        "strings": {
+                          "en": {
+                            "name": "Example",
+                            "title": "Sign in to Example"
+                          }
+                        },
+                        "darkMode": "enabled"
+                      },
+                      "uiLocales": [
+                        "en"
+                      ],
+                      "expiresAt": "2026-10-26T10:00:00Z"
+                    }
+                  },
+                  "sign_in": {
+                    "summary": "urn:qauth:ia:sign_in:v1-rc.0",
+                    "value": {
+                      "step": "urn:qauth:ia:sign_in:v1-rc.0",
+                      "alternatives": [],
+                      "params": {
+                        "urn:qauth:ia:sign_in:v1-rc.0": {}
+                      },
+                      "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
+                      "client": {
+                        "kind": "cimd",
+                        "verifiedDomain": {
+                          "host": "app.example.com",
+                          "registrableDomain": "example.com",
+                          "sharedHosting": false
+                        },
+                        "redirect": {
+                          "target": "host",
+                          "host": "app.example.com"
+                        },
+                        "declaredName": "Example Notes",
+                        "newClient": false
+                      },
+                      "brand": {
+                        "logo": {
+                          "light": {
+                            "url": "/ui/assets/logo-3f9a1c2e.svg",
+                            "width": 160,
+                            "height": 40
+                          }
+                        },
+                        "colors": {
+                          "light": {
+                            "primary": "#1f5fbf"
+                          },
+                          "dark": {
+                            "primary": "#7aa7ef",
+                            "background": "#10141a"
+                          }
+                        },
+                        "font": "inter",
+                        "links": {
+                          "privacy": "https://example.com/privacy",
+                          "help": "https://example.com/help"
+                        },
+                        "strings": {
+                          "en": {
+                            "name": "Example",
+                            "title": "Sign in to Example"
+                          }
+                        },
+                        "darkMode": "enabled"
+                      },
+                      "uiLocales": [
+                        "en"
+                      ],
+                      "expiresAt": "2026-10-26T10:00:00Z"
+                    }
+                  },
                   "device_code": {
                     "summary": "urn:qauth:ia:device_code:v1-rc.0",
                     "value": {
@@ -1662,6 +1780,20 @@
                       "data": {}
                     }
                   },
+                  "register": {
+                    "summary": "urn:qauth:ia:register:v1-rc.0",
+                    "value": {
+                      "step": "urn:qauth:ia:register:v1-rc.0",
+                      "data": {}
+                    }
+                  },
+                  "sign_in": {
+                    "summary": "urn:qauth:ia:sign_in:v1-rc.0",
+                    "value": {
+                      "step": "urn:qauth:ia:sign_in:v1-rc.0",
+                      "data": {}
+                    }
+                  },
                   "device_code": {
                     "summary": "urn:qauth:ia:device_code:v1-rc.0",
                     "value": {
@@ -2029,6 +2161,20 @@
                     "type": "urn:qauth:ia:upstream_link:v1-rc.0",
                     "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
                     "decision": "link"
+                  }
+                },
+                "register": {
+                  "summary": "urn:qauth:ia:register:v1-rc.0",
+                  "value": {
+                    "type": "urn:qauth:ia:register:v1-rc.0",
+                    "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE"
+                  }
+                },
+                "sign_in": {
+                  "summary": "urn:qauth:ia:sign_in:v1-rc.0",
+                  "value": {
+                    "type": "urn:qauth:ia:sign_in:v1-rc.0",
+                    "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE"
                   }
                 },
                 "device_code": {
@@ -2497,6 +2643,146 @@
                   },
                   "upstream_link": {
                     "summary": "urn:qauth:ia:upstream_link:v1-rc.0",
+                    "value": {
+                      "result": "step",
+                      "interaction": {
+                        "step": "urn:qauth:ia:identifier:v1-rc.0",
+                        "alternatives": [
+                          "urn:qauth:ia:webauthn_get:v1-rc.0"
+                        ],
+                        "params": {
+                          "urn:qauth:ia:identifier:v1-rc.0": {},
+                          "urn:qauth:ia:webauthn_get:v1-rc.0": {
+                            "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+                            "rpId": "auth.example.com",
+                            "timeout": 300000,
+                            "userVerification": "required"
+                          }
+                        },
+                        "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
+                        "client": {
+                          "kind": "cimd",
+                          "verifiedDomain": {
+                            "host": "app.example.com",
+                            "registrableDomain": "example.com",
+                            "sharedHosting": false
+                          },
+                          "redirect": {
+                            "target": "host",
+                            "host": "app.example.com"
+                          },
+                          "declaredName": "Example Notes",
+                          "newClient": false
+                        },
+                        "brand": {
+                          "logo": {
+                            "light": {
+                              "url": "/ui/assets/logo-3f9a1c2e.svg",
+                              "width": 160,
+                              "height": 40
+                            }
+                          },
+                          "colors": {
+                            "light": {
+                              "primary": "#1f5fbf"
+                            },
+                            "dark": {
+                              "primary": "#7aa7ef",
+                              "background": "#10141a"
+                            }
+                          },
+                          "font": "inter",
+                          "links": {
+                            "privacy": "https://example.com/privacy",
+                            "help": "https://example.com/help"
+                          },
+                          "strings": {
+                            "en": {
+                              "name": "Example",
+                              "title": "Sign in to Example"
+                            }
+                          },
+                          "darkMode": "enabled"
+                        },
+                        "uiLocales": [
+                          "en"
+                        ],
+                        "expiresAt": "2026-10-26T10:00:00Z"
+                      }
+                    }
+                  },
+                  "register": {
+                    "summary": "urn:qauth:ia:register:v1-rc.0",
+                    "value": {
+                      "result": "step",
+                      "interaction": {
+                        "step": "urn:qauth:ia:identifier:v1-rc.0",
+                        "alternatives": [
+                          "urn:qauth:ia:webauthn_get:v1-rc.0"
+                        ],
+                        "params": {
+                          "urn:qauth:ia:identifier:v1-rc.0": {},
+                          "urn:qauth:ia:webauthn_get:v1-rc.0": {
+                            "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+                            "rpId": "auth.example.com",
+                            "timeout": 300000,
+                            "userVerification": "required"
+                          }
+                        },
+                        "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
+                        "client": {
+                          "kind": "cimd",
+                          "verifiedDomain": {
+                            "host": "app.example.com",
+                            "registrableDomain": "example.com",
+                            "sharedHosting": false
+                          },
+                          "redirect": {
+                            "target": "host",
+                            "host": "app.example.com"
+                          },
+                          "declaredName": "Example Notes",
+                          "newClient": false
+                        },
+                        "brand": {
+                          "logo": {
+                            "light": {
+                              "url": "/ui/assets/logo-3f9a1c2e.svg",
+                              "width": 160,
+                              "height": 40
+                            }
+                          },
+                          "colors": {
+                            "light": {
+                              "primary": "#1f5fbf"
+                            },
+                            "dark": {
+                              "primary": "#7aa7ef",
+                              "background": "#10141a"
+                            }
+                          },
+                          "font": "inter",
+                          "links": {
+                            "privacy": "https://example.com/privacy",
+                            "help": "https://example.com/help"
+                          },
+                          "strings": {
+                            "en": {
+                              "name": "Example",
+                              "title": "Sign in to Example"
+                            }
+                          },
+                          "darkMode": "enabled"
+                        },
+                        "uiLocales": [
+                          "en"
+                        ],
+                        "expiresAt": "2026-10-26T10:00:00Z"
+                      }
+                    }
+                  },
+                  "sign_in": {
+                    "summary": "urn:qauth:ia:sign_in:v1-rc.0",
                     "value": {
                       "result": "step",
                       "interaction": {
@@ -3796,6 +4082,50 @@
             "if": {
               "properties": {
                 "step": {
+                  "const": "urn:qauth:ia:register:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:register:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:sign_in:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:sign_in:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
                   "const": "urn:qauth:ia:device_code:v1-rc.0"
                 }
               },
@@ -3881,6 +4211,8 @@
           "urn:qauth:ia:select_account:v1-rc.0",
           "urn:qauth:ia:upstream:v1-rc.0",
           "urn:qauth:ia:upstream_link:v1-rc.0",
+          "urn:qauth:ia:register:v1-rc.0",
+          "urn:qauth:ia:sign_in:v1-rc.0",
           "urn:qauth:ia:device_code:v1-rc.0",
           "urn:qauth:ia:device_confirm:v1-rc.0",
           "urn:qauth:ia:logout_confirm:v1-rc.0"
@@ -3954,6 +4286,12 @@
           "urn:qauth:ia:upstream_link:v1-rc.0": {
             "$ref": "#/components/schemas/UpstreamLinkParams"
           },
+          "urn:qauth:ia:register:v1-rc.0": {
+            "$ref": "#/components/schemas/RegisterParams"
+          },
+          "urn:qauth:ia:sign_in:v1-rc.0": {
+            "$ref": "#/components/schemas/SignInParams"
+          },
           "urn:qauth:ia:device_code:v1-rc.0": {
             "$ref": "#/components/schemas/DeviceCodeParams"
           },
@@ -4017,6 +4355,12 @@
             "$ref": "#/components/schemas/UpstreamLinkAnswer"
           },
           {
+            "$ref": "#/components/schemas/RegisterAnswer"
+          },
+          {
+            "$ref": "#/components/schemas/SignInAnswer"
+          },
+          {
             "$ref": "#/components/schemas/DeviceCodeAnswer"
           },
           {
@@ -4045,6 +4389,8 @@
             "urn:qauth:ia:select_account:v1-rc.0": "#/components/schemas/SelectAccountAnswer",
             "urn:qauth:ia:upstream:v1-rc.0": "#/components/schemas/UpstreamAnswer",
             "urn:qauth:ia:upstream_link:v1-rc.0": "#/components/schemas/UpstreamLinkAnswer",
+            "urn:qauth:ia:register:v1-rc.0": "#/components/schemas/RegisterAnswer",
+            "urn:qauth:ia:sign_in:v1-rc.0": "#/components/schemas/SignInAnswer",
             "urn:qauth:ia:device_code:v1-rc.0": "#/components/schemas/DeviceCodeAnswer",
             "urn:qauth:ia:device_confirm:v1-rc.0": "#/components/schemas/DeviceConfirmAnswer",
             "urn:qauth:ia:logout_confirm:v1-rc.0": "#/components/schemas/LogoutConfirmAnswer"
@@ -4195,6 +4541,12 @@
           },
           "urn:qauth:ia:upstream_link:v1-rc.0": {
             "$ref": "#/components/schemas/UpstreamLinkPersonalData"
+          },
+          "urn:qauth:ia:register:v1-rc.0": {
+            "$ref": "#/components/schemas/RegisterPersonalData"
+          },
+          "urn:qauth:ia:sign_in:v1-rc.0": {
+            "$ref": "#/components/schemas/SignInPersonalData"
           },
           "urn:qauth:ia:device_code:v1-rc.0": {
             "$ref": "#/components/schemas/DeviceCodePersonalData"
@@ -6333,6 +6685,78 @@
         "additionalProperties": false
       },
       "UpstreamLinkPersonalData": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "RegisterParams": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+        "x-qauth-step": {
+          "name": "urn:qauth:ia:register:v1-rc.0",
+          "transports": [
+            "interaction"
+          ],
+          "errors": [],
+          "amr": []
+        }
+      },
+      "RegisterAnswer": {
+        "type": "object",
+        "description": "An answer to `urn:qauth:ia:register:v1-rc.0`.",
+        "properties": {
+          "type": {
+            "const": "urn:qauth:ia:register:v1-rc.0",
+            "description": "The step this request answers."
+          },
+          "csrf": {
+            "$ref": "#/components/schemas/Csrf"
+          }
+        },
+        "required": [
+          "type",
+          "csrf"
+        ],
+        "additionalProperties": false
+      },
+      "RegisterPersonalData": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "SignInParams": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+        "x-qauth-step": {
+          "name": "urn:qauth:ia:sign_in:v1-rc.0",
+          "transports": [
+            "interaction"
+          ],
+          "errors": [],
+          "amr": []
+        }
+      },
+      "SignInAnswer": {
+        "type": "object",
+        "description": "An answer to `urn:qauth:ia:sign_in:v1-rc.0`.",
+        "properties": {
+          "type": {
+            "const": "urn:qauth:ia:sign_in:v1-rc.0",
+            "description": "The step this request answers."
+          },
+          "csrf": {
+            "$ref": "#/components/schemas/Csrf"
+          }
+        },
+        "required": [
+          "type",
+          "csrf"
+        ],
+        "additionalProperties": false
+      },
+      "SignInPersonalData": {
         "type": "object",
         "properties": {},
         "additionalProperties": false

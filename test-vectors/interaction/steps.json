@@ -1187,6 +1187,96 @@
       }
     },
     {
+      "id": "register",
+      "input": {
+        "step": {
+          "type": "urn:qauth:ia:register:v1-rc.0",
+          "params": {},
+          "answer": {},
+          "personal": {},
+          "amr": []
+        },
+        "alternatives": [],
+        "fipa": {
+          "iss": "https://auth.example.com",
+          "auth_session": "YXV0aC1zZXNzaW9uLWhhbmRsZS1vZi0zMi1ieXRlcyE",
+          "interaction_types_supported": [
+            "urn:qauth:ia:identifier:v1-rc.0",
+            "urn:qauth:ia:password:v1-rc.0",
+            "urn:qauth:ia:email_code:v1-rc.0",
+            "urn:qauth:ia:new_password:v1-rc.0",
+            "urn:qauth:ia:password_reset:v1-rc.0",
+            "urn:qauth:ia:captcha:v1-rc.0",
+            "urn:qauth:ia:webauthn_get:v1-rc.0",
+            "urn:qauth:ia:webauthn_create:v1-rc.0",
+            "urn:qauth:ia:totp:v1-rc.0",
+            "urn:qauth:ia:register:v1-rc.0"
+          ]
+        }
+      },
+      "expected": {
+        "interaction": {
+          "step": "urn:qauth:ia:register:v1-rc.0",
+          "alternatives": [],
+          "params": {
+            "urn:qauth:ia:register:v1-rc.0": {}
+          }
+        },
+        "fipa": {
+          "status": 403,
+          "body": {
+            "error": "redirect_to_web",
+            "iss": "https://auth.example.com"
+          }
+        }
+      }
+    },
+    {
+      "id": "sign-in",
+      "input": {
+        "step": {
+          "type": "urn:qauth:ia:sign_in:v1-rc.0",
+          "params": {},
+          "answer": {},
+          "personal": {},
+          "amr": []
+        },
+        "alternatives": [],
+        "fipa": {
+          "iss": "https://auth.example.com",
+          "auth_session": "YXV0aC1zZXNzaW9uLWhhbmRsZS1vZi0zMi1ieXRlcyE",
+          "interaction_types_supported": [
+            "urn:qauth:ia:identifier:v1-rc.0",
+            "urn:qauth:ia:password:v1-rc.0",
+            "urn:qauth:ia:email_code:v1-rc.0",
+            "urn:qauth:ia:new_password:v1-rc.0",
+            "urn:qauth:ia:password_reset:v1-rc.0",
+            "urn:qauth:ia:captcha:v1-rc.0",
+            "urn:qauth:ia:webauthn_get:v1-rc.0",
+            "urn:qauth:ia:webauthn_create:v1-rc.0",
+            "urn:qauth:ia:totp:v1-rc.0",
+            "urn:qauth:ia:sign_in:v1-rc.0"
+          ]
+        }
+      },
+      "expected": {
+        "interaction": {
+          "step": "urn:qauth:ia:sign_in:v1-rc.0",
+          "alternatives": [],
+          "params": {
+            "urn:qauth:ia:sign_in:v1-rc.0": {}
+          }
+        },
+        "fipa": {
+          "status": 403,
+          "body": {
+            "error": "redirect_to_web",
+            "iss": "https://auth.example.com"
+          }
+        }
+      }
+    },
+    {
       "id": "device-code",
       "input": {
         "step": {

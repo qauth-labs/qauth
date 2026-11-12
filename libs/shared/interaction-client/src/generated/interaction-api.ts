@@ -61,6 +61,8 @@ export type StepName =
   | 'urn:qauth:ia:select_account:v1-rc.0'
   | 'urn:qauth:ia:upstream:v1-rc.0'
   | 'urn:qauth:ia:upstream_link:v1-rc.0'
+  | 'urn:qauth:ia:register:v1-rc.0'
+  | 'urn:qauth:ia:sign_in:v1-rc.0'
   | 'urn:qauth:ia:device_code:v1-rc.0'
   | 'urn:qauth:ia:device_confirm:v1-rc.0'
   | 'urn:qauth:ia:logout_confirm:v1-rc.0'
@@ -95,6 +97,8 @@ export interface StepParams {
   'urn:qauth:ia:select_account:v1-rc.0'?: SelectAccountParams;
   'urn:qauth:ia:upstream:v1-rc.0'?: UpstreamParams;
   'urn:qauth:ia:upstream_link:v1-rc.0'?: UpstreamLinkParams;
+  'urn:qauth:ia:register:v1-rc.0'?: RegisterParams;
+  'urn:qauth:ia:sign_in:v1-rc.0'?: SignInParams;
   'urn:qauth:ia:device_code:v1-rc.0'?: DeviceCodeParams;
   'urn:qauth:ia:device_confirm:v1-rc.0'?: DeviceConfirmParams;
   'urn:qauth:ia:logout_confirm:v1-rc.0'?: LogoutConfirmParams;
@@ -118,6 +122,8 @@ export type AnswerRequest =
   | SelectAccountAnswer
   | UpstreamAnswer
   | UpstreamLinkAnswer
+  | RegisterAnswer
+  | SignInAnswer
   | DeviceCodeAnswer
   | DeviceConfirmAnswer
   | LogoutConfirmAnswer;
@@ -170,6 +176,8 @@ export interface StepPersonalData {
   'urn:qauth:ia:select_account:v1-rc.0'?: SelectAccountPersonalData;
   'urn:qauth:ia:upstream:v1-rc.0'?: UpstreamPersonalData;
   'urn:qauth:ia:upstream_link:v1-rc.0'?: UpstreamLinkPersonalData;
+  'urn:qauth:ia:register:v1-rc.0'?: RegisterPersonalData;
+  'urn:qauth:ia:sign_in:v1-rc.0'?: SignInPersonalData;
   'urn:qauth:ia:device_code:v1-rc.0'?: DeviceCodePersonalData;
   'urn:qauth:ia:device_confirm:v1-rc.0'?: DeviceConfirmPersonalData;
   'urn:qauth:ia:logout_confirm:v1-rc.0'?: LogoutConfirmPersonalData;
@@ -725,6 +733,28 @@ export interface UpstreamLinkAnswer {
 }
 
 export type UpstreamLinkPersonalData = Record<string, never>;
+
+export type RegisterParams = Record<string, never>;
+
+/** An answer to `urn:qauth:ia:register:v1-rc.0`. */
+export interface RegisterAnswer {
+  /** The step this request answers. */
+  type: 'urn:qauth:ia:register:v1-rc.0';
+  csrf: Csrf;
+}
+
+export type RegisterPersonalData = Record<string, never>;
+
+export type SignInParams = Record<string, never>;
+
+/** An answer to `urn:qauth:ia:sign_in:v1-rc.0`. */
+export interface SignInAnswer {
+  /** The step this request answers. */
+  type: 'urn:qauth:ia:sign_in:v1-rc.0';
+  csrf: Csrf;
+}
+
+export type SignInPersonalData = Record<string, never>;
 
 export interface DeviceCodeParams {
   /** How many characters the code has, without the dash. */
