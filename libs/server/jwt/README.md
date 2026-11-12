@@ -450,9 +450,9 @@ list lacks it.
 
 Signs an access token with both algorithms. Returns the compact Ed25519 JWS plus
 the detached PQC signature; the caller decides how to deliver the latter. The
-auth-server delivers it by reference (`PQC_TOKEN_DELIVERY=reference`, the
-default). It stores the signature under the token's `jti`, and introspection
-returns it as `pqc_signature`.
+auth-server delivers it by reference (`PQC_TOKEN_DELIVERY=reference`, the only
+delivery it has). It stores the signature under the token's `jti`, and
+introspection returns it as `pqc_signature`.
 
 #### `signHybridIdToken(payload, keys, issuer, expiresIn, backend): Promise<HybridSignedToken>`
 

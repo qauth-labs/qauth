@@ -111,15 +111,16 @@ Because the signature is detached, the **bearer token stays ~736 bytes** in
 every channel — it never balloons. The 4412-byte ML-DSA signature is delivered
 out-of-band. Accordingly:
 
-- **`PQC_TOKEN_DELIVERY=reference` (the default when hybrid is on):** the bearer
+- **`PQC_TOKEN_DELIVERY=reference`, the only delivery QAuth has:** the bearer
   token is validated normally; the PQC component is retrieved and checked via
   **RFC 7662 introspection** (a POST body, with no header/cookie size ceiling).
-  This is the recommended posture, and is how QAuth's own `/oauth/introspect`
-  serves it (`apps/auth-server/src/app/helpers/hybrid-token.ts`).
-- **`PQC_TOKEN_DELIVERY=self-contained`:** only viable where you control the
-  transport and it tolerates a ~4.4 KB payload — i.e. **large-buffer request
-  headers, never cookies or URLs**. It requires an explicit
-  `PQC_SELF_CONTAINED_ACK=true`, so it can never be selected by accident.
+  QAuth's own `/oauth/introspect` serves it as `pqc_signature`
+  (`apps/auth-server/src/app/helpers/hybrid-token.ts`).
+- **`PQC_TOKEN_DELIVERY=self-contained`**, which would carry the signature with
+  the token, is not built. The server refuses to start with it, and with
+  `PQC_SELF_CONTAINED_ACK`, the acknowledgement it once required, which was
+  removed in 0.3.0. Until 0.3.0 both were accepted and ignored: the signature
+  was delivered by reference whatever they said.
 
 ## 3. Draft revision implemented, and churn risk
 

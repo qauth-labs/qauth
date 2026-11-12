@@ -991,8 +991,7 @@ unless configured. See the [verifier guide](/operate/pqc-verifier-guide/).
 | `HYBRID_SIGNING_ENABLED` | No                     | `false`     | Turns on live hybrid token issuance. Enabling it without an ML-DSA key **throws at startup** — a half-configured deployment fails fast rather than degrading to classical-only. |
 | `JWT_MLDSA_PRIVATE_KEY`  | Yes, when hybrid is on | _(unset)_   | ML-DSA-65 private key as a base64url 32-byte seed (or `JWT_MLDSA_PRIVATE_KEY_PATH`).                                                                                            |
 | `JWT_MLDSA_KID`          | No                     | _(unset)_   | Stable `kid` for the ML-DSA key published in the `AKP` JWK.                                                                                                                     |
-| `PQC_TOKEN_DELIVERY`     | No                     | `reference` | `reference` keeps the bearer a small Ed25519 JWS and serves the PQC signature via introspection. `self-contained` requires `PQC_SELF_CONTAINED_ACK`.                            |
-| `PQC_SELF_CONTAINED_ACK` | Conditional            | `false`     | Explicit acknowledgement that `self-contained` ships a ~4.4 KB detached signature exceeding cookie and URL budgets.                                                             |
+| `PQC_TOKEN_DELIVERY`     | No                     | `reference` | `reference`, the only value, keeps the bearer a small Ed25519 JWS and serves the PQC signature via introspection. `self-contained` is not built and stops the boot.             |
 
 > Setting `JWT_MLDSA_PRIVATE_KEY` alone publishes the ML-DSA public key in the
 > JWKS without issuing any hybrid token — deliberate, so verifiers can fetch the
