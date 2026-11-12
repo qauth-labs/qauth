@@ -695,7 +695,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'Link an upstream account (#844, #670): the person signs in at the provider, then to this account again with its own factors, in one interaction on the hosted pages; the identity the provider proved is linked then. Nothing is matched by an email address. Only a provider the realm offers and the account holds no identity of; any other is `404`.',
+          'Link an upstream account (#844, #670): the person signs in at the provider, then to this account again, with its own factors or through another provider whose identity the account already holds (#1080), in one interaction on the hosted pages; the identity the provider proved is linked then. Nothing is matched by an email address. Only a provider the realm offers and the account holds no identity of; any other is `404`.',
         tags,
         'x-qauth-stability': 'experimental',
         'x-qauth-errors': [403, 404],

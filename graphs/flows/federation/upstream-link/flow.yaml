@@ -10,6 +10,10 @@
 #   provider runs first and the account's own sign-in after it.
 # - The account is never found by an email or another attribute: it is the one the sign-in proved. The identity is
 #   found by (realm, provider type, sub) alone.
+# - The sign-in may go through another upstream provider of the realm, never the one being linked (#1080; ADR-020 §3,
+#   amended 2026-11-12): an account made through one provider holds no password and often no passkey, so its own
+#   factors alone could never link a second. Such a provider proves the account only through an identity the account
+#   already holds; an identity no account holds signs in to nothing and creates nothing.
 # - Each exit is a final state named <what happened>.<cause>, with the response the browser gets. A refused link sends
 #   nothing to the client's redirect_uri.
 # - The provider's own leg (the start, the waiting page, the pending sign-in bound to the flow cookie, the method's
@@ -22,9 +26,10 @@ domain: qauth
 title: Link an upstream account to an existing account by signing in to it
 summary: >-
   An identity a provider proved and no account holds is offered to the person as a new account or as one they already
-  have. Choosing the existing one starts a fresh sign-in to it in the same interaction: no upstream provider, no
-  password reset and no registration are offered, the realm's MFA policy applies, and a session the browser already
-  holds counts for nothing. Only when that sign-in finishes does the identity join the account it proved, under the
+  have. Choosing the existing one starts a fresh sign-in to it in the same interaction: no password reset and no
+  registration are offered, the realm's other upstream providers are (never the one being linked) and prove only an
+  account that already holds their identity, the account's passkey and the realm's MFA policy apply, and a session the
+  browser already holds counts for nothing. Only when that sign-in finishes does the identity join the account it proved, under the
   account's row lock, once no other account holds it and the account holds no other identity of the provider; the
   credential and user.upstream_linked commit together, and the owner is mailed. A signed-in person reaches the same
   sign-in through qauth_link.
@@ -85,6 +90,20 @@ context:
     say:
       sameBrowser: "the interaction's own browser answers its steps"
       otherBrowser: 'another browser answers them: it holds no flow cookie of the interaction'
+  signInWay:
+    values: [ownFactors, heldProvider]
+    initial: any
+    say:
+      ownFactors: "the account's own factors: the identifier and the password, or the passkey"
+      heldProvider: >-
+        another upstream provider of the realm, picked beside the sign-in's first step (#1080); the provider being
+        linked is never offered there
+  heldBy:
+    values: [anAccount, nobody]
+    initial: any
+    say:
+      anAccount: 'an account holds the identity that provider proved: it is the account the sign-in proves'
+      nobody: 'no account holds it'
   signInOutcome:
     values: [succeeds, refused]
     initial: any
@@ -117,6 +136,7 @@ guards:
   newAccountNotOffered: "newAccount == 'notOffered'"
   answeredElsewhere: "answerFrom == 'otherBrowser'"
   signInRefused: "signInOutcome == 'refused'"
+  unknownIdentity: "signInWay == 'heldProvider' and heldBy == 'nobody'"
 
 effects:
   signIn: { set: { signedIn: true } }
@@ -140,6 +160,7 @@ main:
     newAccount: offered
     answerFrom: sameBrowser
     firstStep: shown
+    signInWay: ownFactors
     signInOutcome: succeeds
     linkCheck: free
   events: [UNKNOWN_IDENTITY, LINK, DONE, SIGNED_IN, DONE]
@@ -148,7 +169,7 @@ initial: idle
 states:
   idle:
     title: Wait for an identity no account holds, or a request to link one
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:958
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1003
     on:
       UNKNOWN_IDENTITY:
         guard: "entry == 'firstSignIn' and arrival == 'sameBrowser' and completion == 'identity' and holder == 'nobody'"
@@ -156,7 +177,7 @@ states:
         say: >-
           the provider's callback on the ceremony page proved an identity no account holds: the interaction moves to
           the upstream_link step, keeping the identity and, when a new account is offered, the claims for it
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:958
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1003
       LINK_REQUEST:
         guard: "entry == 'qauthLink'"
         target: checkingLinkRequest
@@ -213,16 +234,16 @@ states:
     description: >-
       As federation.upstream-sign-in's checkingPending: a callback in another browser spends nothing, and the pending
       sign-in stays for its own browser.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:873
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:901
     always:
       - guard: notTheStartingBrowser
         target: bad_request.transaction_mismatch
         say: 'no pending sign-in for this browser'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:874
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:902
       - guard: personDeclined
         target: provider_error.declined
         say: 'the person cancelled at the provider, or it answered an error'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:878
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:906
       - guard: checkFailed
         target: bad_request.invalid_response
         say: "the provider's answer failed a check"
@@ -231,7 +252,7 @@ states:
 
   lookingUpHolder:
     title: Look the identity's holder up by (realm, provider type, sub) alone
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:527
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:550
     invoke: { action: UserCredential.findByRealmProviderSub }
     on:
       DONE:
@@ -243,12 +264,12 @@ states:
 
   checkingHolder:
     title: Refuse an identity another account holds before anyone signs in
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:931
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:976
     always:
       - guard: identityHeld
         target: link_refused.held_at_callback
         say: 'an account holds the identity already: it stays with that account'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:942
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:987
       - target: startingSignIn
         say: 'a free identity: the sign-in to the account starts'
 
@@ -264,7 +285,7 @@ states:
       LINK:
         target: checkingAnswer
         say: '"I already have an account"'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:738
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:766
       CREATE:
         target: checkingCreate
         say: '"Create a new account"'
@@ -287,25 +308,26 @@ states:
 
   checkingCreate:
     title: Create the account only when the step offered it
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:746
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:774
     always:
       - guard: newAccountNotOffered
         target: invalid_answer.no_new_account
         say: 'the step offered no new account'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:746
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:774
       - target: account_created.upstream_sign_in
         say: >-
           the account is created from the identity and the kept claims, and the upstream sign-in goes on as
           federation.upstream-sign-in's completingStep
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:754
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:782
 
   startingSignIn:
     title: Start a fresh sign-in to the account in the same interaction
     description: >-
-      A first round of the sign-in engine that offers no upstream provider, no password reset and no registration
-      (prompt=create notwithstanding), and that the realm's MFA policy governs. The interaction holds the identity as
-      signing_in; its step views name the provider (upstreamLink), never an address.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:391
+      A first round of the sign-in engine that offers no password reset and no registration (prompt=create
+      notwithstanding), lists the realm's upstream providers but the one being linked beside its first step
+      (RoundContext.withheldUpstream, #1080), and that the realm's MFA policy governs. The interaction holds the
+      identity as signing_in; its step views name the provider (upstreamLink), never an address.
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:405
     invoke: { external: signInEngine }
     on:
       DONE:
@@ -317,7 +339,7 @@ states:
 
   checkingFirstStep:
     title: Go on only to a step the ceremony page shows
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:413
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:428
     always:
       - guard: "firstStep == 'none' and entry == 'qauthLink'"
         target: bad_request.step_not_available
@@ -325,10 +347,10 @@ states:
       - guard: "firstStep == 'none'"
         target: interaction_expired.step_not_available
         say: 'no first step, at the choice: user.sign_in_failed with the reason step_not_available'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:784
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:812
       - target: signingIn
         say: 'the first step of the sign-in: the ceremony page shows it'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:414
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:436
 
   failingSignInStart:
     title: Answer a store that cannot start the sign-in
@@ -336,28 +358,53 @@ states:
       - guard: "entry == 'qauthLink'"
         target: bad_request.unavailable
         say: 'at the callback: the error page, user.sign_in_failed with the reason unavailable'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1032
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1080
       - target: temporarily_unavailable.engine
         say: "at the choice: the Interaction API's answer"
 
   signingIn:
-    title: Wait while the person signs in to the account with its own factors
+    title: Wait while the person signs in to the account
     description: >-
-      core.sign-in's steps, a second factor too where the MFA policy asks for one. A session the browser already
-      holds is not asked for and counts for nothing.
+      core.sign-in's steps, a second factor too where the MFA policy asks for one; or another upstream provider of the
+      realm, picked beside the first step (#1080), whose start and callback are federation.upstream-sign-in's. A
+      session the browser already holds is not asked for and counts for nothing.
     by: human
-    source: apps/auth-server/src/app/routes/interaction-api.ts:521
+    source: apps/auth-server/src/app/routes/interaction-api.ts:531
     on:
       SIGNED_IN:
+        guard: "signInWay == 'ownFactors'"
         target: checkingSignIn
         say: 'the last step is answered'
+      PROVIDER_RETURNS:
+        guard: "signInWay == 'heldProvider'"
+        target: checkingProviderProof
+        say: "the provider picked on the first step sends the interaction's browser back to its callback"
+        source: apps/auth-server/src/app/routes/interaction-api.ts:577
       ABANDON:
         target: abandoned
         say: 'the person gives up, or the interaction expires'
 
+  checkingProviderProof:
+    title: Take another provider's identity only as proof of the account that holds it
+    description: >-
+      The callback, past federation.upstream-sign-in's checks of the pending sign-in and the method's completion: the
+      identity is looked up by (realm, provider type, sub) alone. While the interaction holds an identity to link, a
+      callback never creates an account and never offers a new link; the provider being linked is refused.
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:964
+    always:
+      - guard: unknownIdentity
+        target: bad_request.unknown_identity
+        say: 'no account holds the identity: it signs in to nothing and creates nothing'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:975
+      - target: checkingSignIn
+        say: >-
+          the account that holds it is proved; the passkey it holds and the second factor the MFA policy asks for come
+          first (ADR-017 Decision 4), and the sign-in finishes at the callback or at the last step's answer
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1051
+
   checkingSignIn:
     title: Link only after a sign-in that succeeded in the interaction's own browser
-    source: apps/auth-server/src/app/routes/interaction-api.ts:834
+    source: apps/auth-server/src/app/routes/interaction-api.ts:850
     always:
       - guard: answeredElsewhere
         target: interaction_expired.other_browser
@@ -368,7 +415,7 @@ states:
       - target: linking
         effect: [signIn]
         say: 'the sign-in finished: the account it proved is the one the identity joins'
-        source: apps/auth-server/src/app/routes/interaction-api.ts:846
+        source: apps/auth-server/src/app/routes/interaction-api.ts:871
 
   linking:
     title: Link the identity under the account's row lock
@@ -376,8 +423,9 @@ states:
       In one transaction: the user's row locked, the account still there and enabled, the identity free, the account
       without another identity of the provider, then the credential ({ kind: upstream, iss, verified: true }) and
       user.upstream_linked. A refusal is recorded as user.upstream_link_failed. The owner is mailed at the account's
-      password address after the commit; an account with none has its security log.
-    source: apps/auth-server/src/app/helpers/upstream-links.ts:114
+      password address after the commit; an account with none has its security log. The Interaction API runs it at
+      the last step's answer, the provider's callback when its proof finished the sign-in.
+    source: apps/auth-server/src/app/helpers/upstream-links.ts:118
     invoke: { external: upstreamLinkStore }
     on:
       DONE:
@@ -389,24 +437,24 @@ states:
 
   decidingLink:
     title: Go on as the link's transaction answered
-    source: apps/auth-server/src/app/routes/interaction-api.ts:854
+    source: apps/auth-server/src/app/routes/interaction-api.ts:878
     always:
       - guard: "linkCheck == 'takenMeanwhile'"
         target: link_refused.already_linked
         say: 'another account took the identity meanwhile, or won the race for its unique index'
-        source: apps/auth-server/src/app/helpers/upstream-links.ts:132
+        source: apps/auth-server/src/app/helpers/upstream-links.ts:137
       - guard: "linkCheck == 'providerHeld'"
         target: link_refused.provider_linked
         say: 'the account already holds an identity of the provider'
-        source: apps/auth-server/src/app/helpers/upstream-links.ts:139
+        source: apps/auth-server/src/app/helpers/upstream-links.ts:144
       - guard: "linkCheck == 'accountGone'"
         target: link_refused.account_unavailable
         say: 'the account was deleted or disabled meanwhile'
-        source: apps/auth-server/src/app/helpers/upstream-links.ts:121
+        source: apps/auth-server/src/app/helpers/upstream-links.ts:125
       - target: linked
         effect: [link]
         say: 'the credential and user.upstream_linked are committed, and the notice is sent'
-        source: apps/auth-server/src/app/helpers/upstream-links.ts:140
+        source: apps/auth-server/src/app/helpers/upstream-links.ts:145
 
   # Exits: success
 
@@ -466,7 +514,7 @@ states:
       user.upstream_link_failed is recorded with the reason already_linked; its subject is the account that holds the
       identity, since nobody has signed in for the link.
     redirect: never
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1025
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1071
     response:
       status: 409
       headers:
@@ -481,7 +529,7 @@ states:
       user.upstream_link_failed is recorded with the reason already_linked, for the account that signed in. The
       person is signed in to it; nothing goes to the client.
     redirect: never
-    source: apps/auth-server/src/app/routes/interaction-api.ts:854
+    source: apps/auth-server/src/app/routes/interaction-api.ts:878
     response: &linkRefused
       status: 303
       headers:
@@ -543,6 +591,17 @@ states:
     type: final
     title: Refuse an answer of the provider that fails a check
     redirect: never
+    response: *errorPage
+
+  bad_request.unknown_identity:
+    type: final
+    title: Refuse another provider's identity that no account holds, during the sign-in to link
+    description: >-
+      user.sign_in_failed is recorded with the reason unknown_identity and no subject. Nobody signs in, no account is
+      created and nothing is linked, whatever address the provider vouches for. The interaction still holds the
+      identity to link; the error page's way back is its ceremony page, at the sign-in's first step.
+    redirect: never
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:975
     response: *errorPage
 
   # Exits: refused answers
@@ -613,19 +672,23 @@ assertions:
   - id: no-link-without-a-sign-in
     never: 'linked and not signedIn'
     say: 'An identity joins an account only after a sign-in to that account, in the same interaction'
-    source: apps/auth-server/src/app/routes/interaction-api.ts:843
+    source: apps/auth-server/src/app/helpers/upstream-links.ts:225
   - id: no-link-in-another-browser
     never: 'linked and (notTheStartingBrowser or answeredElsewhere)'
     say: "Neither the provider's answer nor the sign-in from another browser links anything"
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:873
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:901
+  - id: no-sign-in-by-an-identity-no-account-holds
+    never: '(signedIn or linked) and unknownIdentity'
+    say: "Another provider's identity that no account holds signs in to nothing and links nothing (#1080)"
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:975
   - id: no-link-after-a-refused-sign-in
     never: 'linked and signInRefused'
     say: 'A wrong factor links nothing'
   - id: a-held-identity-stays-with-its-holder
     never: 'linked and identityHeld'
     say: 'An identity another account holds is never moved to this one'
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:942
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:987
   - id: no-link-to-an-account-that-cannot-take-it
     never: "linked and linkCheck != 'free'"
     say: 'A link checks again, under the lock, that the identity is free and the account can take it'
-    source: apps/auth-server/src/app/helpers/upstream-links.ts:114
+    source: apps/auth-server/src/app/helpers/upstream-links.ts:118

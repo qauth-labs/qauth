@@ -230,12 +230,19 @@ sign-up. The page names the provider and nothing else: no address, no account
 and no hint, and QAuth never looks an account up by an email address.
 
 "I already have an account" goes on to a sign-in to that account in the same
-interaction, with its own factors and its MFA policy: the password or the
-passkey, then the second factor the account or the realm asks for. No upstream
-provider and no password reset is offered during it. Once that sign-in
-completes, the identity joins the account it proved, the owner gets an email
-notice, and the security log records the link; the authorization request goes
-on as after any sign-in. An identity another account took meanwhile, or an
+interaction, under its MFA policy: the password or the passkey, then the
+second factor the account or the realm asks for. No password reset is offered
+during it. The realm's other upstream providers are, beside its first step,
+never the one being linked (#1080), so an account made through one provider
+links a second by signing in with the first. Such a provider proves the
+account only through an identity the account already holds: one no account
+holds signs in to nothing and creates nothing, whatever address the provider
+gives, and a passkey the account holds is still asked for after it. Once that
+sign-in completes, the identity joins the account it proved, the security log
+records the link, and the owner gets an email notice at the address of the
+account's password (an account with no password, such as one made through a
+provider, has the security log alone); the authorization
+request goes on as after any sign-in. An identity another account took meanwhile, or an
 account that already has an identity of that provider, is refused: the browser
 goes to `GET /ui/upstream-link-refused`, which says why, and nothing reaches
 the client.

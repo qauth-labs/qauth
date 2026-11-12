@@ -165,7 +165,8 @@ import {
  *    With none, a discoverable passkey (#651), preferred, with the password
  *    and the identifier step beside it, or the identifier step alone for an
  *    engine built without passkeys; and the realm's upstream identity
- *    providers beside them (#639): a pick sends the browser to the provider, whose callback
+ *    providers beside them (#639), but for the one a round withholds
+ *    (`RoundContext.withheldUpstream`, #1080): a pick sends the browser to the provider, whose callback
  *    proves the account it holds ({@link SignInEngine.completeUpstream}). An
  *    upstream sign-in ranks with the password in rule 8's downgrade rule.
  * 7. The first factor, offered alike to every account: the password, and a
@@ -1609,7 +1610,9 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * directory, or when the transport can serve or start none. An entry
      * outside the step's schema (a name the screen cannot show) is left out
      * and reported, so one provider's bad row never stops the sign-in; a
-     * directory that answers no list is a store fault.
+     * directory that answers no list is a store fault. The provider the
+     * round withholds (`RoundContext.withheldUpstream`, #1080) is left out
+     * without a report.
      */
     const upstreamProviders = async (): Promise<StepParams<'upstream'> | null> => {
       const directory = deps.upstream;
@@ -1626,10 +1629,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (!Array.isArray(providers)) {
         throw new SignInStoreUnavailableError('upstream', new Error('not a provider list'));
       }
-      const shown = (providers as readonly UpstreamProviderEntry[]).filter(
-        (entry) => upstreamParams([entry]) !== null
+      const listed = (providers as readonly UpstreamProviderEntry[]).filter(
+        (entry) =>
+          context.withheldUpstream === undefined || entry?.provider !== context.withheldUpstream
       );
-      if (shown.length < providers.length) {
+      const shown = listed.filter((entry) => upstreamParams([entry]) !== null);
+      if (shown.length < listed.length) {
         report('upstream', new Error('a provider outside the upstream step’s schema was left out'));
       }
       if (shown.length === 0) return null;

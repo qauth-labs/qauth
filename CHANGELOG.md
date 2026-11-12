@@ -72,6 +72,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider. `extend/auth-method-contract` links the two preset plugins beside
   the GitHub one.
 
+### Changed
+
+- **The sign-in that links an upstream account may go through a provider the
+  account already holds** ([#1080], ADR-020 §3, ADR-017 Decision 4). An
+  account made through one upstream provider holds no password and, until its
+  owner adds one, no passkey, so it could never link a second provider. The
+  sign-in to the account an identity joins ([#670]), after "I already have an
+  account" at the `upstream_link` step, from `qauth_link` or from the hosted
+  account page, now offers the realm's upstream providers beside its first
+  step, never the one being linked. Such a provider proves the account only
+  through an identity the account already holds: one no account holds signs
+  in to nothing and creates nothing, recorded as `user.sign_in_failed` with
+  the reason `unknown_identity`, and no account is ever found by an email
+  address. A passkey the account holds is still asked for after the provider,
+  and the MFA policy still applies. The identity joins the account only once
+  that sign-in completes, in the same browser and interaction, as before. The
+  owner is mailed at the address of the account's password, as after every
+  link; an account with no password, such as one made through a provider, has
+  the security log alone. The published descriptions of the `upstream` and
+  `upstream_link` steps and of `user.upstream_linked` say so.
+
 ### Fixed
 
 - **The code exchange gives a refresh token only to a client registered for
@@ -4092,6 +4113,7 @@ It adds migrations 0068 and 0069.
 [#1076]: https://github.com/qauth-labs/qauth/issues/1076
 [#1078]: https://github.com/qauth-labs/qauth/issues/1078
 [#1079]: https://github.com/qauth-labs/qauth/issues/1079
+[#1080]: https://github.com/qauth-labs/qauth/issues/1080
 
 ### Deprecated
 

@@ -34,12 +34,14 @@ import {
   E2E_REALM_NAME,
   type E2eInfrastructure,
   generateJwtPem,
+  type PemKeyPair,
   pkcePair,
   registerPasswordAccount,
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
 import { SESSION_COOKIE } from '../testing/session-cookie-value';
+import { softPasskey } from '../testing/soft-passkey';
 import type { BackgroundTasks } from './helpers/background-tasks';
 import type { InteractionEngines } from './helpers/interaction-engines';
 
@@ -70,6 +72,12 @@ import type { InteractionEngines } from './helpers/interaction-engines';
  * - a link and an unlink each mail the owner and write the event the
  *   security log reads.
  *
+ * And those of #1080 (ADR-020 §3): an account made through another provider
+ * of the realm links this one at its first sign-in by signing in with that
+ * provider, on every way in, and gives its passkey after it; an identity of
+ * that provider no account holds signs in to nothing and creates nothing; no
+ * account is found by an email address.
+ *
  * No page and no step view shows the account's email address, and nothing
  * finds the account by it: the unit tests of `helpers/upstream-links.ts`
  * and `helpers/upstream-sign-in.ts` prove the reads.
@@ -90,6 +98,12 @@ const STATE = 'link-state';
 
 const TYPE = 'oidc_corp';
 const PROVIDER_NAME = 'Corp';
+/**
+ * The realm's second provider (#1080), on the same fake OpenID Provider: the
+ * one an account made through it holds. Seeded only by the tests that need it.
+ */
+const HOME_TYPE = 'oidc_home';
+const HOME_NAME = 'Home';
 /** QAuth's registration at the fake provider. */
 const UPSTREAM_CLIENT_ID = 'qauth-corp';
 const UPSTREAM_CLIENT_SECRET = 'an-upstream-client-secret-of-some-length-0042';
@@ -104,6 +118,16 @@ const PERSON: FakeSignIn = {
   sub: 'corp-user-1',
   claims: { email: EMAIL, email_verified: true, name: 'Grace Hopper' },
 };
+/** The same person at the second provider, whose identity the account made through it holds. */
+const HOME_PERSON: FakeSignIn = {
+  sub: 'home-user-1',
+  claims: { email: EMAIL, email_verified: true, name: 'Grace Hopper' },
+};
+/** Someone else at the second provider, with the same verified address: no account holds them. */
+const HOME_STRANGER: FakeSignIn = {
+  sub: 'home-user-2',
+  claims: { email: EMAIL, email_verified: true, name: 'Not Grace' },
+};
 
 /** The page titles and texts of `helpers/upstream-pages.ts`, written out: app modules read the environment at import. */
 const WAITING_TITLE = 'Continuing to your sign-in provider';
@@ -115,6 +139,8 @@ const PASSWORD = stepUrn('password');
 const TOTP = stepUrn('totp');
 const UPSTREAM = stepUrn('upstream');
 const UPSTREAM_LINK = stepUrn('upstream_link');
+const WEBAUTHN_GET = stepUrn('webauthn_get');
+const RECOVERY_CODES = stepUrn('recovery_codes');
 const LINKED = 'urn:qauth:event:user.upstream_linked:v1-rc.0';
 const UNLINKED = 'urn:qauth:event:user.upstream_unlinked:v1-rc.0';
 const LINK_FAILED = 'urn:qauth:event:user.upstream_link_failed:v1-rc.0';
@@ -150,8 +176,8 @@ interface StepView {
   readonly upstreamLink?: { readonly provider: string; readonly name: string };
 }
 
-/** The callback URL the provider sends the browser back to. */
-const CALLBACK_URL = `${ORIGIN}/upstream/${TYPE}/callback`;
+/** The callback URL the provider of `type` sends the browser back to. */
+const callbackUrlOf = (type: string) => `${ORIGIN}/upstream/${type}/callback`;
 
 /** The path and query of a location, relative or on the realm origin. */
 function pathOf(location: unknown): string {
@@ -196,6 +222,7 @@ function signedInAgo(secondsAgo: number): number {
 
 describe('linking an upstream account to an existing one (#670, real containers)', () => {
   let infra: E2eInfrastructure | undefined;
+  let jwt: PemKeyPair | undefined;
   let booted: BootedAuthServer | undefined;
   let fixture: LocalHttpsFixture | undefined;
   let provider: FakeProvider;
@@ -213,13 +240,14 @@ describe('linking an upstream account to an existing one (#670, real containers)
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     infra = await startE2eInfrastructure();
+    jwt = await generateJwtPem();
     fixture = await startLocalHttpsFixture();
     const served = await createFakeProvider({ issuer: fixture.origin });
     served.register({
       clientId: UPSTREAM_CLIENT_ID,
       method: 'client_secret_basic',
       clientSecret: UPSTREAM_CLIENT_SECRET,
-      redirectUris: [CALLBACK_URL],
+      redirectUris: [callbackUrlOf(TYPE), callbackUrlOf(HOME_TYPE)],
     });
     const origin = fixture.origin;
     fixture.handler = (req, body, res) => {
@@ -248,9 +276,22 @@ describe('linking an upstream account to an existing one (#670, real containers)
     };
     provider = served;
 
-    booted = await bootAuthServer(
+    booted = await boot();
+    // Imported after the boot, as the harness imports the app: the modules
+    // read the environment the boot sets, and share the app's instances.
+    const { createInteractionEngines } = await import('./helpers/interaction-engines');
+    engines = createInteractionEngines(booted.app, { tasks: TASKS });
+  }, 240_000);
+
+  /**
+   * Boot the server with `extra` over the suite's environment: its egress
+   * through the test-only client, its engine mails recorded.
+   */
+  async function boot(extra: Record<string, string> = {}): Promise<BootedAuthServer> {
+    if (infra === undefined || jwt === undefined) throw new Error('no infrastructure');
+    const server = await bootAuthServer(
       {
-        ...baseEnvironment(infra, await generateJwtPem()),
+        ...baseEnvironment(infra, jwt),
         INTERACTION_UI_ENABLED: 'true',
         ALLOW_SIGN_UP: 'true',
         // Each test registers its accounts and runs several authorization
@@ -258,6 +299,7 @@ describe('linking an upstream account to an existing one (#670, real containers)
         REGISTRATION_RATE_LIMIT: '10000',
         AUTHORIZE_RATE_LIMIT: '10000',
         AUTHORIZE_RATE_LIMIT_LENIENT: '10000',
+        ...extra,
       },
       {
         egressClientFactory: createTestEgressClient,
@@ -265,17 +307,14 @@ describe('linking an upstream account to an existing one (#670, real containers)
         mfaPolicy: { read: async () => policy },
       }
     );
-    const { emailService } = booted.app;
+    const { emailService } = server.app;
     const original = emailService.sendEngineMail.bind(emailService);
     emailService.sendEngineMail = async (realm, to, mail: EngineMail, context) => {
       mails.push({ to, template: mail.template });
       return original(realm, to, mail, context);
     };
-    // Imported after the boot, as the harness imports the app: the modules
-    // read the environment the boot sets, and share the app's instances.
-    const { createInteractionEngines } = await import('./helpers/interaction-engines');
-    engines = createInteractionEngines(booted.app, { tasks: TASKS });
-  }, 240_000);
+    return server;
+  }
 
   afterAll(async () => {
     await booted?.close();
@@ -450,11 +489,15 @@ describe('linking an upstream account to an existing one (#670, real containers)
    * `qauth_link`), its redirect to the provider's start and the waiting
    * page, whose link is the provider's authorization request.
    */
-  async function startProvider(jar: CookieJar, extra: Record<string, string>): Promise<Started> {
+  async function startProvider(
+    jar: CookieJar,
+    extra: Record<string, string>,
+    type = TYPE
+  ): Promise<Started> {
     const routed = await get(jar, authorizeUrl(extra));
     expect(routed.statusCode, withServerLog(routed.body)).toBe(302);
     const start = new URL(String(routed.headers['location']), ORIGIN);
-    expect(start.pathname).toBe(`/ui/upstream/${TYPE}/start`);
+    expect(start.pathname).toBe(`/ui/upstream/${type}/start`);
     const interactionId = start.searchParams.get('interaction') ?? '';
     expect(interactionId).toMatch(INTERACTION_ID);
     const page = await get(jar, `${start.pathname}${start.search}`);
@@ -469,21 +512,67 @@ describe('linking an upstream account to an existing one (#670, real containers)
     return { interactionId, providerRequest };
   }
 
-  /** The provider's callback with the response `params`, from the browser holding `jar`. */
-  function callbackAt(jar: CookieJar, params: Record<string, string>) {
-    return get(jar, `/upstream/${TYPE}/callback?${new URLSearchParams(params).toString()}`);
+  /** The callback of the provider `type` with the response `params`, from the browser holding `jar`. */
+  function callbackAt(jar: CookieJar, params: Record<string, string>, type = TYPE) {
+    return get(jar, `/upstream/${type}/callback?${new URLSearchParams(params).toString()}`);
   }
 
-  /** Start the provider with `extra`, sign `person` in at it, and come back to the callback. */
+  /** Start the provider `type` with `extra`, sign `person` in at it, and come back to the callback. */
   async function throughProvider(
     jar: CookieJar,
     extra: Record<string, string>,
-    person: FakeSignIn = PERSON
+    person: FakeSignIn = PERSON,
+    type = TYPE
   ): Promise<LightMyRequestResponse> {
-    const started = await startProvider(jar, extra);
+    const started = await startProvider(jar, extra, type);
     const answered = provider.authorize(started.providerRequest, person);
     expect(answered['error']).toBeUndefined();
-    return callbackAt(jar, answered);
+    return callbackAt(jar, answered, type);
+  }
+
+  /**
+   * Pick the provider `type` on the current step of the interaction `id`, as
+   * the ceremony page's button posts it, sign `person` in at it, and come
+   * back to its callback.
+   */
+  async function throughPickedProvider(
+    jar: CookieJar,
+    id: string,
+    person: FakeSignIn,
+    type = HOME_TYPE
+  ): Promise<LightMyRequestResponse> {
+    const picked = await answer(jar, id, UPSTREAM, { provider: type });
+    expect(picked.statusCode, withServerLog(picked.body)).toBe(303);
+    const providerRequest = new URL(String(picked.headers['location']));
+    expect(`${providerRequest.origin}${providerRequest.pathname}`).toBe(
+      provider.authorizationEndpoint
+    );
+    const answered = provider.authorize(providerRequest, person);
+    expect(answered['error']).toBeUndefined();
+    return callbackAt(jar, answered, type);
+  }
+
+  /** Seed the realm's second provider (#1080), beside the first, on the same fake provider. */
+  async function addHomeProvider(): Promise<void> {
+    const config: UpstreamOidcConfigInput = {
+      issuer: provider.issuer,
+      clientId: UPSTREAM_CLIENT_ID,
+      clientAuthentication: { method: 'client_secret_basic', clientSecret: UPSTREAM_CLIENT_SECRET },
+    };
+    await app().repositories.realmUpstreamProviders.create({
+      realmId,
+      type: HOME_TYPE,
+      displayName: HOME_NAME,
+      displayOrder: 1,
+      hidden: false,
+      enabled: true,
+      marksVerified: true,
+      config: await sealUpstreamOidcConfig(
+        app().signer,
+        { realmId, providerId: HOME_TYPE, caller: 'api' },
+        config
+      ),
+    });
   }
 
   /**
@@ -526,17 +615,20 @@ describe('linking an upstream account to an existing one (#670, real containers)
     return rows;
   }
 
-  /** The credential the provider's subject `sub` signs in with, if any. */
-  function upstreamCredentialOf(sub = PERSON.sub) {
-    return app().repositories.userCredentials.findByRealmProviderSub(realmId, TYPE, sub);
+  /** The credential the subject `sub` of the provider `type` signs in with, if any. */
+  function upstreamCredentialOf(sub = PERSON.sub, type = TYPE) {
+    return app().repositories.userCredentials.findByRealmProviderSub(realmId, type, sub);
   }
 
-  /** A new account whose primary identity is the provider's identity `sub`. */
-  async function accountHolding(sub = PERSON.sub): Promise<{ id: string; credentialId: string }> {
+  /** A new account whose primary identity is the identity `sub` of the provider `type`. */
+  async function accountHolding(
+    sub = PERSON.sub,
+    type = TYPE
+  ): Promise<{ id: string; credentialId: string }> {
     const user = await app().repositories.users.create(
       { realmId },
       {
-        providerType: TYPE,
+        providerType: type,
         externalSub: sub,
         credentialData: { kind: 'upstream', iss: provider.issuer, verified: true },
       }
@@ -654,7 +746,8 @@ describe('linking an upstream account to an existing one (#670, real containers)
       expect(JSON.stringify(choice)).not.toContain(EMAIL);
       expect(await upstreamCredentials()).toBe(0);
 
-      // "I already have an account": the account's own sign-in, with no provider and no hint.
+      // "I already have an account": the account's own sign-in, with no hint, and no provider
+      // but the realm's others (#1080), of which this realm has none.
       const identifier = await chooseLink(jar, id);
       expect(identifier.alternatives ?? []).not.toContain(UPSTREAM);
       expect(JSON.stringify(identifier)).not.toContain(EMAIL);
@@ -1022,6 +1115,261 @@ describe('linking an upstream account to an existing one (#670, real containers)
     });
   });
 
+  describe('through a provider the account already holds (#1080)', () => {
+    /** The first step of the link's sign-in offers the second provider, never the one it links. */
+    function expectHomeOffered(step: StepView): void {
+      expect(step.alternatives ?? []).toContain(UPSTREAM);
+      expect(step.params?.[UPSTREAM]).toEqual({
+        providers: [{ provider: HOME_TYPE, name: HOME_NAME }],
+      });
+      expect(step.upstreamLink).toEqual({ provider: TYPE, name: PROVIDER_NAME });
+    }
+
+    it('links the provider at its first sign-in to an account made through another, by a sign-in with that one', async () => {
+      await addHomeProvider();
+      const owner = await accountHolding(HOME_PERSON.sub, HOME_TYPE);
+      const usersBefore = await users();
+      const jar = new CookieJar();
+      const id = await atChoice(jar);
+
+      // "I already have an account": the account holds no password, and the
+      // sign-in offers the provider it was made through beside the identifier.
+      expectHomeOffered(await chooseLink(jar, id));
+      const callback = await throughPickedProvider(jar, id, HOME_PERSON);
+
+      // The provider proved the account, which needs nothing more: linked.
+      expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
+      codeAt(callback.headers['location']);
+      const credential = await upstreamCredentialOf();
+      expect(credential?.userId).toBe(owner.id);
+      expect(credential?.credentialData).toEqual({
+        kind: 'upstream',
+        iss: provider.issuer,
+        verified: true,
+      });
+      expect(await users()).toBe(usersBefore);
+      const linked = await events(LINKED);
+      expect(linked).toHaveLength(1);
+      expect(linked[0]?.subject_id).toBe(owner.id);
+      expect(linked[0]?.data).toMatchObject({ provider: TYPE, credentialId: credential?.id });
+      expect(await events(LINK_FAILED)).toEqual([]);
+      const signedIn = (await events(SIGNED_IN)).at(-1);
+      expect(signedIn?.subject_id).toBe(owner.id);
+      expect(signedIn?.data).toMatchObject({ method: 'upstream' });
+      // The second provider's identity stays the account's own, as it was.
+      expect((await upstreamCredentialOf(HOME_PERSON.sub, HOME_TYPE))?.userId).toBe(owner.id);
+
+      // The linked provider now signs the owner in on its own.
+      const again = new CookieJar();
+      const returning = await throughProvider(again, { qauth_upstream: TYPE });
+      expect(returning.statusCode, withServerLog(returning.body)).toBe(303);
+      codeAt(returning.headers['location']);
+      expect((await events(SIGNED_IN)).map((event) => event.subject_id).at(-1)).toBe(owner.id);
+    });
+
+    it('offers it on a qauth_link too, after the provider being linked, and links through it', async () => {
+      await addHomeProvider();
+      const owner = await accountHolding(HOME_PERSON.sub, HOME_TYPE);
+      const jar = new CookieJar();
+      const session = await throughProvider(
+        jar,
+        { qauth_upstream: HOME_TYPE },
+        HOME_PERSON,
+        HOME_TYPE
+      );
+      codeAt(session.headers['location']);
+      expect(jar.get(SESSION_COOKIE)).toBeDefined();
+
+      const callback = await throughProvider(jar, { qauth_link: TYPE });
+
+      // The session is no sign-in for the link: the link's first step.
+      expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
+      const id = ceremonyIdOf(callback.headers['location']);
+      const step = await read(id);
+      expect(step.step).toBe(IDENTIFIER);
+      expectHomeOffered(step);
+      expect(await upstreamCredentials()).toBe(0);
+      const done = await throughPickedProvider(jar, id, HOME_PERSON);
+
+      expect(done.statusCode, withServerLog(done.body)).toBe(303);
+      codeAt(done.headers['location']);
+      expect((await upstreamCredentialOf())?.userId).toBe(owner.id);
+      expect((await events(LINKED)).map((event) => event.subject_id)).toEqual([owner.id]);
+    });
+
+    it("offers it on the account page's link, and goes back to the page once linked", async () => {
+      await addHomeProvider();
+      const owner = await accountHolding(HOME_PERSON.sub, HOME_TYPE);
+      const jar = new CookieJar();
+      const session = await throughProvider(
+        jar,
+        { qauth_upstream: HOME_TYPE },
+        HOME_PERSON,
+        HOME_TYPE
+      );
+      codeAt(session.headers['location']);
+
+      // "Link" on the hosted account page: the provider first.
+      const overview = await get(jar, '/ui/account');
+      expect(overview.statusCode, withServerLog(overview.body)).toBe(200);
+      const csrf = /name="csrf" value="([^"]+)"/.exec(overview.body)?.[1] ?? '';
+      const linking = await app().inject({
+        method: 'POST',
+        url: '/ui/account/linked-accounts/link',
+        headers: { ...FORM, ...SAME_ORIGIN, cookie: jar.header() ?? '' },
+        payload: new URLSearchParams({ csrf, provider: TYPE }).toString(),
+      });
+      jar.absorb(linking.headers['set-cookie']);
+      expect(linking.statusCode, withServerLog(linking.body)).toBe(303);
+      const start = new URL(String(linking.headers['location']), ORIGIN);
+      expect(start.pathname).toBe(`/ui/upstream/${TYPE}/start`);
+      const waiting = await get(jar, `${start.pathname}${start.search}`);
+      expect(waiting.statusCode, withServerLog(waiting.body)).toBe(200);
+      const link = /<a class="alt-action" href="([^"]+)"/.exec(waiting.body)?.[1];
+      if (link === undefined) throw new Error('no provider link on the waiting page');
+      const answered = provider.authorize(new URL(decodeHtmlEntities(link)), PERSON);
+      expect(answered['error']).toBeUndefined();
+      const callback = await callbackAt(jar, answered);
+      expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
+      const id = ceremonyIdOf(callback.headers['location']);
+      expectHomeOffered(await read(id));
+
+      const done = await throughPickedProvider(jar, id, HOME_PERSON);
+
+      expect(done.statusCode, withServerLog(done.body)).toBe(303);
+      expect(pathOf(done.headers['location'])).toBe('/ui/account?notice=linked');
+      expect((await upstreamCredentialOf())?.userId).toBe(owner.id);
+      expect((await events(LINKED)).map((event) => event.subject_id)).toEqual([owner.id]);
+    });
+
+    it('signs in to nothing and creates nothing for an identity of that provider no account holds', async () => {
+      await addHomeProvider();
+      const owner = await accountHolding(HOME_PERSON.sub, HOME_TYPE);
+      const usersBefore = await users();
+      const jar = new CookieJar();
+      const id = await atChoice(jar);
+      await chooseLink(jar, id);
+
+      const refused = await throughPickedProvider(jar, id, HOME_STRANGER);
+
+      // The error page with its way back; nobody signed in, nothing created.
+      expect(refused.statusCode, withServerLog(refused.body)).toBe(400);
+      expect(refused.body).toContain(ERROR_TITLE);
+      expect(refused.headers['location']).toBeUndefined();
+      expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+      expect(await users()).toBe(usersBefore);
+      expect(await upstreamCredentialOf(HOME_STRANGER.sub, HOME_TYPE)).toBeUndefined();
+      expect(await upstreamCredentials()).toBe(0);
+      expect(await codes()).toBe(0);
+      expect(await events(LINKED)).toEqual([]);
+      expect(await events(SIGNED_IN)).toEqual([]);
+      expect(await events('urn:qauth:event:user.registered:v1-rc.0')).toEqual([]);
+      const failed = (await events(SIGN_IN_FAILED)).filter(
+        (event) => event.data['reason'] === 'unknown_identity'
+      );
+      expect(failed).toHaveLength(1);
+      expect(failed[0]?.subject_id).toBeNull();
+      expect(failed[0]?.data).toMatchObject({ method: 'upstream' });
+
+      // The interaction still holds the identity to link, at the link's
+      // first step: the identity the account holds still links it.
+      const step = await read(id);
+      expect(step.step).toBe(IDENTIFIER);
+      expectHomeOffered(step);
+      const done = await throughPickedProvider(jar, id, HOME_PERSON);
+      expect(done.statusCode, withServerLog(done.body)).toBe(303);
+      codeAt(done.headers['location']);
+      expect((await upstreamCredentialOf())?.userId).toBe(owner.id);
+    });
+
+    it('never finds an account by an email address: not the password account, not the provider account', async () => {
+      await addHomeProvider();
+      // Both hold the address the stranger's provider vouches for.
+      const passwordOwner = await registerPasswordAccount(app(), EMAIL);
+      const homeOwner = await accountHolding(HOME_PERSON.sub, HOME_TYPE);
+      await app().repositories.userAttributes.upsertMany(homeOwner.id, [
+        { source: HOME_TYPE, attrKey: 'email', attrValue: EMAIL, verified: true, expiresAt: null },
+      ]);
+      const usersBefore = await users();
+      const jar = new CookieJar();
+      const id = await atChoice(jar);
+      await chooseLink(jar, id);
+
+      const refused = await throughPickedProvider(jar, id, HOME_STRANGER);
+
+      expect(refused.statusCode, withServerLog(refused.body)).toBe(400);
+      expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+      expect(await users()).toBe(usersBefore);
+      expect(await upstreamCredentials()).toBe(0);
+      expect(await upstreamCredentialOf(HOME_STRANGER.sub, HOME_TYPE)).toBeUndefined();
+      expect(
+        await count('SELECT count(*) AS count FROM user_credentials WHERE user_id = $1', [
+          passwordOwner,
+        ])
+      ).toBe(1);
+      expect(
+        await count('SELECT count(*) AS count FROM user_credentials WHERE user_id = $1', [
+          homeOwner.id,
+        ])
+      ).toBe(1);
+      expect(await events(SIGNED_IN)).toEqual([]);
+      expect(await events(LINKED)).toEqual([]);
+      expect(await codes()).toBe(0);
+    });
+
+    it('refuses the provider being linked as an answer of its own sign-in, starting nothing', async () => {
+      await addHomeProvider();
+      await accountHolding(HOME_PERSON.sub, HOME_TYPE);
+      const jar = new CookieJar();
+      const id = await atChoice(jar);
+      await chooseLink(jar, id);
+
+      // The step does not list the provider being linked: an answer naming it
+      // is refused, and nothing starts.
+      const picked = await answer(jar, id, UPSTREAM, { provider: TYPE });
+
+      expect(picked.statusCode, withServerLog(picked.body)).toBe(400);
+      expect(picked.headers['location']).toBeUndefined();
+      expect(await upstreamCredentials()).toBe(0);
+      expect(await events(LINKED)).toEqual([]);
+      const step = await read(id);
+      expectHomeOffered(step);
+    });
+
+    it('holds the sign-in through the provider to the MFA policy, as every sign-in through a provider: nothing links', async () => {
+      policy = POLICY_REQUIRED;
+      await addHomeProvider();
+      const owner = await accountHolding(HOME_PERSON.sub, HOME_TYPE);
+      const secret = await bindTotp(owner.id, true);
+      const jar = new CookieJar();
+      const id = await atChoice(jar);
+      await chooseLink(jar, id);
+
+      const callback = await throughPickedProvider(jar, id, HOME_PERSON);
+
+      // The provider's proof does not complete the sign-in: the account's
+      // second factor is asked, and nothing is linked yet.
+      expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
+      expect(ceremonyIdOf(callback.headers['location'])).toBe(id);
+      const second = await read(id);
+      expect(second.step).toBe(TOTP);
+      expect(second.upstreamLink).toEqual({ provider: TYPE, name: PROVIDER_NAME });
+      expect(await upstreamCredentials()).toBe(0);
+
+      // A provider adds no amr value, so its TOTP cannot make the `mfa` the
+      // policy requires: the sign-in cannot complete here, as no sign-in
+      // through a provider can (#653), and the link never happens.
+      const ended = await answer(jar, id, TOTP, { otp: totpCodeAt(secret, Date.now()) });
+      expect(ended.statusCode, withServerLog(ended.body)).toBe(410);
+      expect(ended.json()).toMatchObject({ code: 'interaction_expired' });
+      expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+      expect(await upstreamCredentials()).toBe(0);
+      expect(await upstreamCredentialOf()).toBeUndefined();
+      expect(await events(SIGNED_IN)).toEqual([]);
+      expect(await events(LINKED)).toEqual([]);
+    });
+  });
+
   describe('the account API (list and unlink)', () => {
     it('lists the linked account, refuses a stale sign-in to unlink it, and unlinks it on a fresh one, with a notice and an event', async () => {
       const ownerId = await registerPasswordAccount(app(), EMAIL);
@@ -1105,6 +1453,73 @@ describe('linking an upstream account to an existing one (#670, real containers)
 
       expect(refused.statusCode, refused.body).toBe(404);
       expect((await upstreamCredentialOf())?.userId).toBe(other.id);
+    });
+  });
+
+  // Last in the suite: this block replaces the server with one that has
+  // passkey sign-in on, sharing the same database and Redis, and the suite's
+  // afterAll closes it.
+  describe('with passkey sign-in on (WEBAUTHN_ENABLED, #1080)', () => {
+    beforeAll(async () => {
+      if (!dockerUp || booted === undefined) return;
+      await booted.close();
+      booted = await boot({ WEBAUTHN_ENABLED: 'true' });
+    }, 240_000);
+
+    it('asks an account that also holds a passkey for it after the other provider, and links only after it', async () => {
+      await addHomeProvider();
+      const owner = await accountHolding(HOME_PERSON.sub, HOME_TYPE);
+      const passkey = softPasskey(new URL(ORIGIN).hostname);
+      await app().repositories.userCredentials.create({
+        userId: owner.id,
+        realmId,
+        providerType: 'webauthn',
+        externalSub: passkey.credentialId,
+        credentialData: passkey.credentialData,
+      });
+      const jar = new CookieJar();
+      const id = await atChoice(jar);
+
+      // Passkey-first: the passkey, with the identifier and the other
+      // provider beside it, never the provider being linked.
+      const first = await answerToNext(jar, id, UPSTREAM_LINK, { decision: 'link' });
+      expect(first.step).toBe(WEBAUTHN_GET);
+      expect(first.alternatives ?? []).toContain(IDENTIFIER);
+      expect(first.params?.[UPSTREAM]).toEqual({
+        providers: [{ provider: HOME_TYPE, name: HOME_NAME }],
+      });
+      const callback = await throughPickedProvider(jar, id, HOME_PERSON);
+
+      // The provider ranks below the passkey the account holds (ADR-017
+      // Decision 4): the passkey is asked for, and nothing is linked yet.
+      expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
+      expect(ceremonyIdOf(callback.headers['location'])).toBe(id);
+      const second = await read(id);
+      expect(second.step).toBe(WEBAUTHN_GET);
+      expect(second.upstreamLink).toEqual({ provider: TYPE, name: PROVIDER_NAME });
+      expect(await upstreamCredentials()).toBe(0);
+      const request = second.params?.[WEBAUTHN_GET] as
+        | { readonly challenge?: unknown; readonly rpId?: unknown }
+        | undefined;
+      if (request === undefined) throw new Error('the webauthn_get step carries no options');
+      let done = await answer(jar, id, WEBAUTHN_GET, {
+        webauthn_response: passkey.assert({
+          challenge: String(request.challenge),
+          rpId: String(request.rpId),
+        }),
+      });
+      expect(done.statusCode, withServerLog(done.body)).toBe(303);
+      // A first sign-in that proves the passkey shows the account its recovery set.
+      if (!String(done.headers['location']).startsWith(REDIRECT_URI)) {
+        expect((await read(id)).step).toBe(RECOVERY_CODES);
+        expect(await upstreamCredentials()).toBe(0);
+        done = await answer(jar, id, RECOVERY_CODES, { acknowledged: 'true' });
+        expect(done.statusCode, withServerLog(done.body)).toBe(303);
+      }
+
+      codeAt(done.headers['location']);
+      expect((await upstreamCredentialOf())?.userId).toBe(owner.id);
+      expect((await events(LINKED)).map((event) => event.subject_id)).toEqual([owner.id]);
     });
   });
 });

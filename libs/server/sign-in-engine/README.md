@@ -47,6 +47,7 @@ const result = await engine.advance(transaction, answer, {
   flow, // 'register' for prompt=create (#640), 'reset' for a reset (#642); absent for a sign-in
   freshSignIn, // max_age or prompt=login: neither a reset (#642) nor a switch to a registration is offered
   switchFlows, // the person may switch between a sign-in and a registration (#1079): the Interaction API
+  withheldUpstream, // the upstream provider a sign-in to link an account links (#1080): not listed
 });
 ```
 

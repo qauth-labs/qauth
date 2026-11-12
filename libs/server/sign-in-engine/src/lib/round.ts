@@ -165,6 +165,15 @@ export interface RoundContext {
    */
   readonly upstreamRoute?: UpstreamProviderEntry;
   /**
+   * An upstream provider the `upstream` step must not list (#1080; ADR-020
+   * §3): the one whose identity a sign-in to join an upstream identity to an
+   * account (#670) links, by its type. The realm's other providers are
+   * listed as on any first step; with none left, the step is not offered. An
+   * answer that names this provider is refused as any provider the step did
+   * not list.
+   */
+  readonly withheldUpstream?: string;
+  /**
    * The flow the request asked for, frozen at round 0: `register` for
    * `prompt=create` (#640; ADR-017 Decision 8), `reset` for a transport that
    * starts a reset on its own (the FiPA endpoint's `password_reset` start,
