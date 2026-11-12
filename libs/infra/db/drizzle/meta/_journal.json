@@ -512,6 +512,13 @@
       "when": 1794492331674,
       "tag": "0072_new_factor_window",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1794510868955,
+      "tag": "0073_auth_method_plugin_assertion_client",
+      "breakpoints": true
     }
   ]
 }

@@ -38,6 +38,17 @@ import { EPOCH_MS_NOW, JSONB_EMPTY_OBJECT } from './sql-helpers';
  *   the clear. A cleared secret has no entry.
  * - `version` rises by one with every write: the admin API's entity tag, so
  *   two admins cannot overwrite each other's change unseen.
+ * - `assertion_client_id`, `assertion_issuer` and `assertion_algorithm` are
+ *   whose client the signer role signs the plugin's client assertions for
+ *   (#1073): the client id QAuth is registered under at the provider, the
+ *   `iss` of a signed client secret when that is not the client id (Sign in
+ *   with Apple's Team ID), and the algorithm of the key registered there. A
+ *   preset makes them from its config with its own code, which the signer's
+ *   process never loads, so the admin API derives them at each configure and
+ *   enable and stores them here, where the signer reads them (with the
+ *   switch and the type, the only columns it may read). All `NULL` for a
+ *   plugin that signs no client assertion, and on a row no configure or
+ *   enable wrote since they were added.
  *
  * Deleting the realm deletes its rows. A plugin removed from the deployment
  * keeps its rows, which nothing reads until it is installed again.
@@ -66,6 +77,15 @@ export const realmAuthMethodPlugins = pgTable(
     config: jsonb('config').$type<Record<string, unknown>>().notNull().default(JSONB_EMPTY_OBJECT),
     /** The ciphertext of each secret member that holds a value, by its path. */
     secrets: jsonb('secrets').$type<Record<string, string>>().notNull().default(JSONB_EMPTY_OBJECT),
+    /**
+     * The client id the signer signs the plugin's client assertions for, or
+     * `NULL` when it signs none (#1073).
+     */
+    assertionClientId: varchar('assertion_client_id', { length: 255 }),
+    /** The `iss` of its signed client secret when that is not the client id, or `NULL`. */
+    assertionIssuer: varchar('assertion_issuer', { length: 255 }),
+    /** The algorithm of the key registered with the provider, set with the client id. */
+    assertionAlgorithm: varchar('assertion_algorithm', { length: 16 }),
     /** Raised by one with every write. */
     version: integer('version').notNull().default(1),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
@@ -101,5 +121,22 @@ export const realmAuthMethodPlugins = pgTable(
       sql`jsonb_typeof(${t.secrets}) <> 'object' OR NOT jsonb_path_exists(${t.secrets}, 'strict $.* ? (@.type() != "string" || !(@ like_regex "^v1[.][^.]+[.][^.]+[.][^.]+$"))')`
     ),
     check('realm_auth_method_plugins_version_positive', sql`${t.version} > 0`),
+    // The assertion client (#1073): a client id and its algorithm together,
+    // an assertion issuer only beside them, no empty value, and an algorithm
+    // the signer signs client assertions with.
+    check(
+      'realm_auth_method_plugins_assertion_client_pair',
+      sql`(${t.assertionClientId} IS NULL) = (${t.assertionAlgorithm} IS NULL)`
+    ),
+    check(
+      'realm_auth_method_plugins_assertion_issuer_client',
+      sql`${t.assertionIssuer} IS NULL OR ${t.assertionClientId} IS NOT NULL`
+    ),
+    check('realm_auth_method_plugins_assertion_client_id_form', sql`${t.assertionClientId} <> ''`),
+    check('realm_auth_method_plugins_assertion_issuer_form', sql`${t.assertionIssuer} <> ''`),
+    check(
+      'realm_auth_method_plugins_assertion_algorithm_form',
+      sql`${t.assertionAlgorithm} IN ('RS256', 'ES256', 'EdDSA')`
+    ),
   ]
 );

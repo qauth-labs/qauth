@@ -64,6 +64,26 @@ export interface RealmUpstreamProvidersRepository {
    * @returns whether a row was deleted.
    */
   delete(realmId: string, type: string, tx?: DbClient): Promise<boolean>;
+  /**
+   * Whose client the signer signs the realm's provider's client assertions
+   * for (#1073): the client id and the algorithm its config names when it
+   * authenticates with `private_key_jwt`, read from the realm id, the type,
+   * the switch and the config alone, the only columns of the table the
+   * signer's database user may read. `undefined` when the realm has no such
+   * provider, it is off, or it authenticates with a client secret.
+   */
+  findAssertionClient(
+    realmId: string,
+    type: string,
+    tx?: DbClient
+  ): Promise<UpstreamProviderAssertionClient | undefined>;
+}
+
+/** The client a generic provider's client assertions are signed for (#1073). */
+export interface UpstreamProviderAssertionClient {
+  readonly clientId: string;
+  /** The algorithm of the key registered with the provider. */
+  readonly algorithm: string;
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -90,6 +110,31 @@ export function createRealmUpstreamProvidersRepository(
         .from(realmUpstreamProviders)
         .where(eq(realmUpstreamProviders.realmId, realmId))
         .orderBy(asc(realmUpstreamProviders.displayOrder), asc(realmUpstreamProviders.type));
+    },
+
+    async findAssertionClient(realmId, type, tx) {
+      if (!isRealmId(realmId) || typeof type !== 'string') return undefined;
+      const [row] = await (tx ?? defaultDb)
+        .select({ config: realmUpstreamProviders.config })
+        .from(realmUpstreamProviders)
+        .where(and(inRealm(realmId, type), eq(realmUpstreamProviders.enabled, true)))
+        .limit(1);
+      const config: unknown = row?.config;
+      if (typeof config !== 'object' || config === null) return undefined;
+      const { clientId, clientAuthentication } = config as Record<string, unknown>;
+      if (typeof clientAuthentication !== 'object' || clientAuthentication === null) {
+        return undefined;
+      }
+      const { method, signingAlgorithm } = clientAuthentication as Record<string, unknown>;
+      if (
+        method !== 'private_key_jwt' ||
+        typeof clientId !== 'string' ||
+        clientId === '' ||
+        typeof signingAlgorithm !== 'string'
+      ) {
+        return undefined;
+      }
+      return { clientId, algorithm: signingAlgorithm };
     },
 
     async find(realmId, type, tx) {

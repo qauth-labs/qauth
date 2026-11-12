@@ -254,8 +254,16 @@ const CALLS: readonly RealmScopedCall[] = [
     (db) => createRealmUpstreamProvidersRepository(db).listByRealm(REALM_ID),
   ],
   [
+    'realmAuthMethodPlugins.listAssertionClients',
+    (db) => createRealmAuthMethodPluginsRepository(db).listAssertionClients(REALM_ID, 'corp'),
+  ],
+  [
     'realmUpstreamProviders.find',
     (db) => createRealmUpstreamProvidersRepository(db).find(REALM_ID, 'oidc_google'),
+  ],
+  [
+    'realmUpstreamProviders.findAssertionClient',
+    (db) => createRealmUpstreamProvidersRepository(db).findAssertionClient(REALM_ID, 'oidc_google'),
   ],
   [
     'realmUpstreamProviders.update',

@@ -152,6 +152,27 @@ describe('the grants map (#498)', () => {
     expect(FUNCTION_GRANTS['"events_oldest_unread_time"()']).toContain('delivery');
   });
 
+  it("lets signer read whose client an upstream provider's assertions speak for, and no plugin config or secret (#1073)", () => {
+    expect(privilegesOf('signer', 'realm_auth_method_plugins')).toEqual([]);
+    expect(privilegesOf('signer', 'realm_upstream_providers')).toEqual([]);
+    expect(COLUMN_GRANTS['realm_auth_method_plugins']?.signer).toEqual([
+      'realm_id',
+      'plugin_type',
+      'enabled',
+      'assertion_client_id',
+      'assertion_issuer',
+      'assertion_algorithm',
+    ]);
+    expect(COLUMN_GRANTS['realm_auth_method_plugins']?.signer).not.toContain('config');
+    expect(COLUMN_GRANTS['realm_auth_method_plugins']?.signer).not.toContain('secrets');
+    expect(COLUMN_GRANTS['realm_upstream_providers']?.signer).toEqual([
+      'realm_id',
+      'type',
+      'enabled',
+      'config',
+    ]);
+  });
+
   it("gives admin the admin audit log's writer grants", () => {
     for (const [table, privileges] of Object.entries(ADMIN_AUDIT_LOG_WRITER_GRANTS)) {
       expect(privilegesOf('admin', table), table).toEqual(privileges);

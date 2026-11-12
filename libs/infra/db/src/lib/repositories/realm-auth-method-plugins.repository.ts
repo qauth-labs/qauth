@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, sql } from 'drizzle-orm';
 
 import type { DbClient } from '../../types';
 import { realmAuthMethodPlugins } from '../schema/auth-method-plugins';
@@ -45,10 +45,33 @@ export interface RealmAuthMethodPlugin {
   readonly config: Record<string, unknown>;
   /** The ciphertext of each secret member that holds a value, by path. */
   readonly secrets: Record<string, string>;
+  /**
+   * The client id the signer signs the plugin's client assertions for, or
+   * `null` when it signs none (#1073). Set with {@link assertionAlgorithm}.
+   */
+  readonly assertionClientId: string | null;
+  /** The `iss` of its signed client secret when that is not the client id, or `null`. */
+  readonly assertionIssuer: string | null;
+  /** The algorithm of the key registered with the provider, or `null`. */
+  readonly assertionAlgorithm: string | null;
   /** Raised by one with every write. */
   readonly version: number;
   readonly createdAt: number;
   readonly updatedAt: number;
+}
+
+/**
+ * Whose client the signer signs a plugin's client assertions for (#1073):
+ * what the admin API derives from the plugin's config at a configure or an
+ * enable, and the signer reads.
+ */
+export interface RealmAuthMethodPluginAssertionClient {
+  /** The client id at the provider: the assertion's `sub`, and its `iss` unless {@link assertionIssuer} is set. */
+  readonly clientId: string;
+  /** The `iss` of a signed client secret that is not the client id, such as a Team ID. */
+  readonly assertionIssuer?: string | undefined;
+  /** The algorithm of the key registered with the provider: `RS256`, `ES256` or `EdDSA`. */
+  readonly algorithm: string;
 }
 
 /** What a write sets: the whole state. */
@@ -62,6 +85,13 @@ export interface RealmAuthMethodPluginState {
    * (`null` for a row written before they were recorded).
    */
   readonly binding: RealmAuthMethodPluginBinding | null;
+  /**
+   * Whose client the signer signs the plugin's client assertions for, or
+   * `null` when it signs none (#1073). Left out, a new row has none and an
+   * update keeps the row's: the admin API names it at every configure and
+   * enable.
+   */
+  readonly assertionClient?: RealmAuthMethodPluginAssertionClient | null;
 }
 
 /**
@@ -94,12 +124,29 @@ export interface RealmAuthMethodPluginsRepository {
     expectedVersion: RealmAuthMethodPluginExpectedVersion,
     tx?: DbClient
   ): Promise<RealmAuthMethodPlugin | undefined>;
+  /**
+   * The assertion clients of the realm's enabled plugin states of the
+   * AuthMethod `type` (#1073): what the signer signs a plugin's client
+   * assertions as. It reads the realm id, the type, the switch and the three
+   * assertion columns alone, the only columns of the table the signer's
+   * database user may read. `[]` when none is enabled or none signs; more
+   * than one when states of two plugin ids name the type, which the caller
+   * must refuse rather than pick from.
+   */
+  listAssertionClients(
+    realmId: string,
+    type: string,
+    tx?: DbClient
+  ): Promise<RealmAuthMethodPluginAssertionClient[]>;
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The AuthMethod id rule (`AUTH_METHOD_ID_PATTERN`), which the table's CHECK holds too. */
 const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9_-]{0,62}$/;
+
+/** The AuthMethod type rule (`AUTH_METHOD_TYPE_PATTERN`), which the table's CHECK holds too. */
+const PLUGIN_TYPE_PATTERN = /^[a-z][a-z0-9_]{0,62}$/;
 
 /** Refuse a key Postgres would refuse with an error (22P02) before it reaches it. */
 const isKey = (realmId: string, pluginId: string) =>
@@ -147,12 +194,21 @@ export function createRealmAuthMethodPluginsRepository(
     async save(realmId, pluginId, state, expectedVersion, tx) {
       if (!isKey(realmId, pluginId)) return undefined;
       const invoker = tx ?? defaultDb;
+      const assertion =
+        state.assertionClient === undefined
+          ? {}
+          : {
+              assertionClientId: state.assertionClient?.clientId ?? null,
+              assertionIssuer: state.assertionClient?.assertionIssuer ?? null,
+              assertionAlgorithm: state.assertionClient?.algorithm ?? null,
+            };
       const values = {
         enabled: state.enabled === true,
         config: plain({ ...state.config }),
         secrets: plain({ ...state.secrets }),
         pluginPackage: state.binding?.package ?? null,
         pluginType: state.binding?.type ?? null,
+        ...assertion,
       };
       if (expectedVersion === null) {
         const [created] = await invoker
@@ -179,6 +235,37 @@ export function createRealmAuthMethodPluginsRepository(
         )
         .returning();
       return updated;
+    },
+
+    async listAssertionClients(realmId, type, tx) {
+      if (typeof realmId !== 'string' || !UUID_PATTERN.test(realmId)) return [];
+      if (typeof type !== 'string' || !PLUGIN_TYPE_PATTERN.test(type)) return [];
+      const rows = await (tx ?? defaultDb)
+        .select({
+          clientId: realmAuthMethodPlugins.assertionClientId,
+          assertionIssuer: realmAuthMethodPlugins.assertionIssuer,
+          algorithm: realmAuthMethodPlugins.assertionAlgorithm,
+        })
+        .from(realmAuthMethodPlugins)
+        .where(
+          and(
+            eq(realmAuthMethodPlugins.realmId, realmId),
+            eq(realmAuthMethodPlugins.pluginType, type),
+            eq(realmAuthMethodPlugins.enabled, true),
+            isNotNull(realmAuthMethodPlugins.assertionClientId)
+          )
+        );
+      return rows.flatMap((row) =>
+        row.clientId === null || row.algorithm === null
+          ? []
+          : [
+              {
+                clientId: row.clientId,
+                ...(row.assertionIssuer === null ? {} : { assertionIssuer: row.assertionIssuer }),
+                algorithm: row.algorithm,
+              },
+            ]
+      );
     },
   };
 }

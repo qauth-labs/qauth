@@ -265,6 +265,86 @@ describe('realm AuthMethod plugin state (real Postgres, #600)', () => {
     ).rejects.toMatchObject({ code: '23514', constraint });
   });
 
+  it('stores the assertion client a write names, keeps it when a write names none, and lists only enabled states of the type (#1073)', async () => {
+    const realmId = await realm('alpha');
+    const other = await realm('beta');
+    const client = {
+      clientId: 'com.example.services',
+      assertionIssuer: 'TEAM123456',
+      algorithm: 'ES256',
+    };
+    const created = await repo.save(
+      realmId,
+      'corp',
+      { enabled: false, config: {}, secrets: {}, binding: BINDING, assertionClient: client },
+      null
+    );
+    expect(created).toMatchObject({
+      assertionClientId: 'com.example.services',
+      assertionIssuer: 'TEAM123456',
+      assertionAlgorithm: 'ES256',
+    });
+    // Off: the signer signs nothing for it.
+    expect(await repo.listAssertionClients(realmId, BINDING.type)).toEqual([]);
+
+    const enabled = await repo.save(
+      realmId,
+      'corp',
+      { enabled: true, config: {}, secrets: {}, binding: BINDING },
+      1
+    );
+    // A write that names no assertion client keeps the row's.
+    expect(enabled?.assertionClientId).toBe('com.example.services');
+    expect(await repo.listAssertionClients(realmId, BINDING.type)).toEqual([client]);
+    expect(await repo.listAssertionClients(realmId, 'another_type')).toEqual([]);
+    expect(await repo.listAssertionClients(other, BINDING.type)).toEqual([]);
+
+    // Without an assertion issuer, and cleared.
+    await repo.save(
+      realmId,
+      'corp',
+      {
+        enabled: true,
+        config: {},
+        secrets: {},
+        binding: BINDING,
+        assertionClient: { clientId: 'client', algorithm: 'RS256' },
+      },
+      2
+    );
+    expect(await repo.listAssertionClients(realmId, BINDING.type)).toEqual([
+      { clientId: 'client', algorithm: 'RS256' },
+    ]);
+    await repo.save(
+      realmId,
+      'corp',
+      { enabled: true, config: {}, secrets: {}, binding: BINDING, assertionClient: null },
+      3
+    );
+    expect(await repo.listAssertionClients(realmId, BINDING.type)).toEqual([]);
+  });
+
+  it('refuses an assertion client of the wrong form (#1073)', async () => {
+    const realmId = await realm('alpha');
+    await repo.save(
+      realmId,
+      'corp',
+      { enabled: true, config: {}, secrets: {}, binding: BINDING },
+      null
+    );
+    for (const sql of [
+      "UPDATE realm_auth_method_plugins SET assertion_client_id = 'client' WHERE realm_id = $1",
+      "UPDATE realm_auth_method_plugins SET assertion_issuer = 'TEAM' WHERE realm_id = $1",
+      "UPDATE realm_auth_method_plugins SET assertion_client_id = '', assertion_algorithm = 'ES256' WHERE realm_id = $1",
+      "UPDATE realm_auth_method_plugins SET assertion_client_id = 'c', assertion_algorithm = 'ES256', assertion_issuer = '' WHERE realm_id = $1",
+      "UPDATE realm_auth_method_plugins SET assertion_client_id = 'c', assertion_algorithm = 'HS256' WHERE realm_id = $1",
+    ]) {
+      await expect(database().pool.query(sql, [realmId]), sql).rejects.toMatchObject({
+        code: '23514',
+      });
+    }
+  });
+
   it('deletes the rows of a deleted realm', async () => {
     const realmId = await realm('alpha');
     await repo.save(
