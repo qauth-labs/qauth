@@ -327,6 +327,7 @@ ships, and may add cases but never drop one or lower its effects.
 - switches brute-force protection off: at least `credential-path`.
 - shortens the lockout: at least `credential-path`.
 - lets anyone sign up: at least `credential-path`.
+- lengthens the new-factor window: at least `credential-path`.
 - raises the environment ceiling: at least `posture-loosening`.
 - lengthens the access-token lifetime: at least `posture-loosening`.
 - lengthens the refresh-token lifetime: at least `posture-loosening`.

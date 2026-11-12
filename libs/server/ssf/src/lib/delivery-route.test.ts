@@ -270,6 +270,8 @@ describe('the SETs of mapped event types (#540)', () => {
   const userEnabled = typeOf('user.enabled');
   const userPasswordReset = typeOf('user.password_reset');
   const userPasswordChanged = typeOf('user.password_changed');
+  const userCredentialAdded = typeOf('user.credential_added');
+  const userCredentialRemoved = typeOf('user.credential_removed');
   const consentRevoked = typeOf('consent.revoked');
   const tokenFamilyRevoked = typeOf('token.family_revoked');
   const tokenRevoked = typeOf('token.revoked');
@@ -317,6 +319,23 @@ describe('the SETs of mapped event types (#540)', () => {
     [userPasswordReset.type]: event(userPasswordReset.type, { client: { id: 'notes-app' } }),
     // A person's own password change on the hosted account page (#844): no client.
     [userPasswordChanged.type]: event(userPasswordChanged.type),
+    // A passkey or authenticator app bound or removed (#1064), with the kind
+    // of authenticator the CAEP credential_type names.
+    [userCredentialAdded.type]: event(userCredentialAdded.type, {
+      data: {
+        type: 'passkey',
+        credentialId: '0192a000-0000-7000-8000-0000000000d1',
+        authenticator: 'roaming',
+      },
+    }),
+    [userCredentialRemoved.type]: event(userCredentialRemoved.type, {
+      data: {
+        type: 'totp',
+        credentialId: '0192a000-0000-7000-8000-0000000000d2',
+        authenticator: 'app',
+        whileNew: true,
+      },
+    }),
     [consentRevoked.type]: event(consentRevoked.type, {
       client: { id: 'receiver' },
       data: { consentId: '0192a000-0000-7000-8000-0000000000c1', revokedRefreshCount: 2 },
@@ -487,6 +506,39 @@ describe('the SETs of mapped event types (#540)', () => {
         },
       },
     });
+  });
+
+  it('sends a bound passkey or authenticator app as CAEP credential-change create, and a removed one as delete (#1064)', async () => {
+    const added = await signed(SAMPLES[userCredentialAdded.type]);
+    expect(added.outcome).toEqual({ ok: true, statusCode: 202 });
+    expect(added.hasSubject).toHaveBeenCalledWith(STREAM, { type: 'user', id: USER });
+    expect(added.claims).toEqual({
+      jti: EVENT_ID,
+      iat: SECONDS,
+      aud: 'receiver',
+      sub_id: { format: 'iss_sub', iss: ISSUER, sub: USER },
+      events: {
+        [CAEP_CREDENTIAL_CHANGE]: {
+          credential_type: 'fido2-roaming',
+          change_type: 'create',
+          event_timestamp: SECONDS,
+          initiating_entity: 'user',
+        },
+      },
+    });
+    const removed = await signed(SAMPLES[userCredentialRemoved.type]);
+    expect(removed.claims).toMatchObject({
+      events: { [CAEP_CREDENTIAL_CHANGE]: { credential_type: 'app', change_type: 'delete' } },
+    });
+  });
+
+  it('sends no credential-change for a binding recorded without its authenticator, as an older release recorded it', async () => {
+    const { outcome } = await signed(
+      event(userCredentialAdded.type, {
+        data: { type: 'passkey', credentialId: '0192a000-0000-7000-8000-0000000000d3' },
+      })
+    );
+    expect(outcome).toEqual({ ok: false, errorClass: 'event_not_offered', retry: false });
   });
 
   it('sends an API key change as CAEP credential-change about the key’s client, by its administrator', async () => {
