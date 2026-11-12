@@ -169,10 +169,33 @@ const REALM_POLICIES = (() => {
   };
 })();
 
-/** A client, as the client cases meet it. */
+/**
+ * A client, as the client cases meet it: the state `clients.update` reads
+ * (#632), in the admin API's client representation
+ * (`admin/clients/representation.ts`), a first-party candidate no developer
+ * owns, so every case can be measured against it.
+ */
 const CLIENT_STATE = {
+  id: CLIENT.clientId,
+  clientId: 'app',
+  name: 'App',
+  description: null,
+  developerId: null,
+  provisionedByOperator: true,
+  dynamicallyRegistered: false,
+  metadataDocument: null,
+  enabled: true,
+  suspended: false,
+  suspendedAt: null,
   redirectUris: ['https://app.example/callback'],
   postLogoutRedirectUris: ['https://app.example/signed-out'],
+  backchannelLogoutUri: null,
+  backchannelLogoutUriSource: null,
+  backchannelLogoutSessionRequired: false,
+  scopes: ['openid', 'notes:read'],
+  clientCredentialsScopes: null,
+  grantTypes: ['authorization_code', 'refresh_token'],
+  responseTypes: ['code'],
   tokenEndpointAuthMethod: 'private_key_jwt',
   jwks: {
     keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU' }],
@@ -180,9 +203,18 @@ const CLIENT_STATE = {
   jwksUri: null,
   requirePkce: true,
   dpopBoundAccessTokens: true,
-  firstParty: false,
   environment: 'production',
+  isAgent: false,
+  maxAgentMode: null,
   verifiedDomain: null,
+  firstPartyProfile: null,
+  firstPartyPolicy: null,
+  firstPartyReason: null,
+  accessTokenLifespanSeconds: 300,
+  refreshTokenLifespanSeconds: 86400,
+  createdAt: '2026-11-01T00:00:00.000Z',
+  updatedAt: '2026-11-01T00:00:00.000Z',
+  lastUsedAt: null,
 };
 
 const policyCase = (
@@ -432,7 +464,7 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'clients.update',
     ['token-content', 'posture-loosening'],
     `${ADR_019}, #518, #632`,
-    'Change a client: its redirect URIs, post-logout redirect URIs, back-channel logout URI, authentication method, first-party trust, verified domain, PKCE or DPoP, client_credentials scopes, environment or agent-type fields.',
+    "Change a client: its redirect URIs, post-logout redirect URIs, back-channel logout URI, authentication method and keys, grant types, first-party trust, verified domain, PKCE or DPoP, client_credentials scopes, qauth: scopes, environment, token lifetimes or agent-type fields; lengthening a client's token lifetime or switching PKCE or DPoP off is posture-loosening.",
     [
       clientCase(
         'adds a redirect URI',
@@ -477,7 +509,23 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
       clientCase('switches DPoP binding off', { dpopBoundAccessTokens: false }, [
         'posture-loosening',
       ]),
-      clientCase('makes the client first-party', { firstParty: true }, ['token-content']),
+      // ADR-017 Decision 2 (#631): the first guess's `firstParty: true`, as
+      // the representation #632 ships names first-party trust.
+      clientCase(
+        'makes the client first-party',
+        { firstPartyProfile: 'web_redirect', firstPartyReason: 'The operator runs the app.' },
+        ['token-content']
+      ),
+      {
+        name: 'removes first-party trust',
+        request: patch(CLIENT, { firstPartyProfile: null }),
+        state: {
+          ...CLIENT_STATE,
+          firstPartyProfile: 'web_redirect',
+          firstPartyReason: 'The operator runs the app.',
+        },
+        effects: ['token-content'],
+      },
       // ADR-019 Decision 6 (#593): the domain every screen shows first for the
       // client, above the name it declares.
       clientCase('sets the verified domain', { verifiedDomain: 'app.example' }, ['token-content']),
@@ -501,6 +549,27 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
         effects: ['token-content'],
       },
       clientCase('loosens the environment', { environment: 'development' }, ['posture-loosening']),
+      // Cases #632 adds, in the representation it ships.
+      clientCase(
+        'adds a grant type',
+        { grantTypes: ['authorization_code', 'refresh_token', 'client_credentials'] },
+        ['token-content']
+      ),
+      clientCase('makes the client an agent', { isAgent: true }, ['token-content']),
+      clientCase('gives an agent a mode', { maxAgentMode: 'exec' }, ['token-content']),
+      clientCase(
+        'adds a scope of the qauth: namespace',
+        { scopes: ['openid', 'notes:read', 'qauth:admin:read'] },
+        ['token-content']
+      ),
+      clientCase('lengthens the access-token lifetime', { accessTokenLifespanSeconds: 600 }, [
+        'posture-loosening',
+      ]),
+      clientCase(
+        "gives the refresh-token lifetime back to the realm's",
+        { refreshTokenLifespanSeconds: null },
+        ['posture-loosening']
+      ),
     ]
   ),
   reserve(

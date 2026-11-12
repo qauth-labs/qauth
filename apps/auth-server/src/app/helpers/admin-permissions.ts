@@ -196,8 +196,8 @@ export function createPermissionRegistry(
  * reading a realm and patching its policies (#517), exporting it (#530),
  * planning a realm-file import (#518), the AuthMethod plugin operations
  * (#600), the approval requests of security operations (#512), sealing a
- * secret for a security operation (#984), and an operator's verification of
- * an account (#1052).
+ * secret for a security operation (#984), an operator's verification of
+ * an account (#1052), and the client operations (#632).
  */
 export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
   definePermission({
@@ -268,6 +268,27 @@ export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
     resource: 'users',
     description:
       'Verify an account as the operator, so it counts as verified for sign-in and for owning an agent and an unclaimed account is claimed (#1052).',
+  }),
+  definePermission({
+    id: 'clients.read',
+    class: 'read',
+    resource: 'clients',
+    description:
+      "List and read every client of a realm, whoever owns it, and preview a change of one; never a client's secret (#632).",
+  }),
+  definePermission({
+    id: 'clients.write',
+    class: 'write',
+    resource: 'clients',
+    description:
+      "Change a client's settings whose change is not a security operation, such as its name or a shorter token lifetime, and suspend a client (#632).",
+  }),
+  definePermission({
+    id: 'clients.security',
+    class: 'security',
+    resource: 'clients',
+    description:
+      "Register and delete a client, lift a suspension, and change a client's settings whose change is a security operation, such as its redirect URIs, its authentication method or first-party trust (#632).",
   }),
   definePermission({
     id: 'approvals.read',

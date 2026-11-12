@@ -41,6 +41,7 @@ import {
   LastCredentialError,
 } from '../helpers/account-operation-errors';
 import { AccountVerificationConflictError } from '../helpers/account-verification-errors';
+import { ClientManagedByDocumentError } from '../helpers/admin-client-errors';
 import {
   InvalidCursorError,
   SandboxCeilingError,
@@ -247,6 +248,13 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // operator already verified (#1052).
   {
     errorClass: AccountVerificationConflictError,
+    code: 'conflict',
+    oauthError: 'invalid_request',
+  },
+  // An admin change of a client whose settings come from its Client ID
+  // Metadata Document (ADR-012 Decision 3, #632): the answer names it.
+  {
+    errorClass: ClientManagedByDocumentError,
     code: 'conflict',
     oauthError: 'invalid_request',
   },

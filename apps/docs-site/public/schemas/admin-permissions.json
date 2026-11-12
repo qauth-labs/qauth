@@ -15,6 +15,9 @@
     "plugins.security",
     "secrets.seal",
     "users.security",
+    "clients.read",
+    "clients.write",
+    "clients.security",
     "approvals.read",
     "approvals.approve"
   ],
@@ -152,6 +155,48 @@
       }
     },
     "users.security": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "security"
+          ]
+        }
+      }
+    },
+    "clients.read": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "read"
+          ]
+        }
+      }
+    },
+    "clients.write": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "write"
+          ]
+        }
+      }
+    },
+    "clients.security": {
       "type": "object",
       "required": [
         "class"
