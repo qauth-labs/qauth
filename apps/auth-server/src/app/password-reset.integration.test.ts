@@ -1,5 +1,8 @@
 import type { EngineMail } from '@qauth-labs/fastify-plugin-email';
-import { SIGN_IN_MIN_RESPONSE_TIME_MS } from '@qauth-labs/fastify-plugin-sign-in-engine';
+import {
+  ROUND_LIMITS_KEY_PREFIX,
+  SIGN_IN_MIN_RESPONSE_TIME_MS,
+} from '@qauth-labs/fastify-plugin-sign-in-engine';
 import {
   CEREMONY_PAGE_PREFIX,
   INTERACTION_API_PREFIX,
@@ -465,7 +468,13 @@ describe('the password reset and the session epoch (#642, real containers)', () 
     expect(known.next.notice).toBeUndefined();
     expect(known.next).toEqual({ ...known.first, notice: undefined });
 
-    // The same for an address no account holds (ADR-017 Decision 4).
+    // The same for an address no account holds (ADR-017 Decision 4). The
+    // five wrong codes above count against this client's IP too, and five
+    // more would ask it for a captcha before the first step: the second
+    // reset comes as from another IP, so that only the identifier differs.
+    const ipKeys = await server().redis.keys(`${ROUND_LIMITS_KEY_PREFIX}:*:ip:*`);
+    expect(ipKeys.length).toBeGreaterThan(0);
+    await server().redis.del(...ipKeys);
     const unknown = await burn(UNKNOWN_EMAIL, false);
     expect(unknown).toEqual(known);
     expect(mails.get(UNKNOWN_EMAIL) ?? []).toEqual([]);
