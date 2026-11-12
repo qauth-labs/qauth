@@ -436,10 +436,12 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
         readonly userId: string;
         readonly credentialData: Readonly<Record<string, unknown>>;
         readonly at: number;
+        readonly newUntil?: number | null;
       },
       tx?: DbClient
     ): Promise<UserCredential | undefined> {
       const invoker = tx ?? defaultDb;
+      const newUntil = input.newUntil ?? null;
       const [credential] = await invoker
         .insert(userCredentials)
         .values({
@@ -450,6 +452,7 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
           credentialData: { ...input.credentialData },
           createdAt: input.at,
           updatedAt: input.at,
+          newUntil,
         })
         .onConflictDoUpdate({
           target: [
@@ -461,6 +464,7 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
             credentialData: sql`excluded.credential_data`,
             disabledAt: null,
             updatedAt: input.at,
+            newUntil,
           },
           setWhere: eq(userCredentials.userId, input.userId),
         })

@@ -429,6 +429,45 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
     },
 
     /**
+     * Revoke the refresh families the given sign-ins of a user opened
+     * (#1064): every active token of the user whose family carries one of
+     * `authTimes` as its `auth_time`. A family carries its sign-in's
+     * `auth_time`, copied from the browser session through the code and kept
+     * by every rotation (#662), so it still names its session once the code
+     * row is purged. A family from before #662, or one a previous release
+     * rotated, carries none and is not found. Already-revoked rows keep their
+     * original reason.
+     *
+     * @returns Count of rows revoked by this call
+     */
+    async revokeFamiliesOfSignIns(
+      userId: string,
+      authTimes: readonly number[],
+      reason: string,
+      tx?: DbClient
+    ): Promise<number> {
+      if (authTimes.length === 0) return 0;
+      const now = Date.now();
+      const run = async (invoker: DbClient): Promise<number> => {
+        await lockUserTokens(invoker, 'revoke', userId);
+        const revoked = await invoker
+          .update(refreshTokens)
+          .set({ revoked: true, revokedAt: now, revokedReason: reason })
+          .where(
+            and(
+              eq(refreshTokens.userId, userId),
+              eq(refreshTokens.revoked, false),
+              gt(refreshTokens.expiresAt, now),
+              inArray(refreshTokens.authTime, [...authTimes])
+            )
+          )
+          .returning({ id: refreshTokens.id });
+        return revoked.length;
+      };
+      return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
+    },
+
+    /**
      * Revoke every active refresh token a user holds for one client
      * (consent revocation). Already-revoked rows keep their original reason.
      *

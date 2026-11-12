@@ -351,6 +351,11 @@ export interface UserCredentialsRepository {
       readonly userId: string;
       readonly credentialData: Readonly<Record<string, unknown>>;
       readonly at: number;
+      /**
+       * When the TOTP stops being new (#1064), or `null` for one that never
+       * is: a rewrite replaces the old secret's window with the new one's.
+       */
+      readonly newUntil?: number | null;
     },
     tx?: DbClient
   ): Promise<UserCredential | undefined>;
@@ -815,6 +820,19 @@ export interface RefreshTokensRepository {
    */
   revokeAllForUser(userId: string, reason?: string, tx?: DbClient): Promise<void>;
   /**
+   * Revoke the refresh families the given sign-ins of a user opened
+   * (#1064): every active token of the user whose `auth_time` is one of
+   * `authTimes`, the `auth_time` of each sign-in's browser session.
+   *
+   * @returns Count of rows revoked by this call.
+   */
+  revokeFamiliesOfSignIns(
+    userId: string,
+    authTimes: readonly number[],
+    reason: string,
+    tx?: DbClient
+  ): Promise<number>;
+  /**
    * Revoke every active refresh token one user holds for one client.
    *
    * Consent revocation calls this: withdrawing a grant must also end the
@@ -992,6 +1010,15 @@ export interface AuthorizationCodesRepository {
    * (consent revocation). Returns count of invalidated codes.
    */
   invalidateForUserAndClient(userId: string, oauthClientId: string, tx?: DbClient): Promise<number>;
+  /**
+   * Invalidate every unredeemed code of a user that one of `sessionIds`
+   * minted (#1064). Returns count of invalidated codes.
+   */
+  invalidateForSessions(
+    userId: string,
+    sessionIds: readonly string[],
+    tx?: DbClient
+  ): Promise<number>;
   /**
    * Delete expired codes
    * Returns count of deleted codes
