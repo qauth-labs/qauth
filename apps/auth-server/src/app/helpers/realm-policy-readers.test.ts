@@ -223,4 +223,3 @@ describe('withClientTokenLifetimes (#632)', () => {
     ).toEqual({ ...realm, developmentAccessTokenLifespanSeconds: 1200 });
   });
 });
-

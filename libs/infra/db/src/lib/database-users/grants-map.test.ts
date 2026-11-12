@@ -168,7 +168,12 @@ describe('the grants map (#498)', () => {
   });
 
   it("lets admin manage any client of a realm and revoke a client's tokens, never issue one (#632)", () => {
-    expect(privilegesOf('admin', 'oauth_clients')).toEqual(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
+    expect(privilegesOf('admin', 'oauth_clients')).toEqual([
+      'SELECT',
+      'INSERT',
+      'UPDATE',
+      'DELETE',
+    ]);
     expect(privilegesOf('admin', 'refresh_tokens')).toEqual(['SELECT', 'UPDATE']);
   });
 
