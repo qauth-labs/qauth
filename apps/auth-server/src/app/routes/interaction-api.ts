@@ -12,7 +12,7 @@ import {
   WEBAUTHN_CREATE_STEP_URN,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { BadRequestError } from '@qauth-labs/shared-errors';
-import { ceremonyPagePath } from '@qauth-labs/shared-interaction-contract';
+import { ceremonyPagePath, type RestartNotice } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
@@ -40,6 +40,7 @@ import {
 import {
   answerInteraction,
   cancelInteraction,
+  continueAtStep,
   type InteractionDecision,
   type InteractionState,
   type InteractionView,
@@ -50,6 +51,7 @@ import {
 import { createInteractionEngines, decisionOf } from '../helpers/interaction-engines';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
+import { restartNoticeOf } from '../helpers/interaction-outcomes';
 import type { InteractionStep } from '../helpers/interaction-record';
 import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
 import { ladderEndUserIp } from '../helpers/password-attempts';
@@ -260,6 +262,9 @@ function stepRead(view: InteractionView) {
     // Where a form answer that finishes sends the browser: the page allows it
     // in `form-action` (helpers/form-action.ts).
     ...(view.formAction === undefined ? {} : { formAction: view.formAction }),
+    // Why the sign-in is back at its first step (#1081), on the one read
+    // that shows it.
+    ...(view.notice === undefined ? {} : { notice: view.notice }),
     brand: DEFAULT_BRAND,
     expiresAt: new Date(view.deadline).toISOString(),
   };
@@ -408,7 +413,7 @@ async function respondStale(
   encoding: AnswerEncoding
 ) {
   if (encoding === 'form') return reply.redirect(ceremonyPageUrl(request), 303);
-  const view = await readInteractionStep(request, interactionIdOf(request));
+  const view = await readInteractionStep(request, interactionIdOf(request), { takeNotice: true });
   return respond(request, reply, encoding, { view });
 }
 
@@ -520,6 +525,12 @@ async function decideAnswer(
      * (#639), for `user.signed_in`'s method.
      */
     readonly signedIn: (method: SignedInMethod) => void;
+    /**
+     * The engine ended the transaction and the sign-in went back to its first
+     * step (#1081): why, for the result of a JSON answer to show. A form
+     * post's next state keeps it for the next step read instead.
+     */
+    readonly restarted: (notice: RestartNotice) => void;
   },
   catalog: UpstreamProviderCatalog
 ): Promise<InteractionDecision> {
@@ -619,9 +630,13 @@ async function decideAnswer(
     },
     context(answer.receivedAt)
   );
+  let notice: RestartNotice | undefined;
   if (result.kind === 'refused' && result.reason === 'transaction_ended') {
-    // The engine's transaction outlived its age, or could not be read: the
-    // sign-in starts again at its first step, within the same interaction.
+    // The engine ended its transaction: the fifth wrong code burned it,
+    // another account answered, or it outlived its age or could not be
+    // read. The sign-in starts again at its first step, within the same
+    // interaction, with a notice of why (#1081) that names no account.
+    notice = restartNoticeOf(result.cause);
     result = await engine.advance(null, null, context(Date.now()));
   } else if (result.kind === 'redirect' && state.signInTransaction?.flow === 'reset') {
     // A password reset needs a step these pages cannot ask for yet: the
@@ -641,7 +656,12 @@ async function decideAnswer(
       signedInMethodOf(state.signInTransaction?.verified ?? [], result.signIn.amr ?? [])
     );
   }
-  return decisionOf(reply, result, answer.receivedAt);
+  const decision = decisionOf(reply, result, answer.receivedAt);
+  if (notice === undefined || decision.kind !== 'step') return decision;
+  // The notice is shown once: by the JSON answer's result, or, after a form
+  // post's 303, by the next step read, which takes it from the record.
+  answered.restarted(notice);
+  return answer.encoding === 'form' ? { ...decision, restartNotice: notice } : decision;
 }
 
 export default async function (fastify: FastifyInstance) {
@@ -732,7 +752,9 @@ export default async function (fastify: FastifyInstance) {
       config: { surface: 'browser', rateLimit: stepReadRateLimit },
     },
     async (request, reply) => {
-      const view = await readInteractionStep(request, interactionIdOf(request));
+      const view = await readInteractionStep(request, interactionIdOf(request), {
+        takeNotice: true,
+      });
       return reply.send(stepRead(view));
     }
   );
@@ -777,6 +799,7 @@ export default async function (fastify: FastifyInstance) {
       let consent: AnsweredConsent | undefined;
       let logout: LogoutDecision | undefined;
       let upstream: UpstreamStarted | undefined;
+      let restarted: RestartNotice | undefined;
       let signedInMethod: SignedInMethod = 'password';
       const result = await answerInteraction(
         request,
@@ -804,6 +827,9 @@ export default async function (fastify: FastifyInstance) {
                 signedIn: (method) => {
                   signedInMethod = method;
                 },
+                restarted: (notice) => {
+                  restarted = notice;
+                },
               },
               catalog
             )
@@ -818,7 +844,11 @@ export default async function (fastify: FastifyInstance) {
           if (upstream !== undefined) {
             return respond(request, reply, parsed.encoding, { location: upstream.redirectTo });
           }
-          return respond(request, reply, parsed.encoding, { view: result.view });
+          // A JSON answer after which the sign-in started again gets the
+          // notice of why (#1081); a form post's next step read shows it.
+          return respond(request, reply, parsed.encoding, {
+            view: restarted === undefined ? result.view : { ...result.view, notice: restarted },
+          });
         case 'finished': {
           if (result.purpose === 'logout') {
             // The confirm step finished the interaction (#675): the session
@@ -832,7 +862,7 @@ export default async function (fastify: FastifyInstance) {
             // The account page's sign-in finished (#844): an upstream link
             // it holds is attached, and the browser goes back to the page.
             return respond(request, reply, parsed.encoding, {
-              location: await finishAccountInteraction(fastify, request, result, {
+              location: await finishAccountInteraction(fastify, request, reply, result, {
                 method: signedInMethod,
                 mailer: engines.mailer,
               }),
@@ -876,7 +906,12 @@ export default async function (fastify: FastifyInstance) {
             mailer: engines.mailer,
           });
           if (held.kind === 'refused') {
-            return respond(request, reply, parsed.encoding, { location: held.location });
+            // The refusal reaches the ceremony page as the `upstream_link`
+            // step with its reason (#1081), the first step of the request's
+            // next interaction: the sign-in finished this one.
+            return respond(request, reply, parsed.encoding, {
+              location: await continueAtStep(request, reply, result, held.step),
+            });
           }
           // The authorization request goes on (#628): the code, minted only
           // now that the interaction has ended, or the request's next

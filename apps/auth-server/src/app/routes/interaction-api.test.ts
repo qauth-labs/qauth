@@ -698,15 +698,25 @@ describe('the answer, through the engine (#616)', () => {
     expect(response.headers['retry-after']).toBeDefined();
   });
 
-  it('starts the sign-in again when the engine ended its transaction', async () => {
+  /** The engine ends the transaction for `cause`, and its fresh start offers the first step. */
+  function endAndRestart(cause: string) {
     engine.advance
-      .mockResolvedValueOnce({ kind: 'refused', reason: 'transaction_ended', transaction: null })
+      .mockResolvedValueOnce({
+        kind: 'refused',
+        reason: 'transaction_ended',
+        transaction: null,
+        cause,
+      })
       .mockResolvedValueOnce({
         kind: 'step',
         transaction: { ...PASSWORD_ROUND.transaction, identifier: undefined },
         offer: { current: { step: 'identifier', params: {} }, alternatives: [] },
         personal: {},
       });
+  }
+
+  it('starts the sign-in again when the engine ended its transaction, and the JSON result says why once (#1081)', async () => {
+    endAndRestart('code_burned');
     const browser = new Browser();
     const id = await browser.start();
     const response = await browser.send(id, 'answer', {
@@ -716,6 +726,53 @@ describe('the answer, through the engine (#616)', () => {
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(engine.advance).toHaveBeenLastCalledWith(null, null, expect.anything());
+    expect(response.json()).toMatchObject({
+      result: 'step',
+      interaction: { step: IDENTIFIER, notice: 'code_burned' },
+    });
+    // The result showed it: no step read shows it again.
+    expect(await browser.read(id)).not.toHaveProperty('notice');
+  });
+
+  it('keeps the notice of a form post for the next step read, which shows it once (#1081)', async () => {
+    endAndRestart('subject_mismatch');
+    const browser = new Browser();
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    const response = await browser.send(
+      id,
+      'answer',
+      `type=${encodeURIComponent(IDENTIFIER)}&csrf=${csrf}&login_hint=alice%40example.com`
+    );
+    expect(response.statusCode).toBe(303);
+    expect(response.headers.location).toBe(`${ORIGIN}${CEREMONY_PAGE_PREFIX}${id}`);
+    expect(await browser.read(id)).toMatchObject({ step: IDENTIFIER, notice: 'subject_mismatch' });
+    expect(await browser.read(id)).not.toHaveProperty('notice');
+  });
+
+  it('says every other end of the transaction as expired (#1081)', async () => {
+    endAndRestart('account_disabled');
+    const browser = new Browser();
+    const id = await browser.start();
+    const response = await browser.send(id, 'answer', {
+      type: IDENTIFIER,
+      csrf: (await browser.read(id)).csrf,
+      login_hint: 'alice@example.com',
+    });
+    expect(response.json()).toMatchObject({ interaction: { notice: 'expired' } });
+  });
+
+  it('carries no notice on an answer that goes on to the next step', async () => {
+    engine.advance.mockResolvedValueOnce(PASSWORD_ROUND);
+    const browser = new Browser();
+    const id = await browser.start();
+    const response = await browser.send(id, 'answer', {
+      type: IDENTIFIER,
+      csrf: (await browser.read(id)).csrf,
+      login_hint: 'alice@example.com',
+    });
+    expect(response.json()).not.toHaveProperty('interaction.notice');
+    expect(await browser.read(id)).not.toHaveProperty('notice');
   });
 });
 

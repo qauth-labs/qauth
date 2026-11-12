@@ -8,6 +8,7 @@ import { identifierPrefill, identifierStep } from './authorization-interaction';
 import type { BackgroundTasks } from './background-tasks';
 import type { EngineMailer } from './engine-mail';
 import {
+  continueAtStep,
   type InteractionCancelResult,
   type InteractionFinished,
   type InteractionState,
@@ -266,11 +267,14 @@ export type AccountSignInMethod = 'password' | 'upstream' | 'passkey';
  * recorded (`user.signed_in`, for no client), an upstream identity the
  * interaction holds is linked to the account it signed in to (#670), and the
  * browser goes back to the account page, with the notice of its intent. A
- * refused link goes to its page instead.
+ * refused link goes instead to the `upstream_link` step with its reason
+ * (#1081), the first step of a next account interaction on `reply`, whose
+ * cancel goes back to the account page.
  */
 export async function finishAccountInteraction(
   fastify: FastifyInstance,
   request: FastifyRequest,
+  reply: FastifyReply,
   result: Extract<InteractionFinished, { readonly purpose: 'account' }>,
   options: { readonly method: AccountSignInMethod; readonly mailer: EngineMailer }
 ): Promise<string> {
@@ -297,7 +301,7 @@ export async function finishAccountInteraction(
     clientId: null,
     mailer: options.mailer,
   });
-  if (held.kind === 'refused') return held.location;
+  if (held.kind === 'refused') return continueAtStep(request, reply, result, held.step);
   if (held.kind === 'linked') {
     return accountPageUrl(realm, result.request.returnTo, ACCOUNT_FINISH_NOTICES.link);
   }

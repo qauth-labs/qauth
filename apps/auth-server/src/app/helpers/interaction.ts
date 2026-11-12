@@ -6,6 +6,7 @@ import type { SignInTransaction } from '@qauth-labs/fastify-plugin-sign-in-engin
 import { ForbiddenError, InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { EventDataOf, RegisteredEventType } from '@qauth-labs/shared-events';
 import type { ClientDisplay } from '@qauth-labs/shared-interaction-client';
+import { ceremonyPagePath, type RestartNotice } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
@@ -50,10 +51,12 @@ import {
   returnInteractionTurn,
   SELECT_ACCOUNT_STEP,
   takeInteractionTurn,
+  takeRestartNotice,
   TOTP_SETUP_STEP,
   type UpstreamLink,
   writeInteractionState,
 } from './interaction-record';
+import { buildRealmUrl } from './realm-url';
 import { requestRealm } from './request-realm';
 import {
   clearSessionCookie,
@@ -180,6 +183,13 @@ export interface InteractionView {
    * say so. Its name only, never the identity.
    */
   readonly upstreamLink?: { readonly provider: string; readonly name: string };
+  /**
+   * Why the sign-in went back to its first step (#1081), for the one read
+   * that shows it: the step read that took it ({@link readInteractionStep}
+   * with `takeNotice`), or the result of the JSON answer that restarted it.
+   * Absent from every other view.
+   */
+  readonly notice?: RestartNotice;
 }
 
 /** The current step's personal data, for the browser holding the flow cookie. */
@@ -267,6 +277,12 @@ export type InteractionDecision =
        * ends it. Only an authorization or an account interaction holds one.
        */
       readonly upstreamLink?: UpstreamLink | null;
+      /**
+       * Why the sign-in went back to its first step (#1081), for the next
+       * step read to show once: the answer was a form post, whose `303`
+       * carries nothing. Any other next state keeps no notice.
+       */
+      readonly restartNotice?: RestartNotice;
     }
   /**
    * The answer proved who the user is: a new browser session (a new `sid`)
@@ -876,18 +892,56 @@ export async function continueInteraction(
 }
 
 /**
+ * Start the next interaction of an authorization or an account interaction
+ * that just finished, at `step` (#1081), on the same reply, and return the
+ * URL of its ceremony page: when what the finish found must reach the
+ * person as a step, such as a refused link (#670). As
+ * {@link continueInteraction}, for either purpose: the flow cookie is built
+ * from the secrets the finish left, and the new interaction keeps the
+ * finished one's absolute expiry. It holds no sign-in: the step's only way
+ * out is the cancel, which ends the request as any cancel does.
+ *
+ * @throws {InvalidRequestError} as {@link startInteraction}
+ */
+export async function continueAtStep(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  finished: Extract<InteractionFinished, { readonly purpose: 'authorization' | 'account' }>,
+  step: InteractionStep
+): Promise<string> {
+  const next = await createInteraction(request, reply, {
+    target:
+      finished.purpose === 'authorization'
+        ? { purpose: 'authorization', request: finished.request }
+        : { purpose: 'account', request: finished.request },
+    step,
+    secrets: finished.continuation.secrets,
+    expiresAt: finished.continuation.expiresAt,
+  });
+  return buildRealmUrl(requestRealm(request), ceremonyPagePath(next.id));
+}
+
+/**
  * The current step, for anyone holding the interaction id: the ceremony app's
  * server reads it while the proxy strips QAuth's cookies. No personal data,
- * and no change to the interaction.
+ * and no change to the interaction, but for `takeNotice`: the Interaction
+ * API's step read takes the restart notice a form post left (#1081), which
+ * it shows once.
  *
  * @throws {InteractionExpiredError} for an id that names no live interaction
  */
 export async function readInteractionStep(
   request: FastifyRequest,
-  id: unknown
+  id: unknown,
+  options: { readonly takeNotice?: boolean } = {}
 ): Promise<InteractionView> {
-  const { record } = await locate(request, id);
-  return viewOf(record);
+  const { record, idHash } = await locate(request, id);
+  const view = viewOf(record);
+  if (options.takeNotice !== true) return view;
+  // The restart notice a form post left (#1081) is shown by one read only:
+  // this one takes it, whoever reads.
+  const notice = await takeRestartNotice(request.server.redis, request.log, record, idHash);
+  return notice === undefined ? view : { ...view, notice };
 }
 
 /**
@@ -1257,7 +1311,8 @@ async function settleAnswer(
 
   if (decision.kind === 'step') {
     const next: InteractionRecord = {
-      ...withUpstreamLink(taken, decision.upstreamLink),
+      ...withoutRestartNotice(withUpstreamLink(taken, decision.upstreamLink)),
+      ...(decision.restartNotice === undefined ? {} : { restartNotice: decision.restartNotice }),
       step: interactionStepSchema.parse(decision.step),
       personal: decision.personal ?? {},
       transaction: { ...taken.transaction, amr: withAmr(taken.transaction.amr, decision.amr) },
@@ -1332,7 +1387,7 @@ async function settleAnswer(
   }
   const secret = mintFlowSecret();
   const next: InteractionRecord = {
-    ...withUpstreamLink(taken, decision.upstreamLink),
+    ...withoutRestartNotice(withUpstreamLink(taken, decision.upstreamLink)),
     step,
     personal: decision.personal ?? {},
     transaction: proved,
@@ -1356,6 +1411,14 @@ async function settleAnswer(
   await answered('authenticated', next);
   await endReplacedSession(request, taken, session.sid);
   return { kind: 'step', view: viewOf(next) };
+}
+
+/** `taken` without the restart notice of its state (#1081): a next state keeps none of its own. */
+function withoutRestartNotice(taken: AnswerableInteractionRecord): AnswerableInteractionRecord {
+  if (taken.restartNotice === undefined) return taken;
+  const rest = { ...taken };
+  delete rest.restartNotice;
+  return rest;
 }
 
 /** The upstream link an authorization or an account record holds, if any (#670, #844). */

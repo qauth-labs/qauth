@@ -38,6 +38,7 @@ import { finishAuthorization } from './authorization-interaction';
 import { matchFlowSecret, readFlowSecrets } from './flow-cookie';
 import {
   answerInteraction,
+  continueAtStep,
   type InteractionAnswerResult,
   type InteractionDecision,
   interactionFlowBinding,
@@ -46,6 +47,12 @@ import {
 import { decisionOf, type InteractionEngines } from './interaction-engines';
 import { InvalidAnswerError } from './interaction-errors';
 import { InteractionExpiredError } from './interaction-expired';
+import {
+  listedUpstreamProvider,
+  refusedLinkStep,
+  refusedUpstreamStep,
+  type UpstreamProviderError,
+} from './interaction-outcomes';
 import {
   eventClientIdOf,
   type InteractionRequest,
@@ -330,17 +337,6 @@ export async function auditUpstreamRefusal(
     { method: 'upstream', reason },
     { realmId: requestRealm(request).id, userId: userId ?? null, actor: 'user' }
   );
-}
-
-/** A link refused (#670), recorded as `user.upstream_link_failed`, its page shown. */
-export class UpstreamLinkRefusedError extends Error {
-  override readonly name = 'UpstreamLinkRefusedError';
-  constructor(
-    readonly reason: UpstreamLinkRefusal,
-    readonly userId?: string
-  ) {
-    super(`upstream link refused: ${reason}`);
-  }
 }
 
 /**
@@ -752,6 +748,9 @@ export async function decideUpstreamLinkChoice(
   input: UpstreamLinkChoice
 ): Promise<InteractionDecision> {
   const { state, receivedAt } = input;
+  // A refused link's step (#1081) takes no answer: the page says why, and
+  // its only way out is the cancel.
+  if (state.step.error !== undefined) throw new InvalidAnswerError('the link was refused');
   const link = state.upstreamLink;
   // The step is written only with its link: anything else is a record no
   // server writes.
@@ -811,6 +810,52 @@ export async function decideUpstreamLinkChoice(
     if (!error.audited) await auditUpstreamRefusal(request, error.reason, error.userId);
     throw new InteractionExpiredError();
   }
+}
+
+/**
+ * Send the browser back to the ceremony page of the interaction a provider
+ * did not sign the person in for (#1081): the step it was picked at, with
+ * the `upstream` step current and refused with `error`, the provider in its
+ * params, as the engine refuses a provider it cannot start. The page offers
+ * the other ways in; nothing goes to the client. A step that offers no
+ * `upstream` step is shown again as it was. An interaction that ended or
+ * moved on meanwhile gets the error page, as every other refusal of the
+ * callback does; the refusal was recorded already.
+ */
+async function backWithProviderError(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  pending: PendingUpstreamSignIn,
+  provider: { readonly type: string; readonly entry: UpstreamProviderEntry | undefined },
+  error: UpstreamProviderError
+): Promise<FastifyReply> {
+  let result: InteractionAnswerResult;
+  try {
+    result = await answerInteraction(
+      request,
+      reply,
+      { id: pending.interactionId, revision: pending.revision },
+      async (state) => {
+        if (state.purpose !== 'authorization' && state.purpose !== 'account') {
+          throw new InteractionExpiredError();
+        }
+        const named = provider.entry ?? listedUpstreamProvider(state.step, provider.type);
+        const refused =
+          named === undefined ? undefined : refusedUpstreamStep(state.step, named, error);
+        return refused === undefined
+          ? { kind: 'step', step: state.step, personal: state.personal }
+          : { kind: 'step', step: refused, personal: {} };
+      }
+    );
+  } catch (thrown) {
+    if (thrown instanceof InteractionExpiredError) {
+      return sendUpstreamErrorPage(request, reply, pending.wayBack);
+    }
+    throw thrown;
+  }
+  if (result.kind !== 'step') return sendUpstreamErrorPage(request, reply, pending.wayBack);
+  reply.header('Cache-Control', 'no-store');
+  return reply.redirect(ceremonyPageUrlOf(requestRealm(request), pending.interactionId), 303);
 }
 
 /** What the callback host needs beyond the server. */
@@ -907,11 +952,21 @@ export function upstreamRouteHost(
       (completion.kind === 'failed' && completion.reason === 'provider_error')
     ) {
       // The person cancelled or declined at the provider, or it answered an
-      // error: nothing goes to the client, and the way back is the first step.
+      // error: nothing goes to the client. An interaction's ceremony page
+      // shows it (#1081); the pages' way back is the first step.
       await auditUpstreamRefusal(
         request,
         completion.kind === 'declined' ? 'declined' : 'provider_error'
       );
+      if (pending.mode === 'interaction') {
+        return backWithProviderError(
+          request,
+          reply,
+          pending,
+          { type: method.type, entry: provider?.entry },
+          completion.kind === 'declined' ? 'provider_declined' : 'provider_error'
+        );
+      }
       return sendUpstreamPage(
         reply,
         upstreamProviderErrorPage({
@@ -983,8 +1038,21 @@ export function upstreamRouteHost(
             ) {
               throw new UpstreamSignInRefusal('transaction_mismatch');
             }
-            if (account !== null)
-              throw new UpstreamLinkRefusedError('already_linked', account.userId);
+            if (account !== null) {
+              // Another account holds the identity: the refusal comes back
+              // to the ceremony page as the `upstream_link` step with its
+              // reason (#1081), whose only way out is the cancel.
+              await auditUpstreamLinkRefusal(request, type, 'already_linked', account.userId);
+              return {
+                kind: 'step',
+                step: refusedLinkStep(
+                  { provider: type, name: provider.entry.name },
+                  'already_linked'
+                ),
+                personal: {},
+                upstreamLink: null,
+              };
+            }
             return linkSignInDecision(
               reply,
               await engine.advance(
@@ -1068,10 +1136,6 @@ export function upstreamRouteHost(
         }
       );
     } catch (error) {
-      if (error instanceof UpstreamLinkRefusedError) {
-        await auditUpstreamLinkRefusal(request, type, error.reason, error.userId);
-        return sendUpstreamLinkRefusedPage(reply, error.reason, provider.entry.name);
-      }
       if (error instanceof UpstreamSignInRefusal) {
         return refuse(error.reason, error.userId ?? accountIdOf(account), error.audited);
       }
@@ -1091,7 +1155,7 @@ export function upstreamRouteHost(
         if (result.purpose === 'account') {
           // A sign-in of the account page (#844) the provider proved: it is
           // recorded there, and the browser goes back to the page.
-          const location = await finishAccountInteraction(fastify, request, result, {
+          const location = await finishAccountInteraction(fastify, request, reply, result, {
             method: 'upstream',
             mailer: engines.mailer,
           });
@@ -1110,7 +1174,8 @@ export function upstreamRouteHost(
         );
         // A link's sign-in the provider's proof finished (#1080): the
         // identity the interaction holds joins the account it proved, as at
-        // the Interaction API's finish, or its refusal's page is shown.
+        // the Interaction API's finish, or its refusal reaches the ceremony
+        // page as the first step of the request's next interaction (#1081).
         const held = await finishHeldUpstreamLink(fastify, request, {
           realm,
           link: result.upstreamLink,
@@ -1119,8 +1184,9 @@ export function upstreamRouteHost(
           mailer: engines.mailer,
         });
         if (held.kind === 'refused') {
+          const next = await continueAtStep(request, reply, result, held.step);
           reply.header('Cache-Control', 'no-store');
-          return reply.redirect(held.location, 303);
+          return reply.redirect(next, 303);
         }
         // The pages start the authorization request again under the new
         // session; an interaction finishes it as the Interaction API does.
