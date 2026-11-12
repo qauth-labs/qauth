@@ -51,13 +51,17 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
 
 ## Grant types
 
-| Grant                                             | Subject (`sub`) | Refresh token?       | Use case                                                |
-| ------------------------------------------------- | --------------- | -------------------- | ------------------------------------------------------- |
-| `authorization_code` (+ PKCE)                     | the end user    | if consent is stored | Apps acting **on behalf of a user**                     |
-| `refresh_token`                                   | the end user    | yes (rotated)        | Renew an access token without re-prompting              |
-| `client_credentials`                              | the `client_id` | no (RFC 6749 §4.4.3) | **Machine-to-machine**, no user                         |
-| `urn:ietf:params:oauth:grant-type:token-exchange` | the end user    | no                   | **Agent delegation** on behalf of a user (RFC 8693)     |
-| `urn:ietf:params:oauth:grant-type:jwt-bearer`     | the end user    | no                   | **ID-JAG** — enterprise-managed authorization (ADR-011) |
+| Grant                                             | Subject (`sub`) | Refresh token?                           | Use case                                                |
+| ------------------------------------------------- | --------------- | ---------------------------------------- | ------------------------------------------------------- |
+| `authorization_code` (+ PKCE)                     | the end user    | `refresh_token` grant + stored consent ¹ | Apps acting **on behalf of a user**                     |
+| `refresh_token`                                   | the end user    | yes (rotated)                            | Renew an access token without re-prompting              |
+| `client_credentials`                              | the `client_id` | no (RFC 6749 §4.4.3)                     | **Machine-to-machine**, no user                         |
+| `urn:ietf:params:oauth:grant-type:token-exchange` | the end user    | no                                       | **Agent delegation** on behalf of a user (RFC 8693)     |
+| `urn:ietf:params:oauth:grant-type:jwt-bearer`     | the end user    | no                                       | **ID-JAG** — enterprise-managed authorization (ADR-011) |
+
+¹ Only to a client whose `grant_types` list `refresh_token`, and only under
+a stored consent that covers the grant (see the
+[token response](#3-exchange-the-code-for-tokens)).
 
 `response_type` is `code` only. There is no implicit or password grant
 (removed in OAuth 2.1).
@@ -335,13 +339,17 @@ Notes:
   hourly purge deletes it, some time after its five-minute lifetime.
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
-- **`refresh_token` is present only when the user has a stored consent** for
-  your client that covers the granted scopes at every `resource` the token is
-  bound to — the row they can review and revoke under `/consents`. A consent
-  remembered for one resource server does not cover another. If they untick **Remember this decision** on the
-  consent screen, the approval is one-time: the member is absent, and you send
-  them through `/oauth/authorize` again once the access token expires.
-  Requesting `offline_access` does not change this either way.
+- **`refresh_token` is present only when your client's `grant_types` list
+  `refresh_token` and the user has a stored consent** for your client that
+  covers the granted scopes at every `resource` the token is bound to — the
+  row they can review and revoke under `/consents`. A client registered for
+  `authorization_code` alone gets no refresh token, however its consent was
+  given: the `refresh_token` grant would refuse it with `unauthorized_client`.
+  A consent remembered for one resource server does not cover another. If they
+  untick **Remember this decision** on the consent screen, the approval is
+  one-time: the member is absent, and you send them through `/oauth/authorize`
+  again once the access token expires. Requesting `offline_access` does not
+  change this either way: the grant and the consent decide.
 - **`id_token` is issued only for this grant** (`authorization_code`), and
   only when the granted scope includes `openid`. It is a separate,
   **client-audienced** EdDSA JWT (`aud` = your `client_id`, not the resource
@@ -458,6 +466,9 @@ curl -s -X POST http://localhost:3000/oauth/token \
   -d client_id=YOUR_CLIENT_ID | jq
 ```
 
+- Only a client whose `grant_types` list `refresh_token` may refresh; any
+  other gets `unauthorized_client`, and the code exchange gives it no
+  refresh token in the first place.
 - The response contains a **new** `refresh_token` — store it and discard the old.
 - Each new refresh token is good for the realm's refresh token lifetime
   (`tokens.refreshTokenLifespanSeconds`, a week by default) from the refresh.
