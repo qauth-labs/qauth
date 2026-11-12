@@ -174,6 +174,8 @@ interface StepView {
   readonly alternatives?: readonly string[];
   readonly params?: Record<string, unknown>;
   readonly upstreamLink?: { readonly provider: string; readonly name: string };
+  /** Why the last answer, or the link (#1081), was refused. */
+  readonly error?: string;
 }
 
 /** The callback URL the provider of `type` sends the browser back to. */
@@ -854,7 +856,10 @@ describe('linking an upstream account to an existing one (#670, real containers)
         state: started.providerRequest.searchParams.get('state') ?? '',
         iss: provider.issuer,
       });
-      expect(cancelled.statusCode, withServerLog(cancelled.body)).toBe(200);
+      // Back to the ceremony page, which says the provider did not sign the
+      // person in (#1081).
+      expect(cancelled.statusCode, withServerLog(cancelled.body)).toBe(303);
+      expect(ceremonyIdOf(cancelled.headers['location'])).toBe(started.interactionId);
 
       // The way back is the interaction's first step: an ordinary sign-in,
       // which the provider never proved an identity for.
@@ -931,6 +936,62 @@ describe('linking an upstream account to an existing one (#670, real containers)
       expect(await users()).toBe(usersBefore);
       expect(await upstreamCredentials()).toBe(0);
       expect((await read(id)).step).toBe(UPSTREAM_LINK);
+    });
+
+    it('brings a link refused at the finish to the ceremony page, whose cancel goes back to the account page (#1081)', async () => {
+      const ownerId = await registerPasswordAccount(app(), EMAIL);
+      const jar = new CookieJar();
+      await signIn(jar);
+      const overview = await get(jar, '/ui/account');
+      expect(overview.statusCode, withServerLog(overview.body)).toBe(200);
+      const csrf = /name="csrf" value="([^"]+)"/.exec(overview.body)?.[1] ?? '';
+      const confirm = await app().inject({
+        method: 'POST',
+        url: '/ui/account/reauthenticate',
+        headers: { ...FORM, ...SAME_ORIGIN, cookie: jar.header() ?? '' },
+        payload: new URLSearchParams({ csrf }).toString(),
+      });
+      jar.absorb(confirm.headers['set-cookie']);
+      expect(confirm.statusCode, withServerLog(confirm.body)).toBe(303);
+      const id = ceremonyIdOf(confirm.headers['location']);
+      const waiting = await get(jar, `/ui/upstream/${TYPE}/start?interaction=${id}`);
+      expect(waiting.statusCode, withServerLog(waiting.body)).toBe(200);
+      const link = /<a class="alt-action" href="([^"]+)"/.exec(waiting.body)?.[1];
+      if (link === undefined) throw new Error('no provider link on the waiting page');
+      const answered = provider.authorize(new URL(decodeHtmlEntities(link)), PERSON);
+      const callback = await callbackAt(jar, answered);
+      expect(ceremonyIdOf(callback.headers['location'])).toBe(id);
+      await chooseLink(jar, id);
+      // Meanwhile another account takes the identity.
+      await accountHolding();
+
+      const done = await signInWithPassword(jar, id);
+
+      // The sign-in finished the account interaction: the refusal is the
+      // first step of a next one, on the ceremony page.
+      expect(done.statusCode, withServerLog(done.body)).toBe(303);
+      expect(pathOf(done.headers['location'])).not.toContain('/ui/upstream-link-refused');
+      const next = ceremonyIdOf(done.headers['location']);
+      expect(next).not.toBe(id);
+      const step = await read(next);
+      expect(step.step).toBe(UPSTREAM_LINK);
+      expect(step.error).toBe('already_linked');
+      expect(step.params?.[UPSTREAM_LINK]).toEqual({
+        provider: { provider: TYPE, name: PROVIDER_NAME },
+        create: false,
+      });
+      expect(await events(LINK_FAILED)).toEqual([
+        { subject_id: ownerId, data: { provider: TYPE, reason: 'already_linked' } },
+      ]);
+
+      const cancelled = await app().inject({
+        method: 'POST',
+        url: `${INTERACTION_API_PREFIX}/${next}/cancel`,
+        headers: { ...FORM, ...SAME_ORIGIN, cookie: jar.header() ?? '' },
+        payload: new URLSearchParams({ csrf: step.csrf }).toString(),
+      });
+      expect(cancelled.statusCode, withServerLog(cancelled.body)).toBe(303);
+      expect(pathOf(cancelled.headers['location']).startsWith('/ui/account')).toBe(true);
     });
 
     it('starts none of its sign-ins on a node with the interaction UI off, which would register', async () => {
@@ -1022,7 +1083,42 @@ describe('linking an upstream account to an existing one (#670, real containers)
   });
 
   describe('an identity already linked to another account', () => {
-    it('is refused at the callback of a qauth_link, with its page and an event, and stays with its holder', async () => {
+    /**
+     * The refused link the ceremony page reads at `id` (#1081): the
+     * `upstream_link` step with its reason, offering no new account and
+     * nothing of the identity. Its answer is refused; its cancel ends the
+     * request with access_denied, and nothing else reaches the client.
+     */
+    async function expectRefusedLink(jar: CookieJar, id: string, reason: string) {
+      const step = await read(id);
+      expect(step.step).toBe(UPSTREAM_LINK);
+      expect(step.error).toBe(reason);
+      expect(step.params?.[UPSTREAM_LINK]).toEqual({
+        provider: { provider: TYPE, name: PROVIDER_NAME },
+        create: false,
+      });
+      expect(step.upstreamLink).toBeUndefined();
+      expect(JSON.stringify(step)).not.toContain(PERSON.sub);
+
+      const answered = await answer(jar, id, UPSTREAM_LINK, { decision: 'link' });
+      expect(answered.statusCode, withServerLog(answered.body)).toBe(400);
+      expect(answered.json()).toMatchObject({ code: 'invalid_answer' });
+
+      const cancelled = await app().inject({
+        method: 'POST',
+        url: `${INTERACTION_API_PREFIX}/${id}/cancel`,
+        headers: { ...FORM, ...SAME_ORIGIN, cookie: jar.header() ?? '' },
+        payload: new URLSearchParams({ csrf: (await read(id)).csrf }).toString(),
+      });
+      jar.absorb(cancelled.headers['set-cookie']);
+      expect(cancelled.statusCode, withServerLog(cancelled.body)).toBe(303);
+      const back = new URL(String(cancelled.headers['location']));
+      expect(`${back.origin}${back.pathname}`).toBe(REDIRECT_URI);
+      expect(back.searchParams.get('error')).toBe('access_denied');
+      expect(back.searchParams.get('code')).toBeNull();
+    }
+
+    it('is refused at the callback of a qauth_link, readable from the Interaction API with its reason, and stays with its holder', async () => {
       const holder = await accountHolding();
       const ownerId = await registerPasswordAccount(app(), EMAIL);
       const jar = new CookieJar();
@@ -1031,10 +1127,12 @@ describe('linking an upstream account to an existing one (#670, real containers)
 
       const refused = await throughProvider(jar, { qauth_link: TYPE });
 
-      expect(refused.statusCode, withServerLog(refused.body)).toBe(409);
-      expect(refused.body).toContain(LINK_REFUSED_TITLE);
-      expect(refused.body).toContain(PROVIDER_NAME);
-      expect(refused.headers['location']).toBeUndefined();
+      // Back to the ceremony page of the same interaction (#1081), never to
+      // a page of the auth server's own.
+      expect(refused.statusCode, withServerLog(refused.body)).toBe(303);
+      expect(pathOf(refused.headers['location'])).not.toContain('/ui/upstream-link-refused');
+      expect(refused.body).not.toContain(LINK_REFUSED_TITLE);
+      const id = ceremonyIdOf(refused.headers['location']);
       expect((await upstreamCredentialOf())?.userId).toBe(holder.id);
       expect(await codes()).toBe(codesBefore);
       expect(await events(LINKED)).toEqual([]);
@@ -1045,6 +1143,9 @@ describe('linking an upstream account to an existing one (#670, real containers)
       // Nobody has signed in for the link yet: the event is the holder's.
       expect(failed[0]?.subject_id).toBe(holder.id);
       expect(failed[0]?.subject_id).not.toBe(ownerId);
+
+      await expectRefusedLink(jar, id, 'already_linked');
+      expect(await codes()).toBe(codesBefore);
     });
 
     it('is refused at the finish when another account took it during the sign-in, and nothing goes to the client', async () => {
@@ -1058,19 +1159,20 @@ describe('linking an upstream account to an existing one (#670, real containers)
 
       const done = await answer(jar, id, PASSWORD, { password: E2E_PASSWORD });
 
+      // The sign-in finished the interaction: the refusal is the first step
+      // of the request's next one (#1081), on the ceremony page.
       expect(done.statusCode, withServerLog(done.body)).toBe(303);
-      expect(pathOf(done.headers['location'])).toBe(
-        `/ui/upstream-link-refused?provider=${TYPE}&reason=already_linked`
-      );
+      expect(pathOf(done.headers['location'])).not.toContain('/ui/upstream-link-refused');
+      const next = ceremonyIdOf(done.headers['location']);
+      expect(next).not.toBe(id);
       expect(await codes()).toBe(0);
       expect((await upstreamCredentialOf())?.userId).toBe(other.id);
       expect(await events(LINKED)).toEqual([]);
       expect(await events(LINK_FAILED)).toEqual([
         { subject_id: ownerId, data: { provider: TYPE, reason: 'already_linked' } },
       ]);
-      const page = await get(jar, pathOf(done.headers['location']));
-      expect(page.statusCode).toBe(409);
-      expect(page.body).toContain(LINK_REFUSED_TITLE);
+      await expectRefusedLink(jar, next, 'already_linked');
+      expect(await codes()).toBe(0);
     });
 
     it('refuses a second identity of the same provider for the account (provider_linked)', async () => {
@@ -1083,14 +1185,13 @@ describe('linking an upstream account to an existing one (#670, real containers)
       const done = await signInWithPassword(jar, id);
 
       expect(done.statusCode, withServerLog(done.body)).toBe(303);
-      expect(pathOf(done.headers['location'])).toBe(
-        `/ui/upstream-link-refused?provider=${TYPE}&reason=provider_linked`
-      );
+      expect(pathOf(done.headers['location'])).not.toContain('/ui/upstream-link-refused');
       expect(await upstreamCredentialOf()).toBeUndefined();
       expect(await upstreamCredentials()).toBe(1);
       expect((await events(LINK_FAILED)).map((event) => event.data['reason'])).toEqual([
         'provider_linked',
       ]);
+      await expectRefusedLink(jar, ceremonyIdOf(done.headers['location']), 'provider_linked');
     });
   });
 

@@ -95,6 +95,8 @@ interface StepView {
   readonly alternatives?: readonly string[];
   readonly params?: Record<string, unknown>;
   readonly error?: string;
+  /** Why the sign-in went back to its first step (#1081): on one read only. */
+  readonly notice?: string;
 }
 
 describe('the password reset and the session epoch (#642, real containers)', () => {
@@ -408,6 +410,65 @@ describe('the password reset and the session epoch (#642, real containers)', () 
     expect(toOwner?.code).toMatch(/^[0-9]{8}$/);
     expect(mails.get(UNKNOWN_EMAIL) ?? []).toEqual([]);
     expect(mails.get(DISABLED_EMAIL) ?? []).toEqual([]);
+  });
+
+  it('starts again at the first step after the fifth wrong code, which says code_burned once, alike for an account and an unknown address (#1081)', async () => {
+    await registerPasswordAccount(server(), OWNER_EMAIL);
+    mails.clear();
+
+    /**
+     * The reset of `email` up to five wrong codes, and the two step reads
+     * that follow: what the ceremony page reads after the fifth answer's
+     * 303, and on the next read.
+     */
+    const burn = async (email: string, mailedCode: boolean) => {
+      const { jar, id } = await atPasswordStep(email);
+      const started = await answer(jar, id, PASSWORD_RESET);
+      expect(started.statusCode, started.body).toBe(303);
+      expect((await read(id)).step).toBe(EMAIL_CODE);
+      // A code that is surely wrong: never the one mailed to the account.
+      const sent = mailedCode ? (await mailed(email, 1))[0]?.code : undefined;
+      const wrong = sent === '00000000' ? '11111111' : '00000000';
+      let fifth: LightMyRequestResponse | undefined;
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        fifth = await answer(jar, id, EMAIL_CODE, { otp: wrong });
+        expect(fifth.statusCode, fifth.body).toBe(303);
+        if (attempt < 5) {
+          expect(await read(id)).toMatchObject({ step: EMAIL_CODE, error: 'invalid_credentials' });
+        }
+      }
+      const shown = (view: StepView) => ({
+        step: view.step,
+        alternatives: view.alternatives,
+        params: view.params,
+        error: view.error,
+        notice: view.notice,
+        revision: view.revision,
+      });
+      const first = shown(await read(id));
+      const next = shown(await read(id));
+      return {
+        location: String(fifth?.headers['location']).replace(id, '<id>'),
+        first,
+        next,
+      };
+    };
+
+    const known = await burn(OWNER_EMAIL, true);
+
+    // The fifth wrong code burned it: the first step again, saying why.
+    expect(known.location.endsWith(`${CEREMONY_PAGE_PREFIX}<id>`), known.location).toBe(true);
+    expect(known.first.step).toBe(IDENTIFIER);
+    expect(known.first.notice).toBe('code_burned');
+    expect(known.first.error).toBeUndefined();
+    // Once: the next read carries none, and is the same step otherwise.
+    expect(known.next.notice).toBeUndefined();
+    expect(known.next).toEqual({ ...known.first, notice: undefined });
+
+    // The same for an address no account holds (ADR-017 Decision 4).
+    const unknown = await burn(UNKNOWN_EMAIL, false);
+    expect(unknown).toEqual(known);
+    expect(mails.get(UNKNOWN_EMAIL) ?? []).toEqual([]);
   });
 
   it('resets a password-only account and ends everything the old password opened', async () => {
