@@ -155,8 +155,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signal. Suspending a client, with `db:suspend-oauth-client` or the admin
   API's `clients.disable`, now revokes every refresh token the client holds
   (`client_suspended`) and spends its unredeemed codes in the same
-  transaction, so lifting the suspension brings none of them back; a
-  suspension by hand still revokes nothing. Disabling a realm by hand stays a
+  transaction, so lifting the suspension brings none of them back; lifting
+  one with the tool or `clients.enable` revokes what a suspension by hand, or
+  one made before this release, left. Disabling a realm by hand stays a
   pause: enabling it again brings back what it held. `operate/accounts` and
   the SSF transmitter guide say what each switch ends and sends.
 - **The sign-in that links an upstream account may go through a provider the

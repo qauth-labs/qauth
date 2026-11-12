@@ -253,12 +253,15 @@ comes back when it is switched on again differs:
   own transaction, every refresh token the client holds (as
   `client_suspended`) and spends its authorization codes not yet redeemed.
   Lifting the suspension brings none of them back: the client's users sign in
-  through it again. Its access tokens are not recalled; they work until they
-  expire, during the suspension too. A suspension sends no Shared Signals
-  event: neither CAEP 1.0 nor RISC 1.0 has one for a client. A suspension by
-  hand (`UPDATE oauth_clients SET suspended = true …`) revokes nothing, so
-  lifting it brings the client's refresh tokens back. Use the tool or the
-  admin API.
+  through it again. Lifting it with the tool or `clients.enable` also revokes
+  whatever of the client is still live, since a suspended client obtains
+  nothing: what a suspension by hand, or one made before QAuth did this, left.
+  Its access tokens are not recalled; they work until they expire, during the
+  suspension too. A suspension sends no Shared Signals event: neither CAEP 1.0
+  nor RISC 1.0 has one for a client. A suspension by hand
+  (`UPDATE oauth_clients SET suspended = true …`) revokes nothing at once, and
+  only a lift by hand brings the client's refresh tokens back. Use the tool or
+  the admin API.
 - **A disabled realm** (`UPDATE realms SET enabled = false …`; no tool or API
   disables one) is paused, not cut off. While it is off, every request to its
   hosts is refused with `421`, so nothing of it is used. Enabling it again

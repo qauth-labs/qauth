@@ -10,7 +10,11 @@
  * A suspension cuts the client off for good, as disabling an account does
  * (#893): in its transaction it revokes every refresh token the client holds
  * and spends its unredeemed authorization codes, so lifting it brings none of
- * them back. Lifting revokes nothing.
+ * them back. Lifting it revokes them as well, should any be left: those a
+ * suspension by hand or one made before #893 did not reach, or a code minted
+ * while the suspension's transaction was open. A suspended client obtains
+ * nothing, so whatever is still live when its suspension lifts dates from
+ * before it.
  *
  * QAuth has no operator role or operator API (ADR-012 §4), so this is operator
  * tooling that talks to the database directly, like `seed-oauth-clients.ts`.
@@ -71,10 +75,13 @@ interface SuspensionState {
 export type SuspensionResult =
   | { status: 'realm_not_found' }
   | { status: 'client_not_found' }
-  | ({ status: 'lifted' | 'unchanged' } & SuspensionState)
+  | ({ status: 'unchanged' } & SuspensionState)
   | ({
-      status: 'suspended';
-      /** How many refresh tokens of the client the suspension revoked. */
+      status: 'suspended' | 'lifted';
+      /**
+       * How many refresh tokens of the client the run revoked: on a lift,
+       * those left from before the suspension.
+       */
       revokedTokens: number;
     } & SuspensionState);
 
@@ -107,8 +114,8 @@ function operatorUser(): string | undefined {
  * (`client.suspended` or `client.suspension_lifted`, actor `operator_cli`), in
  * one transaction. Idempotent: a client already in the requested state is
  * reported `unchanged` and nothing is written. `enabled` is never touched.
- * A suspension also revokes the client's refresh tokens and spends its
- * unredeemed codes, in the same transaction.
+ * A suspension, and the lift of one, also revokes the client's refresh tokens
+ * and spends its unredeemed codes, in the same transaction.
  *
  * Since #458 nothing writes `audit_logs`; the event store holds the record.
  */
@@ -168,20 +175,19 @@ export async function setClientSuspension(
     const database = db as unknown as Database;
     const t = tx as unknown as DbTransaction;
 
-    // What the client holds ends with the suspension (#893): codes first, so
-    // none redeemed meanwhile opens a family the revocation misses. Before
-    // the event: recording it takes the realm's chain lock, which an admin
-    // API write takes last, after the rows it changes, so taking it first
-    // could deadlock against one holding a code or token of this client.
-    let revokedTokens = 0;
-    if (args.suspend) {
-      await createAuthorizationCodesRepository(database).invalidateForClient(client.id, t);
-      revokedTokens = await createRefreshTokensRepository(database).revokeAllForClient(
-        client.id,
-        SUSPENDED_CLIENT_REVOKE_REASON,
-        t
-      );
-    }
+    // What the client holds ends with the suspension (#893), and what is
+    // left of it when the suspension lifts, so a lift brings none back:
+    // codes first, so none redeemed meanwhile opens a family the revocation
+    // misses. Before the event: recording it takes the realm's chain lock,
+    // which an admin API write takes last, after the rows it changes, so
+    // taking it first could deadlock against one holding a code or token of
+    // this client.
+    await createAuthorizationCodesRepository(database).invalidateForClient(client.id, t);
+    const revokedTokens = await createRefreshTokensRepository(database).revokeAllForClient(
+      client.id,
+      SUSPENDED_CLIENT_REVOKE_REASON,
+      t
+    );
     await createEventsRepository(database).emit(t, {
       type: args.suspend
         ? 'urn:qauth:event:client.suspended:v1-rc.0'
@@ -192,7 +198,10 @@ export async function setClientSuspension(
       client: { id: client.clientId },
       data: {},
     });
-    if (!args.suspend) return { status: 'lifted' as const, ...updated };
-    return { status: 'suspended' as const, ...updated, revokedTokens };
+    return {
+      status: args.suspend ? ('suspended' as const) : ('lifted' as const),
+      ...updated,
+      revokedTokens,
+    };
   });
 }

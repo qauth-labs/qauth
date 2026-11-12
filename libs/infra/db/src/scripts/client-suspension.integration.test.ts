@@ -260,11 +260,13 @@ describe('setClientSuspension (real Postgres)', () => {
         suspend: true,
       });
       expect(result).toMatchObject({ status: 'suspended', revokedTokens: 2 });
-      await setClientSuspension(db(), {
+      const lifted = await setClientSuspension(db(), {
         realm: 'susp-end-1',
         clientId: 'app-end-1',
         suspend: false,
       });
+      // The suspension left nothing for the lift to revoke.
+      expect(lifted).toMatchObject({ status: 'lifted', revokedTokens: 0 });
 
       for (const id of tokens) {
         expect(await tokenState(id)).toEqual({
@@ -278,11 +280,12 @@ describe('setClientSuspension (real Postgres)', () => {
       expect(await codeUsed(othersCode)).toBe(false);
     });
 
-    it('revokes nothing on a run that changes nothing, nor when it lifts a suspension', async () => {
+    it('revokes nothing on a run that changes nothing, and lifting revokes what a suspension left', async () => {
       const realm = await createRealmsRepository(db()).create({ name: 'susp-end-2' });
       const client = await seedClient(realm.id, 'app-end-3');
       const user = await seedUser(realm.id);
-      // Suspended by hand: no tool run revoked what it holds.
+      // Suspended by hand, as a suspension made before #893 also was: no
+      // tool run revoked what it holds.
       await db().update(oauthClients).set({ suspended: true }).where(eq(oauthClients.id, client));
       const token = await seedToken(user, client);
       const code = await seedCode(client, user);
@@ -293,15 +296,20 @@ describe('setClientSuspension (real Postgres)', () => {
         suspend: true,
       });
       expect(again.status).toBe('unchanged');
+      expect(await tokenState(token)).toEqual({ revoked: false, revoked_reason: null });
+      expect(await codeUsed(code)).toBe(false);
+
       const lifted = await setClientSuspension(db(), {
         realm: 'susp-end-2',
         clientId: 'app-end-3',
         suspend: false,
       });
-      expect(lifted.status).toBe('lifted');
-
-      expect(await tokenState(token)).toEqual({ revoked: false, revoked_reason: null });
-      expect(await codeUsed(code)).toBe(false);
+      expect(lifted).toMatchObject({ status: 'lifted', revokedTokens: 1 });
+      expect(await tokenState(token)).toEqual({
+        revoked: true,
+        revoked_reason: SUSPENDED_CLIENT_REVOKE_REASON,
+      });
+      expect(await codeUsed(code)).toBe(true);
     });
   });
 });

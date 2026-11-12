@@ -873,7 +873,7 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: 'Enable a client',
         description:
-          "Lifts the client's suspension, and switches on a client no developer owns; a developer's own switch stays theirs. A security operation: the client obtains tokens again, so it needs clients.security and an approval, filed against the client as it stands; If-Match names its ETag (428 without it, 412 when it moved). It takes no body, or an empty object. A client already enabled is answered as it is.",
+          "Lifts the client's suspension, and switches on a client no developer owns; a developer's own switch stays theirs. Lifting a suspension also revokes any refresh token and spends any authorization code of the client left from before it (one a suspension by hand did not reach, say), so it brings none of them back. A security operation: the client obtains tokens again, so it needs clients.security and an approval, filed against the client as it stands; If-Match names its ETag (428 without it, 412 when it moved). It takes no body, or an empty object. A client already enabled is answered as it is.",
         'x-qauth-errors': [400, 401, 403, 404, 412, 428],
         params: clientParams,
         headers: ifMatchHeadersSchema,
@@ -892,14 +892,26 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
       const switchOn = state.developerId === null && !state.enabled;
       let after = state;
       if (state.suspended || switchOn) {
+        const tx = adminTransaction(request);
         const updated = await request.server.repositories.oauthClients.updateByAdmin(
           realmId,
           row.id,
           { suspended: false, suspendedAt: null, ...(switchOn ? { enabled: true } : {}) },
-          adminTransaction(request)
+          tx
         );
         after = adminClientOf(updated);
         if (state.suspended) {
+          // A suspended client obtains nothing, so whatever of it is still
+          // live dates from before the suspension, which a suspension by hand
+          // or one made before #893 did not end: it ends now, so lifting the
+          // suspension brings none of it back. Codes first, and before the
+          // event, as clients.disable does.
+          await request.server.repositories.authorizationCodes.invalidateForClient(row.id, tx);
+          await request.server.repositories.refreshTokens.revokeAllForClient(
+            row.id,
+            SUSPENDED_CLIENT_REVOKE_REASON,
+            tx
+          );
           await emitUserEvent(
             request,
             'urn:qauth:event:client.suspension_lifted:v1-rc.0',

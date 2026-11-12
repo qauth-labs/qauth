@@ -681,6 +681,20 @@ describe('the admin client operations (#632, real containers)', () => {
     const ended = { revoked: true, revoked_reason: 'client_suspended', codeUsed: true };
     expect(await heldState()).toEqual(ended);
 
+    // One left from before the suspension that it did not reach, as a
+    // suspension by hand or one made before #893 leaves them: lifting the
+    // suspension revokes it (#893).
+    const leftover = await app().repositories.refreshTokens.create({
+      userId: users[0].id,
+      oauthClientId: client.id,
+      tokenHash: app().jwtUtils.hashRefreshToken(`rt-${randomUUID()}`),
+      familyCreatedAt: Date.now(),
+      familySessionExpiresAt: null,
+      authTime: null,
+      amr: null,
+      expiresAt: Date.now() + 3_600_000,
+    });
+
     const etag = String(suspended.headers['etag']);
     const byEditor = await send(
       'POST',
@@ -708,8 +722,14 @@ describe('the admin client operations (#632, real containers)', () => {
     );
     expect(enabled.statusCode, enabled.body).toBe(200);
     expect(enabled.json<ClientBody>().suspended).toBe(false);
-    // Lifting the suspension brings back nothing the client held.
+    // Lifting the suspension brings back nothing the client held, and ends
+    // what the suspension left.
     expect(await heldState()).toEqual(ended);
+    const left = await app().dbPool.query<{ revoked: boolean; revoked_reason: string | null }>(
+      'SELECT revoked, revoked_reason FROM refresh_tokens WHERE id = $1',
+      [leftover.id]
+    );
+    expect(left.rows[0]).toEqual({ revoked: true, revoked_reason: 'client_suspended' });
 
     const current = String(enabled.headers['etag']);
     const deleteApproval = await fileAndApprove(realm.id, securityAdmin, 'clients.delete', {
