@@ -116,10 +116,10 @@
       "docs": "https://docs.qauth.dev/reference/realm-policies/#accounts",
       "default": 7,
       "secret": false,
-      "direction": "lower-is-stricter",
-      "securityWhen": "loosening",
+      "direction": "opaque",
+      "securityWhen": "any-change",
       "class": {
-        "tightening": "write",
+        "tightening": "security",
         "loosening": "security",
         "neutral": "security"
       },

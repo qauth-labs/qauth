@@ -62,8 +62,11 @@ export const ACCOUNTS_POLICY_GROUP = {
   newFactorWindowDays: policyField(z.number().int().min(1).max(30), {
     seedEnv: 'NEW_FACTOR_WINDOW_DAYS',
     default: 7,
-    direction: 'lower-is-stricter',
-    securityWhen: 'loosening',
+    // Neither way is stricter (#1064): a longer window leaves a new factor
+    // removable with the password for longer, the owner's own included, and
+    // a shorter one leaves the owner less time to undo an intruder's.
+    direction: 'opaque',
+    securityWhen: 'any-change',
     effects: ['credential-path'],
     secret: false,
     environmentBound: false,
