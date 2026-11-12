@@ -217,6 +217,13 @@ const CLIENT_STATE = {
   lastUsedAt: null,
 };
 
+/** A client that obtains admin tokens: one holding a `qauth:admin:*` scope. */
+const ADMIN_CLIENT_STATE = {
+  ...CLIENT_STATE,
+  client_id: 'console',
+  scopes: ['openid', 'qauth:admin:read', 'qauth:admin:security'],
+};
+
 const policyCase = (
   name: string,
   body: Record<string, unknown>,
@@ -462,9 +469,9 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
   ),
   reserveRequestDependent(
     'clients.update',
-    ['token-content', 'posture-loosening'],
+    ['token-content', 'posture-loosening', 'administration'],
     `${ADR_019}, #518, #632`,
-    "Change a client: its redirect URIs, post-logout redirect URIs, back-channel logout URI, authentication method and keys, grant types, first-party trust, verified domain, PKCE or DPoP, client_credentials scopes, qauth: scopes, environment, token lifetimes or agent-type fields; lengthening a client's token lifetime or switching PKCE or DPoP off is posture-loosening.",
+    "Change a client: its redirect URIs, post-logout redirect URIs, back-channel logout URI, authentication method and keys, grant types, first-party trust, verified domain, PKCE or DPoP, client_credentials scopes, qauth: scopes, environment, token lifetimes or agent-type fields; lengthening a client's token lifetime or switching PKCE or DPoP off is posture-loosening; any change of a client that obtains admin tokens is administration.",
     [
       clientCase(
         'adds a redirect URI',
@@ -570,6 +577,29 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
         { refreshTokenLifespanSeconds: null },
         ['posture-loosening']
       ),
+      // A client_credentials client with no list of its own is issued any
+      // scope it holds (#891): a scope added is a scope its tokens carry.
+      {
+        name: 'adds a scope to a client_credentials client without a list',
+        request: patch(CLIENT, { scopes: ['notes:read', 'notes:write'] }),
+        state: {
+          ...CLIENT_STATE,
+          grantTypes: ['client_credentials'],
+          responseTypes: [],
+          redirectUris: [],
+          postLogoutRedirectUris: [],
+          scopes: ['notes:read'],
+        },
+        effects: ['token-content'],
+      },
+      // A client that obtains admin tokens administers the realm: renaming
+      // it, as any other change, is shown to a second admin.
+      {
+        name: 'renames a client that obtains admin tokens',
+        request: patch(CLIENT, { name: 'Console' }),
+        state: ADMIN_CLIENT_STATE,
+        effects: ['administration'],
+      },
     ]
   ),
   reserve(
@@ -747,6 +777,20 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     ['administration'],
     `${ADR_019}, #679`,
     'Remove a service account.'
+  ),
+  reserveRequestDependent(
+    'clients.disable',
+    ['administration'],
+    `${ADR_019}, #632`,
+    'Suspend a client. Suspending one that obtains admin tokens takes the admin API from whoever signs in through it.',
+    [
+      {
+        name: 'suspends a client that obtains admin tokens',
+        request: { method: 'POST', params: CLIENT, query: {}, body: {} },
+        state: ADMIN_CLIENT_STATE,
+        effects: ['administration'],
+      },
+    ]
   ),
 
   // import: a realm file, or a sandbox promotion, whose diff holds any other effect.

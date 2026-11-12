@@ -71,7 +71,16 @@ export const CLIENT_REFRESH_TOKEN_LIFESPAN_MAX = 7776000;
  * The members of a JWK that hold private key material (RFC 7518 §6): never
  * shown, even on a row written by hand. Registration refuses a key with one.
  */
-const PRIVATE_JWK_MEMBERS = new Set(['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']);
+export const PRIVATE_JWK_MEMBERS: ReadonlySet<string> = new Set([
+  'd',
+  'p',
+  'q',
+  'dp',
+  'dq',
+  'qi',
+  'oth',
+  'k',
+]);
 
 const isoTime = z.iso.datetime();
 

@@ -8,15 +8,16 @@ import {
 } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
+import { ClientManagedByDocumentError } from '../../helpers/admin-client-errors';
 import type {
   AdminOperationDefinition,
+  Classification,
   ClassifyInput,
   RenderedField,
   RenderedOperation,
   RenderInput,
 } from '../../helpers/admin-operations';
 import { UnprocessableContentError } from '../../helpers/api-request-errors';
-import { ClientManagedByDocumentError } from '../../helpers/admin-client-errors';
 import { parseClientJwkSet } from '../../helpers/client-jwks';
 import {
   validatePostLogoutRedirectUri,
@@ -26,12 +27,19 @@ import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { tokenLifetimesOf } from '../../helpers/realm-policy-readers';
 import type { RealmRow } from '../../helpers/request-realm';
 import {
-  applyClientPatch,
+  CLIENT_HEADER_LINES,
+  type ClientChangeLines,
+  clientChangeLines,
+  clientCreateLines,
+  CREATE_HEADER_LINES,
+  shownValue,
+} from './approval-lines';
+import {
   type AppliedClientPatch,
-  changedClientFields,
+  applyClientPatch,
   classifyClientPatch,
-  CLIENT_FIELDS,
   type ClientFieldProblem,
+  holdsAdminScope,
 } from './fields';
 import {
   type AdminClient,
@@ -56,11 +64,16 @@ import {
  *   the field's effects; any other `clients.write`. A patch of both needs
  *   both, and one approval. Every patch needs `clients.read` too: it answers
  *   the client. `clients.preview` answers what the same patch would change
- *   and need, and writes nothing (#589).
+ *   and need, and writes nothing (#589). A security change an approver could
+ *   not be shown in full is refused with 422 (`./approval-lines.ts`).
  * - `clients.create` and `clients.delete` are security operations on every
  *   request (`admin-operations-reserved.ts`), and so is `clients.enable`:
  *   lifting a suspension gives the client its tokens back. `clients.disable`,
- *   the suspension, only takes them away: a write.
+ *   the suspension, only takes them away: a write, unless the client holds
+ *   an admin scope.
+ * - Every change of a client that holds an admin scope (`qauth:admin:*`) is
+ *   a security change with the effect `administration`: a narrowing of the
+ *   admin console's client by a write could leave no token able to undo it.
  *
  * A client registered from a Client ID Metadata Document (CIMD) is read-only
  * (ADR-012 Decision 3): its document is where it is changed, and every
@@ -69,8 +82,8 @@ import {
  * the document, so `clients.disable` and `clients.enable` take one too: they
  * are the operator's switch for every client.
  *
- * `clients.update`, `clients.delete` and `clients.enable` read the client
- * (`loadState`): its version is the client's `ETag`, which the request names
+ * `clients.update`, `clients.delete`, `clients.enable` and `clients.disable`
+ * read the client (`loadState`): its version is the client's `ETag`, which the request names
  * in `If-Match`, and an approval approves the request against that version
  * only. A client of another realm is 404, as one that does not exist.
  */
@@ -335,7 +348,11 @@ export function clientSettingsProblems(
   }
 
   // ADR-020 §3: a client's own lifetime is never longer than the realm's.
-  if (named('accessTokenLifespanSeconds') && client.accessTokenLifespanSeconds !== null) {
+  // The environment picks the realm's tier, so a change of it is checked too.
+  if (
+    named('accessTokenLifespanSeconds', 'environment') &&
+    client.accessTokenLifespanSeconds !== null
+  ) {
     const realm = context.realmAccessLifetime(client.environment);
     if (client.accessTokenLifespanSeconds > realm) {
       refuse(
@@ -472,11 +489,33 @@ async function loadClientUpdateState(
   const state = await clientOfRequest(request, input, CLIENT_OPERATION_IDS.update);
   refuseDocumentClient(state);
   const caller = pipelineCaller(request, CLIENT_OPERATION_IDS.update);
-  assertClientSettings(
-    applyClientPatch(state, input.body),
-    await clientCheckContext(request, caller.targetRealm)
-  );
+  const applied = applyClientPatch(state, input.body);
+  assertClientSettings(applied, await clientCheckContext(request, caller.targetRealm));
+  assertShownInFull(input, state, applied);
   return state;
+}
+
+/** The message of a security change too large to show an approver in full. */
+export const CLIENT_CHANGE_NOT_SHOWN_MESSAGE =
+  'The change cannot be shown to an approver in full: file it as smaller changes.';
+
+/**
+ * Refuse a security change an approver could not be shown in full
+ * (`./approval-lines.ts`): every value whole, in at most the lines one
+ * approval holds. A write needs no approval, so it is not held to it.
+ *
+ * @throws UnprocessableContentError naming each member that does not fit
+ */
+export function assertShownInFull(
+  input: ClassifyInput,
+  state: AdminClient,
+  applied: AppliedClientPatch
+): void {
+  if (classifyClientPatch(input, state).class !== 'security') return;
+  const { problems } = clientChangeLines(state, applied.client, CLIENT_HEADER_LINES);
+  if (problems.length > 0) {
+    throw new UnprocessableContentError(problems, CLIENT_CHANGE_NOT_SHOWN_MESSAGE);
+  }
 }
 
 /** `clients.delete`'s `loadState`: the client, which must not be a CIMD client. */
@@ -497,22 +536,30 @@ async function loadClientEnableState(
   return clientOfRequest(request, input, CLIENT_OPERATION_IDS.enable);
 }
 
+/** `clients.disable`'s `loadState`: the client, a CIMD one included. */
+async function loadClientDisableState(
+  request: FastifyRequest,
+  input: ClassifyInput
+): Promise<AdminClient> {
+  return clientOfRequest(request, input, CLIENT_OPERATION_IDS.disable);
+}
+
+/**
+ * The classification of a suspension: a write, which only takes tokens
+ * away, unless the client holds an admin scope (`holdsAdminScope`).
+ * Suspending that one stops every new admin token, the ones that could lift
+ * the suspension too: a security change with the effect `administration`.
+ */
+export function classifyClientDisable(state: AdminClient): Classification {
+  return holdsAdminScope(state)
+    ? { class: 'security', effects: ['administration'], permissions: ['clients.security'] }
+    : { class: 'write', effects: [], permissions: ['clients.write'] };
+}
+
 /** The version of a client state, as `stateVersion` gives it. */
 const clientStateVersion = (state: unknown): string => adminClientVersion(state as AdminClient);
 
-/** The longest value an approver is shown, before the display caps it. */
-const MAX_RENDERED_VALUE = 500;
-
-/** The most fields one approval shows, under the display's cap of 50 lines. */
-const MAX_RENDERED_FIELDS = 46;
-
-/** A value as an approver reads it: JSON, capped. */
-export function shownValue(value: unknown): string {
-  const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? 'null');
-  return text.length > MAX_RENDERED_VALUE ? `${text.slice(0, MAX_RENDERED_VALUE)}…` : text;
-}
-
-/** The client an approval is about, as its first lines. */
+/** The client an approval is about, as its first lines (`CLIENT_HEADER_LINES`). */
 function clientLines(client: AdminClient): RenderedField[] {
   return [
     { label: 'client', value: `${client.client_id} (${client.name})` },
@@ -526,18 +573,23 @@ function clientLines(client: AdminClient): RenderedField[] {
   ];
 }
 
-/** `fields`, capped under the display's limit, with a line for the rest. */
-function capped(fields: RenderedField[], more: number): RenderedField[] {
-  if (more > 0) {
-    fields.push({ label: 'and more', value: `${more} more fields, not shown` });
+/**
+ * The lines a change shows, or an error: the state check refuses a change
+ * that cannot be shown in full before it is filed, so a renderer meets none.
+ */
+function shownLines(lines: ClientChangeLines): readonly RenderedField[] {
+  if (lines.problems.length > 0) {
+    throw new Error(lines.problems.map((problem) => problem.message).join('; '));
   }
-  return fields;
+  return lines.fields;
 }
 
 /**
  * What an approver is shown of a client update: the client, and each field
- * the patch changes, the stored value beside the new one, against the client
- * as it stood when the approval was filed (`RenderInput.state`).
+ * the patch changes against the client as it stood when the approval was
+ * filed (`RenderInput.state`): a list as each entry it removes and adds, a
+ * key set as its keys, any other field beside the value it replaces. Every
+ * value is shown whole (`./approval-lines.ts`).
  */
 function renderClientUpdate(input: RenderInput): RenderedOperation {
   const state = input.state as AdminClient | undefined;
@@ -545,48 +597,33 @@ function renderClientUpdate(input: RenderInput): RenderedOperation {
     throw new Error('A client update is shown against the client it was filed against');
   }
   const { client } = applyClientPatch(state, input.body);
-  const changed = changedClientFields(state, client);
-  const shown = changed.slice(0, MAX_RENDERED_FIELDS);
+  const fields = shownLines(clientChangeLines(state, client, CLIENT_HEADER_LINES));
   return {
-    title:
-      changed.length === 1
-        ? 'Change one setting of a client'
-        : `Change ${changed.length} settings of a client`,
-    fields: capped(
-      [
-        ...clientLines(state),
-        ...shown.map((name): RenderedField => ({
-          label: name,
-          before: shownValue(state[name]),
-          value: shownValue(client[name]),
-        })),
-      ],
-      changed.length - shown.length
-    ),
+    title: 'Change the settings of a client',
+    fields: [...clientLines(state), ...fields],
   };
 }
 
-/** The settings of a new client an approver is shown, in the table's order. */
+/** The settings of a new client an approver is shown, each whole, in the table's order. */
 function renderClientCreate(input: RenderInput): RenderedOperation {
-  const body = (input.body ?? {}) as Record<string, unknown>;
-  const named = (Object.keys(CLIENT_FIELDS) as (keyof AdminClient)[]).filter((name) =>
-    Object.hasOwn(body, name)
-  );
-  const shown = named.slice(0, MAX_RENDERED_FIELDS);
+  const fields = shownLines(clientCreateLines(input.body, CREATE_HEADER_LINES));
   return {
     title: 'Register a client',
-    fields: capped(
-      [
-        {
-          label: 'effect',
-          value:
-            'A new client no developer owns, provisioned by the operator. A client that authenticates with a secret gets one, returned once to the admin who registers it.',
-        },
-        ...shown.map((name): RenderedField => ({ label: name, value: shownValue(body[name]) })),
-      ],
-      named.length - shown.length
-    ),
+    fields: [
+      {
+        label: 'effect',
+        value:
+          'A new client no developer owns, provisioned by the operator. A client that authenticates with a secret gets one, returned once to the admin who registers it.',
+      },
+      ...fields,
+    ],
   };
+}
+
+/** A list, whole when it fits a line, or how many entries it holds. */
+function listLine(label: string, values: readonly string[]): RenderedField {
+  const whole = shownValue(values);
+  return { label, value: whole.length <= 900 ? whole : `${values.length} entries` };
 }
 
 /** What an approver is shown of a deletion: the client, as it stood. */
@@ -599,8 +636,8 @@ function renderClientDelete(input: RenderInput): RenderedOperation {
     title: 'Delete a client',
     fields: [
       ...clientLines(state),
-      { label: 'grant types', value: shownValue(state.grantTypes) },
-      { label: 'redirect URIs', value: shownValue(state.redirectUris) },
+      listLine('grant types', state.grantTypes),
+      listLine('redirect URIs', state.redirectUris),
       {
         label: 'effect',
         value:
@@ -639,6 +676,29 @@ function renderClientEnable(input: RenderInput): RenderedOperation {
   };
 }
 
+/** What an approver is shown of suspending a client that holds an admin scope. */
+function renderClientDisable(input: RenderInput): RenderedOperation {
+  const state = input.state as AdminClient | undefined;
+  if (state === undefined) {
+    throw new Error('A suspension is shown against the client it was filed against');
+  }
+  return {
+    title: 'Suspend a client that obtains admin tokens',
+    fields: [
+      ...clientLines(state),
+      listLine(
+        'admin scopes',
+        state.scopes.filter((scope) => scope.startsWith('qauth:admin:'))
+      ),
+      {
+        label: 'effect',
+        value:
+          'The client obtains no token until clients.enable lifts the suspension: no new admin token is issued through it, the ones that could lift the suspension included.',
+      },
+    ],
+  };
+}
+
 /** The definitions, for `ADMIN_OPERATIONS` (`helpers/admin-operations.ts`). */
 export const CLIENT_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] = Object.freeze([
   {
@@ -668,10 +728,10 @@ export const CLIENT_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
   {
     id: CLIENT_OPERATION_IDS.update,
     class: 'security',
-    effects: ['token-content', 'posture-loosening'],
+    effects: ['token-content', 'posture-loosening', 'administration'],
     permissions: ['clients.write', 'clients.security', 'clients.read'],
     description:
-      'Change a client with a JSON Merge Patch against the version it names; each field it changes needs what the client field table says, a security change an approval; a CIMD client is refused; it answers the client, so it needs clients.read too.',
+      'Change a client with a JSON Merge Patch against the version it names; each field it changes needs what the client field table says, and every change of a client that holds an admin scope is a security change; a security change needs an approval; a CIMD client is refused; it answers the client, so it needs clients.read too.',
     loadState: loadClientUpdateState,
     stateVersion: clientStateVersion,
     classify: (request: ClassifyInput, state: unknown) =>
@@ -710,10 +770,15 @@ export const CLIENT_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
   } as AdminOperationDefinition,
   {
     id: CLIENT_OPERATION_IDS.disable,
-    class: 'write',
-    effects: [],
-    permissions: ['clients.write'],
+    class: 'security',
+    effects: ['administration'],
+    permissions: ['clients.write', 'clients.security'],
     description:
-      'Suspend a client: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it.',
-  },
+      'Suspend a client, against the version it names: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it; a write, unless the client holds an admin scope.',
+    loadState: loadClientDisableState,
+    stateVersion: clientStateVersion,
+    classify: (_request: ClassifyInput, state: unknown) =>
+      classifyClientDisable(state as AdminClient),
+    render: renderClientDisable,
+  } as AdminOperationDefinition,
 ]);

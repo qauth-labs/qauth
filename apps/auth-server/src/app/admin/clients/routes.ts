@@ -39,6 +39,7 @@ import {
   recordAdminChange,
   requestAdminCaller,
 } from '../pipeline';
+import { clientCreateLines, CREATE_HEADER_LINES } from './approval-lines';
 import {
   applyClientPatch,
   changedClientFields,
@@ -48,6 +49,7 @@ import {
 } from './fields';
 import {
   assertClientSettings,
+  assertShownInFull,
   CLIENT_OPERATION_IDS,
   clientCheckContext,
   readClientState,
@@ -68,6 +70,7 @@ import {
   CLIENT_RESPONSE_TYPES,
   CLIENT_URI_MAX_LENGTH,
   type OAuthClientRecord,
+  PRIVATE_JWK_MEMBERS,
   storedFirstPartyPolicy,
 } from './representation';
 
@@ -84,7 +87,7 @@ import {
  *                                                                          the same patch, nothing written
  *   DELETE /admin/v1-rc.0/realms/{realmId}/clients/{clientId}            — clients.delete, If-Match required
  *   POST   /admin/v1-rc.0/realms/{realmId}/clients/{clientId}/enable     — clients.enable, If-Match required
- *   POST   /admin/v1-rc.0/realms/{realmId}/clients/{clientId}/disable    — clients.disable
+ *   POST   /admin/v1-rc.0/realms/{realmId}/clients/{clientId}/disable    — clients.disable, If-Match required
  *
  * `{clientId}` is the client's `id`, a UUID, as the developer API names it:
  * a CIMD client's `client_id` is a URL. A client of another realm is 404, as
@@ -132,6 +135,17 @@ const scopeList = z.array(scopeToken).max(CLIENT_LIST_MAX);
 const flows = z.array(z.enum(FIRST_PARTY_FLOWS)).min(1).max(FIRST_PARTY_FLOWS.length);
 
 /**
+ * A public JWK: a key with a private member is refused here, before an
+ * approval of the request is filed and shows it.
+ */
+const publicJwk = z
+  .record(z.string(), z.unknown())
+  .refine((key) => !Object.keys(key).some((member) => PRIVATE_JWK_MEMBERS.has(member)), {
+    message:
+      'a key holds a private member (d, p, q, dp, dq, qi, oth or k): send the public key only',
+  });
+
+/**
  * Each member a create or an update takes, by its value. The keys are the
  * patchable fields of the field table (`./fields.ts`): a field the table
  * makes patchable has a schema here, or the build fails.
@@ -148,7 +162,7 @@ const VALUE_SCHEMAS = {
   grantTypes: z.array(z.enum(CLIENT_GRANT_TYPES)).min(1).max(CLIENT_GRANT_TYPES.length),
   responseTypes: z.array(z.enum(CLIENT_RESPONSE_TYPES)).max(CLIENT_RESPONSE_TYPES.length),
   tokenEndpointAuthMethod: z.enum(CLIENT_AUTH_METHODS),
-  jwks: z.strictObject({ keys: z.array(z.record(z.string(), z.unknown())).min(1).max(20) }),
+  jwks: z.strictObject({ keys: z.array(publicJwk).min(1).max(20) }),
   jwksUri: uri,
   requirePkce: z.boolean(),
   dpopBoundAccessTokens: z.boolean(),
@@ -205,7 +219,21 @@ export function clientCreateBodySchema(): z.ZodType {
       ? VALUE_SCHEMAS[name]
       : VALUE_SCHEMAS[name].optional();
   }
-  return z.strictObject(shape).meta({ id: 'AdminClientCreateRequest' });
+  // A registration is a security operation: its approver is shown every
+  // setting whole (`./approval-lines.ts`), so one that would not fit is
+  // refused here, before it is filed.
+  return z
+    .strictObject(shape)
+    .superRefine((body, context) => {
+      for (const problem of clientCreateLines(body, CREATE_HEADER_LINES).problems) {
+        context.addIssue({
+          code: 'custom',
+          message: problem.message,
+          path: problem.pointer === '' ? [] : [problem.pointer.slice(1)],
+        });
+      }
+    })
+    .meta({ id: 'AdminClientCreateRequest' });
 }
 
 /** The body of an operation that takes none: absent, or an empty object. */
@@ -735,9 +763,13 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
       const tx = adminTransaction(request);
       const state = await readClientState(request.server, realmId, request.params.clientId, tx);
       refuseDocumentClient(state);
-      assertClientSettings(
-        applyClientPatch(state, request.body),
-        await clientCheckContext(request, caller.targetRealm)
+      const applied = applyClientPatch(state, request.body);
+      assertClientSettings(applied, await clientCheckContext(request, caller.targetRealm));
+      // Refused as the save is: an approver could not be shown it whole.
+      assertShownInFull(
+        { method: 'PATCH', params: request.params, query: {}, body: request.body },
+        state,
+        applied
       );
       const { registry } = request.server.adminApi;
       const preview = previewClientPatch(
@@ -880,17 +912,22 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: 'Suspend a client',
         description:
-          'Suspends the client: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it. A write: it only takes tokens away, so it needs no approval and no If-Match. It takes no body, or an empty object. A client already suspended is answered as it is.',
-        'x-qauth-errors': [400, 401, 403, 404],
+          'Suspends the client: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it. A write, which only takes tokens away, needing clients.write and no approval; for a client that holds an admin scope (qauth:admin:*), a security operation, needing clients.security and an approval, since no new admin token is issued through it once it is suspended. If-Match names its ETag (428 without it, 412 when it moved). It takes no body, or an empty object. A client already suspended is answered as it is.',
+        'x-qauth-errors': [400, 401, 403, 404, 412, 428],
         params: clientParams,
+        headers: ifMatchHeadersSchema,
         body: emptyBody('AdminClientDisableRequest'),
         response: { 200: adminClientSchema },
       },
     },
     async (request, reply) => {
       const realmId = requestAdminCaller(request).targetRealm.id;
-      const row = await lockedClient(request, realmId, request.params.clientId);
-      const state = adminClientOf(row);
+      const { row, state } = await classifiedClient(
+        request,
+        operations.disable.id,
+        realmId,
+        request.params.clientId
+      );
       let after = state;
       if (!state.suspended) {
         const updated = await request.server.repositories.oauthClients.updateByAdmin(
