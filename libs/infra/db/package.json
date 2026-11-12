@@ -8,6 +8,7 @@
     "./migrations": "./src/migrations.ts",
     "./system-client": "./src/system-client.ts",
     "./grants": "./src/grants.ts",
+    "./account-verification": "./src/account-verification.ts",
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -20,6 +21,9 @@
       ],
       "grants": [
         "src/grants.ts"
+      ],
+      "account-verification": [
+        "src/account-verification.ts"
       ]
     }
   },

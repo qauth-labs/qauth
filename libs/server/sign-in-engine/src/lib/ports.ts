@@ -49,13 +49,23 @@ export interface SignInCandidate {
   /** `users.enabled`. A disabled user is answered as a wrong password and never changed. */
   readonly enabled: boolean;
   /**
-   * Whether the account's primary identity is proved (for a password
-   * account, its address). An engine built with `emailCodes` proves an
-   * unverified one's password and verifies its address inline (#638); one
-   * built without refuses it like a wrong password under
-   * `REQUIRE_VERIFIED_ACCOUNT`.
+   * Whether the account is verified: its primary identity is proved (for a
+   * password account, its address), or an operator verified the account
+   * (ADR-015 Decision 8, amended 2026-11-08; #1052). An engine built with
+   * `emailCodes` proves an unverified one's password and verifies its
+   * address inline (#638); one built without refuses it like a wrong
+   * password under `REQUIRE_VERIFIED_ACCOUNT`.
    */
   readonly verified: boolean;
+  /**
+   * Whether the address the identifier names was proved by its mailbox:
+   * the password credential's `email_verified`. A reset reads this, not
+   * {@link verified}: a reset proves the mailbox and hands the account to
+   * whoever holds it, and an operator's verification attests the account,
+   * not its address. An account an operator verified whose address was
+   * never proved is not reset by mail (`address_unproved`).
+   */
+  readonly addressProved: boolean;
   /**
    * The account's password, when it has one: whether it is disabled, and its
    * Argon2id hash, `null` when the credential's data cannot be read. Without
@@ -103,9 +113,18 @@ export interface SignInAccount {
    * password credential's address is not proved yet is verified inline after
    * its password (#638). An account with no password credential (a passkey or
    * a wallet is its primary identity) has no address to prove and is
-   * verified.
+   * verified. An operator's verification (#1052) verifies it too.
    */
   readonly verified: boolean;
+  /**
+   * Whether its address is proved by its mailbox, apart from an operator's
+   * verification (#1052): every password credential's `email_verified` and
+   * every upstream identity's `verified`; `verified` when absent. A
+   * registration that proves the mailbox and then the password records the
+   * address when this is false, on an account an operator verified too, so
+   * a later reset by mail opens for it.
+   */
+  readonly addressProved?: boolean;
   /** Every authenticator bound to it, disabled ones included. */
   readonly factors: readonly BoundFactor[];
   /**
@@ -681,6 +700,14 @@ export const SIGN_IN_AUDIT_REASONS = [
    * proof and gives the mailbox owner a new one.
    */
   'account_unclaimed',
+  /**
+   * An operator verified the account (#1052), but the address its password
+   * answers to was never proved by its mailbox. The operator attested the
+   * account, not the address, so whoever holds the mailbox need not be the
+   * person the operator verified: its right reset code is answered as a
+   * wrong one and nothing changes.
+   */
+  'address_unproved',
   /**
    * A binding needs a factor proved at most 5 minutes ago (ADR-017
    * Decision 8), and the transaction's is older (#653): nothing is bound,

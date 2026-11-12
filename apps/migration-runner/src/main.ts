@@ -6,6 +6,8 @@
  * with its duration and exits 0 once the database is current. A second
  * runner started beside it waits for the lock, then finds nothing to do.
  * `--check` reports the pending migrations and changes nothing.
+ * `verify-account --realm <name> --user <id>` records an operator's
+ * verification of an account (#1052) on a current database.
  *
  * Built by `nx run migration-runner:build` into one file,
  * `dist/apps/migration-runner/main.js`, with the generated migrations in

@@ -440,8 +440,41 @@ export const users = pgTable(
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     lastLoginAt: bigint('last_login_at', { mode: 'number' }),
+    /**
+     * When an operator verified the account, in epoch ms (ADR-015 Decision 8,
+     * amended 2026-11-08; #1052): the admin security operation `users.verify`,
+     * or the migration runner's `verify-account` command on the server host.
+     * NULL for an account no operator verified. Set once, never by a general
+     * update (`UpdateUser` leaves it out), only by
+     * `UsersRepository.recordOperatorVerification`.
+     *
+     * It is the operator's attestation of the account, beside the proof of its
+     * primary identity: a set value makes the account verified for sign-in and
+     * for owning an agent, and claims an unclaimed one (ADR-017). It says
+     * nothing about an address: `email_verified` stays as it was.
+     */
+    operatorVerifiedAt: bigint('operator_verified_at', { mode: 'number' }),
+    /**
+     * Who verified the account, with {@link users.operatorVerifiedAt}: the
+     * method and the operator, as `operator:<admin account id>` for the admin
+     * API, `operator_cli:<operating-system user>` for the command on the host,
+     * or `operator_cli` when the host named no user. The forms are
+     * `operatorVerifiedBy`/`parseOperatorVerifiedBy` of shared-validation.
+     */
+    operatorVerifiedBy: varchar('operator_verified_by', { length: 320 }),
   },
   (t) => [
+    // An operator's verification records its time and its operator together,
+    // or neither (#1052).
+    check(
+      'users_operator_verification_pair',
+      sql`(${t.operatorVerifiedAt} IS NULL) = (${t.operatorVerifiedBy} IS NULL)`
+    ),
+    // `OPERATOR_VERIFIED_BY_PATTERN` of shared-validation.
+    check(
+      'users_operator_verified_by_form',
+      sql`${t.operatorVerifiedBy} ~ '^(operator:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|operator_cli(:[^[:cntrl:]]{1,255})?)$'`
+    ),
     // The target of `sessions_user_realm_fk` (issue #468). Already unique
     // through `id`; it exists so a row that names a user can also name the
     // user's realm, and the database refuses a pair that disagrees. A

@@ -308,6 +308,30 @@ describe('the reset’s first code', () => {
     expect(built.resets.resets).toEqual([]);
   });
 
+  it('takes nothing of an account an operator verified whose address was never proved (#1052)', async () => {
+    // The operator attested the account, not its address: whoever holds the
+    // mailbox need not be the person verified, so a reset would hand them
+    // the account.
+    const built = build([
+      [ADDRESS, passwordAccount(USER, PASSWORD, { verified: true, addressProved: false })],
+    ]);
+    const ctx = context(built);
+    const code = await toCode(built, ctx);
+    expect(built.sender.sent.map((mail) => mail.reset)).toEqual(['withheld']);
+    const answered = await built.engine.advance(kept(code), codeAnswer(built.sender.last), ctx);
+    expect(answered).toMatchObject({
+      kind: 'step',
+      offer: { current: { ...RECOVERY_CODE, error: 'invalid_credentials' } },
+    });
+    expect(kept(answered).subject).toBeUndefined();
+    expect(ctx.records.at(-1)).toMatchObject({
+      outcome: 'refused',
+      step: 'email_code',
+      reason: 'address_unproved',
+    });
+    expect(built.resets.resets).toEqual([]);
+  });
+
   it('refuses a wrong code and keeps the transaction', async () => {
     const built = build();
     const ctx = context(built);

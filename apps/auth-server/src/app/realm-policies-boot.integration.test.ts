@@ -232,7 +232,11 @@ describe('realm policies at boot on the auth server (#516)', () => {
       max_environment_laxity: 'staging',
       policies_version: 1,
     });
-    expect(await users()).toEqual(usersBefore);
+    // Migration 0070 (#1052) adds two nullable columns to users: every row
+    // reads them as null and keeps every column it had.
+    expect(await users()).toEqual(
+      usersBefore.map((row) => ({ ...row, operator_verified_at: null, operator_verified_by: null }))
+    );
 
     // A later boot with other values changes nothing, and names each key once.
     const second = environment({

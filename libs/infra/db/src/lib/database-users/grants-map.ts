@@ -20,7 +20,8 @@ import type { DatabaseRole } from './roles';
  * - `realm_keys`, the private keys: only `signer` reads or writes it. Every
  *   other role verifies with `realm_public_keys`, which it may only read;
  *   only `signer` writes a published key.
- * - `events`: the roles that write events (`web`, `api`) may only insert,
+ * - `events`: the roles that write events (`web`, `api`, and `admin` for the
+ *   events of an admin operation, such as `user.verified`) may only insert,
  *   and read what they need through the functions of migrations 0033 and
  *   0055, never the table: it holds every realm's request IPs, user agents
  *   and admin diffs (`eventsWriterGrantStatements`).
@@ -103,9 +104,10 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // a stream and reads a stream's delivery status.
   event_deliveries: { api: SI, delivery: SIU },
   event_delivery_positions: { delivery: SIUD },
-  // The event store (#457): written by `web` and `api`, read and pruned by
-  // `delivery` alone.
-  events: { web: I, api: I, delivery: SD },
+  // The event store (#457): written by `web` and `api`, and by `admin` for
+  // the events its operations record (`user.verified`, #1052); read and
+  // pruned by `delivery` alone.
+  events: { web: I, api: I, admin: I, delivery: SD },
   // `web` stores CIMD clients as it fetches their documents; `api` also
   // registers, updates and deletes clients. `delivery` reads columns only.
   oauth_clients: { web: SIU, api: SIUD },
@@ -137,6 +139,8 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   ssf_stream_subjects: { api: SID },
   ssf_streams: { api: SIUD, delivery: S },
   user_attributes: { web: SIU, api: SIU },
+  // `admin` reads nothing of it: what `users.verify` shows of an account's
+  // credentials comes through `user_credential_proofs` (#1052).
   user_credentials: { web: SIU, api: SIU },
   // Each account's recovery codes (#649): the sign-in engine, on `web`,
   // reads an account's codes, takes one (an `UPDATE … WHERE used_at IS NULL`)
@@ -157,7 +161,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // deletes a row but the user's or the realm's cascade.
   user_session_epochs: { web: SIU },
   // `api` creates accounts; `web` and `api` record sign-ins; `admin` finds
-  // the account behind an admin token. No role deletes one.
+  // the account behind an admin token, and records an operator's
+  // verification of one only through `users_record_operator_verification`
+  // (`users.verify`, #1052). No role deletes one.
   users: { web: SIU, api: SIU, admin: S },
 });
 
@@ -199,11 +205,17 @@ export const COLUMN_GRANTS: ColumnGrants = Object.freeze({
 export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // An admin event's chain head and the row the writer's own transaction
   // wrote (migration 0033): the event writers.
-  '"events_admin_chain_head"(uuid)': ['web', 'api'],
-  '"events_own_row"(uuid)': ['web', 'api'],
+  '"events_admin_chain_head"(uuid)': ['web', 'api', 'admin'],
+  '"events_own_row"(uuid)': ['web', 'api', 'admin'],
   // The event store's lag, which every process that builds the events
-  // repository reports on its metrics.
-  '"events_oldest_unread_time"()': ['web', 'api', 'delivery'],
+  // repository reports on its metrics: `admin` builds it too since it writes
+  // the events of its operations (#1052).
+  '"events_oldest_unread_time"()': ['web', 'api', 'admin', 'delivery'],
+  // An operator's verification of an account (`users.verify`, migration
+  // 0070, #1052): what the account's credentials prove, read without their
+  // secrets, and the write of the verification's two columns alone.
+  '"user_credential_proofs"(uuid, uuid)': ['admin'],
+  '"users_record_operator_verification"(uuid, uuid, uuid, bigint)': ['admin'],
   // Whether an event about a user can still reach an SSF stream (migration
   // 0055): the subject sweep, an `api` job.
   '"ssf_subject_events_pending"(uuid, text)': ['api'],

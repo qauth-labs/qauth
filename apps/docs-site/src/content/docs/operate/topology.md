@@ -3,7 +3,7 @@ title: Topology
 description: How a QAuth deployment is laid out — one host and one issuer per realm on a dedicated host, DNS and TLS per realm, endpoint hosts for server-side callers, service roles and mutual TLS between them, database users, and the reverse proxy in front.
 sidebar:
   order: 1
-lastVerified: '2026-11-03'
+lastVerified: '2026-11-08'
 ---
 
 This page describes the layout of a QAuth deployment, as
@@ -228,14 +228,14 @@ single deployment above. Once one is set, all five must be.
 What the grants give, from the map in
 `libs/infra/db/src/lib/database-users/grants-map.ts`:
 
-| Table                    | Who                                                                                                  |
-| ------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `realm_keys`             | `signer` alone reads and writes it.                                                                  |
-| `realm_public_keys`      | Every role reads it; only `signer` writes it.                                                        |
-| `events`                 | `web` and `api` only insert, and read their own rows through functions; `delivery` reads and prunes. |
-| `audit_logs`             | No role: it has no writer since #458.                                                                |
-| `admin_grants`           | `web`, `api` and `admin` read it; no role writes it.                                                 |
-| The outbox and its queue | `delivery`, with only the columns of `realms`, `oauth_clients` and the stream subjects it reads.     |
+| Table                    | Who                                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `realm_keys`             | `signer` alone reads and writes it.                                                                           |
+| `realm_public_keys`      | Every role reads it; only `signer` writes it.                                                                 |
+| `events`                 | `web`, `api` and `admin` only insert, and read their own rows through functions; `delivery` reads and prunes. |
+| `audit_logs`             | No role: it has no writer since #458.                                                                         |
+| `admin_grants`           | `web`, `api` and `admin` read it; no role writes it.                                                          |
+| The outbox and its queue | `delivery`, with only the columns of `realms`, `oauth_clients` and the stream subjects it reads.              |
 
 No role user holds `TRUNCATE`, `REFERENCES` or `TRIGGER`, owns a table, or can
 create one in the schema (a temporary table, which lasts as long as its own

@@ -410,4 +410,114 @@ describe('migration runner (built program, testcontainers Postgres)', () => {
       ]);
     });
   });
+
+  // #1052: the account verification of a deployment with no admin API set
+  // up. The database below has never been served by an auth server, so no
+  // admin listener exists.
+  describe('verify-account (#1052)', () => {
+    async function seedAccount(url: string) {
+      expect((await runRunner(url)).code).toBe(0);
+      const [realm] = await query<{ id: string }>(
+        url,
+        `INSERT INTO realms (name) VALUES ('master') RETURNING id`
+      );
+      const [user] = await query<{ id: string }>(
+        url,
+        `INSERT INTO users (realm_id) VALUES ($1) RETURNING id`,
+        [realm?.id]
+      );
+      if (!realm || !user) throw new Error('the seed wrote no rows');
+      return { realmId: realm.id, userId: user.id };
+    }
+
+    const verification = (url: string, userId: string) =>
+      query<{ operator_verified_at: string | null; operator_verified_by: string | null }>(
+        url,
+        'SELECT operator_verified_at, operator_verified_by FROM users WHERE id = $1',
+        [userId]
+      );
+
+    const eventsOf = (url: string, realmId: string) =>
+      query<{ type: string; actor_type: string; subject_id: string; data: unknown }>(
+        url,
+        'SELECT type, actor_type, subject_id, data FROM events WHERE realm_id = $1 ORDER BY seq',
+        [realmId]
+      );
+
+    it('verifies the account, records user.verified, and keeps the first verification on a second run', async (ctx) => {
+      const url = await freshDatabase(ctx);
+      const { realmId, userId } = await seedAccount(url);
+
+      const result = await runRunner(url, [
+        'verify-account',
+        '--realm',
+        'master',
+        '--user',
+        userId,
+      ]);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain(`Verified the account ${userId}`);
+      const [stored] = await verification(url, userId);
+      expect(stored?.operator_verified_at).not.toBeNull();
+      expect(stored?.operator_verified_by).toMatch(/^operator_cli(:.+)?$/);
+      expect(await eventsOf(url, realmId)).toEqual([
+        {
+          type: 'urn:qauth:event:user.verified:v1-rc.0',
+          actor_type: 'operator_cli',
+          subject_id: userId,
+          data: { method: 'operator_cli' },
+        },
+      ]);
+
+      const again = await runRunner(url, ['verify-account', `--realm=master`, `--user=${userId}`]);
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).toContain('already verified');
+      expect(await verification(url, userId)).toEqual([stored]);
+      expect(await eventsOf(url, realmId)).toHaveLength(1);
+    });
+
+    it('refuses a disabled account and an unknown one with exit 6, changing nothing', async (ctx) => {
+      const url = await freshDatabase(ctx);
+      const { realmId, userId } = await seedAccount(url);
+      await query(url, 'UPDATE users SET enabled = false WHERE id = $1', [userId]);
+
+      const disabled = await runRunner(url, [
+        'verify-account',
+        '--realm',
+        'master',
+        '--user',
+        userId,
+      ]);
+      expect(disabled.code).toBe(6);
+      expect(disabled.stderr).toContain('is disabled');
+      const unknown = await runRunner(url, [
+        'verify-account',
+        '--realm',
+        'master',
+        '--user',
+        '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f',
+      ]);
+      expect(unknown.code).toBe(6);
+      expect(unknown.stderr).toContain('holds no account');
+      expect(await verification(url, userId)).toEqual([
+        { operator_verified_at: null, operator_verified_by: null },
+      ]);
+      expect(await eventsOf(url, realmId)).toEqual([]);
+    });
+
+    it('exits 1 on a database whose migrations are pending, applying none', async (ctx) => {
+      const url = await freshDatabase(ctx);
+
+      const result = await runRunner(url, [
+        'verify-account',
+        '--realm',
+        'master',
+        '--user',
+        '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f',
+      ]);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('Run the migration runner to apply them');
+      expect(await query(url, `SELECT to_regclass('public.users') AS t`)).toEqual([{ t: null }]);
+    });
+  });
 });

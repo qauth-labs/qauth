@@ -279,6 +279,12 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'Link an enterprise ID-JAG subject to an account, the one link an admin may make.'
   ),
   reserve(
+    'users.verify',
+    ['credential-path'],
+    `${ADR_019}, ADR-015 Decision 8, #1052, #682`,
+    "Verify an account as the operator: it counts as verified for sign-in and for owning an agent, and an unclaimed account is claimed, so another person's mailbox proof no longer ends it."
+  ),
+  reserve(
     'upstreamProviders.create',
     ['credential-path'],
     `${ADR_019}, #714`,

@@ -220,10 +220,33 @@ describe('defineOperation: the static rule (#508)', () => {
     ).toThrow(/declares the strictest case, class security/);
   });
 
-  it('refuses loadState without classify', () => {
-    expect(() =>
-      defineOperation(readOperation({ loadState: async () => ({}), stateVersion: () => 'v1' }))
-    ).toThrow(/loadState is read only by classify/);
+  // #1052: an operation may read state only to show it to an approver and
+  // bind the request to it; it needs its declaration on every request.
+  it('takes loadState without classify, which leaves the declaration on every request, bound to the version', () => {
+    const verify = defineOperation({
+      id: 'widgets.verify',
+      class: 'security',
+      effects: ['credential-path'],
+      permissions: ['realms.policies.security'],
+      description: 'Verify a widget.',
+      loadState: async () => ({ widget: 1 }),
+      stateVersion: () => 'v1',
+    });
+    expect(
+      classifyRequest(
+        { permissions: PERMISSION_REGISTRY },
+        verify,
+        { method: 'POST', params: {}, query: {}, body: null },
+        { widget: 1 },
+        'v1'
+      )
+    ).toMatchObject({
+      class: 'security',
+      effects: ['credential-path'],
+      permissions: ['realms.policies.security'],
+      failedClosed: null,
+      stateVersion: 'v1',
+    });
   });
 
   // M1: the classification holds for the state it was made against only.

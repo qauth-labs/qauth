@@ -2742,12 +2742,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
        * password whose address was proved. An unclaimed account (an address
        * never proved, ADR-017 Decision 8) is not: a reset would keep a `sub`
        * someone other than the mailbox owner may have created, until #641
-       * ends such an account at this proof.
+       * ends such an account at this proof. Nor is an account an operator
+       * verified whose address was never proved (#1052): the operator
+       * attested the account, not the address.
        */
       const resettable = (candidate: SignInCandidate | null): candidate is SignInCandidate =>
         candidate !== null &&
         candidate.enabled &&
-        candidate.verified &&
+        candidate.addressProved &&
         candidate.password !== null;
       if (!provedMailbox()) {
         const taken: { candidate: SignInCandidate | null } = { candidate: null };
@@ -2762,7 +2764,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             const { candidate } = taken;
             if (candidate === null || candidate.password === null) return 'invalid_credentials';
             if (!candidate.enabled) return 'account_disabled';
-            return candidate.verified ? null : 'account_unclaimed';
+            if (candidate.addressProved) return null;
+            return candidate.verified ? 'address_unproved' : 'account_unclaimed';
           },
         });
         if ('result' in answered) return answered.result;
@@ -3435,8 +3438,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     // A registration for an address an account holds (#640): its mailbox was
     // proved before its password, so the same person proved both, and an
     // address not verified yet is verified now, as the inline verification
-    // would after the password (ADR-017 Decision 8).
-    if (registering && !account.verified && provedMailbox() && emailCodes !== undefined) {
+    // would after the password (ADR-017 Decision 8). An account an operator
+    // verified (#1052) has its address recorded too: the operator's
+    // verification is not the address's proof.
+    if (
+      registering &&
+      !(account.addressProved ?? account.verified) &&
+      provedMailbox() &&
+      emailCodes !== undefined
+    ) {
       const { identifier } = state.transaction;
       if (identifier === undefined)
         throw new Error('sign-in engine: a registration without its address');
@@ -3450,7 +3460,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         }
         return ended('email_code', reason);
       }
-      account = { ...account, verified: true };
+      account = { ...account, verified: true, addressProved: true };
     }
     // An address this transaction has still to verify: the account's is not
     // proved, and no code of this transaction proved it.

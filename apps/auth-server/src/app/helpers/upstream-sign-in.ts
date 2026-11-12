@@ -27,6 +27,7 @@ import {
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
 import { ceremonyPagePath, stepUrn } from '@qauth-labs/shared-interaction-contract';
+import { isOperatorVerified } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
@@ -566,7 +567,9 @@ export async function lookUpAccount(
     kind: 'account',
     userId: user.id,
     enabled: user.enabled,
-    verified: data.data.verified,
+    // What QAuth proved of the identity, or an operator's verification of
+    // the account (#1052).
+    verified: data.data.verified || isOperatorVerified(user),
     created: false,
   };
 }

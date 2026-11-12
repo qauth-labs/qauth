@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseRunnerArgs, RUNNER_EXIT, RUNNER_USAGE, runRunner } from './cli';
+import {
+  parseRunnerArgs,
+  parseVerifyAccountArgs,
+  RUNNER_EXIT,
+  RUNNER_USAGE,
+  runRunner,
+} from './cli';
 
 /**
  * The runner's command line without a database (issue #474). The container
@@ -182,5 +188,69 @@ describe('runRunner with database users for the roles (#498)', () => {
     expect(RUNNER_USAGE).toContain('DB_USER_DELIVERY');
     expect(RUNNER_USAGE).toContain('Exits 5 when the migrations are applied but the grants');
     expect(RUNNER_EXIT.grantsFailed).toBe(5);
+  });
+});
+
+describe('verify-account (#1052)', () => {
+  const USER = '018F2D6E-8A8B-7C3D-9E0F-1A2B3C4D5E6F';
+
+  it('reads --realm and --user, each with its value apart or after =', () => {
+    const expected = { help: false, realm: 'master', userId: USER.toLowerCase() };
+    expect(parseVerifyAccountArgs(['--realm', 'master', '--user', USER])).toEqual(expected);
+    expect(parseVerifyAccountArgs(['--user=' + USER, '--realm=master'])).toEqual(expected);
+    expect(parseVerifyAccountArgs(['--help'])).toEqual({ help: true });
+  });
+
+  it('refuses a missing or repeated flag, a missing value, an unknown flag and a user that is no UUID', () => {
+    for (const args of [
+      [],
+      ['--realm', 'master'],
+      ['--user', USER],
+      ['--realm', 'master', '--user'],
+      ['--realm', '--user', USER],
+      ['--realm=', '--user', USER],
+      ['--realm', 'a', '--realm', 'b', '--user', USER],
+      ['--realm', 'master', '--user', 'not-a-uuid'],
+      ['--realm', 'master', '--user', USER, '--force'],
+      ['master', USER],
+    ]) {
+      expect(parseVerifyAccountArgs(args), JSON.stringify(args)).toBeNull();
+    }
+  });
+
+  it('prints the usage and exits 2 on bad arguments, and exits 2 without DATABASE_URL', async () => {
+    const bad = capture();
+    await expect(
+      runRunner(argv('verify-account', '--realm', 'master'), {}, '/m', bad.io)
+    ).resolves.toBe(RUNNER_EXIT.usage);
+    expect(bad.err).toEqual([RUNNER_USAGE]);
+
+    const unset = capture();
+    await expect(
+      runRunner(argv('verify-account', '--realm', 'master', '--user', USER), {}, '/m', unset.io)
+    ).resolves.toBe(RUNNER_EXIT.usage);
+    expect(unset.err).toEqual(['DATABASE_URL must be set in the environment.']);
+  });
+
+  it('exits 3, changing nothing, when it cannot check the migrations first', async () => {
+    const { out, err, io } = capture();
+    const env = { DATABASE_URL: 'postgresql://u:p@127.0.0.1:1/db' };
+    await expect(
+      runRunner(
+        argv('verify-account', '--realm', 'master', '--user', USER),
+        env,
+        '/nonexistent/drizzle',
+        io
+      )
+    ).resolves.toBe(RUNNER_EXIT.cannotRun);
+    expect(out).toEqual([]);
+    expect(err).toHaveLength(1);
+    expect(err[0]).toMatch(/^Cannot check the migrations:/);
+  });
+
+  it('describes the command and its exit code in the usage', () => {
+    expect(RUNNER_USAGE).toContain('node main.js verify-account --realm <name> --user <id>');
+    expect(RUNNER_USAGE).toContain('6 when the realm holds no such account or it is disabled');
+    expect(RUNNER_EXIT.accountRefused).toBe(6);
   });
 });

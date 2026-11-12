@@ -562,6 +562,51 @@ describe('each service role on a database user of its own (#498)', () => {
     expect(cancelled.statusCode, cancelled.body).toBe(200);
     expect(cancelled.json()).toMatchObject({ status: 'cancelled' });
 
+    // users.verify (#1052), approved and run as the admin user: it reads the
+    // account, what its credentials prove through user_credential_proofs,
+    // records the verification through users_record_operator_verification
+    // (it holds no SELECT on user_credentials and no UPDATE on users), and
+    // records user.verified in the event store.
+    const account = (
+      await fixture.app.repositories.users.create({ realmId: realm.id }, testPrimaryCredential())
+    ).id;
+    const verifyFiled = await send('POST', approvals, {
+      operation: 'users.verify',
+      params: { userId: account },
+      body: {},
+    });
+    expect(verifyFiled.statusCode, verifyFiled.body).toBe(201);
+    const verifyApproval = json<{ id: string }>(verifyFiled).id;
+    // Imported once the boots reset the modules.
+    const { createTestApprovalFactor } = await import('../testing/approval-factor');
+    const engine = await import('./admin/approvals/engine');
+    const test = createTestApprovalFactor();
+    const approver = { realmId: realm.id, accountId: userId };
+    const decision = {
+      realmId: realm.id,
+      approvalId: verifyApproval,
+      approver,
+      sessionIssuedAtMs: Date.now(),
+    };
+    const { challenge } = await engine.startApproval(fixture.app, test.factor, decision);
+    await engine.completeApproval(fixture.app, test.factor, {
+      ...decision,
+      response: test.answer(challenge, approver),
+    });
+    const verified = await send(
+      'POST',
+      `/admin/v1-rc.0/realms/${realm.id}/users/${account}/verification`,
+      {},
+      { 'if-match': '*', 'qauth-approval': verifyApproval }
+    );
+    expect(verified.statusCode, verified.body).toBe(200);
+    const recorded = await fixture.app.dbPool.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM events
+        WHERE realm_id = $1 AND type = 'urn:qauth:event:user.verified:v1-rc.0'`,
+      [realm.id]
+    );
+    expect(recorded.rows[0]?.count).toBe(1);
+
     // The pipeline audited every call, in the admin user's transactions.
     const { rows } = await fixture.app.dbPool.query<{ count: number }>(
       'SELECT count(*)::int AS count FROM admin_audit_log WHERE realm_id = $1',

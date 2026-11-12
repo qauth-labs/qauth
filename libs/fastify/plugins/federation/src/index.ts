@@ -102,6 +102,7 @@ export type {
   PrimaryIdentity,
   PrimaryIdentityKind,
   UpstreamProviderSwitch,
+  VerifiedOwnerAccount,
   VerifiedOwnerDecision,
   VerifiedOwnerRefusalReason,
 } from '@qauth-labs/server-federation';
