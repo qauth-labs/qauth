@@ -340,10 +340,11 @@ Interaction API, until the design-system screens of #654 replace them:
   secret is personal data, so the page is shown only to the browser whose
   flow cookie binds the interaction, and never to a page another site opened
   (`403`). The interaction record does not keep it: each read opens the
-  sign-in's sealed copy again. An account whose address is not proved cannot bind one, and the
-  first second factor of a password-only account also needs a code mailed to
-  its address, unless the sign-in proved the mailbox already. The first
-  binding issues a set of recovery codes.
+  sign-in's sealed copy again. A verified account binds its first
+  authenticator app after a fresh sign-in, with no code mailed to its address:
+  the account decides, never a channel (ADR-017 Decision 8, amended on
+  2026-11-08). An unclaimed account, a password account not yet verified,
+  binds none. The first binding issues a set of recovery codes.
 
 Both work without JavaScript and post to the Interaction API's answer endpoint
 with the step and its CSRF value. An interaction at another step is sent to
@@ -396,9 +397,9 @@ recovery code in place of the lost one; renaming a passkey and ending sessions
 ask for none. A change refused for want of one answers `403` with "Confirm it's
 you", which starts that sign-in and comes back. Adding a passkey, setting up an
 app and linking an account are such a sign-in themselves, followed by the
-binding step, with its own rules: a password-only account proves its mailbox
-with a mailed code before its first second factor, and the first one issues a
-recovery code set. A link attaches only the identity the provider proved to
+binding step, with its own rules: a verified account binds its first passkey
+or app with no mailed code, an unclaimed account binds none, and the first
+one issues a recovery code set. A link attaches only the identity the provider proved to
 the account the same interaction signed in to; nothing is matched by an email
 address.
 
