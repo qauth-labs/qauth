@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/user.upstream_linked.v1-rc.0.json",
   "title": "urn:qauth:event:user.upstream_linked:v1-rc.0",
-  "description": "The user.upstream_linked event, v1-rc.0. A person linked an upstream identity to their account: the provider proved the identity, and the person then signed in to the account, with its own factors or through another upstream provider whose identity the account already holds, under its MFA policy, in the same browser and the same interaction. The account can sign in through the provider from now on. The person is told by email.",
+  "description": "The user.upstream_linked event, v1-rc.0. A person linked an upstream identity to their account: the provider proved the identity, and the person then signed in to the account, with its own factors or through another upstream provider whose identity the account already holds, under its MFA policy, in the same browser and the same interaction. The account can sign in through the provider from now on. The person is told by email at the address of the account’s password; an account with no password, such as one made through a provider, has this record alone.",
   "type": "object",
   "properties": {
     "id": {
