@@ -1844,21 +1844,31 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const settled = (current: SignInAccount): SignInAccount => settledAccount(current, clock.now());
     /**
      * Whether this transaction proved a factor beyond the password that is
-     * not new (#1064): the passkey that answered (named by the port), or the
-     * account's TOTP. A passkey the port did not name counts as not new, as
-     * every passkey did before #1064.
+     * not new (#1064): the passkey that answered (named by the port), the
+     * account's TOTP, or a recovery code of an account that holds no new
+     * factor.
+     *
+     * A passkey the port did not name counts as not new, as every passkey did
+     * before #1064; one it named that the account no longer holds (removed
+     * meanwhile) proves nothing settled. A code may have been shown with a
+     * factor that is still new (the first binding issues the set), so it
+     * stands in for a settled factor only once no factor is new: removing a
+     * new factor deletes the set (ADR-017 Decision 8, amended 2026-11-12).
      */
     const provedSettledBeyondPassword = (current: SignInAccount): boolean => {
       const now = clock.now();
       return state.transaction.verified.some((step) => {
+        if (step.step === 'recovery_code') {
+          return !current.factors.some((held) => isNewFactor(held, now));
+        }
         const factor = factorOf(step.step);
         if (factor === 'passkey') {
           const id = state.transaction.passkeyCredential;
-          const bound =
-            id === undefined
-              ? undefined
-              : current.factors.find((held) => held.type === 'passkey' && held.credentialId === id);
-          return bound === undefined || !isNewFactor(bound, now);
+          if (id === undefined) return true;
+          const bound = current.factors.find(
+            (held) => held.type === 'passkey' && held.credentialId === id
+          );
+          return bound !== undefined && !isNewFactor(bound, now);
         }
         if (factor === 'totp') {
           return current.factors.some((held) => held.type === 'totp' && !isNewFactor(held, now));
@@ -1877,9 +1887,9 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * Whether a factor this transaction binds is new (#1064; ADR-017
      * Decision 8, amended 2026-11-12): the account has a password, and the
      * sign-in proved no factor beyond it that is not new itself (a password,
-     * an upstream provider, a recovery code or a new factor). Such a factor is
-     * removable with the password for the realm's window. One bound after a
-     * factor that is not new is never new.
+     * an upstream provider, a new factor, or a recovery code while a factor
+     * is new). Such a factor is removable with the password for the realm's
+     * window. One bound after a factor that is not new is never new.
      */
     const bindsNew = (current: SignInAccount): boolean =>
       current.factors.some((factor) => factor.type === 'password') &&

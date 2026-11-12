@@ -812,6 +812,46 @@ describe('a TOTP bound after a password-only sign-in (#1064)', () => {
     expect(stepOf(await signIn(built))).toBe('totp');
   });
 
+  /** Rebind a disabled TOTP after a recovery code, as the hosted pages ask. */
+  const rebindAfterCode = async (built: Awaited<ReturnType<typeof build>>) => {
+    const ctx = context(built);
+    const offered = await signIn(built, ctx);
+    const setUp = await built.engine.advance(
+      kept(offered),
+      answer('recovery_code', { recovery_code: built.set[0] }),
+      ctx
+    );
+    expect(stepOf(setUp)).toBe('totp_setup');
+    await firstCode(built, setUp, ctx);
+    return built.totp.rows.get(`${REALM}:${USER}`);
+  };
+
+  it('is not new when a recovery code stood in for a lost one on an account with no new factor', async () => {
+    // Someone who knows the password disabled the owner's TOTP with wrong
+    // codes; the owner's code and the TOTP they bind keep the account as
+    // strong as it was.
+    const built = await build({ totp: 'disabled' });
+    naming(built);
+    const row = await rebindAfterCode(built);
+    expect(row).toMatchObject({ disabled: false });
+    expect(row?.isNew).toBeUndefined();
+  });
+
+  it('is new when a recovery code stood in while the account holds a new factor', async () => {
+    // The codes may have been shown with that new factor: they settle nothing.
+    const built = await build({
+      totp: 'disabled',
+      account: {
+        others: [
+          { type: 'passkey', disabled: false, credentialId: 'passkey-new', newUntil: T0 + WINDOW },
+        ],
+      },
+    });
+    naming(built);
+    const row = await rebindAfterCode(built);
+    expect(row).toMatchObject({ disabled: false, isNew: true });
+  });
+
   it('is owed in full when it never was new, and the sign-in names none', async () => {
     const built = await build({ totp: 'bound' });
     naming(built);

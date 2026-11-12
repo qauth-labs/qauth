@@ -93,6 +93,10 @@ context:
   totpNew:
     values: [false, true]
     initial: any
+  # Whether the account holds a passkey that is new (#1064; flows/core/passkey).
+  passkeyNew:
+    values: [false, true]
+    initial: any
   # Whether the account holds a password. A factor bound on an account without one is never new.
   passwordHeld:
     values: [false, true]
@@ -202,8 +206,12 @@ guards:
   unclaimed: 'not addressProved'
   stale: "authAge == 'stale'"
   validSetupCode: "setupCode == 'valid'"
-  # The set-up follows no proved passkey and no proved TOTP, so nothing beyond the password that is not new was proved.
-  bindsNew: 'passwordHeld or afterPassword'
+  # A recovery code stands in for a settled factor only on an account that holds no new factor (ADR-017 Decision 8,
+  # amended 2026-11-12): the first binding shows the set, so while that factor is new the codes may be its taker's.
+  codeSettles: 'codeTaken and not totpNew and not passkeyNew'
+  # The set-up follows no proved passkey and no proved TOTP, so only a code that settles proved a factor beyond the
+  # password that is not new.
+  bindsNew: '(passwordHeld or afterPassword) and not codeSettles'
   disabled: 'totpDisabled'
 
 effects:
@@ -495,7 +503,9 @@ states:
         effect: [markNew]
         say: "only the password was proved: the TOTP is bound new, until the end of the realm's window"
       - target: bindingSecret
-        say: 'the account holds no password: the TOTP is a full factor'
+        say: >-
+          the account holds no password, or a recovery code stood in on an account that holds no new factor: the TOTP
+          is a full factor
 
   bindingSecret:
     title: Bind the secret to the account
@@ -773,10 +783,17 @@ assertions:
     never: 'secretBound and not signalled'
     say: "Every bound TOTP reaches the user's Shared Signals streams as a CAEP credential-change"
   - id: new-after-the-password-alone
-    never: 'secretBound and (passwordHeld or afterPassword) and not storedNew'
+    never: >-
+      secretBound and (passwordHeld or afterPassword) and not (codeTaken and not totpNew and not passkeyNew) and not
+      storedNew
     say: >-
-      A TOTP set up after a sign-in that proved only the password is always new: the owner can remove it with the
-      password, and it blocks no reset
+      A TOTP set up after a sign-in that proved only the password, or a recovery code while the account holds a new
+      factor, is always new: the owner can remove it with the password, and it blocks no reset
+  - id: a-code-without-a-new-factor-settles
+    never: 'secretBound and storedNew and codeTaken and not totpNew and not passkeyNew'
+    say: >-
+      A TOTP set up again after a recovery code, on an account that holds no new factor, is a full factor: whoever
+      disables the owner's TOTP with wrong codes does not make the owner's rebind weaker
   - id: a-settled-totp-is-owed
     never: "state == 'goesOn' and totp == 'usable' and not totpNew and not mfaProved and not codeTaken"
     say: 'An account whose TOTP is not new never completes the first factor without it, a passkey or a recovery code'

@@ -1077,6 +1077,26 @@ describe('a passkey bound after a password-only sign-in (#1064)', () => {
     });
   });
 
+  it('counts a passkey it named that the account no longer holds as no settled factor', async () => {
+    const built = build(accountWithPasskey());
+    naming(built);
+    await withSavedSet(built);
+    const ctx = context(built, { enrol: 'passkey' });
+    const first = await built.engine.advance(null, null, ctx);
+    const offered = await built.engine.advance(kept(first), assertion(first), ctx);
+    expect(offerOf(offered).current.step).toBe('webauthn_create');
+    // Removed meanwhile, as the account page removes a new one: what the
+    // transaction proved is gone, so a passkey it binds is new.
+    const current = built.directory.accounts.get(IDENTIFIER);
+    if (current === undefined) throw new Error('no account');
+    built.directory.accounts.set(IDENTIFIER, {
+      ...current,
+      others: current.others.filter((factor) => factor.type !== 'passkey'),
+    });
+    await built.engine.advance(kept(offered), registration(offered), ctx);
+    expect(built.passkeys.bindings).toEqual([{ id: 'credential-new', isNew: true }]);
+  });
+
   it('counts in full once the window is over: the password alone no longer completes', async () => {
     const built = build(accountWithPasskey(T0 + WINDOW));
     naming(built);

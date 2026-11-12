@@ -128,8 +128,10 @@ context:
   passkeyNew:
     values: [false, true]
     initial: any
-  # The transaction proved a factor beyond the password that is not new: an authenticator app (core.totp). A recovery
-  # code is not one, so a chain of new factors never settles itself.
+  # The transaction proved a factor beyond the password that is not new: an authenticator app (core.totp), or a
+  # recovery code on an account that holds no new factor (the first binding shows the set, so while that factor is new
+  # the codes may be its taker's, and a chain of new factors never settles itself). A passkey the transaction proved
+  # that the account no longer holds proves nothing.
   settledBeyondPassword:
     values: [false, true]
     initial: any
