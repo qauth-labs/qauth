@@ -3,6 +3,9 @@ import { createHash } from 'node:crypto';
 import { SECURITY_EFFECTS, type SecurityEffect } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
+import { classifyClientPatch } from '../admin/clients/fields';
+import { classifyClientDisable } from '../admin/clients/operations';
+import type { AdminClient } from '../admin/clients/representation';
 import { classifyPolicyPatch, type RealmPolicyState } from '../admin/realms/operations';
 import {
   ADMIN_OPERATIONS,
@@ -693,7 +696,12 @@ describe('the server registry and reserved table (#508)', () => {
   it('lets only request-dependent reserved operations classify', () => {
     expect(
       RESERVED_OPERATIONS.filter((entry) => entry.requestDependent).map((entry) => entry.id)
-    ).toEqual(['realms.policies.update', 'clients.update', 'realms.imports.apply']);
+    ).toEqual([
+      'realms.policies.update',
+      'clients.update',
+      'clients.disable',
+      'realms.imports.apply',
+    ]);
     // M2: answering `write` for every request no longer takes the entry.
     const policies = defineOperation({
       id: 'realms.policies.update',
@@ -1114,26 +1122,6 @@ const securityWith = (...effects: SecurityEffect[]): Classification => ({
   permissions: ['realms.policies.security'],
 });
 
-/** The member of a merge-patch body at a top-level or two-level JSON Pointer. */
-function at(value: unknown, path: string): unknown {
-  return path
-    .split('/')
-    .slice(1)
-    .reduce<unknown>(
-      (node, key) =>
-        typeof node === 'object' && node !== null
-          ? (node as Record<string, unknown>)[key]
-          : undefined,
-      value
-    );
-}
-
-/** A field that is a security change unless it keeps or tightens `safe`. */
-const unless =
-  (path: string, safe: (value: unknown, current: unknown) => boolean, effect: SecurityEffect) =>
-  (request: ClassifyInput, state: unknown): Classification =>
-    safe(at(request.body, path), at(state, path)) ? WRITE : securityWith(effect);
-
 // realms.read: a policy patch answers the realm it changes (#517).
 const REQUEST_DEPENDENT_PERMISSIONS = [
   'realms.policies.write',
@@ -1141,62 +1129,24 @@ const REQUEST_DEPENDENT_PERMISSIONS = [
   'realms.read',
 ];
 
+/** The permissions each request-dependent entry's shipped operation declares. */
+const DECLARED_PERMISSIONS: Readonly<Record<string, readonly string[]>> = {
+  // clients.read: a client update answers the client it changes (#632).
+  'clients.update': ['clients.write', 'clients.security', 'clients.read'],
+  'clients.disable': ['clients.write', 'clients.security'],
+};
+
 /** A correct classify for each request-dependent reserved entry, as its issue would write it. */
 const CORRECT_CLASSIFY: Record<string, AdminOperationDefinition['classify']> = {
   // The shipped classify (#517): every field by the merged document's diff.
   'realms.policies.update': (request, state) =>
     classifyPolicyPatch(request, state as RealmPolicyState),
-  'clients.update': classifyByField<unknown>({
-    changedFields: (request) => mergePatchLeafPaths(request.body),
-    fields: {
-      '/redirectUris': unless(
-        '/redirectUris',
-        (next, current) =>
-          Array.isArray(next) && next.every((uri) => (current as unknown[]).includes(uri)),
-        'token-content'
-      ),
-      // #675: a list that keeps or narrows where the end-session route may
-      // send the browser is an ordinary write; adding an entry is not.
-      '/postLogoutRedirectUris': unless(
-        '/postLogoutRedirectUris',
-        (next, current) =>
-          Array.isArray(next) && next.every((uri) => (current as unknown[]).includes(uri)),
-        'posture-loosening'
-      ),
-      // #624: removing the URI is an ordinary write; setting one sends
-      // logout tokens to a new destination.
-      '/backchannelLogoutUri': unless(
-        '/backchannelLogoutUri',
-        (next) => next === null,
-        'token-content'
-      ),
-      '/tokenEndpointAuthMethod': securityWith('token-content'),
-      '/jwks': securityWith('token-content'),
-      '/jwks/keys': securityWith('token-content'),
-      '/jwksUri': securityWith('token-content'),
-      '/requirePkce': unless('/requirePkce', (next) => next === true, 'posture-loosening'),
-      '/dpopBoundAccessTokens': unless(
-        '/dpopBoundAccessTokens',
-        (next) => next === true,
-        'posture-loosening'
-      ),
-      '/firstParty': unless('/firstParty', (next) => next === false, 'token-content'),
-      '/verifiedDomain': securityWith('token-content'),
-      // #891: a list that keeps or narrows the scopes a token naming no user
-      // may carry is an ordinary write; lifting it (NULL) or adding a scope is not.
-      '/clientCredentialsScopes': unless(
-        '/clientCredentialsScopes',
-        (next, current) =>
-          Array.isArray(next) &&
-          (current === null ||
-            current === undefined ||
-            (Array.isArray(current) && next.every((scope) => current.includes(scope)))),
-        'token-content'
-      ),
-      '/environment': unless('/environment', (next) => next === 'production', 'posture-loosening'),
-    },
-    unchanged: WRITE,
-  }),
+  // The shipped classify (#632): every field by the client field table, on
+  // the patched client.
+  'clients.update': (request, state) => classifyClientPatch(request, state as AdminClient),
+  // The shipped classify (#632): administration for a client that obtains
+  // admin tokens.
+  'clients.disable': (_request, state) => classifyClientDisable(state as AdminClient),
   // An import is a security operation as soon as its file differs from the
   // realm in anything but the display name.
   'realms.imports.apply': (request, state) => {
@@ -1213,7 +1163,7 @@ function requestDependentOperation(id: string, classify: AdminOperationDefinitio
     id,
     class: 'security',
     effects: entry.effects,
-    permissions: REQUEST_DEPENDENT_PERMISSIONS,
+    permissions: DECLARED_PERMISSIONS[id] ?? REQUEST_DEPENDENT_PERMISSIONS,
     description: entry.description,
     classify,
   });
@@ -1235,8 +1185,15 @@ describe('the reserved security cases (#508)', () => {
 
   it('refuses a classify that answers write for every request, on every entry', () => {
     for (const entry of requestDependent) {
+      // A write within the entry's own declaration, so the case refuses it
+      // for its class, not for a permission it does not declare.
+      const write: Classification = {
+        class: 'write',
+        effects: [],
+        permissions: [entry.id.startsWith('clients.') ? 'clients.write' : 'realms.policies.write'],
+      };
       expect(
-        () => createOperationRegistry([requestDependentOperation(entry.id, () => WRITE)]),
+        () => createOperationRegistry([requestDependentOperation(entry.id, () => write)]),
         entry.id
       ).toThrow(/classify gives the reserved case ".+" write with no effect/);
     }

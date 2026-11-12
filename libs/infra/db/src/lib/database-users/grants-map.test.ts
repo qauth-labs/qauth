@@ -167,6 +167,16 @@ describe('the grants map (#498)', () => {
     ).toEqual(['admin']);
   });
 
+  it("lets admin manage any client of a realm and revoke a client's tokens, never issue one (#632)", () => {
+    expect(privilegesOf('admin', 'oauth_clients')).toEqual([
+      'SELECT',
+      'INSERT',
+      'UPDATE',
+      'DELETE',
+    ]);
+    expect(privilegesOf('admin', 'refresh_tokens')).toEqual(['SELECT', 'UPDATE']);
+  });
+
   it('lets no role write who administers, nor delete a realm or a user', () => {
     for (const role of DATABASE_ROLES) {
       for (const table of ['admin_grants', 'admin_roles']) {

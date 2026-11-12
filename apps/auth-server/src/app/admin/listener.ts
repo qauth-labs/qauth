@@ -31,6 +31,7 @@ import errorHandler from '../plugins/error-handler';
 import { requestIdPlugin } from '../plugins/request-id';
 import { securityHeadersPlugin } from '../plugins/security-headers';
 import { approvalRoutes } from './approvals/routes';
+import { clientRoutes } from './clients/routes';
 import { adminHandlerRepositories } from './handler-scope';
 import { adminOpenapiOptions } from './openapi-options';
 import { AdminCallsInFlight, adminDpopService, adminPipeline } from './pipeline';
@@ -69,8 +70,9 @@ export const ADMIN_OPENAPI_PATH = `${API_FAMILY_PREFIXES.admin}/openapi.json`;
  * the approval routes (#512), which every registry built with
  * `createAdminOperationRegistry` holds the operations of, the seal route of a
  * security operation's secrets (#984), the realm routes that read a realm and
- * update its policies (#517), the AuthMethod plugin routes (#600) and the
- * account routes (#1052), whose operations `ADMIN_OPERATIONS` holds.
+ * update its policies (#517), the AuthMethod plugin routes (#600), the
+ * account routes (#1052) and the client routes (#632), whose operations
+ * `ADMIN_OPERATIONS` holds.
  */
 export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze([
   approvalRoutes,
@@ -78,6 +80,7 @@ export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze(
   realmRoutes,
   pluginRoutes,
   userRoutes,
+  clientRoutes,
 ]);
 
 /**
@@ -297,6 +300,9 @@ export async function installAdminApi(
   // (#517). The secret store's values stay with the app's mail sender.
   admin.decorate('policyStore', source.policyStore);
   admin.decorate('realmSecretStore', source.realmSecretStore);
+  // The password hasher, which hashes the secret of a client an admin
+  // registers (#632).
+  admin.decorate('passwordHasher', source.passwordHasher);
   // The realm of a request: the one its token's issuer names while the token
   // guard runs, then the one its path names. Never a host's.
   admin.decorateRequest('realm', null);

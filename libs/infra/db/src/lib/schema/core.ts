@@ -876,6 +876,31 @@ export const oauthClients = pgTable(
      * `UpdateOAuthClient` excludes it, so no route can set or clear it.
      */
     registrationChallenge: boolean('registration_challenge'),
+    /**
+     * The client's own access-token lifetime in seconds (ADR-020 §3, issue
+     * #632): every access token and ID token the client is issued lives at
+     * most this long, and at most the realm's lifetime for it
+     * (`tokens.accessTokenLifespanSeconds`, or the development one for a
+     * development client), whichever is shorter. A client's lifetime can only
+     * be shorter than the realm's: the admin API refuses a longer one, and the
+     * token endpoint takes the shorter of the two whatever is stored, so a
+     * realm that shortens its own still bounds the client. NULL (every row
+     * until an admin sets one) gives the realm's.
+     *
+     * ADMIN-SET: only `clients.update` and `clients.create` write it;
+     * shortening it is a write, lengthening or clearing it a security change
+     * (`posture-loosening`). No registration path names it, and
+     * `UpdateOAuthClient` excludes it. At most a day, as the realm's own.
+     */
+    accessTokenLifespanSeconds: integer('access_token_lifespan_seconds'),
+    /**
+     * The client's own refresh-token lifetime in seconds (#632), as
+     * {@link oauthClients.accessTokenLifespanSeconds}: every refresh token the
+     * client is issued expires at most this long after its issue, and never
+     * later than the realm's `tokens.refreshTokenLifespanSeconds` gives. NULL
+     * gives the realm's. At most 90 days, as the realm's own.
+     */
+    refreshTokenLifespanSeconds: integer('refresh_token_lifespan_seconds'),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
@@ -965,6 +990,17 @@ export const oauthClients = pgTable(
     check(
       'oauth_clients_hosted_flows_array',
       sql`${t.hostedFlows} IS NULL OR jsonb_typeof(${t.hostedFlows}) = 'array'`
+    ),
+    // #632: a client's own lifetimes, within the bounds of the realm's
+    // (`MAX_ACCESS_TOKEN_LIFESPAN_SECONDS`, a day, and
+    // `MAX_REFRESH_TOKEN_LIFESPAN_SECONDS`, 90 days, of server-config).
+    check(
+      'oauth_clients_access_token_lifespan_bounds',
+      sql`${t.accessTokenLifespanSeconds} IS NULL OR ${t.accessTokenLifespanSeconds} BETWEEN 1 AND 86400`
+    ),
+    check(
+      'oauth_clients_refresh_token_lifespan_bounds',
+      sql`${t.refreshTokenLifespanSeconds} IS NULL OR ${t.refreshTokenLifespanSeconds} BETWEEN 1 AND 7776000`
     ),
   ]
 );

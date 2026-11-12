@@ -32,6 +32,9 @@ describe('the admin permission catalog (#507)', () => {
       ['plugins.security', 'security'],
       ['secrets.seal', 'write'],
       ['users.security', 'security'],
+      ['clients.read', 'read'],
+      ['clients.write', 'write'],
+      ['clients.security', 'security'],
       ['approvals.read', 'read'],
       ['approvals.approve', 'security'],
     ]);
@@ -44,6 +47,7 @@ describe('the admin permission catalog (#507)', () => {
       'realms.policies.security',
       'plugins.security',
       'users.security',
+      'clients.security',
       'approvals.approve',
     ]);
     expect(security.filter((id) => write.includes(id))).toEqual([]);

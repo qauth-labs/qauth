@@ -72,6 +72,7 @@ export interface DatabaseGrantsMap {
 const S: readonly TablePrivilege[] = Object.freeze(['SELECT']);
 const SI: readonly TablePrivilege[] = Object.freeze(['SELECT', 'INSERT']);
 const SD: readonly TablePrivilege[] = Object.freeze(['SELECT', 'DELETE']);
+const SU: readonly TablePrivilege[] = Object.freeze(['SELECT', 'UPDATE']);
 const SIU: readonly TablePrivilege[] = Object.freeze(['SELECT', 'INSERT', 'UPDATE']);
 const SID: readonly TablePrivilege[] = Object.freeze(['SELECT', 'INSERT', 'DELETE']);
 const SIUD: readonly TablePrivilege[] = Object.freeze(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
@@ -109,8 +110,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // pruned by `delivery` alone.
   events: { web: I, api: I, admin: I, delivery: SD },
   // `web` stores CIMD clients as it fetches their documents; `api` also
-  // registers, updates and deletes clients. `delivery` reads columns only.
-  oauth_clients: { web: SIU, api: SIUD },
+  // registers, updates and deletes clients, and so does `admin` for any
+  // client of a realm it administers (#632). `delivery` reads columns only.
+  oauth_clients: { web: SIU, api: SIUD, admin: SIUD },
   oauth_consents: { web: SIU, api: SIU },
   oid4vp_request_states: { web: SIU, api: SIUD },
   // Each realm's AuthMethod plugins (#600): enabled and configured by admin.
@@ -130,7 +132,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // none, so it holds nothing.
   realm_upstream_providers: { web: S, admin: SIUD },
   realms: { web: SIU, api: SIU, admin: SIU, signer: SIU },
-  refresh_tokens: { web: SIU, api: SIUD },
+  // `admin` issues none: it revokes every token of a client whose
+  // first-party profile an admin removed (#632), an `UPDATE … RETURNING`.
+  refresh_tokens: { web: SIU, api: SIUD, admin: SU },
   roles: {},
   session_clients: { web: SID, api: SID },
   // Only the session purge, on `web`, deletes a session (`session-purge.ts`).

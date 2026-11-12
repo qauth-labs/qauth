@@ -861,25 +861,25 @@ The userinfo endpoint refused a request.
 
 ### client.created v1-rc.0
 
-An OAuth client was created: by RFC 7591 dynamic registration, or by a developer through the developer API.
+An OAuth client was created: by RFC 7591 dynamic registration, by a developer through the developer API, or by an admin through the admin API.
 
 - Identifier: `urn:qauth:event:client.created:v1-rc.0`
 - Category: `user` · Severity: `info` · Since: v0.2.0
 - Subject: `client`, when known
 - Schema: [client.created.v1-rc.0.json](/schemas/events/client.created.v1-rc.0.json)
 
-| Member         | Type                                                | Required | Meaning                                                                                                                        |
-| -------------- | --------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `registration` | one of `dynamic`, `developer_api`, or a later value | yes      | `dynamic`: RFC 7591 dynamic client registration. `developer_api`: a developer created it. The set may grow in a minor release. |
-| `isPublic`     | boolean                                             | yes      | Whether the client is public, with no client authentication.                                                                   |
-| `isAgent`      | boolean                                             | no       | Whether the client registered as an agent (ADR-007 §2).                                                                        |
-| `grantTypes`   | array of string                                     | yes      | The grant types the client may use.                                                                                            |
-| `scopes`       | array of string                                     | no       | The scopes the client may request.                                                                                             |
-| `authMethod`   | string                                              | no       | How the client authenticates at the token endpoint, such as `private_key_jwt`.                                                 |
+| Member         | Type                                                             | Required | Meaning                                                                                                                                                                            |
+| -------------- | ---------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `registration` | one of `dynamic`, `developer_api`, `admin_api`, or a later value | yes      | `dynamic`: RFC 7591 dynamic client registration. `developer_api`: a developer created it. `admin_api`: an admin created it, for no developer. The set may grow in a minor release. |
+| `isPublic`     | boolean                                                          | yes      | Whether the client is public, with no client authentication.                                                                                                                       |
+| `isAgent`      | boolean                                                          | no       | Whether the client registered as an agent (ADR-007 §2).                                                                                                                            |
+| `grantTypes`   | array of string                                                  | yes      | The grant types the client may use.                                                                                                                                                |
+| `scopes`       | array of string                                                  | no       | The scopes the client may request.                                                                                                                                                 |
+| `authMethod`   | string                                                           | no       | How the client authenticates at the token endpoint, such as `private_key_jwt`.                                                                                                     |
 
 ### client.updated v1-rc.0
 
-A developer changed a client's settings.
+A developer or an admin changed a client's settings.
 
 - Identifier: `urn:qauth:event:client.updated:v1-rc.0`
 - Category: `user` · Severity: `info` · Since: v0.2.0
@@ -892,7 +892,7 @@ A developer changed a client's settings.
 
 ### client.deleted v1-rc.0
 
-A developer deleted a client.
+A developer or an admin deleted a client.
 
 - Identifier: `urn:qauth:event:client.deleted:v1-rc.0`
 - Category: `user` · Severity: `info` · Since: v0.2.0
@@ -916,7 +916,7 @@ A developer replaced a client's secret. The old secret stopped working.
 
 ### client.suspended v1-rc.0
 
-An operator suspended a client: it can no longer obtain tokens until the suspension is lifted.
+An operator or an admin suspended a client: it can no longer obtain tokens until the suspension is lifted.
 
 - Identifier: `urn:qauth:event:client.suspended:v1-rc.0`
 - Category: `admin` · Severity: `warning` · Since: v0.2.0
@@ -928,7 +928,7 @@ An operator suspended a client: it can no longer obtain tokens until the suspens
 
 ### client.suspension_lifted v1-rc.0
 
-An operator lifted a client's suspension.
+An operator or an admin lifted a client's suspension.
 
 - Identifier: `urn:qauth:event:client.suspension_lifted:v1-rc.0`
 - Category: `admin` · Severity: `info` · Since: v0.2.0

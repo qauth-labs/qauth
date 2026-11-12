@@ -151,6 +151,12 @@ export function requiredRealmArgument(db: DbClient): void {
   void clients.pageByDeveloper(ID, { limit: 1 });
   // @ts-expect-error a client id is looked up in a realm (#524)
   void clients.findByIdForUpdate(ID, db);
+  // @ts-expect-error a client id is looked up in a realm (#632)
+  void clients.findByIdForAdminUpdate(ID, db);
+  // @ts-expect-error the admin list is of one realm's clients (#632)
+  void clients.pageByRealm({ limit: 1 });
+  // @ts-expect-error a client id is looked up in a realm (#632)
+  void clients.updateByAdmin(ID, { name: 'x' });
 
   // @ts-expect-error a consent is looked up in a realm (#489)
   void consents.findActive(ID, OTHER_ID);
@@ -292,6 +298,23 @@ const CALLS: readonly RealmScopedCall[] = [
   [
     'oauthClients.findByIdForUpdate',
     (db) => createOAuthClientsRepository(db).findByIdForUpdate(REALM_ID, ID, db),
+  ],
+  [
+    'oauthClients.findByIdForAdminUpdate',
+    (db) => createOAuthClientsRepository(db).findByIdForAdminUpdate(REALM_ID, ID, db),
+  ],
+  [
+    'oauthClients.pageByRealm',
+    (db) =>
+      createOAuthClientsRepository(db).pageByRealm(
+        REALM_ID,
+        { limit: 2, after: { at: 1, id: OTHER_ID } },
+        { search: 'a_b%' }
+      ),
+  ],
+  [
+    'oauthClients.updateByAdmin',
+    (db) => createOAuthClientsRepository(db).updateByAdmin(REALM_ID, ID, { name: 'x' }),
   ],
   [
     'oauthClients.countByDeveloper',
