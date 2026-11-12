@@ -437,9 +437,9 @@ export type CaptchaParams =
   | {
       /** The built-in proof of work. */
       provider: 'pow';
-      /** The puzzle the engine issued. */
+      /** The puzzle the engine issued, hashed as the text it is. */
       challenge: string;
-      /** How many leading zero bits the answer must produce. */
+      /** The fewest leading zero bits the SHA-256 digest of `<challenge>:<nonce>` must start with. */
       difficulty: number;
     }
   | {
@@ -456,7 +456,7 @@ export interface CaptchaAnswer {
   /** The step this request answers. */
   type: 'urn:qauth:ia:captcha:v1-rc.0';
   csrf: Csrf;
-  /** The solution, or the provider’s token: printable ASCII, so 4096 characters are 4096 bytes. */
+  /** For the built-in proof of work, the nonce: 1 to 16 ASCII digits, with no sign and no leading zero. For a hosted provider, the provider’s token. Printable ASCII, so 4096 characters are 4096 bytes. */
   captcha_token: string;
 }
 

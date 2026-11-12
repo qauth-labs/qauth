@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { stepNamed } from '@qauth-labs/shared-interaction-contract';
 import { strictValidator } from '@qauth-labs/shared-interaction-contract/src/testing/schema-validator';
 import { loadVectors } from '@qauth-labs/shared-test-vectors';
 import { describe, expect, it } from 'vitest';
@@ -90,4 +91,27 @@ describe('the step vectors (test-vectors/interaction/steps.json)', () => {
       }
     }
   );
+});
+
+// The id as a literal: shared-test-vectors' tree test finds a file's loader by it.
+const proofOfWorkVectors = loadVectors<
+  { challenge: string; difficulty: number; captcha_token: string },
+  { accepted: boolean; smallest_solution: boolean }
+>('interaction/proof-of-work');
+
+describe('the captcha step’s example', () => {
+  // The engine's check runs every case of the file (libs/server/sign-in-engine),
+  // so an example answer that did not solve its puzzle would fail there.
+  it('answers its puzzle: it is the contract-example case of the proof-of-work vectors', () => {
+    const { step, answer } = stepNamed('captcha').example;
+    const params = step.params as { provider: string; challenge: string; difficulty: number };
+    const vector = proofOfWorkVectors.cases.find(({ id }) => id === 'contract-example');
+    expect(params.provider).toBe('pow');
+    expect(vector?.input).toStrictEqual({
+      challenge: params.challenge,
+      difficulty: params.difficulty,
+      captcha_token: answer['captcha_token'],
+    });
+    expect(vector?.expected).toMatchObject({ accepted: true, smallest_solution: true });
+  });
 });
