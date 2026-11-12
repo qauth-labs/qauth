@@ -182,6 +182,8 @@ export const NOT_IN_SECURITY_LOG: Readonly<Record<string, string>> = {
   'user.disabled':
     'An operator’s switch, recorded in the admin events; a disabled account cannot read its log.',
   'user.enabled': 'An operator’s switch, recorded in the admin events.',
+  'user.session_revoked':
+    'A session an operator’s disablement of the account ended, recorded in the admin events beside the disablement, which the log leaves out too.',
   'user.verified':
     'An operator’s attestation of the account, recorded in the admin events; it changes no credential.',
   'user.agent_ownership_refused':

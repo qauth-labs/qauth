@@ -268,6 +268,7 @@ describe('the SETs of mapped event types (#540)', () => {
   const userSignedOut = typeOf('user.signed_out');
   const userDisabled = typeOf('user.disabled');
   const userEnabled = typeOf('user.enabled');
+  const userSessionRevoked = typeOf('user.session_revoked');
   const userPasswordReset = typeOf('user.password_reset');
   const userPasswordChanged = typeOf('user.password_changed');
   const userCredentialAdded = typeOf('user.credential_added');
@@ -314,6 +315,12 @@ describe('the SETs of mapped event types (#540)', () => {
     [userEnabled.type]: event(userEnabled.type, {
       category: 'admin',
       actor: { type: 'operator_cli', id: 'root' },
+    }),
+    // Each session the tool's disablement ended (#893).
+    [userSessionRevoked.type]: event(userSessionRevoked.type, {
+      category: 'admin',
+      actor: { type: 'operator_cli', id: 'root' },
+      data: { sid: '0192a000-0000-7000-8000-0000000000d3', reason: 'account_disabled' },
     }),
     // The owner's password reset (#642), from the client the sign-in was for.
     [userPasswordReset.type]: event(userPasswordReset.type, { client: { id: 'notes-app' } }),
@@ -615,6 +622,31 @@ describe('the SETs of mapped event types (#540)', () => {
     );
     expect(other.outcome).toEqual({ ok: false, errorClass: 'event_not_offered', retry: false });
     expect(other.requests).toHaveLength(0);
+  });
+
+  it('sends each session a disablement ended as session-revoked about the user and the session, by an admin (#893)', async () => {
+    const { outcome, claims, hasSubject } = await signed(SAMPLES[userSessionRevoked.type]);
+    expect(outcome).toEqual({ ok: true, statusCode: 202 });
+    // Matched on the user: a stream that added the user receives it.
+    expect(hasSubject).toHaveBeenCalledWith(STREAM, { type: 'user', id: USER });
+    expect(claims).toEqual({
+      jti: EVENT_ID,
+      iat: SECONDS,
+      aud: 'receiver',
+      sub_id: {
+        format: 'complex',
+        user: { format: 'iss_sub', iss: ISSUER, sub: USER },
+        session: { format: 'opaque', id: '0192a000-0000-7000-8000-0000000000d3' },
+      },
+      events: {
+        [CAEP_SESSION_REVOKED]: {
+          reason_admin: { en: 'The account was disabled; every session it held was revoked.' },
+          event_timestamp: SECONDS,
+          initiating_entity: 'admin',
+        },
+      },
+    });
+    expect(subjectIdentifierSchema.safeParse(claims?.['sub_id']).success).toBe(true);
   });
 
   it('sends an RFC 7009 revocation as the QAuth-defined token-revoked event', async () => {

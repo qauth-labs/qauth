@@ -325,6 +325,7 @@ describe('event types offered to streams', () => {
       eventTypesFor(['https://schemas.openid.net/secevent/caep/event-type/session-revoked'])
     ).toEqual([
       'urn:qauth:event:user.signed_out:v1-rc.0',
+      'urn:qauth:event:user.session_revoked:v1-rc.0',
       'urn:qauth:event:token.family_revoked:v1-rc.0',
     ]);
     expect(EVENT_TYPES.some((definition) => typeof definition.ssf === 'object')).toBe(true);
