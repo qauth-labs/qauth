@@ -45,7 +45,8 @@ const result = await engine.advance(transaction, answer, {
   audit, // where the round's audit records go
   sendCode, // the capped sender of email codes (#637), bound to the request
   flow, // 'register' for prompt=create (#640), 'reset' for a reset (#642); absent for a sign-in
-  freshSignIn, // max_age or prompt=login: a reset is never offered (#642)
+  freshSignIn, // max_age or prompt=login: neither a reset (#642) nor a switch to a registration is offered
+  switchFlows, // the person may switch between a sign-in and a registration (#1079): the Interaction API
 });
 ```
 
@@ -288,7 +289,21 @@ refused like a wrong one under `REQUIRE_VERIFIED_ACCOUNT`, and signs in while it
 With `registrations`, `emailCodes` and `passwordUpdates`, a round whose `flow` is `register` (the
 request's `prompt=create`, #640; ADR-017 Decision 8) registers a password account. The flow is
 graphed in [`graphs/flows/core/sign-up/flow.yaml`](../../../graphs/flows/core/sign-up/flow.yaml).
-The transaction keeps its flow from round 0: a round of another flow ends it.
+The transaction keeps its flow from round 0: a round of another flow ends it, unless the transport
+lets the person switch (below).
+
+- **The switch** (#1079), on a round whose `switchFlows` is set (the Interaction API, for an
+  authorization request): a sign-in's first step, before anyone is named, offers the `register`
+  path marker last, while the gate below holds, the transport serves `register` and a
+  registration's steps, and the request asks for no fresh sign-in (`freshSignIn`). A
+  registration's address step offers `sign_in`, the way back, under no gate of its own. Nothing of
+  any account decides either offer. Answering one starts a new transaction of the other flow, as
+  old as the one it replaces and holding nothing of it, and the round goes on as that flow's first
+  round: the registration's gate and its bot challenge, then its first step; or the sign-in's first
+  step. The marker is audited as passed. A marker the transaction may not take (the gate closed
+  since it was offered, an identifier given, no `switchFlows`) is refused as `invalid_answer`, and
+  the transaction stays as it was. With `switchFlows`, the transaction's own flow, not `flow`, is
+  the round's; `flow` is the one a new transaction begins with.
 
 - **The gate**, after the request checks, on every round: `registrations.allowed` must say that
   the realm (its sign-up switch) and the client (a redirect-flow client's `hosted_flows`, a
@@ -301,7 +316,8 @@ The transaction keeps its flow from round 0: a round of another flow ends it.
   requires one: the `captcha` step, once a transaction, before anything is mailed. A transport
   that does not serve `captcha` is refused as `request_refused` with `registration_not_allowed`,
   never sent to a browser in its place.
-- **The address**, alone: the identifier step, with no factor and no upstream provider beside it.
+- **The address**: the identifier step, with no factor and no upstream provider beside it; only
+  the way back to the sign-in (`sign_in`), where the transport lets the flows switch.
 - **The mailbox**: an 8-digit `email_code` with the purpose `verify_account`, the same step for a
   new address and for one an account holds, in body and in timing. The first code is a
   registration start, which the `limits` hook's `reserveRegistrationStart` caps (3 an hour per

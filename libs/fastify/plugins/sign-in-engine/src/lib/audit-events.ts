@@ -60,6 +60,11 @@ const STEP_METHODS: Readonly<
   // part of the sign-in it holds back, as the recovery codes are.
   totp: 'password',
   totp_setup: 'password',
+  // The switches between a sign-in and a registration (#1079) prove
+  // nothing: like the identifier step, they belong to the password flows
+  // they lead to.
+  register: 'password',
+  sign_in: 'password',
 });
 
 /**

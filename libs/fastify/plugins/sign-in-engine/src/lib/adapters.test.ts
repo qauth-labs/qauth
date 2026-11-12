@@ -942,6 +942,26 @@ describe('audit events', () => {
     }
   });
 
+  it('maps the switches between a sign-in and a registration as the password flows’ (#1079)', () => {
+    for (const step of ['register', 'sign_in'] as const) {
+      const passed = signInAuditEvent({ outcome: 'passed', step });
+      const refused = signInAuditEvent({ outcome: 'refused', step, reason: 'invalid_answer' });
+      expect(passed).toEqual({
+        type: 'urn:qauth:event:user.sign_in_step_passed:v1-rc.0',
+        data: { step: STEP_URNS[step] },
+        userId: null,
+      });
+      expect(refused).toEqual({
+        type: 'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+        data: { method: 'password', reason: 'invalid_answer' },
+        userId: null,
+      });
+      for (const event of [passed, refused]) {
+        expect(getEventType(event.type)?.data.safeParse(event.data).success).toBe(true);
+      }
+    }
+  });
+
   it('maps the recovery codes’ records as the password sign-in’s (#649)', () => {
     const refused = signInAuditEvent({
       outcome: 'refused',
