@@ -338,7 +338,9 @@ export interface SignInEngineDependencies {
    * any identifier, offered beside the password once there is one, and asked
    * for after the password of a passkey-bound account (the downgrade rule).
    * And after a sign-in that proved the password of an account whose only
-   * factor it is, `webauthn_create` offers a passkey, on a transport that
+   * factor it is, `webauthn_create` offers a passkey, while the realm's
+   * `passkeys.offerAfterSignIn` keeps the offer (#1083,
+   * {@link PasskeyCeremonies.offerAfterSignIn}), on a transport that
    * serves it and can show the first set of recovery codes it owes: a
    * password-only account proves its mailbox with an emailed code first,
    * unless this transaction did, and the binding needs a factor at most
@@ -3738,7 +3740,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * account whose only factor is the password this transaction proved, on
      * a transport that serves the step and `recovery_codes` (the first set is
      * owed at once), while that password is at most
-     * {@link PASSKEY_BINDING_MAX_AUTH_AGE_MS} old. An answer with no response
+     * {@link PASSKEY_BINDING_MAX_AUTH_AGE_MS} old and the realm keeps the
+     * offer (`passkeys.offerAfterSignIn`, #1083), read on the round that
+     * would offer it or take its answer: off, nothing is offered and an
+     * answer to an earlier offer binds nothing. An answer with no response
      * declines it. A response is a credential round on the limiters; the port
      * takes the ceremony and verifies it with user verification, and the
      * transaction holds what it verified. The binding then needs the
@@ -3750,6 +3755,25 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * as `passkeyEnrolment: 'bound'`, not among its verified steps (it adds no
      * amr value). Returns the round's result, or `null` once nothing is owed.
      */
+    /**
+     * Whether the realm keeps the optional passkey offer (#1083):
+     * {@link PasskeyCeremonies.offerAfterSignIn}, on this round. A port
+     * without it keeps the offer. The offer is optional, so a read that
+     * fails, or a verdict that is not a boolean, is reported and makes no
+     * offer: the sign-in goes on without it.
+     */
+    const realmOffersPasskey = async (passkeys: PasskeyCeremonies): Promise<boolean> => {
+      if (passkeys.offerAfterSignIn === undefined) return true;
+      try {
+        const verdict: unknown = await passkeys.offerAfterSignIn({ realmId, clientId });
+        if (typeof verdict === 'boolean') return verdict;
+        report('passkeys', new Error('not an offer verdict'));
+      } catch (error) {
+        report('passkeys', error);
+      }
+      return false;
+    };
+
     const enrolPasskey = async (
       passkeys: PasskeyCeremonies,
       current: SignInAccount,
@@ -3810,6 +3834,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             provedMailbox() ||
             (emailCodes !== undefined && served.has('email_code')));
         if (!offered) return null;
+        // The realm's word on the optional offer (#1083), last, so a sign-in
+        // that would not be offered one reads nothing more. A passkey the
+        // person asked for (#844) is no offer, and does not read it.
+        if (!requested && !(await realmOffersPasskey(passkeys))) return null;
         let offer: StepOffer;
         try {
           offer = await offerOf([create]);
