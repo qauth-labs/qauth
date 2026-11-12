@@ -246,13 +246,18 @@ describe("a provider plugin's client-assertion key through the admin API (#1073,
     | 'plugins.keys.import'
     | 'plugins.keys.activate';
 
-  /** File an approval for one request of a plugin operation and approve it with the test factor. */
+  /**
+   * File an approval for one request of a plugin operation and approve it
+   * with the test factor. Answers its id and the filing's response, which
+   * holds what the approver is shown: once the approval is used, a read of
+   * it shows nothing.
+   */
   async function fileAndApprove(
     realmId: string,
     requester: Requester,
     operation: Operation,
     body: unknown
-  ): Promise<string> {
+  ): Promise<{ approvalId: string; filed: LightMyRequestResponse }> {
     const filed = await send(
       'POST',
       `/admin/v1-rc.0/realms/${realmId}/approvals`,
@@ -278,7 +283,7 @@ describe("a provider plugin's client-assertion key through the admin API (#1073,
       ...decision,
       response: test.answer(challenge, requester.approver),
     });
-    return approvalId;
+    return { approvalId, filed };
   }
 
   /** Send an approved plugin operation and answer its response, whatever its status. */
@@ -288,12 +293,16 @@ describe("a provider plugin's client-assertion key through the admin API (#1073,
     operation: Operation,
     suffix: string,
     body: unknown
-  ): Promise<{ response: LightMyRequestResponse; approvalId: string }> {
-    const approvalId = await fileAndApprove(realmId, requester, operation, body);
+  ): Promise<{
+    response: LightMyRequestResponse;
+    approvalId: string;
+    filed: LightMyRequestResponse;
+  }> {
+    const { approvalId, filed } = await fileAndApprove(realmId, requester, operation, body);
     const response = await send('POST', pluginPath(realmId, suffix), requester.token, body, {
       'qauth-approval': approvalId,
     });
-    return { response, approvalId };
+    return { response, approvalId, filed };
   }
 
   /** Configure the preset as an Apple-like client and enable it in the realm. */
@@ -390,15 +399,16 @@ describe("a provider plugin's client-assertion key through the admin API (#1073,
       aud: SIGNED_SECRET_PRESET_ISSUER,
     });
 
-    // What the approver was shown: the key id, never the key.
+    // What the approver was shown when the import was filed: the key id,
+    // never the key. A read of the used approval shows nothing more.
+    expect(imported.filed.body).toContain('APPLEKEY01');
+    expect(imported.filed.body).toContain('a sealed value (not shown)');
     const shown = await send(
       'GET',
       `/admin/v1-rc.0/realms/${realm.id}/approvals/${imported.approvalId}`,
       requester.token
     );
     expect(shown.statusCode, shown.body).toBe(200);
-    expect(shown.body).toContain('APPLEKEY01');
-    expect(shown.body).toContain('a sealed value (not shown)');
 
     const { rows: audit } = await app().dbPool.query<{ text: string }>(
       `SELECT row_to_json(a)::text AS text FROM admin_audit_log a
@@ -421,6 +431,7 @@ describe("a provider plugin's client-assertion key through the admin API (#1073,
     const seen = [
       imported.sealed.body,
       imported.response.body,
+      imported.filed.body,
       shown.body,
       ...audit.map((row) => row.text),
       ...events.map((row) => row.text),
