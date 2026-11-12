@@ -7,15 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.3] - 2026-11-12
-
-A patch release that carries a breaking change, as a 0.x release may (see the
-**Action for operators** under Fixed). A provider plugin can now live in its
-own repository and build on the server's OpenID Connect client through the
-plugin SDK alone. The admin API previews a realm policy change before it is
-saved, an operator can verify an account on a deployment without mail, and a
-CIMD client gets no token without a user unless the operator lists its scopes.
-
 ### Added
 
 - **The admin API manages every client of a realm** ([#632], ADR-020 §3,
@@ -57,6 +48,18 @@ CIMD client gets no token without a user unless the operator lists its scopes.
   tokens (removing first-party trust revokes a client's refresh tokens),
   and the `admin` role builds the password hasher. The new **Clients**
   page of the operator guide describes the routes.
+
+## [0.2.3] - 2026-11-12
+
+A patch release that carries a breaking change, as a 0.x release may (see the
+**Action for operators** under Fixed). A provider plugin can now live in its
+own repository and build on the server's OpenID Connect client through the
+plugin SDK alone. The admin API previews a realm policy change before it is
+saved, an operator can verify an account on a deployment without mail, and a
+CIMD client gets no token without a user unless the operator lists its scopes.
+
+### Added
+
 - **The admin API previews a realm policy change before it is saved**
   ([#589], ADR-020 §5, experimental route). `POST
   /admin/v1-rc.0/realms/{realmId}/policies/preview`
