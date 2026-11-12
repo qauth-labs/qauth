@@ -256,6 +256,32 @@ describe('the upstream step offered (#639)', () => {
     expect(first.offer.alternatives[0]?.params).toEqual({ providers: many.slice(0, 16) });
   });
 
+  it('leaves out the provider the round withholds, with no report, and the step when none is left (#1080)', async () => {
+    const reported: string[] = [];
+    const built = build(undefined, { onUnavailable: (error) => reported.push(error.port) });
+    const first = await built.engine.advance(
+      null,
+      null,
+      context(built, { withheldUpstream: CORP.provider })
+    );
+    expect(first).toMatchObject({
+      kind: 'step',
+      offer: { alternatives: [{ step: 'upstream', params: { providers: [PARTNER] } }] },
+    });
+    expect(reported).toEqual([]);
+
+    const alone = build(undefined, { providers: [CORP] });
+    const none = await alone.engine.advance(
+      null,
+      null,
+      context(alone, { withheldUpstream: CORP.provider })
+    );
+    expect(none).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'identifier' }, alternatives: [] },
+    });
+  });
+
   it('refuses a directory that answers no list as a store fault', async () => {
     const built = build(undefined, { providers: 'nope' as unknown as UpstreamProviderEntry[] });
     const first = await built.engine.advance(null, null, context(built));
@@ -300,6 +326,33 @@ describe('picking an upstream provider (#639)', () => {
       step: 'upstream',
       reason: 'invalid_answer',
     });
+  });
+
+  it('refuses the provider the round withholds, starting none, and starts another (#1080)', async () => {
+    const built = build();
+    const ctx = context(built, { withheldUpstream: CORP.provider });
+    const first = await built.engine.advance(null, null, ctx);
+    const withheld = await built.engine.advance(
+      kept(first),
+      answer('upstream', { provider: CORP.provider }),
+      ctx
+    );
+    expect(withheld).toMatchObject({ kind: 'refused', reason: 'invalid_answer' });
+    expect(ctx.started).toEqual([]);
+
+    const other = await built.engine.advance(
+      kept(first),
+      answer('upstream', { provider: PARTNER.provider }),
+      ctx
+    );
+    expect(other).toMatchObject({ kind: 'upstream', provider: PARTNER.provider });
+    expect(ctx.started).toEqual([PARTNER]);
+    const done = await built.engine.completeUpstream(
+      kept(other),
+      proof({ provider: PARTNER }),
+      ctx
+    );
+    expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
   });
 
   it('offers the step again with provider_unavailable when the provider cannot start', async () => {
