@@ -193,7 +193,11 @@ export interface ServerPasskeyOptions {
   readonly now?: () => number;
 }
 
-/** The engine's passkey ceremonies over the server's repositories and Redis. */
+/**
+ * The engine's passkey ceremonies over the server's repositories and Redis,
+ * with the realm's word on the optional offer after a password sign-in
+ * (`passkeys.offerAfterSignIn`, #1083).
+ */
 export function createServerPasskeys(
   fastify: FastifyInstance,
   options: ServerPasskeyOptions
@@ -430,6 +434,15 @@ export function createServerPasskeys(
         fastify.log.error({ err: error, realmId }, 'a passkey was bound, but its notice failed');
       }
       return { kind: 'bound' };
+    },
+
+    // The realm's `passkeys.offerAfterSignIn` (#1083), from its row, read on
+    // the round the engine would offer a passkey: a change reaches the next
+    // such round. A realm that does not exist offers none.
+    async offerAfterSignIn({ realmId }) {
+      const realm = await fastify.repositories.realms.findById(realmId);
+      if (realm === undefined) return false;
+      return fastify.policyStore.ofRealm(realm).policies.passkeys.offerAfterSignIn;
     },
   };
   return Object.freeze(ceremonies);

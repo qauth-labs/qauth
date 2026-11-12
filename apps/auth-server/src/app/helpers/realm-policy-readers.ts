@@ -70,6 +70,10 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // difficulty, read for every challenge.
   'botChallenge.requiredAtSignUp',
   'botChallenge.difficulty',
+  // The passkey offer after a password sign-in (`createServerPasskeys` in
+  // `helpers/passkey-sign-in.ts`, #1083), read on the round that would make
+  // it.
+  'passkeys.offerAfterSignIn',
 ]);
 
 /**

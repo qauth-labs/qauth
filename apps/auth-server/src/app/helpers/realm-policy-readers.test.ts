@@ -32,7 +32,7 @@ describe('POLICIES_READ_FROM_REALM_ROW (#516)', () => {
     }
   });
 
-  it('holds the two policies the server read from the row before #516, the token lifetimes (#527), the account policies (#528), the mail transport and sender (#529), CIMD (#534), the minimum password length (#634) and the bot challenge (#643)', () => {
+  it('holds the two policies the server read from the row before #516, the token lifetimes (#527), the account policies (#528), the mail transport and sender (#529), CIMD (#534), the minimum password length (#634), the bot challenge (#643) and the passkey offer (#1083)', () => {
     expect([...POLICIES_READ_FROM_REALM_ROW].sort()).toEqual([
       'accounts.requireVerifiedAccount',
       'botChallenge.difficulty',
@@ -48,6 +48,7 @@ describe('POLICIES_READ_FROM_REALM_ROW (#516)', () => {
       'mail.smtp.port',
       'mail.smtp.secure',
       'mail.smtp.user',
+      'passkeys.offerAfterSignIn',
       'password.minLength',
       'password.minScore',
       'posture.maxEnvironmentLaxity',
