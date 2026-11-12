@@ -145,6 +145,37 @@ describe('checkUpstreamOidcPreset (#671)', () => {
     ]);
   });
 
+  it("takes a signed client secret's assertionIssuer, and refuses a malformed one or one on another method (#1073)", () => {
+    const signed = (authentication: Record<string, unknown>) =>
+      kitProblems({
+        upstreamConfig: (config) =>
+          ({
+            issuer: 'https://idp.example.com',
+            clientId: config.clientId,
+            clientAuthentication: authentication,
+          }) as never,
+      });
+    expect(
+      signed({
+        method: 'signed_client_secret',
+        signingAlgorithm: 'ES256',
+        assertionIssuer: 'TEAM123456',
+      })
+    ).toEqual([]);
+    expect(signed({ method: 'signed_client_secret', assertionIssuer: '' })).toEqual([
+      'configs[0]: clientAuthentication.assertionIssuer must be a string of 1 to 255 characters, no control character',
+    ]);
+    expect(signed({ method: 'signed_client_secret', assertionIssuer: 'x'.repeat(256) })).toEqual([
+      'configs[0]: clientAuthentication.assertionIssuer must be a string of 1 to 255 characters, no control character',
+    ]);
+    expect(signed({ method: 'signed_client_secret', assertionIssuer: 'TEAM\n1' })).toEqual([
+      'configs[0]: clientAuthentication.assertionIssuer must be a string of 1 to 255 characters, no control character',
+    ]);
+    expect(signed({ method: 'private_key_jwt', assertionIssuer: 'TEAM123456' })).toEqual([
+      'configs[0]: clientAuthentication.assertionIssuer is taken only with signed_client_secret',
+    ]);
+  });
+
   it('refuses a client secret taken from a plain member, and a secret anywhere else', () => {
     expect(
       kitProblems({

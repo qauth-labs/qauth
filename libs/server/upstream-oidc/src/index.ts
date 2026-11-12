@@ -2,6 +2,7 @@
 // EXPERIMENTAL) for one OpenID Provider per configured `oidc_<alias>` type,
 // and the preset plugins built on it (#951), each with its own id, type and
 // config. It makes no account decision; the upstream sign-in flow (#639) does.
+export * from './lib/assertion-client';
 export {
   UPSTREAM_STANDARD_ATTRIBUTES,
   type UpstreamClaimAttribute,

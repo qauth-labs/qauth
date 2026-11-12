@@ -5,7 +5,7 @@ import type {
 import { describe, expect, it } from 'vitest';
 
 import type { UpstreamOidcClientConfigInput } from './config';
-import { upstreamOidcClientConfigSchema } from './config';
+import { upstreamOidcClientConfigSchema, upstreamOidcConfigSchema } from './config';
 import type { UpstreamOidcPresetOptions } from './upstream-oidc-preset';
 
 /**
@@ -40,7 +40,11 @@ describe("the preset's provider config is the plugin SDK's shape (#671)", () => 
     const config: UpstreamOidcProviderConfig = {
       issuer: 'https://idp.example.com/tenant/v2',
       clientId: 'client',
-      clientAuthentication: { method: 'signed_client_secret', signingAlgorithm: 'ES256' },
+      clientAuthentication: {
+        method: 'signed_client_secret',
+        signingAlgorithm: 'ES256',
+        assertionIssuer: 'TEAM123456',
+      },
       scopes: ['openid', 'email'],
       endpoints: {
         authorization: 'https://idp.example.com/authorize',
@@ -55,5 +59,45 @@ describe("the preset's provider config is the plugin SDK's shape (#671)", () => 
       tenantIssuer: { template: 'https://idp.example.com/{tenantid}/v2', tenantClaim: 'tid' },
     };
     expect(upstreamOidcClientConfigSchema.safeParse(config).success).toBe(true);
+  });
+});
+
+describe("a signed client secret's assertion issuer (#1073)", () => {
+  const withIssuer = (assertionIssuer: unknown) =>
+    upstreamOidcClientConfigSchema.safeParse({
+      issuer: 'https://idp.example.com',
+      clientId: 'client',
+      clientAuthentication: { method: 'signed_client_secret', assertionIssuer },
+    });
+
+  it('takes a string of up to 255 characters', () => {
+    const parsed = withIssuer('TEAM123456');
+    expect(parsed.success && parsed.data.clientAuthentication).toEqual({
+      method: 'signed_client_secret',
+      signingAlgorithm: 'ES256',
+      assertionIssuer: 'TEAM123456',
+    });
+    expect(withIssuer('x'.repeat(255)).success).toBe(true);
+  });
+
+  it.each([[''], ['x'.repeat(256)], ['TEAM\u0000'], [42]])('refuses %j', (value) => {
+    expect(withIssuer(value).success).toBe(false);
+  });
+
+  it('is taken by no other method, nor by the generic client', () => {
+    expect(
+      upstreamOidcClientConfigSchema.safeParse({
+        issuer: 'https://idp.example.com',
+        clientId: 'client',
+        clientAuthentication: { method: 'private_key_jwt', assertionIssuer: 'TEAM123456' },
+      }).success
+    ).toBe(false);
+    expect(
+      upstreamOidcConfigSchema.safeParse({
+        issuer: 'https://idp.example.com',
+        clientId: 'client',
+        clientAuthentication: { method: 'private_key_jwt', assertionIssuer: 'TEAM123456' },
+      }).success
+    ).toBe(false);
   });
 });

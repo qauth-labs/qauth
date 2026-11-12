@@ -140,6 +140,14 @@ export const UPSTREAM_ASSERTION_ALGORITHMS = Object.freeze(['RS256', 'ES256', 'E
 export type UpstreamAssertionAlgorithm = (typeof UPSTREAM_ASSERTION_ALGORITHMS)[number];
 
 /**
+ * The longest `assertionIssuer` a signed client secret may name, in
+ * characters.
+ *
+ * @experimental
+ */
+export const MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH = 255;
+
+/**
  * The placeholder an issuer template holds for the tenant id:
  * `https://idp.example.com/{tenantid}/v2.0`.
  *
@@ -254,6 +262,15 @@ export type UpstreamOidcClientAuthentication =
       method: typeof UPSTREAM_SIGNED_CLIENT_SECRET;
       /** The algorithm of the key registered with the provider; `ES256` unless set. */
       signingAlgorithm?: UpstreamAssertionAlgorithm | undefined;
+      /**
+       * The `iss` of the signed client secret when it is not the client id:
+       * the developer account that registered the client and holds its key,
+       * such as Sign in with Apple's Team ID. A non-empty string of at most
+       * {@link MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH} characters, no control
+       * character. Unset, the client id is the `iss`. The signer role sets
+       * it from what the realm's admin configured, never from the request.
+       */
+      assertionIssuer?: string | undefined;
     };
 
 /**

@@ -1,9 +1,11 @@
 import { AUTH_METHOD_TYPE_PATTERN } from '../lib/contract.js';
 import { AuthMethodContractError } from '../lib/errors.js';
 import {
+  MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH,
   MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH,
   UPSTREAM_ID_TOKEN_ONLY_CLAIMS,
   UPSTREAM_PRESET_CLIENT_AUTHENTICATION_METHODS,
+  UPSTREAM_SIGNED_CLIENT_SECRET,
   UPSTREAM_TENANT_PLACEHOLDER,
   UPSTREAM_VERIFIED_CLAIM_PAIRS,
   type UpstreamOidcPreset,
@@ -253,6 +255,27 @@ function providerConfigProblems(provider: unknown, origins: ReadonlySet<string>)
     problems.push(
       `clientAuthentication.method must be one of ${UPSTREAM_PRESET_CLIENT_AUTHENTICATION_METHODS.join(', ')}`
     );
+  }
+  const assertionIssuer =
+    typeof authentication === 'object' && authentication !== null
+      ? (authentication as Record<string, unknown>)['assertionIssuer']
+      : undefined;
+  if (assertionIssuer !== undefined) {
+    if (method !== UPSTREAM_SIGNED_CLIENT_SECRET) {
+      problems.push(
+        `clientAuthentication.assertionIssuer is taken only with ${UPSTREAM_SIGNED_CLIENT_SECRET}`
+      );
+    } else if (
+      typeof assertionIssuer !== 'string' ||
+      assertionIssuer.length === 0 ||
+      assertionIssuer.length > MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH ||
+      // eslint-disable-next-line no-control-regex -- refusing control characters is the point
+      /[\u0000-\u001f\u007f]/u.test(assertionIssuer)
+    ) {
+      problems.push(
+        `clientAuthentication.assertionIssuer must be a string of 1 to ${MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH} characters, no control character`
+      );
+    }
   }
   const endpoints = config['endpoints'];
   if (endpoints !== undefined) {
