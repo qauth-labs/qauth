@@ -3,7 +3,7 @@ title: Published images
 description: The container images each QAuth release publishes, how to run them by digest, how to verify their signature, provenance and SBOM before you do, and how to build your own image with an AuthMethod plugin added.
 sidebar:
   order: 9
-lastVerified: '2026-11-09'
+lastVerified: '2026-11-12'
 ---
 
 Each QAuth release publishes two container images, built once from the
@@ -167,12 +167,9 @@ redirect URI at the provider, once for each host a realm signs in on.
 | GitHub    | [`@qauth-labs/plugin-github`](https://github.com/qauth-labs/plugin-github#readme)       | `https://<realm host>/upstream/github/callback`    |
 | Google    | [`@qauth-labs/plugin-google`](https://github.com/qauth-labs/plugin-google#readme)       | `https://<realm host>/upstream/google/callback`    |
 | Microsoft | [`@qauth-labs/plugin-microsoft`](https://github.com/qauth-labs/plugin-microsoft#readme) | `https://<realm host>/upstream/microsoft/callback` |
-| Apple     | [`@qauth-labs/plugin-apple`](https://github.com/qauth-labs/plugin-apple#readme)         | `https://<realm host>/upstream/apple/callback`     |
 
-Google, Microsoft and Apple are [preset plugins](/extend/preset-plugins/), built on the server's
-own OpenID Connect client, so they need a QAuth release that loads presets (#671). Sign in with
-Apple also needs the signer to hold the key Apple issues (#1073). Until then its code exchange
-fails closed, and no account is created.
+Google and Microsoft are [preset plugins](/extend/preset-plugins/), built on the server's own
+OpenID Connect client, so they need QAuth `0.2.3` or later.
 
 ## What a release runs
 

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The docs list QAuth's provider plugins** ([#1074], [#1075]).
+  `operate/images` names each plugin in its own repository (GitHub, Google
+  and Microsoft) with its package and the redirect URI to register at the
+  provider. `extend/auth-method-contract` links the two preset plugins beside
+  the GitHub one.
+
+## [0.2.3] - 2026-11-12
+
+A patch release that carries a breaking change, as a 0.x release may (see the
+**Action for operators** under Fixed). A provider plugin can now live in its
+own repository and build on the server's OpenID Connect client through the
+plugin SDK alone. The admin API previews a realm policy change before it is
+saved, an operator can verify an account on a deployment without mail, and a
+CIMD client gets no token without a user unless the operator lists its scopes.
+
+### Added
+
 - **The admin API previews a realm policy change before it is saved**
   ([#589], ADR-020 §5, experimental route). `POST
   /admin/v1-rc.0/realms/{realmId}/policies/preview`
@@ -86,11 +103,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   admin operation may now read state without `classify`, only to show it to
   the approver and bind the approval to it; it then needs its declaration on
   every request.
-- **The docs list QAuth's provider plugins** ([#1074], [#1075], [#1076]).
-  `operate/images` names each plugin in its own repository (GitHub, Google,
-  Microsoft and Apple) with its package and the redirect URI to register at
-  the provider. `extend/auth-method-contract` links the three preset plugins
-  beside the GitHub one.
 
 ### Changed
 
@@ -4850,7 +4862,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/qauth-labs/qauth/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/qauth-labs/qauth/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/qauth-labs/qauth/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/qauth-labs/qauth/compare/v0.1.3...v0.2.0
