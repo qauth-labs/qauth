@@ -16,6 +16,7 @@ import {
   mergePatchLeafPaths,
 } from '../../helpers/admin-classification';
 import type { Classification, ClassifyInput } from '../../helpers/admin-operations';
+import { ADMIN_SCOPE_LIST } from '../../helpers/admin-scopes';
 import { ENVIRONMENTS } from '../../helpers/environment-policy';
 import { AGENT_MODES } from '../../helpers/scope-modes';
 import type { ChangeDirection } from '../change-preview';
@@ -382,9 +383,11 @@ export interface AppliedClientPatch {
  *   its value and is reported in `problems`. A member that is not patchable
  *   is ignored here: the body schema refuses it, and the classification
  *   fails such a request closed.
- * - The lists drop repeats; a verified domain takes its stored form when it
- *   has one.
- * - First-party trust stays consistent (ADR-017 Decision 2): removing the
+ * - A list the patch names drops repeats; a verified domain it names takes
+ *   its stored form when it has one. A member it does not name stays as
+ *   stored.
+ * - When the patch names a member of first-party trust, the three stay
+ *   consistent (ADR-017 Decision 2): removing the
  *   profile removes its policy and its reason, and `web_redirect` drops a
  *   policy, unless the patch names them (the check then refuses them);
  *   `native_backend` takes its policy with every member, the defaults
@@ -410,13 +413,20 @@ export function applyClientPatch(state: AdminClient, body: unknown): AppliedClie
     client[name] = mergePatch(client[name], value);
   }
 
-  for (const list of ['redirectUris', 'postLogoutRedirectUris', 'scopes', 'grantTypes']) {
-    if (Array.isArray(client[list])) client[list] = [...new Set(client[list] as unknown[])];
+  // Only what the patch names is normalised: a member it leaves alone is
+  // stored as it was, whatever an older path wrote.
+  for (const list of [
+    'redirectUris',
+    'postLogoutRedirectUris',
+    'scopes',
+    'grantTypes',
+    'clientCredentialsScopes',
+  ]) {
+    if (named.has(list) && Array.isArray(client[list])) {
+      client[list] = [...new Set(client[list] as unknown[])];
+    }
   }
-  if (Array.isArray(client['clientCredentialsScopes'])) {
-    client['clientCredentialsScopes'] = [...new Set(client['clientCredentialsScopes'])];
-  }
-  if (typeof client['verifiedDomain'] === 'string') {
+  if (named.has('verifiedDomain') && typeof client['verifiedDomain'] === 'string') {
     try {
       client['verifiedDomain'] = normaliseVerifiedDomain(client['verifiedDomain']);
     } catch {
@@ -425,14 +435,18 @@ export function applyClientPatch(state: AdminClient, body: unknown): AppliedClie
   }
 
   // A policy or a reason the patch itself names is kept as sent, so the
-  // check refuses one that the profile does not take.
+  // check refuses one that the profile does not take. A patch that names no
+  // member of first-party trust leaves all three as stored.
   const profile = client['firstPartyProfile'];
-  if (profile === null) {
+  const namesTrust = ['firstPartyProfile', 'firstPartyPolicy', 'firstPartyReason'].some((name) =>
+    named.has(name)
+  );
+  if (namesTrust && profile === null) {
     if (!named.has('firstPartyPolicy')) client['firstPartyPolicy'] = null;
     if (!named.has('firstPartyReason')) client['firstPartyReason'] = null;
-  } else if (profile === 'web_redirect' && !named.has('firstPartyPolicy')) {
+  } else if (namesTrust && profile === 'web_redirect' && !named.has('firstPartyPolicy')) {
     client['firstPartyPolicy'] = null;
-  } else if (profile === 'native_backend') {
+  } else if (namesTrust && profile === 'native_backend') {
     const policy = firstPartyPolicySchema.safeParse(
       storedFirstPartyPolicy(client['firstPartyPolicy'] ?? {})
     );
@@ -499,6 +513,70 @@ export function classificationOfClientField(
   }
 }
 
+/** The admin API's own scopes, which only an admin token carries. */
+const ADMIN_SCOPES: ReadonlySet<string> = new Set(ADMIN_SCOPE_LIST);
+
+/**
+ * Whether a client may obtain admin tokens: it holds a scope of the admin
+ * API (`qauth:admin:*`). Every change of one changes who can administer, a
+ * narrowing too: a write that took `qauth:admin:security` from the admin
+ * console's client, suspended it or cut its token lifetime to a second
+ * would leave no token able to undo it.
+ */
+export function holdsAdminScope(client: Pick<AdminClient, 'scopes'>): boolean {
+  return client.scopes.some((scope) => ADMIN_SCOPES.has(scope));
+}
+
+/**
+ * Whether a change of `scopes` gives a client a scope it may obtain as
+ * itself: it has the `client_credentials` grant and no
+ * `clientCredentialsScopes` list, so every scope of `scopes` is issued to
+ * it without a user and without consent (#891).
+ */
+function widensClientCredentials(state: AdminClient, client: AdminClient): boolean {
+  return (
+    (client.grantTypes as readonly string[]).includes('client_credentials') &&
+    client.clientCredentialsScopes === null &&
+    client.scopes.some((scope) => !state.scopes.includes(scope))
+  );
+}
+
+/** `classification` as a security change, with `effect` among its effects. */
+function asSecurity(classification: Classification, effect: SecurityEffect): Classification {
+  const effects = classification.class === 'security' ? [...classification.effects] : [];
+  return {
+    class: 'security',
+    effects: effects.includes(effect) ? effects : [...effects, effect],
+    permissions: ['clients.security'],
+  };
+}
+
+/**
+ * What the change of one field from `state` to `client` needs: its entry in
+ * the field table ({@link classificationOfClientField}), and two rules that
+ * read the rest of the client. A scope added to a `client_credentials`
+ * client without a list is a security change (`token-content`), and every
+ * change of a client that holds an admin scope, or gets one, is a security
+ * change with the effect `administration` ({@link holdsAdminScope}).
+ */
+export function classificationOfClientChange(
+  name: ClientFieldName,
+  state: AdminClient,
+  client: AdminClient
+): Classification {
+  const before = state[name];
+  const after = client[name];
+  let classification = classificationOfClientField(name, before, after);
+  if (isDeepStrictEqual(before, after)) return classification;
+  if (name === 'scopes' && widensClientCredentials(state, client)) {
+    classification = asSecurity(classification, 'token-content');
+  }
+  if (holdsAdminScope(state) || holdsAdminScope(client)) {
+    classification = asSecurity(classification, 'administration');
+  }
+  return classification;
+}
+
 /** Which way a change of one field moves, by its entry. */
 export function directionOfClientField(
   name: ClientFieldName,
@@ -521,17 +599,22 @@ function memberOf(pointer: string): string {
  * The classification of a client update (API-03): the leaf paths of its body
  * (`mergePatchLeafPaths`), each mapped to the member of the representation it
  * is in, so a member the table does not hold, a read-only one included,
- * fails the request closed (`classifyByField`); each member is classified by
- * its change on the patched client, and the update always needs
+ * fails the request closed (`classifyByField`), and every member the patched
+ * client holds differently besides, which the patch did not name but its
+ * rules changed; each member is classified by its change on the patched
+ * client ({@link classificationOfClientChange}), and the update always needs
  * `clients.read` too: it answers the client.
  */
 export function classifyClientPatch(request: ClassifyInput, state: AdminClient): Classification {
   const { client } = applyClientPatch(state, request.body);
   const fields: Record<string, FieldRule<AdminClient>> = {};
   for (const name of PATCHABLE_CLIENT_FIELDS) {
-    fields[name] = () => classificationOfClientField(name, state[name], client[name]);
+    fields[name] = () => classificationOfClientChange(name, state, client);
   }
-  const members = new Set(mergePatchLeafPaths(request.body).map(memberOf));
+  const members = new Set([
+    ...mergePatchLeafPaths(request.body).map(memberOf),
+    ...changedClientFields(state, client),
+  ]);
   return mergeClassifications([
     READ,
     classifyByField<AdminClient>({ changedFields: () => members, fields, unchanged: WRITE })(

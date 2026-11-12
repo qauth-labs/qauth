@@ -8,7 +8,7 @@ import type { PreviewedChange } from '../change-preview';
 import {
   applyClientPatch,
   changedClientFields,
-  classificationOfClientField,
+  classificationOfClientChange,
   directionOfClientField,
 } from './fields';
 import { CLIENT_OPERATION_IDS } from './operations';
@@ -22,8 +22,10 @@ import type { AdminClient } from './representation';
  *
  * - The changes are the fields the patched client (`applyClientPatch`)
  *   holds differently, in the order of the field table.
- * - Each change needs what its entry of the table gives it
- *   (`classificationOfClientField`), and moves the way it says
+ * - Each change needs what the update's rules give it
+ *   (`classificationOfClientChange`): its entry of the table, a scope that
+ *   widens what `client_credentials` issues, and any change of a client that
+ *   holds an admin scope. It moves the way its entry says
  *   (`directionOfClientField`).
  * - The patch as a whole needs what the pipeline would classify it as:
  *   `classifyRequest` over the registry's `clients.update`, its `classify`
@@ -90,7 +92,7 @@ export function previewClientPatch(
       before: state[name],
       after: client[name],
       direction: directionOfClientField(name, state[name], client[name]),
-      classification: classificationOfClientField(name, state[name], client[name]),
+      classification: classificationOfClientChange(name, state, client),
       secret: false,
       environmentBound: isEnvironmentBound(name, state[name], client[name]),
     })),
