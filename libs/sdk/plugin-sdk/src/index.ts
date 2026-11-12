@@ -12,8 +12,11 @@
  *
  * - this one: the `AuthMethod` interface and the types it uses, the contract's
  *   constants, its errors and the static checks the server's registry runs;
+ *   and the shape of an upstream OpenID Connect preset, a plugin the server
+ *   builds on its own OpenID Connect client (`defineUpstreamOidcPreset`);
  * - `@qauth-labs/plugin-sdk/testing`: the contract test kit,
- *   `checkAuthMethod`, for a plugin's own tests;
+ *   `checkAuthMethod`, and the preset kit, `checkUpstreamOidcPreset`, for a
+ *   plugin's own tests;
  * - `@qauth-labs/plugin-sdk/host`: the host's half, which QAuth's server
  *   imports and the test kit runs (the engine's checks around a method's
  *   answers, the context a method is handed). A plugin does not need it.
@@ -41,3 +44,8 @@ export {
 
 // The static checks the server's registry and loader run on a method.
 export { assertAuthMethod, authMethodProblems, isAuthMethod } from './lib/validate.js';
+
+// An upstream OpenID Connect preset (#671): a provider's facts and claim
+// rules, which the server's own client runs. Its types, its constants, the
+// helper that defines one and the loader's static checks of it.
+export * from './lib/upstream-oidc-preset.js';

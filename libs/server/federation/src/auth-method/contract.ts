@@ -18,8 +18,7 @@ import { WEBAUTHN_PROVIDER_TYPE } from '../providers/webauthn.provider';
  * package a plugin is written against in its own repository; this library
  * re-exports it and declares none of it again
  * (`single-copy.test.ts`). What stays here is the server's: where the contract
- * stands in the experimental-feature registry, and the names the plugin loader
- * keeps for the generic upstream OpenID Connect client.
+ * stands in the experimental-feature registry.
  *
  * EXPERIMENTAL, like the contract.
  *
@@ -37,30 +36,6 @@ export const AUTH_METHOD_STABILITY = Object.freeze({
   stability: 'experimental',
   experimentalItem: 'plugin-api' satisfies ExperimentalItemId,
 } as const);
-
-/**
- * The `id` of QAuth's generic upstream OpenID Connect client
- * (`@qauth-labs/server-upstream-oidc`, #601), which every provider it is
- * configured for shares. No plugin may take it (`loadAuthMethodPlugins`), so
- * a plugin's realm state and its admin API name never stand for the client's.
- *
- * @experimental
- */
-export const UPSTREAM_OIDC_METHOD_ID = 'oidc';
-
-/**
- * The `type` of a provider of the generic upstream OpenID Connect client
- * (#601): `oidc_` and a lower-case alias of letters, digits and `_`, at most
- * 63 characters in all. It is the AuthMethod type, the
- * `user_credentials.provider_type` value and a segment of the callback URL,
- * so it holds no `:` or `/` and never equals an ID-JAG type
- * (`oidc_<issuer URL>`). The namespace is the client's: no plugin may take a
- * type in it (`loadAuthMethodPlugins`), so a plugin can neither answer a
- * provider's callback nor write its credentials.
- *
- * @experimental
- */
-export const UPSTREAM_OIDC_TYPE_PATTERN = /^oidc_[a-z0-9][a-z0-9_]{0,57}$/;
 
 /**
  * The SDK imports no other QAuth package, so it writes out the three values

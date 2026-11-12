@@ -28,7 +28,7 @@ export type FakeClientAuthentication =
   | 'client_secret_basic'
   | 'client_secret_post'
   | 'private_key_jwt'
-  /** A JWT the client signs, sent as `client_secret` in the form (Sign in with Apple's). */
+  /** A JWT the client signs, sent as `client_secret` in the form (`signed_client_secret`). */
   | 'signed_client_secret';
 
 /** A client registered at the fake provider. */
@@ -43,8 +43,8 @@ export interface FakeClient {
    */
   readonly assertionKeys?: () => Promise<{ readonly keys: readonly unknown[] }>;
   /**
-   * For `signed_client_secret`: the `iss` the secret must carry, such as
-   * Apple's Team ID. The client id unless set.
+   * For `signed_client_secret`: the `iss` the secret must carry, such as a
+   * developer account's team id. The client id unless set.
    */
   readonly secretIssuer?: string;
   /**
@@ -387,7 +387,7 @@ export async function createFakeProvider(options: FakeProviderOptions): Promise<
   /**
    * Whether `secret` is the client's signed client secret: a JWT under its
    * assertion keys, `iss` its secret issuer, `sub` its client id, `aud` the
-   * issuer, with `iat` and `exp`, as Sign in with Apple checks it.
+   * issuer, with `iat` and `exp`.
    */
   async function signedSecretVerifies(client: FakeClient, secret: string): Promise<boolean> {
     if (client.trustAssertion !== undefined) return client.trustAssertion(secret);

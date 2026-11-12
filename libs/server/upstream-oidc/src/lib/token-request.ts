@@ -56,15 +56,15 @@ export function formEncode(value: string): string {
  *
  * For `private_key_jwt` the signer role signs the assertion (ADR-019
  * Decision 9): `iss` and `sub` are the client id the realm's configuration
- * of the provider names (`iss` its assertion issuer when it names one, as
- * Apple's Team ID), `aud` the provider's issuer identifier (the
+ * of the provider names (`iss` its assertion issuer when it names one,
+ * such as a developer account's team id), `aud` the provider's issuer identifier (the
  * assertion's sole audience, draft-ietf-oauth-rfc7523bis), with a fresh
  * `jti` and an `exp` {@link CLIENT_ASSERTION_LIFETIME_SECONDS} away. The
  * library sends the signed string and never sees the key.
  *
  * A `signed_client_secret` (#671) is the same signed JWT, with the same
  * claims and lifetime, sent as the `client_secret` of a `client_secret_post`
- * request, as Sign in with Apple takes it.
+ * request, for a provider that takes no static secret.
  */
 export async function clientCredentials(
   context: AuthMethodContext<UpstreamOidcClientConfig>,
