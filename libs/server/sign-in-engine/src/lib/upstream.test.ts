@@ -13,7 +13,7 @@ import {
   passwordAccount,
   recordingAudit,
 } from '../testing/fakes';
-import { createMemoryPasskeys, fakeRegistration } from '../testing/memory-passkeys';
+import { createMemoryPasskeys, fakeAssertion, fakeRegistration } from '../testing/memory-passkeys';
 import { createMemoryRecoveryCodes } from '../testing/memory-recovery-codes';
 import { createMemoryTotp } from '../testing/memory-totp';
 import { createProofOfWorkProvider } from './bot-challenge';
@@ -443,6 +443,46 @@ describe('the upstream provider’s callback (#639)', () => {
     const done = await built.engine.advance(
       kept(next),
       answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
+      ctx
+    );
+    expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
+  });
+
+  it('asks for the passkey after another provider on a passkey-first sign-in that withholds one (#1080)', async () => {
+    const passkeys = createMemoryPasskeys([{ id: 'credential-1', userId: USER, disabled: false }]);
+    const codes = createMemoryRecoveryCodes(() => T0);
+    const set = await codes.replace({ realmId: REALM, userId: USER });
+    await codes.confirm({ realmId: REALM, userId: USER, setId: set.setId });
+    const built = build(upstreamAccount({ others: [{ type: 'passkey', disabled: false }] }), {
+      passkeys,
+      recoveryCodes: codes,
+    });
+    // The sign-in to the account an identity of CORP joins: a fresh one.
+    const ctx = context(built, { withheldUpstream: CORP.provider, freshSignIn: true });
+
+    const first = await built.engine.advance(null, null, ctx);
+    if (first.kind !== 'step') throw new Error(`a ${first.kind}, not a step`);
+    expect(first.offer.current).toMatchObject({ step: 'webauthn_get' });
+    expect(first.offer.alternatives).toContainEqual({
+      step: 'upstream',
+      params: { providers: [PARTNER] },
+    });
+    const pick = await built.engine.advance(
+      kept(first),
+      answer('upstream', { provider: PARTNER.provider }),
+      ctx
+    );
+    expect(pick).toMatchObject({ kind: 'upstream', provider: PARTNER.provider });
+    const next = await built.engine.completeUpstream(kept(pick), proof({ provider: PARTNER }), ctx);
+
+    if (next.kind !== 'step') throw new Error(`a ${next.kind}, not a step`);
+    expect(next.offer.current).toMatchObject({ step: 'webauthn_get' });
+    expect(kept(next).subject).toBe(USER);
+    const done = await built.engine.advance(
+      kept(next),
+      answer('webauthn_get', {
+        webauthn_response: fakeAssertion('credential-1', next.offer.current.params),
+      }),
       ctx
     );
     expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
