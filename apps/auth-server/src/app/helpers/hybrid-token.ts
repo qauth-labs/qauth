@@ -16,7 +16,8 @@ import { REDIS_KEYS } from '../constants/redis-keys';
  * (`HybridSignedToken.token`), and the PQC component is parked server-side
  * keyed by the token's `jti`. A resource server retrieves it out-of-band from
  * RFC 7662 introspection, whose POST body has no header/cookie ceiling. This is
- * `PQC_TOKEN_DELIVERY='reference'`, the fail-safe default.
+ * `PQC_TOKEN_DELIVERY='reference'`, the only delivery the configuration
+ * accepts: `self-contained` is not built and stops the boot (#875).
  *
  * The store entry carries the SAME TTL as the token, so it self-evicts on
  * expiry and can never outlive the credential it describes.

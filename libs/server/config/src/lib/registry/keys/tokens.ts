@@ -69,16 +69,7 @@ export const TOKEN_KEYS = defineKeys([
     owner: 'signing',
     default: 'reference',
     since: '0.1.0',
-    docs: 'How the ML-DSA-65 signature of a hybrid token reaches a verifier: `reference`, through introspection, or `self-contained`, with the token.',
-  },
-  {
-    name: 'PQC_SELF_CONTAINED_ACK',
-    tier: 'advanced',
-    role: 'deployment',
-    owner: 'signing',
-    default: 'false',
-    since: '0.1.0',
-    docs: 'Confirm that `self-contained` hybrid tokens, whose ML-DSA-65 signature exceeds cookie and URL size limits, travel only where large headers are accepted; `PQC_TOKEN_DELIVERY=self-contained` requires it.',
+    docs: "How the ML-DSA-65 signature of a hybrid token reaches a verifier; `reference`, the only value, stores it under the token's `jti` for the token's lifetime, and introspection returns it as `pqc_signature`; any other value, `self-contained` included, stops the boot.",
   },
   {
     name: 'JWT_PRIVATE_KEY',

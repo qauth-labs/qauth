@@ -59,7 +59,7 @@ describe('cryptoEnvSchema (HYBRID_SIGNING_ENABLED coupling — #245)', () => {
   });
 });
 
-describe('cryptoEnvSchema (PQC_TOKEN_DELIVERY posture — #247)', () => {
+describe('cryptoEnvSchema (PQC_TOKEN_DELIVERY — #247, #875)', () => {
   const SEED = Buffer.alloc(32, 7).toString('base64url');
   const hybridBase = {
     HYBRID_SIGNING_ENABLED: 'true' as const,
@@ -72,26 +72,35 @@ describe('cryptoEnvSchema (PQC_TOKEN_DELIVERY posture — #247)', () => {
     expect(cryptoEnvSchema.parse(hybridBase).PQC_TOKEN_DELIVERY).toBe('reference');
   });
 
-  it('rejects self-contained delivery without an explicit size acknowledgement (fail-fast)', () => {
-    expect(() =>
-      cryptoEnvSchema.parse({ ...hybridBase, PQC_TOKEN_DELIVERY: 'self-contained' })
-    ).toThrow(/PQC_SELF_CONTAINED_ACK/);
+  it("accepts 'reference' when it is set", () => {
+    const parsed = cryptoEnvSchema.parse({ ...hybridBase, PQC_TOKEN_DELIVERY: 'reference' });
+    expect(parsed.PQC_TOKEN_DELIVERY).toBe('reference');
   });
 
-  it('accepts self-contained delivery once the size risk is acknowledged', () => {
-    const parsed = cryptoEnvSchema.parse({
-      ...hybridBase,
-      PQC_TOKEN_DELIVERY: 'self-contained',
-      PQC_SELF_CONTAINED_ACK: 'true',
-    });
-    expect(parsed.PQC_TOKEN_DELIVERY).toBe('self-contained');
+  // #875: the server only ever delivered by reference, so `self-contained`
+  // was accepted and ignored. It is refused now, with or without hybrid
+  // signing and whatever the old acknowledgement says, naming what to do.
+  it.each([
+    ['with hybrid signing', hybridBase],
+    ['without hybrid signing', {}],
+    ['with the old acknowledgement', { ...hybridBase, PQC_SELF_CONTAINED_ACK: 'true' }],
+  ])("refuses 'self-contained' %s: it is not built", (_label, base) => {
+    const parse = () => cryptoEnvSchema.parse({ ...base, PQC_TOKEN_DELIVERY: 'self-contained' });
+    expect(parse).toThrow("PQC_TOKEN_DELIVERY must be 'reference'");
+    expect(parse).toThrow(
+      "'self-contained', which would carry the signature with the token, is not built."
+    );
   });
 
-  it('does not gate self-contained delivery when hybrid signing is off', () => {
-    // Classical tokens are already small self-contained JWTs; the guard only
-    // applies once hybrid is enabled, so the ack is not required here.
-    const parsed = cryptoEnvSchema.parse({ PQC_TOKEN_DELIVERY: 'self-contained' });
-    expect(parsed.PQC_TOKEN_DELIVERY).toBe('self-contained');
+  it.each(['Reference', 'by-reference'])('refuses any other value (%j)', (value) => {
+    expect(() => cryptoEnvSchema.parse({ PQC_TOKEN_DELIVERY: value })).toThrow(
+      "PQC_TOKEN_DELIVERY must be 'reference'"
+    );
+  });
+
+  it('reads no PQC_SELF_CONTAINED_ACK: the key is removed (registry/removed.ts)', () => {
+    const parsed = cryptoEnvSchema.parse({ ...hybridBase, PQC_SELF_CONTAINED_ACK: 'true' });
+    expect(parsed).not.toHaveProperty('PQC_SELF_CONTAINED_ACK');
   });
 });
 

@@ -60,14 +60,17 @@ function setEnv(overrides: Record<string, string | undefined>) {
 beforeEach(() => {
   // Both names of the verified-account gate are cleared here, because a case
   // that leaves an invalid value behind would fail every later import. The
-  // removed private-address switches too: one left set fails every later
-  // import. And DB_POOL_MAX, which a pool of one refuses.
+  // removed private-address switches too, and the removed PQC
+  // acknowledgement and refused PQC delivery (#875): one left set fails every
+  // later import. And DB_POOL_MAX, which a pool of one refuses.
   setEnv({
     NODE_ENV: 'development',
     REQUIRE_VERIFIED_ACCOUNT: undefined,
     REQUIRE_EMAIL_VERIFIED: undefined,
     CIMD_ALLOW_PRIVATE_ADDRESSES: undefined,
     ID_JAG_ALLOW_PRIVATE_ADDRESSES: undefined,
+    PQC_TOKEN_DELIVERY: undefined,
+    PQC_SELF_CONTAINED_ACK: undefined,
     EGRESS_ALLOWLIST_PATH: undefined,
     DB_POOL_MAX: undefined,
     WEBAUTHN_ENABLED: undefined,
@@ -387,6 +390,50 @@ describe('the removed private-address switches stop the boot (#481)', () => {
 
     expect(mod.env).not.toHaveProperty('CIMD_ALLOW_PRIVATE_ADDRESSES');
     expect(mod.env).not.toHaveProperty('ID_JAG_ALLOW_PRIVATE_ADDRESSES');
+  });
+});
+
+/**
+ * PQC delivery (#875). The server only ever delivered a hybrid token's
+ * ML-DSA-65 signature by reference, through introspection, so
+ * `PQC_TOKEN_DELIVERY=self-contained` and its acknowledgement
+ * `PQC_SELF_CONTAINED_ACK` were accepted and did nothing. Both now stop the
+ * boot instead of leaving the operator believing a setting that never applied.
+ */
+describe('PQC delivery settings that the server does not honour stop the boot (#875)', () => {
+  it('refuses PQC_TOKEN_DELIVERY=self-contained, which is not built', async () => {
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: PROD_SECRET,
+      PQC_TOKEN_DELIVERY: 'self-contained',
+    });
+
+    await expect(import('./env')).rejects.toThrow("PQC_TOKEN_DELIVERY must be 'reference'");
+  });
+
+  it('refuses PQC_SELF_CONTAINED_ACK, a removed key, naming the delivery that applies', async () => {
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: PROD_SECRET,
+      PQC_SELF_CONTAINED_ACK: 'false',
+    });
+
+    const boot = import('./env');
+    await expect(boot).rejects.toThrow('PQC_SELF_CONTAINED_ACK was removed in 0.3.0 and is set.');
+    await expect(boot).rejects.toThrow('PQC_TOKEN_DELIVERY=reference');
+  });
+
+  it('boots with PQC_TOKEN_DELIVERY=reference and a blank PQC_SELF_CONTAINED_ACK', async () => {
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: PROD_SECRET,
+      PQC_TOKEN_DELIVERY: 'reference',
+      PQC_SELF_CONTAINED_ACK: '',
+    });
+    const mod = await import('./env');
+
+    expect(mod.env.PQC_TOKEN_DELIVERY).toBe('reference');
+    expect(mod.env).not.toHaveProperty('PQC_SELF_CONTAINED_ACK');
   });
 });
 
