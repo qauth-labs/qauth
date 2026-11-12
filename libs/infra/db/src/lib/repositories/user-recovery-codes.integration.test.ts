@@ -348,6 +348,32 @@ describe('recovery codes (real Postgres, #649)', () => {
     });
   });
 
+  it('deletes the set of one account (#1064), and nothing of another account or realm', async () => {
+    const mine = await seedUser('realm-delete');
+    const theirs = await seedUser('realm-delete-other');
+    await codes.replaceSet({ ...mine, codeHashes: HASHES, createdAt: 1_000 });
+    await codes.replaceSet({ ...theirs, codeHashes: HASHES, createdAt: 1_000 });
+    const [kept] = await codes.findUnused(mine.realmId, mine.userId);
+    if (kept === undefined) throw new Error('no code');
+
+    // The user in another realm is no user: nothing is deleted.
+    await expect(codes.deleteSet(theirs.realmId, mine.userId)).resolves.toBe(0);
+    await expect(codes.deleteSet(mine.realmId, mine.userId)).resolves.toBe(10);
+    await expect(codes.status(mine.realmId, mine.userId)).resolves.toEqual({
+      issued: false,
+      unused: 0,
+      confirmed: false,
+    });
+    // A code of the deleted set is taken no more.
+    await expect(codes.markUsed({ ...mine, id: kept.id, usedAt: 2_000 })).resolves.toBe(false);
+    await expect(codes.status(theirs.realmId, theirs.userId)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: false,
+    });
+    await expect(codes.deleteSet(mine.realmId, mine.userId)).resolves.toBe(0);
+  });
+
   it('finds the account of an unused code by its lookup digest alone (#655)', async () => {
     const { realmId, userId } = await seedUser('realm-lookup');
     const digests = HASHES.map((_, index) => `lookup-${index}`);

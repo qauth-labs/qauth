@@ -444,6 +444,25 @@ export function createSessionsRepository(
         .orderBy(desc(sessions.createdAt), desc(sessions.id));
     },
 
+    async listNamingCredential(
+      realmId: string,
+      userId: string,
+      credentialId: string,
+      tx?: DbClient
+    ): Promise<Session[]> {
+      return (tx ?? defaultDb)
+        .select()
+        .from(sessions)
+        .where(
+          and(
+            eq(sessions.realmId, realmId),
+            eq(sessions.userId, userId),
+            sql`${sessions.newCredentialIds} @> ${JSON.stringify([credentialId])}::jsonb`
+          )
+        )
+        .orderBy(desc(sessions.createdAt), desc(sessions.id));
+    },
+
     async recordClient(
       realmId: string,
       sessionId: string,

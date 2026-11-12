@@ -1206,6 +1206,41 @@ describe('repository integration (real Postgres)', () => {
         .where(eq(refreshTokens.id, opened.id));
       expect(first?.revokedReason).toBe('new_credential_removed');
     });
+
+    it('listNamingCredential finds the sessions that name a credential, ended ones too, of one user in one realm', async () => {
+      const realm = await seedRealm();
+      const otherRealm = await seedRealm('other');
+      const user = await seedUser(realm.id);
+      const other = await seedUser(realm.id);
+      const repo = createSessionsRepository(db().database.db);
+      const credential = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f00c1';
+      const seed = (userId: string, newCredentialIds: string[], expiresAt: number) =>
+        repo.create({
+          realmId: realm.id,
+          userId,
+          authTime: Date.now() - 60_000,
+          amr: ['pwd'],
+          expiresAt,
+          newCredentialIds,
+        });
+      const live = await seed(user.id, [credential], Date.now() + 3_600_000);
+      // A browser session ends long before the families its sign-in opened.
+      const signedOut = await seed(
+        user.id,
+        ['0190f5a8-7c3e-7d10-8a4b-3c2d1e0f00c2', credential],
+        Date.now() + 3_600_000
+      );
+      await repo.revoke(realm.id, signedOut.id, 'sign_out');
+      const lapsed = await seed(user.id, [credential], Date.now() - 1_000);
+      await seed(user.id, [], Date.now() + 3_600_000);
+      await seed(user.id, ['0190f5a8-7c3e-7d10-8a4b-3c2d1e0f00c2'], Date.now() + 3_600_000);
+      await seed(other.id, [credential], Date.now() + 3_600_000);
+
+      const named = await repo.listNamingCredential(realm.id, user.id, credential);
+      expect(named.map((row) => row.id).sort()).toEqual([live.id, signedOut.id, lapsed.id].sort());
+      // Another realm's call names the user in vain.
+      expect(await repo.listNamingCredential(otherRealm.id, user.id, credential)).toEqual([]);
+    });
   });
 
   describe('oauth consents — soft-delete revoke + upsertGrant scope union', () => {

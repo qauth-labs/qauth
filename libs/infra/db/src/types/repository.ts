@@ -1665,6 +1665,19 @@ export interface SessionsRepository {
    */
   listActiveForUser(realmId: string, userId: string, tx?: DbClient): Promise<Session[]>;
   /**
+   * A user's sessions in a realm whose sign-in bound or proved the new
+   * credential `credentialId` (#1064; `new_credential_ids`), newest first:
+   * live or ended alike, for as long as an ended one is kept
+   * (`SESSION_RETENTION_DAYS`), since the refresh families a sign-in opened
+   * outlive its browser session.
+   */
+  listNamingCredential(
+    realmId: string,
+    userId: string,
+    credentialId: string,
+    tx?: DbClient
+  ): Promise<Session[]>;
+  /**
    * Record that a live session served a client (issue #549): the
    * `session_clients` row back-channel logout reads, written in the
    * transaction that mints the authorization code. A session that served the
