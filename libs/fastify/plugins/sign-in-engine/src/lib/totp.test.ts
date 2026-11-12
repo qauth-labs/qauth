@@ -39,6 +39,7 @@ interface FakeRow {
   externalSub: string;
   credentialData: Record<string, unknown>;
   disabledAt: number | null;
+  newUntil?: number | null;
 }
 
 /** A reversible cipher bound to the account: what the signer's context does. */
@@ -112,7 +113,7 @@ function setup(
         row.credentialData = { ...row.credentialData, last_step: step };
         return true;
       },
-      async upsertTotp({ realmId, userId, credentialData }, tx) {
+      async upsertTotp({ realmId, userId, credentialData, newUntil }, tx) {
         reads.push(tx);
         const row = totpRow(realmId, userId);
         if (row === undefined) {
@@ -124,6 +125,7 @@ function setup(
             externalSub: userId,
             credentialData: { ...credentialData },
             disabledAt: null,
+            newUntil: newUntil ?? null,
           };
           rows.push(created);
           return created;
@@ -131,6 +133,7 @@ function setup(
         if (row.userId !== userId) return undefined;
         row.credentialData = { ...credentialData };
         row.disabledAt = null;
+        row.newUntil = newUntil ?? null;
         return row;
       },
       async setDisabledAt(realmId, providerType, externalSub, disabledAt) {
@@ -167,6 +170,7 @@ function setup(
     disabled: vi.fn(async () => undefined),
     failedAfterPassword: vi.fn(async () => undefined),
     report: vi.fn(),
+    newFactorWindowMs: vi.fn<(realmId: string) => Promise<number>>(async () => WINDOW_MS),
     clock: { now: () => clock, sleep: async () => undefined },
   } satisfies RepositoryTotpOptions<FakeTx>;
   const totp = createRepositoryTotp<FakeTx>(
@@ -193,7 +197,10 @@ function setup(
 }
 
 /** Start a set-up and bind it with its first code, as the engine does. */
-async function bound(built: ReturnType<typeof setup>): Promise<Uint8Array> {
+async function bound(
+  built: ReturnType<typeof setup>,
+  options: { readonly isNew?: boolean } = {}
+): Promise<Uint8Array> {
   const started = await built.totp.start({ ...ACCOUNT, identifier: 'alice@example.com' });
   const secret = await cipher.open({ ...ACCOUNT, sealed: started.sealed });
   const checked = await built.totp.check({
@@ -208,12 +215,48 @@ async function bound(built: ReturnType<typeof setup>): Promise<Uint8Array> {
       clientId: CLIENT,
       sealed: started.sealed,
       step: checked.step,
+      ...(options.isNew === true ? { isNew: true } : {}),
     })
-  ).toEqual({ kind: 'bound' });
+  ).toEqual({ kind: 'bound', credentialId: built.totpRow()?.id });
   return secret;
 }
 
+/** The realm's new-factor window in these tests (#1064): 7 days. */
+const WINDOW_MS = 7 * 86_400_000;
+
 describe('the TOTP over user_credentials (#653)', () => {
+  it('stores when a new binding stops being new, and clears it on a binding that is not (#1064)', async () => {
+    const built = setup();
+    await bound(built, { isNew: true });
+    expect(built.opts.newFactorWindowMs).toHaveBeenCalledWith(REALM);
+    expect(built.totpRow()?.newUntil).toBe(T0 + WINDOW_MS);
+    expect(built.opts.recorded).toHaveBeenCalledWith(
+      { ...ACCOUNT, credentialId: built.totpRow()?.id, newUntil: T0 + WINDOW_MS },
+      built.transactions[0]
+    );
+    built.advance(60_000);
+    await bound(built);
+    expect(built.totpRow()?.newUntil).toBeNull();
+    expect(built.opts.newFactorWindowMs).toHaveBeenCalledTimes(1);
+  });
+
+  it('binds nothing when the realm’s window cannot be read (#1064)', async () => {
+    const built = setup();
+    built.opts.newFactorWindowMs.mockRejectedValueOnce(new Error('the realm is gone'));
+    const started = await built.totp.start({ ...ACCOUNT, identifier: 'alice@example.com' });
+    await expect(
+      built.totp.bind({
+        ...ACCOUNT,
+        clientId: CLIENT,
+        sealed: started.sealed,
+        step: 1,
+        isNew: true,
+      })
+    ).rejects.toThrow('the realm is gone');
+    expect(built.totpRow()).toBeUndefined();
+    expect(built.opts.bound).not.toHaveBeenCalled();
+  });
+
   it('binds one row of the account, its secret sealed, its first code spent', async () => {
     const built = setup();
     const secret = await bound(built);
@@ -308,7 +351,7 @@ describe('the TOTP over user_credentials (#653)', () => {
       sealed: started.sealed,
       step: 1,
     });
-    expect(bound).toEqual({ kind: 'bound' });
+    expect(bound).toEqual({ kind: 'bound', credentialId: built.totpRow()?.id });
     expect(built.totpRow()).toBeDefined();
   });
 

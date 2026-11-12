@@ -46,7 +46,7 @@ function stubStores(
   overrides: Partial<{
     credential: Record<string, unknown> | undefined;
     user: { id: string; enabled: boolean; operatorVerifiedAt?: number | null } | undefined;
-    passkeys: { realmId: string; disabledAt?: number | null }[];
+    passkeys: { realmId: string; disabledAt?: number | null; newUntil?: number | null }[];
     upstreams: Record<string, unknown>[];
     grants: unknown[];
     disabledAt: number | null;
@@ -60,7 +60,7 @@ function stubStores(
     user: { id: USER, enabled: true } as
       | { id: string; enabled: boolean; operatorVerifiedAt?: number | null }
       | undefined,
-    passkeys: [] as { realmId: string; disabledAt?: number | null }[],
+    passkeys: [] as { realmId: string; disabledAt?: number | null; newUntil?: number | null }[],
     upstreams: [] as Record<string, unknown>[],
     grants: [] as unknown[],
     disabledAt: null as number | null,
@@ -106,6 +106,7 @@ function stubStores(
             providerType: 'webauthn',
             credentialData: {},
             disabledAt: passkey.disabledAt ?? null,
+            newUntil: passkey.newUntil ?? null,
           })),
           ...state.upstreams.map((upstream, index) => ({
             id: `upstream-${index}`,
@@ -178,7 +179,7 @@ describe('the repository account directory', () => {
       // A passkey of another realm's row is not this account's.
       factors: [
         { type: 'password', disabled: false },
-        { type: 'passkey', disabled: false },
+        { type: 'passkey', disabled: false, credentialId: 'passkey-0' },
       ],
       requiredActions: [],
       // The address a sign-in a passkey proved goes on with (#651).
@@ -188,6 +189,17 @@ describe('the repository account directory', () => {
     expect(
       await createRepositoryAccountDirectory(none, log()).findByUserId(REALM, USER)
     ).toBeNull();
+  });
+
+  it('names each passkey, with the end of its window while it has one (#1064)', async () => {
+    const { repos } = stubStores({
+      passkeys: [{ realmId: REALM, newUntil: 1_800_000_000_000 }, { realmId: REALM }],
+    });
+    const account = await createRepositoryAccountDirectory(repos, log()).findByUserId(REALM, USER);
+    expect(account?.factors.filter((factor) => factor.type === 'passkey')).toEqual([
+      { type: 'passkey', disabled: false, credentialId: 'passkey-0', newUntil: 1_800_000_000_000 },
+      { type: 'passkey', disabled: false, credentialId: 'passkey-1' },
+    ]);
   });
 
   it('reads the pending required actions of the proved account (#635)', async () => {
