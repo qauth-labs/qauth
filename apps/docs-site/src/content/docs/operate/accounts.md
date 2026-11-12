@@ -36,11 +36,13 @@ it, rather than at its next use:
 - every live refresh token of the account is revoked, as `account_disabled`;
 - every authorization code of the account not yet redeemed is spent.
 
-An access token cannot be recalled: QAuth keeps no record of it. QAuth's own
-endpoints refuse it, as above. A resource server that verifies access tokens
-itself, without introspection, accepts one until it expires (15 minutes by
-default), unless it acts on the account's signals: `account-disabled` and the
-`session-revoked` of each session.
+The tool does not reach the access tokens already issued. Each stays valid
+until it expires (15 minutes by default) unless it is revoked by value, at
+`/oauth/revoke` or as the token presented to `/auth/logout`, or by a replay of
+the grant it came from. QAuth's own endpoints refuse one all the same, as
+above. A resource server that verifies access tokens itself, without
+introspection, accepts one until it expires, unless it acts on the account's
+signals: `account-disabled` and the `session-revoked` of each session.
 
 The account keeps its credentials, consents and clients. Signing out still
 works.
