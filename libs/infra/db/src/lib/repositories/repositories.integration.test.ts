@@ -34,6 +34,7 @@ import {
   createOAuthConsentsRepository,
   createRealmsRepository,
   createRefreshTokensRepository,
+  createSessionsRepository,
   createUserCredentialsRepository,
   createUsersRepository,
 } from './index';
@@ -1103,6 +1104,109 @@ describe('repository integration (real Postgres)', () => {
   });
 
   // --- consent soft-delete + scope union ------------------------------------
+
+  describe('what a removed new factor opened (#1064)', () => {
+    /** A live browser session of the user, signed in at `authTime`. */
+    async function seedSession(realmId: string, userId: string, authTime: number) {
+      return createSessionsRepository(db().database.db).create({
+        realmId,
+        userId,
+        authTime,
+        amr: ['pwd'],
+        expiresAt: Date.now() + 3_600_000,
+      });
+    }
+
+    it('invalidateForSessions ends the unredeemed codes only those sessions minted', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const opened = await seedSession(realm.id, user.id, Date.now() - 60_000);
+      const other = await seedSession(realm.id, user.id, Date.now() - 30_000);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+      const seedCode = (code: string, sessionId?: string) =>
+        codes.create({
+          code,
+          oauthClientId: client.id,
+          userId: user.id,
+          redirectUri: 'https://app.example.com/cb',
+          codeChallenge: 'challenge',
+          codeChallengeMethod: 'S256',
+          scopes: ['read:foo'],
+          expiresAt: Date.now() + 60_000,
+          ...(sessionId === undefined ? {} : { sessionId }),
+        });
+      await seedCode('opened-code', opened.id);
+      await seedCode('other-session-code', other.id);
+      await seedCode('no-session-code');
+
+      expect(await codes.invalidateForSessions(user.id, [opened.id])).toBe(1);
+      expect(await codes.findByCode(realm.id, 'opened-code')).toBeUndefined();
+      expect(await codes.findByCode(realm.id, 'other-session-code')).toBeDefined();
+      expect(await codes.findByCode(realm.id, 'no-session-code')).toBeDefined();
+      // Another user's call names the session in vain, and none names nothing.
+      const stranger = await seedUser(realm.id);
+      expect(await codes.invalidateForSessions(stranger.id, [other.id])).toBe(0);
+      expect(await codes.invalidateForSessions(user.id, [])).toBe(0);
+      expect(await codes.findByCode(realm.id, 'other-session-code')).toBeDefined();
+    });
+
+    it('revokeFamiliesOfSignIns revokes the families those sign-ins opened, and only them', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const other = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+      const openedAt = Date.now() - 60_000;
+      const seedToken = (tokenHash: string, userId: string, authTime: number | null) =>
+        tokens.create({
+          tokenHash,
+          userId,
+          oauthClientId: client.id,
+          familyCreatedAt: Date.now(),
+          familySessionExpiresAt: null,
+          authTime,
+          amr: authTime === null ? null : ['pwd'],
+          scopes: ['read:foo'],
+          expiresAt: Date.now() + 600_000,
+        });
+      const opened = await seedToken('opened-hash', user.id, openedAt);
+      const rotated = await seedToken('rotated-hash', user.id, openedAt);
+      const kept = await seedToken('kept-hash', user.id, openedAt - 1);
+      // A family from before #662 carries no auth_time, and is not found.
+      const legacy = await seedToken('legacy-hash', user.id, null);
+      const othersAtTheSameTime = await seedToken('other-user-hash', other.id, openedAt);
+
+      expect(
+        await tokens.revokeFamiliesOfSignIns(user.id, [openedAt], 'new_credential_removed')
+      ).toBe(2);
+      const rows = await db()
+        .database.db.select({
+          id: refreshTokens.id,
+          revoked: refreshTokens.revoked,
+          revokedReason: refreshTokens.revokedReason,
+        })
+        .from(refreshTokens);
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      for (const token of [opened, rotated]) {
+        expect(byId.get(token.id)).toMatchObject({
+          revoked: true,
+          revokedReason: 'new_credential_removed',
+        });
+      }
+      for (const token of [kept, legacy, othersAtTheSameTime]) {
+        expect(byId.get(token.id)).toMatchObject({ revoked: false });
+      }
+      // A second sweep finds nothing more, and keeps the first reason.
+      expect(await tokens.revokeFamiliesOfSignIns(user.id, [openedAt], 'reset')).toBe(0);
+      expect(await tokens.revokeFamiliesOfSignIns(user.id, [], 'reset')).toBe(0);
+      const [first] = await db()
+        .database.db.select({ revokedReason: refreshTokens.revokedReason })
+        .from(refreshTokens)
+        .where(eq(refreshTokens.id, opened.id));
+      expect(first?.revokedReason).toBe('new_credential_removed');
+    });
+  });
 
   describe('oauth consents — soft-delete revoke + upsertGrant scope union', () => {
     it('revoke is a soft-delete: the row is preserved with revokedAt set', async () => {

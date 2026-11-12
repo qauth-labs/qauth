@@ -65,6 +65,15 @@ import type { InteractionEngines } from './helpers/interaction-engines';
  * completes with no `webauthn_create` step, and a passkey added from the
  * account page still runs one.
  *
+ * And #1064's (ADR-017 Decision 8, amended 2026-11-12): a passkey someone who
+ * knows only the password binds is new for the realm's window, the owner's
+ * password alone removes it, and the removal ends the sessions, codes and
+ * refresh families its sign-in opened; once the window passed it is a full
+ * factor, whose removal needs a fresh sign-in with it; every binding reaches
+ * a subscribed Shared Signals receiver as a CAEP `credential-change` while no
+ * mail can be sent; and no binding step asks for a mailed code or a phone
+ * number.
+ *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
  */
@@ -109,6 +118,11 @@ const REFUSED_EVENT = 'request.account_operation_refused';
 const REAUTHENTICATE_FORM = `action="${ACCOUNT}/reauthenticate"`;
 /** A public address the fixture DNS hands out; a local server stands for it. */
 const RECEIVER_ADDRESS = '93.184.215.14';
+/** Another one, for the Shared Signals receiver of #1064. */
+const SSF_RECEIVER_ADDRESS = '151.101.1.140';
+const CREDENTIAL_CHANGE = 'https://schemas.openid.net/secevent/caep/event-type/credential-change';
+const PUSH_DELIVERY = 'urn:ietf:rfc:8935';
+const DAY_MS = 86_400_000;
 const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
 /** The background tasks of the engines this suite builds: run now, failures dropped. */
 const TASKS: BackgroundTasks = {
@@ -231,6 +245,7 @@ describe('the hosted account pages (#844, real containers)', () => {
   let booted: BootedAuthServer | undefined;
   let net: FixtureNetwork | undefined;
   let receiver: FixtureServer;
+  let ssfReceiver: FixtureServer;
   let dockerUp = false;
   let realmId = '';
   let engines: InteractionEngines | undefined;
@@ -249,11 +264,18 @@ describe('the hosted account pages (#844, real containers)', () => {
       res.writeHead(200);
       res.end();
     });
+    ssfReceiver = await net.serve(SSF_RECEIVER_ADDRESS, (_req, _body, res) => {
+      res.writeHead(202);
+      res.end();
+    });
     network.current = net.transport;
     booted = await bootAuthServer({
       ...baseEnvironment(infra, await generateJwtPem()),
       INTERACTION_UI_ENABLED: 'true',
       WEBAUTHN_ENABLED: 'true',
+      // The Shared Signals transmitter of #1064's receiver; the realm turns it
+      // on only for that test.
+      SSF_TRANSMITTER_ENABLED: 'true',
       // Each test registers and verifies its accounts through POST
       // /auth/register and /auth/verify, and drives dozens of page loads from
       // one address.
@@ -298,7 +320,9 @@ describe('the hosted account pages (#844, real containers)', () => {
     }
     net.dns.clear();
     net.dns.set('rp.egress.test', [RECEIVER_ADDRESS]);
+    net.dns.set('ssf.egress.test', [SSF_RECEIVER_ADDRESS]);
     receiver.requests.length = 0;
+    ssfReceiver.requests.length = 0;
     mails.clear();
   });
 
@@ -712,8 +736,8 @@ describe('the hosted account pages (#844, real containers)', () => {
     expect((await credentialsOf(who.userId)).map((row) => row.provider_type)).toEqual(['password']);
     expect(await eventsOf('user.password_changed', who.userId)).toEqual([{}]);
     expect(await eventsOf('user.credential_removed', who.userId)).toEqual([
-      { type: 'totp', credentialId: expect.any(String) },
-      { type: 'passkey', credentialId: passkeyId },
+      { type: 'totp', credentialId: expect.any(String), authenticator: 'app' },
+      { type: 'passkey', credentialId: passkeyId, authenticator: 'platform' },
     ]);
     expect(await eventsOf('user.recovery_codes_regenerated', who.userId)).toEqual([{}]);
     // Every change is told to the owner (ADR-020 §3 "Emails").
@@ -1216,6 +1240,18 @@ describe('the hosted account pages (#844, real containers)', () => {
     expect((await overview(browser)).body).toContain(
       `action="${ACCOUNT}/passkeys/${passkeyId}/remove"`
     );
+    // Bound after a sign-in that proved only the password, it is new for the
+    // realm's window, and the password alone would remove it (#1064). Once
+    // the window passed, it is a full factor.
+    const [stored] = await query<{ new_until: string | null }>(
+      'SELECT new_until::text AS new_until FROM user_credentials WHERE id = $1::uuid',
+      [passkeyId]
+    );
+    expect(Number(stored?.new_until)).toBeGreaterThan(Date.now());
+    await query('UPDATE user_credentials SET new_until = $2 WHERE id = $1::uuid', [
+      passkeyId,
+      Date.now() - 1,
+    ]);
 
     // Its removal asks for the passkey itself: "Confirm it's you" with it.
     const refused = await submit(browser, `${ACCOUNT}/passkeys/${passkeyId}/remove`);
@@ -1247,8 +1283,8 @@ describe('the hosted account pages (#844, real containers)', () => {
       'totp',
     ]);
     expect(await eventsOf('user.credential_added', who.userId)).toEqual([
-      { type: 'passkey', credentialId: passkeyId },
-      { type: 'totp', credentialId: expect.any(String) },
+      { type: 'passkey', credentialId: passkeyId, authenticator: 'platform' },
+      { type: 'totp', credentialId: expect.any(String), authenticator: 'app' },
     ]);
 
     // Sign out everywhere: this browser too.
@@ -1260,6 +1296,330 @@ describe('the hosted account pages (#844, real containers)', () => {
     const after = await open(browser, ACCOUNT);
     expect(after.statusCode, after.body).toBe(303);
     expect(locationOf(after).startsWith(CEREMONY_PAGE_PREFIX)).toBe(true);
+  });
+
+  describe('a factor bound after a password-only sign-in (#1064)', () => {
+    /** Every step a binding may ask: none is a mailed code or a phone number. */
+    const BINDING_STEPS = [
+      WEBAUTHN_GET,
+      IDENTIFIER,
+      PASSWORD,
+      WEBAUTHN_CREATE,
+      TOTP_SETUP,
+      RECOVERY_CODES,
+    ];
+
+    /** When the credential's new-factor window ends, or null for one never new. */
+    async function newUntilOf(credentialId: string): Promise<number | null> {
+      const [row] = await query<{ new_until: string | null }>(
+        'SELECT new_until::text AS new_until FROM user_credentials WHERE id = $1::uuid',
+        [credentialId]
+      );
+      if (row === undefined) throw new Error(`no credential ${credentialId}`);
+      return row.new_until === null ? null : Number(row.new_until);
+    }
+
+    /** The account's live sessions, with the new credentials each names. */
+    async function liveSessions(
+      who: Account
+    ): Promise<{ id: string; auth_time: string; new_credential_ids: string[] }[]> {
+      return query(
+        `SELECT id::text AS id, auth_time::text AS auth_time, new_credential_ids
+           FROM sessions WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at`,
+        [who.userId]
+      );
+    }
+
+    /**
+     * Someone who knows only the password signs in on a browser of their own
+     * and takes the passkey the sign-in offers (#651). Returns the browser,
+     * the passkey, its row's id and every step the ceremony asked.
+     */
+    async function bindAfterPassword(who: Account): Promise<{
+      readonly browser: Browser;
+      readonly passkey: SoftPasskey;
+      readonly passkeyId: string;
+      readonly steps: readonly string[];
+    }> {
+      const browser: Browser = { jar: new CookieJar() };
+      const steps: string[] = [];
+      let created: SoftPasskey | undefined;
+      const back = await ceremony(browser, await open(browser, ACCOUNT), who, {
+        seen: (step) => steps.push(step),
+        created: (passkey) => {
+          created = passkey;
+        },
+      });
+      expect(back.startsWith(ACCOUNT), back).toBe(true);
+      if (created === undefined) throw new Error('no passkey was created');
+      const [row] = await query<{ id: string }>(
+        "SELECT id::text AS id FROM user_credentials WHERE user_id = $1 AND provider_type = 'webauthn' AND external_sub = $2",
+        [who.userId, created.credentialId]
+      );
+      if (row === undefined) throw new Error('the passkey is not bound');
+      return { browser, passkey: created, passkeyId: row.id, steps };
+    }
+
+    it('lets the owner remove with the password a passkey someone bound with it, ending what it opened', async () => {
+      const who = await account();
+      const intruder = await bindAfterPassword(who);
+      // No mailed code and no phone number on the way (AC 4).
+      expect(intruder.steps).toContain(WEBAUTHN_CREATE);
+      expect(intruder.steps.filter((step) => !BINDING_STEPS.includes(step))).toEqual([]);
+      expect((mails.get(who.email) ?? []).filter((mail) => mail.code !== undefined)).toEqual([]);
+      // New for the realm's window, seven days by default; the session the
+      // sign-in opened names it.
+      const until = await newUntilOf(intruder.passkeyId);
+      expect(until).toBeGreaterThan(Date.now() + 7 * DAY_MS - 5 * 60_000);
+      expect(until).toBeLessThanOrEqual(Date.now() + 7 * DAY_MS);
+      const [opened] = await liveSessions(who);
+      expect(opened?.new_credential_ids).toEqual([intruder.passkeyId]);
+      // What that session minted: an unredeemed code, and a refresh family
+      // carrying its sign-in's auth_time (#662).
+      const rp = await relyingParty(null);
+      const code = await server().repositories.authorizationCodes.create({
+        code: `code-${randomUUID()}`,
+        oauthClientId: rp.id,
+        userId: who.userId,
+        redirectUri: 'https://rp.example/cb',
+        codeChallenge: 'c'.repeat(43),
+        codeChallengeMethod: 'S256',
+        scopes: ['openid'],
+        expiresAt: Date.now() + 60_000,
+        sessionId: opened?.id as string,
+      });
+      const family = await server().repositories.refreshTokens.create({
+        tokenHash: randomBytes(32).toString('hex'),
+        userId: who.userId,
+        oauthClientId: rp.id,
+        familyCreatedAt: Date.now(),
+        familySessionExpiresAt: null,
+        authTime: Number(opened?.auth_time),
+        amr: ['pwd'],
+        scopes: ['openid'],
+        expiresAt: Date.now() + 600_000,
+      });
+
+      // The owner signs in with the password: the new passkey is not asked
+      // for after it, and the account page shows the binding.
+      const owner: Browser = { jar: new CookieJar() };
+      const ownerSteps: string[] = [];
+      const back = await ceremony(owner, await open(owner, ACCOUNT), who, {
+        seen: (step) => ownerSteps.push(step),
+      });
+      expect(back.startsWith(ACCOUNT), back).toBe(true);
+      expect(ownerSteps.slice(ownerSteps.indexOf(PASSWORD))).not.toContain(WEBAUTHN_GET);
+      const page = await overview(owner);
+      expect(page.body).toContain('role="alert"');
+      expect(page.body).toContain('A passkey was added to your account');
+      expect(page.body).toContain('Not you? Remove it');
+
+      // "Not you? Remove it", with the session's password sign-in alone.
+      const removed = await post(owner, `${ACCOUNT}/passkeys/${intruder.passkeyId}/remove`, {
+        csrf: csrfOf(page.body),
+      });
+      expect(locationOf(removed)).toBe(`${ACCOUNT}?notice=passkey_removed`);
+      expect((await credentialsOf(who.userId)).map((row) => row.provider_type)).toEqual([
+        'password',
+      ]);
+      expect(await eventsOf('user.credential_removed', who.userId)).toEqual([
+        {
+          type: 'passkey',
+          credentialId: intruder.passkeyId,
+          authenticator: 'platform',
+          whileNew: true,
+        },
+      ]);
+      // The intruder's session ended, with its code and its family; the
+      // owner's stays.
+      expect(
+        await query<{ revoked_reason: string | null }>(
+          'SELECT revoked_reason FROM sessions WHERE id = $1::uuid',
+          [opened?.id]
+        )
+      ).toEqual([{ revoked_reason: 'reset' }]);
+      expect(
+        await query('SELECT used FROM authorization_codes WHERE id = $1::uuid', [code.id])
+      ).toEqual([{ used: true }]);
+      expect(
+        await query('SELECT revoked, revoked_reason FROM refresh_tokens WHERE id = $1::uuid', [
+          family.id,
+        ])
+      ).toEqual([{ revoked: true, revoked_reason: 'new_credential_removed' }]);
+      const intruderBack = await open(intruder.browser, ACCOUNT);
+      expect(intruderBack.statusCode, intruderBack.body).toBe(303);
+      expect(locationOf(intruderBack).startsWith(CEREMONY_PAGE_PREFIX)).toBe(true);
+      expect((await overview(owner)).body).toContain(escaped(who.email));
+    });
+
+    it('makes the passkey a full factor once its window passed: its removal needs a fresh sign-in with it', async () => {
+      const who = await account();
+      const bound = await bindAfterPassword(who);
+      expect(await newUntilOf(bound.passkeyId)).toBeGreaterThan(Date.now());
+      await query('UPDATE user_credentials SET new_until = $2 WHERE id = $1::uuid', [
+        bound.passkeyId,
+        Date.now() - 1,
+      ]);
+
+      // A fresh password sign-in no longer removes it, and shows no notice.
+      const browser = await signedIn(who, ['pwd']);
+      const page = await overview(browser);
+      expect(page.body).not.toContain('Not you? Remove it');
+      const refused = await post(browser, `${ACCOUNT}/passkeys/${bound.passkeyId}/remove`, {
+        csrf: csrfOf(page.body),
+      });
+      expect(refused.statusCode, refused.body).toBe(403);
+      expect(refused.body).toContain(REAUTHENTICATE_FORM);
+      expect(await eventsOf(REFUSED_EVENT, who.userId)).toContainEqual(
+        expect.objectContaining({ reason: 'strongest_factor_missing', requiredFactor: 'pop' })
+      );
+      // "Confirm it's you" with the passkey: then it is removed.
+      const confirming = await post(browser, `${ACCOUNT}/reauthenticate`, {
+        csrf: csrfOf(refused.body),
+        return_to: ACCOUNT,
+      });
+      expect(await ceremony(browser, confirming, who, { passkey: bound.passkey })).toBe(
+        `${ACCOUNT}?notice=confirmed`
+      );
+      const removed = await submit(browser, `${ACCOUNT}/passkeys/${bound.passkeyId}/remove`);
+      expect(locationOf(removed)).toBe(`${ACCOUNT}?notice=passkey_removed`);
+      expect(await eventsOf('user.credential_removed', who.userId)).toEqual([
+        { type: 'passkey', credentialId: bound.passkeyId, authenticator: 'platform' },
+      ]);
+      // A removal of a full factor ends no session of its own.
+      expect((await liveSessions(who)).length).toBeGreaterThan(0);
+    });
+
+    it('sends every binding to a subscribed receiver as a CAEP credential-change, with no mail transport', async () => {
+      const who = await account();
+      await query('UPDATE realms SET ssf_transmitter_enabled = true WHERE id = $1', [realmId]);
+      server().realmHostCache.clear();
+      try {
+        // A receiver with a stream, and the user added to it.
+        const clientId = `receiver-${randomUUID()}`;
+        const secret = `secret-${randomUUID()}`;
+        const client = await server().repositories.oauthClients.create({
+          realmId,
+          clientId,
+          clientSecretHash: await server().passwordHasher.hashPassword(secret),
+          tokenEndpointAuthMethod: 'client_secret_post',
+          name: 'SSF receiver',
+          redirectUris: ['https://receiver.example.com/callback'],
+          scopes: ['openid', 'ssf:stream'],
+          grantTypes: ['authorization_code', 'refresh_token', 'client_credentials'],
+          audience: [ORIGIN],
+          enabled: true,
+          requirePkce: true,
+        });
+        const issued = await server().inject({
+          method: 'POST',
+          url: '/oauth/token',
+          headers: FORM,
+          payload: new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: clientId,
+            client_secret: secret,
+            scope: 'ssf:stream',
+          }).toString(),
+        });
+        expect(issued.statusCode, issued.body).toBe(200);
+        const bearer = {
+          authorization: `Bearer ${issued.json<{ access_token: string }>().access_token}`,
+        };
+        const stream = await server().inject({
+          method: 'POST',
+          url: '/ssf/stream',
+          headers: bearer,
+          payload: {
+            events_requested: [CREDENTIAL_CHANGE],
+            delivery: { method: PUSH_DELIVERY, endpoint_url: 'https://ssf.egress.test/events' },
+          },
+        });
+        expect(stream.statusCode, stream.body).toBe(201);
+        await server().repositories.oauthConsents.upsertGrant(realmId, who.userId, client.id, [
+          'openid',
+        ]);
+        const subject = { format: 'iss_sub', iss: ORIGIN, sub: who.userId };
+        const added = await server().inject({
+          method: 'POST',
+          url: '/ssf/subjects/add',
+          headers: bearer,
+          payload: { stream_id: stream.json<{ stream_id: string }>().stream_id, subject },
+        });
+        expect(added.statusCode, added.body).toBe(200);
+        // The first fan-out that sees a stream in a realm starts at the
+        // horizon: the bindings come once its position exists.
+        await vi.waitFor(
+          async () =>
+            expect(
+              await query(
+                `SELECT 1 FROM event_delivery_positions WHERE realm_id = $1 AND destination_kind = 'ssf'`,
+                [realmId]
+              )
+            ).toHaveLength(1),
+          { timeout: 15_000, interval: 100 }
+        );
+
+        // No mail transport: the realm can send nothing, and every send fails.
+        const { emailService } = server();
+        vi.spyOn(emailService, 'canSend').mockResolvedValue(false);
+        vi.spyOn(emailService, 'sendEngineMail').mockRejectedValue(new Error('no mail transport'));
+
+        // A passkey, then an authenticator app, each from the account page.
+        const browser = await signedIn(who, ['pwd']);
+        const steps: string[] = [];
+        const addition = await submit(browser, `${ACCOUNT}/passkeys/add`);
+        expect(
+          await ceremony(browser, addition, who, {
+            seen: (step) => steps.push(step),
+            created: () => undefined,
+          })
+        ).toBe(`${ACCOUNT}?notice=passkey`);
+        const setup = await submit(browser, `${ACCOUNT}/totp/setup`);
+        expect(await ceremony(browser, setup, who, { seen: (step) => steps.push(step) })).toBe(
+          `${ACCOUNT}?notice=totp`
+        );
+        expect(steps.filter((step) => !BINDING_STEPS.includes(step))).toEqual([]);
+
+        // Both reach the receiver, signed with the transmitter's keys.
+        const metadata = await server().inject({
+          method: 'GET',
+          url: '/.well-known/ssf-configuration',
+        });
+        const jwksPath = new URL(metadata.json<{ jwks_uri: string }>().jwks_uri).pathname;
+        const keys = createLocalJWKSet(
+          (await server().inject({ method: 'GET', url: jwksPath })).json<JSONWebKeySet>()
+        );
+        let changes: Record<string, unknown>[] = [];
+        await vi.waitFor(
+          async () => {
+            changes = [];
+            for (const request of ssfReceiver.requests) {
+              expect(request.headers['content-type']).toBe('application/secevent+jwt');
+              const { payload } = await jwtVerify(request.body.toString('utf8'), keys, {
+                issuer: ORIGIN,
+                audience: clientId,
+                typ: 'secevent+jwt',
+              });
+              expect(payload['sub_id']).toEqual(subject);
+              const events = payload['events'] as Record<string, Record<string, unknown>>;
+              if (events[CREDENTIAL_CHANGE] !== undefined) changes.push(events[CREDENTIAL_CHANGE]);
+            }
+            expect(changes).toHaveLength(2);
+          },
+          { timeout: 20_000, interval: 200 }
+        );
+        expect(changes).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ change_type: 'create', credential_type: 'fido2-platform' }),
+            expect.objectContaining({ change_type: 'create', credential_type: 'app' }),
+          ])
+        );
+      } finally {
+        await query('UPDATE realms SET ssf_transmitter_enabled = false WHERE id = $1', [realmId]);
+        server().realmHostCache.clear();
+      }
+    });
   });
 
   describe('a realm that turns the passkey offer off (#1083)', () => {
