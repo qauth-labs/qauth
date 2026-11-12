@@ -147,7 +147,7 @@ export const userClientSessionEnded = defineEventType({
   security: true,
   ssf: 'none',
   ssfNote:
-    'The end of a session is user.signed_out, sent as CAEP 1.0 `session-revoked`. This event is the per-client notice of OpenID Connect Back-Channel Logout 1.0, delivered as a logout token to the client, not as a SET.',
+    'The end of a session is user.signed_out, or user.session_revoked when an operator ended it, sent as CAEP 1.0 `session-revoked`. This event is the per-client notice of OpenID Connect Back-Channel Logout 1.0, delivered as a logout token to the client, not as a SET.',
 });
 
 export const userSignOutFailed = defineEventType({
@@ -280,7 +280,7 @@ export const userDisabled = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'An operator disabled an account: it can no longer sign in or obtain tokens, and every browser session and token issued to it before now stays refused, also after it is enabled again.',
+    'An operator disabled an account: it can no longer sign in or obtain tokens, and every browser session and token issued to it before now stays refused, also after it is enabled again. The operator tool also ends, in the same transaction, the browser sessions, refresh tokens and unredeemed authorization codes the account holds, and records a `user.session_revoked` for each session it ended.',
   category: 'admin',
   severity: 'warning',
   since: FIRST_RELEASE,
@@ -305,6 +305,48 @@ export const userEnabled = defineEventType({
   data: z.strictObject({}),
   security: true,
   ssf: { event: RISC_ACCOUNT_ENABLED },
+});
+
+/** Why an operator's or an admin's action ended a session (#893). The set may grow. */
+export const SESSION_REVOCATION_REASONS = ['account_disabled'] as const;
+
+/**
+ * One browser session an operator's or an admin's action on the account
+ * ended (#893), recorded in the transaction that ended it, so a receiver
+ * that acts per session learns of each: today only the disablement of the
+ * account by the operator tool, beside its `user.disabled`.
+ */
+export const userSessionRevoked = defineEventType({
+  name: 'user.session_revoked',
+  version: 1,
+  rc: 0,
+  description:
+    "An operator's or an admin's action on an account ended one of its browser sessions, not the person's own sign-out: the operator tool disabled the account, and ended each session it held. One event per session ended, in the transaction that ended it.",
+  category: 'admin',
+  severity: 'info',
+  since: 'v0.3.0',
+  subject: 'user',
+  data: z.strictObject({
+    sid: recordId('The session that ended: the `sid` its ID tokens carry (#549).'),
+    reason: extensibleEnum(SESSION_REVOCATION_REASONS).describe(
+      '`account_disabled`: the account was disabled. The set may grow in a minor release.'
+    ),
+  }),
+  security: true,
+  ssf: {
+    event: CAEP_SESSION_REVOKED,
+    session: 'sid',
+    members: {
+      reason_admin: {
+        data: 'reason',
+        map: {
+          account_disabled: {
+            en: 'The account was disabled; every session it held was revoked.',
+          },
+        },
+      },
+    },
+  },
 });
 
 /**
@@ -638,6 +680,7 @@ export const USER_EVENT_TYPES = [
   userRecoveryCodesFailed,
   userDisabled,
   userEnabled,
+  userSessionRevoked,
   userUpstreamLinked,
   userUpstreamUnlinked,
   userUpstreamLinkFailed,

@@ -384,6 +384,15 @@
       "stability": "stable"
     },
     {
+      "name": "event-user-session-revoked-v1",
+      "description": "The urn:qauth:event:user.session_revoked:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #893).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.session_revoked.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-user-upstream-linked-v1",
       "description": "The urn:qauth:event:user.upstream_linked:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #670).",
       "format": "json-schema",
