@@ -7,6 +7,7 @@ import {
   dynamicRegistrationScopesOf,
   POLICIES_READ_FROM_REALM_ROW,
   tokenLifetimesOf,
+  withClientTokenLifetimes,
 } from './realm-policy-readers';
 
 /** A policy document's value at a dotted path, or `undefined`. */
@@ -181,3 +182,45 @@ describe('tokenLifetimesOf (#527)', () => {
     );
   });
 });
+
+describe('withClientTokenLifetimes (#632)', () => {
+  const realm = Object.freeze({
+    accessTokenLifespanSeconds: 900,
+    developmentAccessTokenLifespanSeconds: 3600,
+    refreshTokenLifespanSeconds: 604800,
+    adminAccessTokenLifespanSeconds: 600,
+  });
+
+  it("keeps the realm's lifetimes for a client that sets none", () => {
+    expect(
+      withClientTokenLifetimes(realm, {
+        accessTokenLifespanSeconds: null,
+        refreshTokenLifespanSeconds: null,
+      })
+    ).toBe(realm);
+  });
+
+  it("caps every access tier, the admin one too, and the refresh lifetime, by the client's own", () => {
+    expect(
+      withClientTokenLifetimes(realm, {
+        accessTokenLifespanSeconds: 300,
+        refreshTokenLifespanSeconds: 86400,
+      })
+    ).toEqual({
+      accessTokenLifespanSeconds: 300,
+      developmentAccessTokenLifespanSeconds: 300,
+      refreshTokenLifespanSeconds: 86400,
+      adminAccessTokenLifespanSeconds: 300,
+    });
+  });
+
+  it("never lengthens one: the realm's wins when it is the shorter", () => {
+    expect(
+      withClientTokenLifetimes(realm, {
+        accessTokenLifespanSeconds: 1200,
+        refreshTokenLifespanSeconds: null,
+      })
+    ).toEqual({ ...realm, developmentAccessTokenLifespanSeconds: 1200 });
+  });
+});
+

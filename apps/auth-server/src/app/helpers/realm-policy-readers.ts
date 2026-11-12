@@ -182,3 +182,43 @@ export function tokenLifetimesOf(
     adminAccessTokenLifespanSeconds,
   });
 }
+
+/**
+ * A client's own token lifetimes (#632), as `oauth_clients` holds them:
+ * `null`, or absent, takes the realm's.
+ */
+export interface ClientTokenLifetimes {
+  readonly accessTokenLifespanSeconds?: number | null;
+  readonly refreshTokenLifespanSeconds?: number | null;
+}
+
+/**
+ * `lifetimes` as one client gets them (ADR-020 §3, #632): each the shorter of
+ * the realm's and the client's own, which an admin may set only shorter than
+ * the realm's. A client's access lifetime caps every access tier, the admin
+ * one too, and with it the ID token's; its refresh lifetime caps a new or
+ * rotated refresh token. The realm's lifetime still wins when an admin
+ * shortened the realm after the client: the client never lives longer than
+ * its realm allows, whatever its row holds.
+ */
+export function withClientTokenLifetimes(
+  lifetimes: TokenLifetimes,
+  client: ClientTokenLifetimes
+): TokenLifetimes {
+  const access = client.accessTokenLifespanSeconds ?? null;
+  const refresh = client.refreshTokenLifespanSeconds ?? null;
+  if (access === null && refresh === null) return lifetimes;
+  const capAccess = (seconds: number): number =>
+    access === null ? seconds : Math.min(seconds, access);
+  return Object.freeze({
+    accessTokenLifespanSeconds: capAccess(lifetimes.accessTokenLifespanSeconds),
+    developmentAccessTokenLifespanSeconds: capAccess(
+      lifetimes.developmentAccessTokenLifespanSeconds
+    ),
+    refreshTokenLifespanSeconds:
+      refresh === null
+        ? lifetimes.refreshTokenLifespanSeconds
+        : Math.min(lifetimes.refreshTokenLifespanSeconds, refresh),
+    adminAccessTokenLifespanSeconds: capAccess(lifetimes.adminAccessTokenLifespanSeconds),
+  });
+}

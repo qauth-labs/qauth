@@ -79,6 +79,14 @@ export type OAuthClientLike = {
    */
   dpopBoundAccessTokens?: boolean;
   /**
+   * #632 the client's own access and refresh token lifetimes, in seconds,
+   * which an admin sets only shorter than the realm's: the token endpoint
+   * takes the shorter of each and the realm's (`withClientTokenLifetimes`).
+   * NULL, or absent for older callers, ⇒ the realm's.
+   */
+  accessTokenLifespanSeconds?: number | null;
+  refreshTokenLifespanSeconds?: number | null;
+  /**
    * Token endpoint auth method (RFC 7591). `'none'` identifies public
    * clients (PKCE, native/SPA) that present only `client_id` at /token.
    * When absent we conservatively treat the client as confidential.

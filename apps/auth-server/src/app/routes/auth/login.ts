@@ -25,7 +25,7 @@ import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/faile
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient, SYSTEM_CLIENT_SCOPES } from '../../helpers/oauth-client';
 import { ladderEndUserIp } from '../../helpers/password-attempts';
-import { tokenLifetimesOf } from '../../helpers/realm-policy-readers';
+import { tokenLifetimesOf, withClientTokenLifetimes } from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { refreshFamilyEnd, refreshTokenExpiresAt } from '../../helpers/refresh-family';
 import { requestRealm } from '../../helpers/request-realm';
@@ -248,9 +248,13 @@ export default async function (fastify: FastifyInstance) {
         const systemClient = await getOrCreateSystemClient(realm.id, fastify);
 
         // The realm's token lifetimes (#527), from the resolver's row: no
-        // query. This first-party sign-in has no client environment, so its
-        // access token gets the `short` tier, the realm's access lifetime.
-        const tokenLifetimes = tokenLifetimesOf(fastify, realm);
+        // query, capped by the system client's own (#632). This first-party
+        // sign-in has no client environment, so its access token gets the
+        // `short` tier, the realm's access lifetime.
+        const tokenLifetimes = withClientTokenLifetimes(
+          tokenLifetimesOf(fastify, realm),
+          systemClient
+        );
         const accessTokenExpiresIn = tokenLifetimes.accessTokenLifespanSeconds;
 
         // Generate access token (JWT) using JWT plugin. No `email` /

@@ -62,6 +62,7 @@ import {
   ADMIN_ACCESS_TOKEN_MAX_LIFESPAN_SECONDS,
   type TokenLifetimes,
   tokenLifetimesOf,
+  withClientTokenLifetimes,
 } from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { realmIssuer, tokenRealm } from '../../helpers/realm-url';
@@ -374,9 +375,10 @@ export default async function (fastify: FastifyInstance) {
         // or realm resolves to the `production` profile (hardened default).
         const policy = resolveEnvironmentPolicy(client, realm);
         // The realm's token lifetimes (ADR-019 Decision 10, #527), from the
-        // same row: no query of its own. Every grant below signs and answers
-        // with them, so two realms' tokens can live differently long.
-        const tokenLifetimes = tokenLifetimesOf(fastify, realm);
+        // same row: no query of its own, each capped by the client's own
+        // (#632). Every grant below signs and answers with them, so two
+        // realms' tokens, and two clients', can live differently long.
+        const tokenLifetimes = withClientTokenLifetimes(tokenLifetimesOf(fastify, realm), client);
 
         // Route by grant type.
         if (body.grant_type === 'authorization_code') {
