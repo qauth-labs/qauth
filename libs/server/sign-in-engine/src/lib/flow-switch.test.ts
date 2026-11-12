@@ -28,6 +28,7 @@ import { createMemoryPasskeys } from '../testing/memory-passkeys';
 import { createMemoryRecoveryCodes } from '../testing/memory-recovery-codes';
 import { createProofOfWorkProvider, solvesProofOfWork } from './bot-challenge';
 import { createSignInEngine, type SignInEngineDependencies } from './engine';
+import type { LimitsHook } from './hooks';
 import type { Clock } from './ports';
 import type { RoundAnswer, RoundContext, RoundResult } from './round';
 import { createCaptchaStep } from './steps/captcha';
@@ -297,6 +298,17 @@ describe('answering register', () => {
     expect(ctx.records).toEqual([
       { outcome: 'refused', step: 'register', reason: 'invalid_answer' },
     ]);
+  });
+
+  it('reads no gate on a round the limiters throttle', async () => {
+    const limits: LimitsHook = {
+      round: async () => ({ kind: 'throttled', retryAfterSeconds: 30 }),
+      reserve: async () => ({ kind: 'reserved', settle: async () => undefined }),
+    };
+    const built = build(undefined, { hooks: { limits } });
+    const throttled = await built.engine.advance(null, answer('register'), context(built));
+    expect(throttled).toMatchObject({ kind: 'refused', reason: 'throttled' });
+    expect(built.registrations.gates).toEqual([]);
   });
 
   it('is refused after an identifier, and on a transport that does not let the flows switch', async () => {
