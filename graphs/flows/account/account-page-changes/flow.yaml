@@ -15,7 +15,8 @@
 # - A passkey or an authenticator app bound after a sign-in that proved only the password is new for the realm's
 #   window (#1064; ADR-017 Decision 8, amended 2026-11-12). It is never the strongest factor, and a factor the
 #   session proved only through a new credential is not fresh. The password alone removes a new one, and the removal
-#   revokes what the sign-ins that bound or proved it opened.
+#   revokes what the sign-ins that bound or proved it opened, live or ended, deletes the account's recovery codes
+#   (its binding may have shown them to whoever bound it) and ends the account's sign-ins in progress.
 # - Each exit is a final state named <error>.<cause>, one per distinct cause, or after what happened, with the response
 #   the browser gets. A refusal is a page with Cache-Control: no-store; a change answers 303 to the overview with its
 #   notice, except the two that show a page of their own (the new recovery codes, a signed-out browser).
@@ -129,6 +130,8 @@ context:
   sessionsEnded: { values: [false, true], initial: false }
   # Whether the codes and refresh families of the sessions that bound or proved a removed new credential are revoked.
   openedRevoked: { values: [false, true], initial: false }
+  # Whether the account's recovery codes are deleted with a removed new credential.
+  codesDeleted: { values: [false, true], initial: false }
 
 guards:
   foreignOrigin: "gate == 'foreignOrigin'"
@@ -173,7 +176,7 @@ effects:
   askEndAll: { set: { change: sessionsEndAll } }
   makeChange: { set: { changed: true } }
   endSessions: { set: { changed: true, sessionsEnded: true } }
-  removeNew: { set: { changed: true, openedRevoked: true } }
+  removeNew: { set: { changed: true, openedRevoked: true, codesDeleted: true } }
 
 failures:
   resolvingSession: { from: browserSessionStore, server: [server_error] }
@@ -577,7 +580,7 @@ states:
   renaming:
     title: Rename the passkey under the user's row lock
     description: The name is tidied as an enrolment tidies it; an empty one removes it. The write and user.passkey_renamed commit together.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:730
+    source: apps/auth-server/src/app/helpers/account-changes.ts:757
     invoke: { external: accountStore }
     on:
       DONE:
@@ -604,11 +607,13 @@ states:
       The realm's MFA policy is read first. In one transaction: the user's row locked, the credentials of the realm
       read, the target found, the last-way-in and second-factor checks, then the delete and user.credential_removed.
       A credential the failure ladder or a rebind marked counts as no way in and no second factor. A credential removed
-      while new also takes, in the same transaction, the unredeemed codes and the refresh families of every live
-      session whose sign-in bound or proved it, and user.credential_removed says whileNew. The event names the
+      while new also takes, in the same transaction, the unredeemed codes and the refresh families of every session
+      whose sign-in bound or proved it, live or ended (a family outlives its browser session; an ended session is kept
+      for SESSION_RETENTION_DAYS), and the account's recovery codes, which its binding may have shown to whoever bound
+      it; user.credential_removed says whileNew. The event names the
       authenticator, and goes to the user's Shared Signals streams as a CAEP credential-change. After the commit, the
       owner is mailed at the password's address, when the account has one.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:657
+    source: apps/auth-server/src/app/helpers/account-changes.ts:667
     invoke: { external: accountStore }
     on:
       DONE:
@@ -625,20 +630,22 @@ states:
       - guard: missingTarget
         target: not_found.credential
         say: 'the account holds no such passkey, or no authenticator app'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:665
+        source: apps/auth-server/src/app/helpers/account-changes.ts:675
       - guard: lastWayIn
         target: conflict.last_credential
         say: 'nothing that signs in on its own would remain: an authenticator app is a second factor, never a way in'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:669
+        source: apps/auth-server/src/app/helpers/account-changes.ts:679
       - guard: lastSecondFactor
         target: conflict.second_factor_required
         say: "no second factor would remain, and the realm's MFA policy requires one of the account"
-        source: apps/auth-server/src/app/helpers/account-changes.ts:670
+        source: apps/auth-server/src/app/helpers/account-changes.ts:680
       - guard: removingNew
         target: endingOpened
         effect: [removeNew]
-        say: 'removed while new: the codes and refresh families its sign-ins opened are revoked with it'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:676
+        say: >-
+          removed while new: the codes and refresh families its sign-ins opened are revoked with it, and the account's
+          recovery codes deleted
+        source: apps/auth-server/src/app/helpers/account-changes.ts:686
       - target: credential_removed
         effect: [makeChange]
         say: 'removed: it no longer signs the person in'
@@ -646,10 +653,12 @@ states:
   endingOpened:
     title: End the sessions whose sign-in bound or proved the removed credential
     description: >-
-      After the commit, each such session ends with the reason reset, which queues a back-channel logout to each of its
-      clients; then their codes and families are swept once more, for one a session minted meanwhile. This browser's
-      session is among them only if its own sign-in bound or proved the credential.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:708
+      After the commit, every sign-in in progress of the account ends at its next round (the password change's cutoff),
+      so none that proved the credential or took one of the deleted codes binds a factor after it. Then each such
+      session still live ends with the reason reset, which queues a back-channel logout to each of its clients; then
+      their codes and families are swept once more, for one a session minted meanwhile. This browser's session is
+      among them only if its own sign-in bound or proved the credential.
+    source: apps/auth-server/src/app/helpers/account-changes.ts:719
     invoke: { external: browserSessionStore }
     on:
       DONE:
@@ -657,13 +666,14 @@ states:
         say: 'they end'
       FAIL.server:
         target: credential_removed
-        say: 'the store fails: it is logged, and the removal stands, its codes and families already revoked'
+        say: >-
+          the store fails: it is logged, and the removal stands, its codes, families and recovery codes already gone
 
   # Recovery codes
 
   readingSecondFactors:
     title: Read whether the account holds a second factor
-    source: apps/auth-server/src/app/helpers/account-changes.ts:807
+    source: apps/auth-server/src/app/helpers/account-changes.ts:834
     invoke: { action: UserCredential.findAllByUserId }
     on:
       DONE:
@@ -675,7 +685,7 @@ states:
 
   checkingSecondFactor:
     title: Issue a set only where it stands in for a second factor
-    source: apps/auth-server/src/app/helpers/account-changes.ts:810
+    source: apps/auth-server/src/app/helpers/account-changes.ts:837
     always:
       - guard: noSecondFactor
         target: conflict.no_second_factor
@@ -686,7 +696,7 @@ states:
   regeneratingCodes:
     title: Replace the code set with a new one
     description: Ten codes, stored as salted hashes; every code of the old set stops working, and the owner is mailed.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:811
+    source: apps/auth-server/src/app/helpers/account-changes.ts:838
     invoke: { external: recoveryCodeStore }
     on:
       DONE:
@@ -699,7 +709,7 @@ states:
 
   recordingRegeneration:
     title: Record the new set
-    source: apps/auth-server/src/app/helpers/account-changes.ts:815
+    source: apps/auth-server/src/app/helpers/account-changes.ts:842
     invoke: { external: eventStore }
     on:
       DONE:
@@ -708,7 +718,7 @@ states:
       FAIL.server:
         target: recovery_codes_shown
         say: 'the record fails: it is logged, and the codes are still shown, as the old set is gone either way'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:822
+        source: apps/auth-server/src/app/helpers/account-changes.ts:849
 
   confirming:
     title: Confirm the set the page showed
@@ -769,7 +779,7 @@ states:
       Its cookie stops working, its side record is dropped, and every relying party it signed in to with a
       back-channel logout URI is queued a logout token in the same revocation (#624). user.signed_out is recorded with
       its sid.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:835
+    source: apps/auth-server/src/app/helpers/account-changes.ts:862
     invoke: { external: browserSessionStore }
     on:
       DONE:
@@ -799,7 +809,7 @@ states:
     description: >-
       Every session ends, each queues its back-channel logout tokens, every unredeemed authorization code and then every
       refresh token of the account is revoked, and user.signed_out is recorded without a sid.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:867
+    source: apps/auth-server/src/app/helpers/account-changes.ts:894
     invoke: { external: browserSessionStore }
     on:
       DONE:
@@ -1113,7 +1123,13 @@ assertions:
     say: >-
       A credential removed while new never leaves the codes or refresh families of the sign-ins that bound or proved
       it
-    source: apps/auth-server/src/app/helpers/account-changes.ts:676
+    source: apps/auth-server/src/app/helpers/account-changes.ts:686
+  - id: a-new-factor-takes-the-recovery-codes
+    never: 'changed and removingCredential and removingNew and not codesDeleted'
+    say: >-
+      A credential removed while new never leaves the account's recovery codes, which its binding may have shown to
+      whoever bound it
+    source: apps/auth-server/src/app/helpers/account-changes.ts:696
   - id: a-recovery-code-only-for-a-removal
     never: "changed and recoveryCodeSignIn and change in ['password', 'recoveryCodes', 'unlink']"
     say: 'A recovery code stands in for the lost factor only to remove a passkey or the authenticator app'
@@ -1121,15 +1137,15 @@ assertions:
   - id: the-last-way-in-stays
     never: "changed and lastWayIn and change in ['passkeyRemove', 'totpRemove', 'unlink']"
     say: 'A removal never leaves the account without a way to sign in'
-    source: apps/auth-server/src/app/helpers/account-changes.ts:669
+    source: apps/auth-server/src/app/helpers/account-changes.ts:679
   - id: the-required-second-factor-stays
     never: 'changed and lastSecondFactor and removingCredential'
     say: "A removal never leaves the account without the second factor the realm's policy requires"
-    source: apps/auth-server/src/app/helpers/account-changes.ts:670
+    source: apps/auth-server/src/app/helpers/account-changes.ts:680
   - id: only-the-accounts-own
     never: "changed and missingTarget and change in ['passkeyRename', 'passkeyRemove', 'totpRemove', 'unlink']"
     say: "A change touches only a credential of the session's own account"
-    source: apps/auth-server/src/app/helpers/account-changes.ts:665
+    source: apps/auth-server/src/app/helpers/account-changes.ts:675
   - id: the-password-meets-the-policy
     never: "changed and changingPassword and password in ['noPassword', 'ladderWaits', 'wrongCurrent', 'breaksPolicy']"
     say: >-
@@ -1139,7 +1155,7 @@ assertions:
   - id: a-set-only-for-a-second-factor
     never: 'changed and regenerating and noSecondFactor'
     say: 'No recovery code set is issued to an account with no passkey and no authenticator app'
-    source: apps/auth-server/src/app/helpers/account-changes.ts:810
+    source: apps/auth-server/src/app/helpers/account-changes.ts:837
   - id: only-the-accounts-own-sessions
     never: 'sessionsEnded and endingSession and missingSession'
     say: "Ending a session ends only one of the session's own account"

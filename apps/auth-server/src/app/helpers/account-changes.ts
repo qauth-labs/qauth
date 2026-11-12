@@ -635,11 +635,15 @@ export type CredentialRemovalResult =
  *
  * A credential removed while it is new (#1064; ADR-017 Decision 8, amended
  * 2026-11-12) takes with it what it opened: in the removal's transaction,
- * the unredeemed codes of every live session whose sign-in bound or proved
- * it, and the refresh families those sign-ins opened (a family carries its
- * session's `auth_time`, #662); then those sessions end, and the codes and
- * families are swept once more, for one a session minted meanwhile. The
- * event says so (`whileNew`).
+ * the unredeemed codes of every session whose sign-in bound or proved it,
+ * live or ended (a family outlives its browser session), the refresh
+ * families those sign-ins opened (a family carries its session's
+ * `auth_time`, #662), and the account's recovery codes, which may have been
+ * shown with it. Then every sign-in in progress of the account ends at its
+ * next round (the password change's cutoff, `recordPasswordChange`), so none
+ * that proved the credential or took one of those codes binds a factor
+ * after it; the live sessions end; and the codes and families are swept once
+ * more, for one a session minted meanwhile. The event says so (`whileNew`).
  */
 export async function removeCredential(
   fastify: FastifyInstance,
@@ -652,8 +656,14 @@ export async function removeCredential(
   const { realmId, userId } = session;
   const mfaRequired = await secondFactorRequired(fastify, realmId, userId);
   let address: string | undefined;
-  /** The live sessions whose sign-in bound or proved the removed new credential. */
-  let opened: readonly { readonly id: string; readonly authTime: number }[] = [];
+  /** Whether the removed credential was new: what it opened is ended after the commit too. */
+  let removedWhileNew = false;
+  /** The sessions, live or ended, whose sign-in bound or proved the removed new credential. */
+  let opened: readonly {
+    readonly id: string;
+    readonly authTime: number;
+    readonly live: boolean;
+  }[] = [];
   const result = await fastify.db.transaction(async (tx): Promise<CredentialRemovalResult> => {
     if (!(await fastify.repositories.userCredentials.lockUser(realmId, userId, tx))) {
       return { kind: 'not_found' };
@@ -674,10 +684,16 @@ export async function removeCredential(
       throw new Error('a locked credential could not be deleted');
     }
     if (whileNew) {
-      opened = (await fastify.repositories.sessions.listActiveForUser(realmId, userId, tx))
-        .filter((candidate) => candidate.newCredentialIds.includes(row.id))
-        .map((candidate) => ({ id: candidate.id, authTime: candidate.authTime }));
+      removedWhileNew = true;
+      opened = (
+        await fastify.repositories.sessions.listNamingCredential(realmId, userId, row.id, tx)
+      ).map((candidate) => ({
+        id: candidate.id,
+        authTime: candidate.authTime,
+        live: candidate.revokedAt === null && candidate.expiresAt > now,
+      }));
       await revokeWhatOpened(fastify, userId, opened, tx);
+      await fastify.repositories.userRecoveryCodes.deleteSet(realmId, userId, tx);
     }
     const data = webauthnCredentialDataSchema.safeParse(row.credentialData);
     await emitUserEvent(
@@ -700,12 +716,23 @@ export async function removeCredential(
     )?.externalSub;
     return { kind: 'removed' };
   });
-  if (result.kind === 'removed' && opened.length > 0) {
+  if (result.kind === 'removed' && removedWhileNew) {
     // None of these can undo the removal, whose transaction already revoked
-    // the sessions' codes and families, and none may fail it: each is
-    // logged. Each session's clients are queued a back-channel logout by its
-    // revocation (#624). A `reset`: a credential's removal ended it.
-    for (const { id } of opened) {
+    // the sessions' codes and families and deleted the recovery codes, and
+    // none may fail it: each is logged. The cutoff first: a sign-in in
+    // progress that proved the credential, or took a code of the deleted
+    // set, binds nothing after it. Each live session's clients are queued a
+    // back-channel logout by its revocation (#624). A `reset`: a
+    // credential's removal ended it.
+    try {
+      await recordPasswordChange(fastify, realmId, userId, Date.now());
+    } catch (error) {
+      fastify.log.error(
+        { err: error, realmId },
+        'a new credential was removed, but the sign-ins in progress could not be ended'
+      );
+    }
+    for (const { id } of opened.filter((candidate) => candidate.live)) {
       try {
         await endBrowserSession(
           fastify,

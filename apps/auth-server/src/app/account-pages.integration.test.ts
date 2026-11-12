@@ -1399,6 +1399,36 @@ describe('the hosted account pages (#844, real containers)', () => {
         scopes: ['openid'],
         expiresAt: Date.now() + 600_000,
       });
+      // A sign-in with the passkey whose browser session has ended since: the
+      // family it opened outlives it.
+      const signedOutAt = Date.now() - 30_000;
+      const signedOut = await server().repositories.sessions.create({
+        realmId,
+        userId: who.userId,
+        authTime: signedOutAt,
+        amr: ['pop'],
+        expiresAt: Date.now() + 3_600_000,
+        newCredentialIds: [intruder.passkeyId],
+      });
+      await server().repositories.sessions.revoke(realmId, signedOut.id, 'sign_out');
+      const outlived = await server().repositories.refreshTokens.create({
+        tokenHash: randomBytes(32).toString('hex'),
+        userId: who.userId,
+        oauthClientId: rp.id,
+        familyCreatedAt: Date.now(),
+        familySessionExpiresAt: null,
+        authTime: signedOutAt,
+        amr: ['pop'],
+        scopes: ['openid'],
+        expiresAt: Date.now() + 600_000,
+      });
+      // The binding showed its taker the account's first recovery codes.
+      const codesHeld = () =>
+        query<{ n: number }>(
+          'SELECT count(*)::int AS n FROM user_recovery_codes WHERE user_id = $1',
+          [who.userId]
+        );
+      expect(await codesHeld()).toEqual([{ n: 10 }]);
 
       // The owner signs in with the password: the new passkey is not asked
       // for after it, and the account page shows the binding.
@@ -1446,6 +1476,14 @@ describe('the hosted account pages (#844, real containers)', () => {
           family.id,
         ])
       ).toEqual([{ revoked: true, revoked_reason: 'new_credential_removed' }]);
+      // The family of the sign-in whose session had ended goes too, and the
+      // recovery codes shown with the passkey no longer work.
+      expect(
+        await query('SELECT revoked, revoked_reason FROM refresh_tokens WHERE id = $1::uuid', [
+          outlived.id,
+        ])
+      ).toEqual([{ revoked: true, revoked_reason: 'new_credential_removed' }]);
+      expect(await codesHeld()).toEqual([{ n: 0 }]);
       const intruderBack = await open(intruder.browser, ACCOUNT);
       expect(intruderBack.statusCode, intruderBack.body).toBe(303);
       expect(locationOf(intruderBack).startsWith(CEREMONY_PAGE_PREFIX)).toBe(true);

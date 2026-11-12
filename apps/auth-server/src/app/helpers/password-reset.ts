@@ -29,7 +29,9 @@ import { isClientUsable } from './client-status';
  * would end that session as well. It leaves a cutoff in Redis
  * ({@link recordPasswordChange}) for as long as a sign-in transaction lives,
  * and the engine's `sessionEpochs` port reads the later of the two
- * ({@link signInNotBefore}). The page ends the other sessions itself.
+ * ({@link signInNotBefore}). The page ends the other sessions itself. The
+ * removal of a new factor (#1064) leaves the same cutoff, so no sign-in that
+ * proved it, or took a recovery code shown with it, binds a factor after it.
  */
 
 /** What the reset's gate reads of a client: its status. */

@@ -98,8 +98,17 @@ function server(
     mfa?: 'off' | 'optional' | 'required' | 'required_for_admins';
     admin?: boolean;
     sessionRow?: { userId: string; recoveryCodeUsed: boolean; newCredentialIds?: string[] };
-    /** The account's live sessions, as `listActiveForUser` reads them (#1064). */
-    live?: { id: string; authTime: number; newCredentialIds: string[] }[];
+    /**
+     * The account's sessions, live unless they say otherwise, of which
+     * `listNamingCredential` reads those that name the credential (#1064).
+     */
+    live?: {
+      id: string;
+      authTime: number;
+      newCredentialIds: string[];
+      revokedAt?: number | null;
+      expiresAt?: number;
+    }[];
   } = {}
 ) {
   const deleteById = vi.fn(async (_realmId: string, id: string) => {
@@ -127,11 +136,17 @@ function server(
             ? undefined
             : { newCredentialIds: [], ...options.sessionRow }
         ),
-        listActiveForUser: vi.fn(async () => options.live ?? []),
+        listNamingCredential: vi.fn(async (_realmId: string, _userId: string, id: string) =>
+          (options.live ?? [])
+            .filter((candidate) => candidate.newCredentialIds.includes(id))
+            .map((candidate) => ({ revokedAt: null, expiresAt: NOW + 3_600_000, ...candidate }))
+        ),
       },
       authorizationCodes: { invalidateForSessions: vi.fn(async () => 0) },
       refreshTokens: { revokeFamiliesOfSignIns: vi.fn(async () => 0) },
+      userRecoveryCodes: { deleteSet: vi.fn(async () => 10) },
     },
+    redis: { set: vi.fn(async () => 'OK') },
     sessionService: { revoke: vi.fn(async () => ({ outcome: 'ended' })) },
   } as unknown as FastifyInstance;
   return { fastify, deleteById };
@@ -551,6 +566,20 @@ describe('removeCredential (#844)', () => {
     const { fastify } = server([credential('password'), fresh], {
       live: [
         { id: 'sid-opened', authTime: NOW - 120_000, newCredentialIds: [fresh.id] },
+        // Signed out since: its families outlive it.
+        {
+          id: 'sid-ended',
+          authTime: NOW - 200_000,
+          newCredentialIds: [fresh.id],
+          revokedAt: NOW - 100_000,
+        },
+        // Past its end, never marked ended.
+        {
+          id: 'sid-lapsed',
+          authTime: NOW - 300_000,
+          newCredentialIds: [fresh.id],
+          expiresAt: NOW,
+        },
         { id: SID, authTime: NOW - 60_000, newCredentialIds: [] },
       ],
     });
@@ -570,23 +599,35 @@ describe('removeCredential (#844)', () => {
       { type: 'passkey', credentialId: fresh.id, whileNew: true },
       expect.objectContaining({ tx: 'tx' })
     );
-    const { repositories, sessionService } = fastify as unknown as {
+    const { repositories, sessionService, redis } = fastify as unknown as {
       repositories: {
         authorizationCodes: { invalidateForSessions: ReturnType<typeof vi.fn> };
         refreshTokens: { revokeFamiliesOfSignIns: ReturnType<typeof vi.fn> };
+        userRecoveryCodes: { deleteSet: ReturnType<typeof vi.fn> };
       };
       sessionService: { revoke: ReturnType<typeof vi.fn> };
+      redis: { set: ReturnType<typeof vi.fn> };
     };
-    // In the removal's transaction, then once more after the session ended.
+    // In the removal's transaction, then once more after the session ended:
+    // what every session that named it opened, an ended one's too.
+    const named = ['sid-opened', 'sid-ended', 'sid-lapsed'];
+    const signIns = [NOW - 120_000, NOW - 200_000, NOW - 300_000];
     expect(repositories.authorizationCodes.invalidateForSessions.mock.calls).toEqual([
-      [USER_ID, ['sid-opened'], 'tx'],
-      [USER_ID, ['sid-opened'], undefined],
+      [USER_ID, named, 'tx'],
+      [USER_ID, named, undefined],
     ]);
     expect(repositories.refreshTokens.revokeFamiliesOfSignIns.mock.calls).toEqual([
-      [USER_ID, [NOW - 120_000], 'new_credential_removed', 'tx'],
-      [USER_ID, [NOW - 120_000], 'new_credential_removed', undefined],
+      [USER_ID, signIns, 'new_credential_removed', 'tx'],
+      [USER_ID, signIns, 'new_credential_removed', undefined],
     ]);
-    // Only the session that bound or proved it ends; this one stays.
+    // The recovery codes, which may have been shown with it, go in the
+    // same transaction; every sign-in in progress is cut after it.
+    expect(repositories.userRecoveryCodes.deleteSet.mock.calls).toEqual([
+      [REALM_ID, USER_ID, 'tx'],
+    ]);
+    expect(redis.set).toHaveBeenCalledTimes(1);
+    expect(redis.set.mock.calls[0]?.[0]).toContain(USER_ID);
+    // Only the live session that bound or proved it ends; this one stays.
     expect(sessionService.revoke).toHaveBeenCalledTimes(1);
     expect(sessionService.revoke).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -606,14 +647,16 @@ describe('removeCredential (#844)', () => {
         { id: 'sid-b', authTime: NOW - 90_000, newCredentialIds: [fresh.id] },
       ],
     });
-    const { sessionService, log, repositories } = fastify as unknown as {
+    const { sessionService, log, repositories, redis } = fastify as unknown as {
       sessionService: { revoke: ReturnType<typeof vi.fn> };
       log: { error: ReturnType<typeof vi.fn> };
       repositories: {
         refreshTokens: { revokeFamiliesOfSignIns: ReturnType<typeof vi.fn> };
       };
+      redis: { set: ReturnType<typeof vi.fn> };
     };
     sessionService.revoke.mockRejectedValueOnce(new Error('store down'));
+    redis.set.mockRejectedValueOnce(new Error('redis down'));
     expect(
       await removeCredential(
         fastify,
@@ -631,6 +674,24 @@ describe('removeCredential (#844)', () => {
       expect.objectContaining({ realmId: REALM_ID }),
       'a new credential was removed, but a session it opened could not be ended'
     );
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ realmId: REALM_ID }),
+      'a new credential was removed, but the sign-ins in progress could not be ended'
+    );
+  });
+
+  it('deletes the recovery codes and cuts the sign-ins in progress when no session named it', async () => {
+    const fresh = credential('totp', REALM_ID, NOW + DAY);
+    const { fastify } = server([credential('password'), fresh]);
+    expect(
+      await removeCredential(fastify, REQUEST, session(['pwd']), { type: 'totp' }, MAILER, NOW)
+    ).toEqual({ kind: 'removed' });
+    const { repositories, redis } = fastify as unknown as {
+      repositories: { userRecoveryCodes: { deleteSet: ReturnType<typeof vi.fn> } };
+      redis: { set: ReturnType<typeof vi.fn> };
+    };
+    expect(repositories.userRecoveryCodes.deleteSet).toHaveBeenCalledWith(REALM_ID, USER_ID, 'tx');
+    expect(redis.set).toHaveBeenCalledTimes(1);
   });
 
   it('ends nothing more when the passkey is no longer new', async () => {
@@ -646,10 +707,15 @@ describe('removeCredential (#844)', () => {
       MAILER,
       NOW
     );
-    const { sessionService } = fastify as unknown as {
+    const { sessionService, repositories, redis } = fastify as unknown as {
       sessionService: { revoke: ReturnType<typeof vi.fn> };
+      repositories: { userRecoveryCodes: { deleteSet: ReturnType<typeof vi.fn> } };
+      redis: { set: ReturnType<typeof vi.fn> };
     };
     expect(sessionService.revoke).not.toHaveBeenCalled();
+    // A full factor's removal keeps the recovery codes and the sign-ins in progress.
+    expect(repositories.userRecoveryCodes.deleteSet).not.toHaveBeenCalled();
+    expect(redis.set).not.toHaveBeenCalled();
     expect(emitUserEvent).toHaveBeenCalledWith(
       REQUEST,
       'urn:qauth:event:user.credential_removed:v1-rc.0',
