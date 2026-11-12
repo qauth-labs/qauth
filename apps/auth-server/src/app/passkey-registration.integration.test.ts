@@ -420,7 +420,8 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
 
     const first = await read(flow.id);
     expect(first.step).toBe(WEBAUTHN_CREATE);
-    expect(first.alternatives).toEqual([IDENTIFIER]);
+    // The address step beside it, and the way back to a sign-in (#1079).
+    expect(first.alternatives).toEqual([IDENTIFIER, stepUrn('sign_in')]);
     expect(first.params?.[WEBAUTHN_CREATE]).toMatchObject({
       optional: false,
       options: {
