@@ -112,6 +112,17 @@ export const userCredentials = pgTable(
      * Deleting the primary credential leaves the account with none.
      */
     isPrimary: boolean('is_primary').notNull().default(false),
+    /**
+     * When this passkey or authenticator app stops being new, in epoch ms
+     * (ADR-017 Decision 8, amended 2026-11-12, #1064); NULL for a credential
+     * that never was new. A factor a sign-in bound after it proved only the
+     * account's password is new for the realm's `accounts.newFactorWindowDays`:
+     * until then the password alone, after a fresh sign-in, may remove it, and
+     * it does not count as the account's strongest factor for a reset or for
+     * the fresh authentication a change needs. It signs in as usual. Once the
+     * time passes it is a full factor; nothing clears the column.
+     */
+    newUntil: bigint('new_until', { mode: 'number' }),
   },
   (t) => [
     uniqueIndex('idx_user_credentials_realm_provider_sub_unique').on(
