@@ -140,6 +140,15 @@ export const authEnvSchema = z.object({
   ALLOW_SIGN_UP: strictBoolean(false),
 
   /**
+   * Seeds a new realm's `accounts.newFactorWindowDays` (#1064): how many
+   * days, 1 to 30, a passkey or authenticator app bound after a sign-in that
+   * proved only the password stays new, removable with the password alone.
+   * The auth server reads each realm's own policy from the realm row.
+   * Defaults to 7.
+   */
+  NEW_FACTOR_WINDOW_DAYS: z.coerce.number().int().min(1).max(30).default(7),
+
+  /**
    * Maximum registration attempts per window
    */
   REGISTRATION_RATE_LIMIT: z.coerce.number().int().min(1).default(3),

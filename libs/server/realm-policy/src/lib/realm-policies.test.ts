@@ -32,7 +32,7 @@ const TABLE_DEFAULTS: RealmPolicies = {
     refreshTokenLifespanSeconds: 604800,
     adminAccessTokenLifespanSeconds: 600,
   },
-  accounts: { requireVerifiedAccount: true, allowSignUp: false },
+  accounts: { requireVerifiedAccount: true, allowSignUp: false, newFactorWindowDays: 7 },
   password: { minLength: 15, minScore: 2, breachListSource: 'off' },
   bruteForce: { enabled: true, maxAttempts: 5, windowSeconds: 900, lockoutSeconds: 900 },
   botChallenge: { requiredAtSignUp: false, difficulty: 18 },

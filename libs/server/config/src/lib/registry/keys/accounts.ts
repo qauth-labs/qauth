@@ -29,6 +29,16 @@ export const ACCOUNT_KEYS = defineKeys([
     docs: "Whether a person may create a new account through the hosted sign-in (an upstream identity that no account holds yet, and a password registration a client starts with `prompt=create` while its operator-set `hosted_flows` name `register`, create one only while this is on, and since 0.2.1 the legacy `POST /auth/register` answers 403 while it is off), that seeds `accounts.allowSignUp` of a new realm, and of a realm whose stored policies lack it at the first boot of the release that added it; once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
   },
   {
+    name: 'NEW_FACTOR_WINDOW_DAYS',
+    tier: 'stable',
+    role: 'realm-seed',
+    seeds: 'accounts.newFactorWindowDays',
+    owner: 'accounts',
+    default: '7',
+    since: '0.3.0',
+    docs: "How many days, from 1 to 30, a passkey or authenticator app bound after a sign-in that proved only the account's password stays new (the password alone, after a fresh sign-in, may remove it, and it does not count as the account's strongest factor for a password reset or for the fresh sign-in a change of the account's factors needs), that seeds `accounts.newFactorWindowDays` of a new realm, and of a realm whose stored policies lack it at the first boot of the release that added it; once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
+  },
+  {
     name: 'SYSTEM_CLIENT_ID',
     tier: 'advanced',
     role: 'deployment',
