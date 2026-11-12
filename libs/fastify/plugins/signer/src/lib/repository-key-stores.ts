@@ -1,6 +1,8 @@
 import {
+  createRealmAuthMethodPluginsRepository,
   createRealmKeysRepository,
   createRealmsRepository,
+  createRealmUpstreamProvidersRepository,
   type DbClient,
   type RealmPublicKeysRepository,
 } from '@qauth-labs/infra-db';
@@ -23,13 +25,23 @@ import type { KekCanaryStore } from './key-custody-check';
  */
 
 /**
+ * The type prefix of the generic upstream OpenID Connect client's providers
+ * (`oidc_<alias>`, `UPSTREAM_OIDC_TYPE_PATTERN`): a realm's provider rows hold
+ * their config. No plugin may take a type under it (the loader refuses the
+ * whole prefix), so a provider id names one source or the other.
+ */
+const GENERIC_PROVIDER_PREFIX = 'oidc_';
+
+/**
  * The store the in-process signer reads: realm issuers, key metadata, wrapped
- * keys for unwrapping, published public keys, and the client id QAuth holds at
+ * keys for unwrapping, published public keys, and the client QAuth holds at
  * each upstream provider.
  */
 export function createRepositorySignerKeyStore(db: DbClient): SignerKeyStore {
   const realms = createRealmsRepository(db);
   const keys = createRealmKeysRepository(db);
+  const plugins = createRealmAuthMethodPluginsRepository(db);
+  const providers = createRealmUpstreamProvidersRepository(db);
   return Object.freeze({
     async findRealmIssuer(realmId: string) {
       const realm = await realms.findById(realmId);
@@ -39,10 +51,25 @@ export function createRepositorySignerKeyStore(db: DbClient): SignerKeyStore {
       keys.listByRealm(realmId, { purpose: filter.purpose, scopeId: filter.scopeId }),
     getWrappedKey: (realmId: string, kid: string) => keys.getWrappedForSigner(realmId, kid),
     listPublicKeys: (realmId: string) => keys.listPublicByRealm(realmId),
-    // No upstream provider is configured anywhere yet: upstream login owns
-    // that configuration (ADR-018 §3) and adds this read with it. Until then
-    // `signClientAssertion` finds no provider and signs nothing.
-    findUpstreamClient: async () => undefined,
+    // The realm's configuration of the provider (#1073): the client id, and
+    // the assertion issuer a preset's signed client secret names. A generic
+    // provider's row holds its config; a plugin's is what the admin API
+    // derived from the plugin's config at its last configure or enable, as
+    // the signer loads no plugin code. Only an enabled provider answers. Two
+    // enabled plugin states of one type (another plugin id left behind) are
+    // refused rather than picked from.
+    async findUpstreamClient(realmId: string, providerId: string) {
+      if (providerId.startsWith(GENERIC_PROVIDER_PREFIX)) {
+        const found = await providers.findAssertionClient(realmId, providerId);
+        return found === undefined ? undefined : { clientId: found.clientId };
+      }
+      const found = await plugins.listAssertionClients(realmId, providerId);
+      if (found.length !== 1) return undefined;
+      const [client] = found;
+      return client.assertionIssuer === undefined
+        ? { clientId: client.clientId }
+        : { clientId: client.clientId, assertionIssuer: client.assertionIssuer };
+    },
   } satisfies SignerKeyStore);
 }
 

@@ -11,6 +11,7 @@ import {
   createRepositoryKekCanaryStore,
   createRepositorySignerKeyStore,
 } from './repository-key-stores';
+import { createUpstreamClientKeys, type UpstreamClientKeys } from './upstream-client-keys';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -26,6 +27,13 @@ declare module 'fastify' {
      * rejects otherwise. Each call unwraps afresh and zeroes what it opened.
      */
     checkKeyCustody: () => Promise<void>;
+    /**
+     * An upstream provider's client-assertion keys (#1073): import a key the
+     * provider issued, sealed under this signer's KEK, list them, and switch
+     * to the `next` one. The admin API's provider key operations call it; a
+     * process that does not hold the signer role decorates it `null`.
+     */
+    upstreamClientKeys: UpstreamClientKeys | null;
   }
 }
 
@@ -93,6 +101,16 @@ export const signerPlugin = fp<SignerPluginOptions>(
 
     const canaries = createRepositoryKekCanaryStore(options.db);
     fastify.decorate('checkKeyCustody', () => checkKeyCustody(kekProvider, canaries));
+
+    fastify.decorate<UpstreamClientKeys | null>(
+      'upstreamClientKeys',
+      createUpstreamClientKeys({
+        db: options.db,
+        kekProvider,
+        enabledSignatureAlgorithms: options.enabledSignatureAlgorithms,
+        hybridSigning: options.hybridSigning,
+      })
+    );
 
     fastify.decorate(
       'signer',

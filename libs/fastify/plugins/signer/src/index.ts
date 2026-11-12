@@ -2,6 +2,7 @@ export * from './lib/fastify-plugin-signer';
 export * from './lib/key-custody-check';
 export * from './lib/realm-keys';
 export * from './lib/repository-key-stores';
+export * from './lib/upstream-client-keys';
 export type * from './types';
 // The context prefix the auth server builds an AuthMethod plugin secret's
 // context from (#600), so the app, which may not import server-keys, and the
@@ -16,4 +17,13 @@ export {
   OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
   OID4VP_REQUEST_OBJECT_TYP as SIGNER_REQUEST_OBJECT_TYP,
   TOTP_SECRET_CONTEXT_PREFIX,
+} from '@qauth-labs/server-keys';
+// The refusals of a provider's client-assertion key import and switch
+// (#1073), which the admin API answers as 400 or 409: the app may not import
+// server-keys.
+export {
+  KeyChangeRefusedError,
+  KeyCreationRefusedError,
+  KeyIdConflictError,
+  NextKeyConflictError,
 } from '@qauth-labs/server-keys';
