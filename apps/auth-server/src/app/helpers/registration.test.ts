@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const { mockEnv } = vi.hoisted(() => ({ mockEnv: { INTERACTION_UI_ENABLED: true } }));
 vi.mock('../../config/env', () => ({ env: mockEnv }));
 
-import { createPromptRefusal, realmOffersRegistration, registrationAllowed } from './registration';
+import {
+  createPromptRefusal,
+  realmOffersRegistration,
+  registrationAllowed,
+  registrationSwitchAllowed,
+} from './registration';
 
 /** Who may register (#640; ADR-017 Decisions 3 and 8): the realm and the client, both. */
 
@@ -43,6 +48,35 @@ describe('registrationAllowed', () => {
     expect(registrationAllowed(OPEN_REALM, { ...CLIENT, suspended: false })).toBe(true);
     expect(registrationAllowed(OPEN_REALM, { ...CLIENT, hostedFlows: 'register' })).toBe(false);
     expect(registrationAllowed(OPEN_REALM, { ...CLIENT, hostedFlows: [1] })).toBe(false);
+  });
+});
+
+describe('registrationSwitchAllowed (#1079)', () => {
+  it('allows the switch the realm and the client allow, with or without openid', () => {
+    expect(registrationSwitchAllowed(() => OPEN_REALM, CLIENT, {})).toBe(true);
+    expect(registrationSwitchAllowed(() => CLOSED_REALM, CLIENT, {})).toBe(false);
+  });
+
+  it('allows none for a request that asks for a fresh sign-in', () => {
+    expect(registrationSwitchAllowed(() => OPEN_REALM, CLIENT, { max_age: 0 })).toBe(false);
+    expect(registrationSwitchAllowed(() => OPEN_REALM, CLIENT, { max_age: 3600 })).toBe(false);
+    expect(registrationSwitchAllowed(() => OPEN_REALM, CLIENT, { prompt: 'login' })).toBe(false);
+    expect(registrationSwitchAllowed(() => OPEN_REALM, CLIENT, { prompt: 'consent' })).toBe(true);
+  });
+
+  it('allows none while the Interaction API is off', () => {
+    mockEnv.INTERACTION_UI_ENABLED = false;
+    expect(registrationSwitchAllowed(() => OPEN_REALM, CLIENT, {})).toBe(false);
+  });
+
+  it('reads the realm only for a request and a client that could register', () => {
+    const realm = vi.fn(() => OPEN_REALM);
+    expect(registrationSwitchAllowed(realm, { ...CLIENT, hostedFlows: null }, {})).toBe(false);
+    expect(registrationSwitchAllowed(realm, null, {})).toBe(false);
+    expect(registrationSwitchAllowed(realm, CLIENT, { prompt: 'login' })).toBe(false);
+    expect(realm).not.toHaveBeenCalled();
+    expect(registrationSwitchAllowed(realm, { ...CLIENT, enabled: false }, {})).toBe(false);
+    expect(realm).toHaveBeenCalledOnce();
   });
 });
 

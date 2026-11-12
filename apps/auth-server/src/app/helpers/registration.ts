@@ -49,6 +49,34 @@ export function registrationAllowed(
   return clientAllowsHostedFlow(client, 'register');
 }
 
+/**
+ * Whether a sign-in of an authorization request may turn into a registration
+ * within its interaction (#1079; ADR-017 Decision 8): the `register` path
+ * marker beside the sign-in's first step. The realm and the client must
+ * allow registration ({@link registrationAllowed}), and the request must ask
+ * for no fresh sign-in: no `max_age` and no `prompt=login`, which a
+ * registration never satisfies. These are the rules `prompt=create` meets
+ * ({@link createPromptRefusal}) but for the `openid` scope, which only that
+ * prompt needs (OpenID Connect Prompt Create 1.0 §4.1): a request without it
+ * that registers ends in a code as any other does. The sign-in engine reads
+ * the same gate again on every round.
+ *
+ * @param realm - reads the realm's sign-up policy; called only once the
+ *   request and the client allow a registration, so a request that can never
+ *   register reads no policy
+ */
+export function registrationSwitchAllowed(
+  realm: () => RealmSignUp,
+  client: RegisteringClient | null | undefined,
+  query: { readonly prompt?: string; readonly max_age?: number }
+): boolean {
+  if (query.max_age !== undefined || query.prompt === 'login') return false;
+  if (client === null || client === undefined || !clientAllowsHostedFlow(client, 'register')) {
+    return false;
+  }
+  return registrationAllowed(realm(), client);
+}
+
 /** What the gate reads of a client: its status and its operator-set flows. */
 export interface RegisteringClient {
   readonly hostedFlows?: unknown;

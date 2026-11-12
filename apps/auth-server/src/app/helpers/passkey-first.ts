@@ -71,6 +71,10 @@ export function passkeyFirstStarter(
         client: { id: clientId },
         // `prompt=create` (#640): the rounds are a registration's, from this one.
         ...(query.prompt === 'create' ? { flow: 'register' as const } : {}),
+        // The interaction of an authorization request: the person may switch
+        // between a sign-in and a registration (#1079), as on every round
+        // the Interaction API runs for it.
+        switchFlows: true,
         ...(query.prompt === 'login' || query.max_age !== undefined ? { freshSignIn: true } : {}),
         receivedAt: Date.now(),
         ...ladderEndUserIp(request),

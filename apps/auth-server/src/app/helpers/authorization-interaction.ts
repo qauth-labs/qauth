@@ -9,6 +9,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { MINT_TRANSACTION, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../constants';
 import type { AuthorizeQuery } from '../schemas/oauth';
+import { accountPoliciesOf } from './account-policies';
 import { accountCredentialRefusal } from './account-validity';
 import { mintAuthorizationCode } from './authorization-code';
 import type { AuthorizationErrorParams } from './authorization-error';
@@ -49,6 +50,7 @@ import {
 import { interactionCancelRedirect } from './interaction-redirect';
 import { buildRedirectUrl } from './oauth-redirect';
 import { buildRealmUrl, realmIssuer } from './realm-url';
+import { registrationSwitchAllowed } from './registration';
 import { requestRealm } from './request-realm';
 import { highestAgentModeInScopes } from './scope-modes';
 import { readSessionSideRecord } from './session-side-record';
@@ -99,18 +101,35 @@ export const CONSENT_STEP = stepUrn('consent');
 /** The `upstream` step's name (`urn:qauth:ia:upstream:v1-rc.0`, #639). */
 export const UPSTREAM_STEP = stepUrn('upstream');
 
+/** The path marker that turns a sign-in into a registration (`urn:qauth:ia:register:v1-rc.0`, #1079). */
+export const REGISTER_STEP = stepUrn('register');
+
+/** The path marker that turns a registration back into a sign-in (`urn:qauth:ia:sign_in:v1-rc.0`, #1079). */
+export const SIGN_IN_STEP = stepUrn('sign_in');
+
 /**
  * The identifier step every sign-in of an authorization request starts at,
  * with the realm's upstream providers beside it (#639): the `upstream`
  * alternative and its list, as the engine's first round offers them. A list
- * the step cannot show leaves the alternative out.
+ * the step cannot show leaves the alternative out. With `register`, the
+ * switch to a registration comes last (#1079), as the engine offers it
+ * under the registration's gate; with `signIn`, the step is a
+ * registration's address step, and the way back to the sign-in is its one
+ * alternative.
  */
-export function identifierStep(providers: readonly UpstreamProviderEntry[] = []): InteractionStep {
-  const step: InteractionStep = { name: IDENTIFIER_STEP, params: {}, alternatives: [] };
+export function identifierStep(
+  providers: readonly UpstreamProviderEntry[] = [],
+  options: { readonly register?: boolean; readonly signIn?: boolean } = {}
+): InteractionStep {
+  const markers = [
+    ...(options.register === true ? [REGISTER_STEP] : []),
+    ...(options.signIn === true ? [SIGN_IN_STEP] : []),
+  ];
+  const step: InteractionStep = { name: IDENTIFIER_STEP, params: {}, alternatives: markers };
   if (providers.length === 0) return step;
   const offered: InteractionStep = {
     ...step,
-    alternatives: [UPSTREAM_STEP],
+    alternatives: [UPSTREAM_STEP, ...markers],
     alternativeParams: { [UPSTREAM_STEP]: { providers: providers.map((entry) => ({ ...entry })) } },
   };
   try {
@@ -142,17 +161,19 @@ export function identifierPrefill(loginHint: string | undefined): InteractionPer
 /**
  * The interaction `prompt=create` starts (#640; ADR-017 Decision 8): the
  * identifier step, with no upstream provider beside it (a registration sets a
- * password), `login_hint` as its prefill. Its transaction is empty: the
- * engine's rounds are a registration's because the request it holds asks for
- * `create`. A browser that is already signed in carries its session in, as a
- * sign-in does (#964), and keeps it: a registration creates no session.
+ * password), `login_hint` as its prefill, and the way back to the sign-in
+ * beside it (#1079). Its transaction is empty: the engine's rounds are a
+ * registration's because the request it holds asks for `create`, until the
+ * person answers `sign_in`. A browser that is already signed in carries its
+ * session in, as a sign-in does (#964), and keeps it: a registration creates
+ * no session.
  */
 export function registrationInteractionStart(
   query: AuthorizeQuery,
   session: BrowserSession | null
 ): AuthorizationInteractionStart {
   return {
-    step: identifierStep(),
+    step: identifierStep([], { signIn: true }),
     personal: identifierPrefill(query.login_hint),
     ...(session === null ? {} : { carriedSession: { userId: session.userId, sid: session.sid } }),
   };
@@ -287,12 +308,15 @@ async function consentPersonal(
  * its personal data, its transaction, the browser session it is started for
  * (#964) and, for a consent, the client's display data (#593); or the error
  * for the client's `redirect_uri` when the consent step cannot show the
- * request.
+ * request. A sign-in's first step offers the switch to a registration while
+ * {@link registrationSwitchAllowed} holds (#1079).
  *
  * @param session - the browser session the request came with, `null` for a
  *   browser that is not signed in, or the user an interaction just registered
  *   (#640), who has no session; a consent is for it, and a consent outcome
  *   always has one
+ * @param options.linking - the sign-in is one to link an upstream account
+ *   (`qauth_link`, #670): it never offers a registration
  * @throws InvalidRequestError when the consent step cannot show where the
  *   code goes (`clientDisplay`), as the consent page refuses to render
  */
@@ -301,7 +325,8 @@ export async function authorizationInteractionStart(
   outcome: Extract<AuthorizationOutcome, { kind: 'sign_in' | 'consent' }>,
   query: AuthorizeQuery,
   target: Pick<AuthorizationTarget, 'realm' | 'iss' | 'client'>,
-  session: AuthorizationSubject | null
+  session: AuthorizationSubject | null,
+  options: { readonly linking?: boolean } = {}
 ): Promise<AuthorizationInteractionStart | { readonly error: AuthorizationErrorParams }> {
   // A registered user has no session to carry in.
   const carried =
@@ -310,8 +335,17 @@ export async function authorizationInteractionStart(
       : { carriedSession: { userId: session.userId, sid: session.sid } };
   if (outcome.kind === 'sign_in') {
     const providers = await upstreamProviderCatalog(fastify).offered(target.realm.id);
+    // The switch to a registration (#1079), under the gate the engine reads
+    // again on every round; never on a sign-in to link an upstream account.
+    const register =
+      options.linking !== true &&
+      registrationSwitchAllowed(
+        () => accountPoliciesOf(fastify, target.realm),
+        target.client,
+        query
+      );
     return {
-      step: identifierStep(providers),
+      step: identifierStep(providers, { register }),
       personal: identifierPrefill(query.login_hint),
       ...carried,
     };

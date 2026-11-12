@@ -547,6 +547,12 @@ async function decideAnswer(
     // `prompt=create` (#640): the engine's rounds are a registration's; a
     // sign-in to link an upstream account (#670) registers nobody.
     ...(authorization?.prompt === 'create' && !linking ? { flow: 'register' as const } : {}),
+    // The person may switch between a sign-in and a registration (#1079):
+    // on an authorization request's interaction, never on one that links an
+    // upstream account (#670), whatever state the link is in.
+    ...(authorization !== undefined && !linking && state.upstreamLink === undefined
+      ? { switchFlows: true }
+      : {}),
     // `prompt=login` and `max_age` ask for a fresh sign-in, which a password
     // reset never is (#642; ADR-017 Decision 8): no reset is offered. A
     // sign-in to link an upstream account (#670) is always a fresh one, and

@@ -254,7 +254,8 @@ export default async function (fastify: FastifyInstance) {
       outcome,
       held,
       target,
-      browserSession
+      browserSession,
+      { linking: options.link === true }
     );
     if ('error' in start) {
       return sendAuthorizationError(reply, target.client, query.redirect_uri, start.error);
