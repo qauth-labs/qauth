@@ -131,7 +131,7 @@ A path marker: answering it starts a reset. The next step is `email_code` with `
 
 `urn:qauth:ia:captcha:v1-rc.0` — Asks for a bot challenge answer.
 
-A bot challenge, when a soft threshold requires one; the pending step resumes after it (ADR-017 Decisions 4 and 7). By default the built-in proof of work, whose script the ceremony app serves from the realm origin. An operator may name a hosted provider for the sign-up and sign-in pages only (ADR-019 Decision 5). A required challenge needs JavaScript and is never skipped.
+A bot challenge, when a soft threshold requires one; the pending step resumes after it (ADR-017 Decisions 4 and 7). By default the built-in proof of work, whose script the ceremony app serves from the realm origin. An operator may name a hosted provider for the sign-up and sign-in pages only (ADR-019 Decision 5). A required challenge needs JavaScript and is never skipped. The built-in proof of work (`provider` `pow`) is solved as follows. The answer, `captcha_token`, is a nonce: 1 to 16 ASCII digits `0` to `9`, with no sign and no leading zero (`0` itself is a nonce). The engine takes the SHA-256 digest of the UTF-8 bytes of the challenge, a colon and the nonce, `<challenge>:<nonce>`, with the challenge as the text it is, not base64url-decoded. It accepts the nonce when that digest starts with at least `difficulty` zero bits, read from the most significant bit of its first byte. Any such nonce passes; trying 0, 1, 2 and so on finds one after about 2^`difficulty` hashes. A puzzle takes one answer: a wrong nonce gets the step back with `captcha_failed` and a new challenge. A token the answer’s schema refuses is an invalid answer: it is not checked, and the challenge stays. QAuth’s shared test vectors, `test-vectors/interaction/proof-of-work.json` in its repository, hold cases to check a solver against.
 
 - Params: `provider`, `challenge`, `difficulty`, or `provider`, `name`, `site_key`
 - Schema: [steps/captcha.json](/interaction/v1-rc.0/steps/captcha.json)
@@ -296,3 +296,11 @@ An error is an RFC 9457 problem details document (`application/problem+json`) wi
 
 - The prefix `/interaction/v1-rc.0/wallet/` is reserved for the wallet return leg (ADR-013). No operation of this document is served under it.
 - The auth server serves this document at `/interaction/v1-rc.0/openapi.json`.
+
+## Replacement apps
+
+A sign-in UI that replaces the reference ceremony app and follows this contract is a supported setup (#618). Beside the contract, it needs:
+
+- **A typed client.** Generate one from [openapi.json](/interaction/v1-rc.0/openapi.json) with any OpenAPI 3.1 client generator, and generate it again when the path's release candidate changes. QAuth's own client, `libs/shared/interaction-client`, is generated the same way, for the reference ceremony app. It is not published as a package, and neither is its proof-of-work solver: the SDKs QAuth publishes are those of [ADR-018](/reference/records/adr/018-1-0-scope-and-stability/#6-sdks-and-the-rust-core) §6, and what this API promises is its document and its step schemas, not a client library.
+- **A solver for the built-in proof of work.** The [`captcha`](#captcha) step states its rule, which is all a solver needs. Check a solver against `test-vectors/interaction/proof-of-work.json`, the shared test vectors QAuth's own check and solver run.
+- **A hosted provider's script**, when the operator named a hosted provider for the bot challenge: the provider's own, loaded from the script hosts the operator listed (ADR-019 Decision 5).

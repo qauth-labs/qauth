@@ -1,8 +1,13 @@
 # @qauth-labs/shared-interaction-client
 
-The typed client of the Interaction API v1 (#590), for the reference ceremony app and for any UI
-that replaces it. Generated from the published contract,
+The typed client of the Interaction API v1 (#590), for the reference ceremony app, and the solver of
+the built-in proof of work. Generated from the published contract,
 `apps/docs-site/public/interaction/v1-rc.0/openapi.json`: no type of the API is written by hand.
+
+The package is private and stays so (#1082): a UI that replaces the reference ceremony app generates
+its own client from the published document and writes its solver from the rule the contract states
+in the `captcha` step, checking it against `test-vectors/interaction/proof-of-work.json`. The
+Interaction API reference (`reference/interaction-api.md`, "Replacement apps") says so.
 
 ```ts
 import { createInteractionClient } from '@qauth-labs/shared-interaction-client';
@@ -35,6 +40,7 @@ redirect a browser hides from `fetch` (an `opaqueredirect`, status 0) with its s
 | ------------------------------ | --------------------------------------------------------------------------------------------- |
 | `generated/interaction-api.ts` | Generated: a type per schema, the `Operations` table, `OPERATIONS`, `createInteractionClient` |
 | `lib/runtime.ts`               | The generic request code: URL, headers, JSON, the declared-status check                       |
+| `lib/proof-of-work.ts`         | `solveProofOfWork`: the built-in bot challenge's solver; its test runs the shared vectors     |
 | `codegen/render-client.ts`     | The generator. It refuses a schema construct it cannot type rather than widening it           |
 | `scripts/generate-client.ts`   | Writes the generated module and formats it                                                    |
 

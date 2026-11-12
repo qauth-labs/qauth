@@ -48,6 +48,37 @@ const identifierPrefill = object(
 /** A stand-in for a 32-byte random value, base64url. */
 export const EXAMPLE_CHALLENGE = 'Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI';
 
+/**
+ * The built-in proof of work's rule (#643), stated in the contract so that a
+ * page that replaces the reference ceremony app can solve the challenge from
+ * the contract alone (#1082): what is hashed, how, and what the engine
+ * accepts. The engine's check is `solvesProofOfWork` in
+ * `libs/server/sign-in-engine`, the reference solver `solveProofOfWork` in
+ * `libs/shared/interaction-client`; both run the shared vectors in
+ * `test-vectors/interaction/proof-of-work.json`. The step grammar's Zod
+ * schema reads the same text, so the two descriptions cannot drift.
+ */
+export const PROOF_OF_WORK_RULE = [
+  'The answer, `captcha_token`, is a nonce: 1 to 16 ASCII digits `0` to `9`, with no sign and no leading zero (`0` itself is a nonce).',
+  'The engine takes the SHA-256 digest of the UTF-8 bytes of the challenge, a colon and the nonce, `<challenge>:<nonce>`, with the challenge as the text it is, not base64url-decoded.',
+  'It accepts the nonce when that digest starts with at least `difficulty` zero bits, read from the most significant bit of its first byte.',
+  'Any such nonce passes; trying 0, 1, 2 and so on finds one after about 2^`difficulty` hashes.',
+  'A puzzle takes one answer: a wrong nonce gets the step back with `captcha_failed` and a new challenge. A token the answer’s schema refuses is an invalid answer: it is not checked, and the challenge stays.',
+  'QAuth’s shared test vectors, `test-vectors/interaction/proof-of-work.json` in its repository, hold cases to check a solver against.',
+].join(' ');
+
+/** The `pow` params' `challenge`. */
+export const PROOF_OF_WORK_CHALLENGE_DESCRIPTION =
+  'The puzzle the engine issued, hashed as the text it is.';
+
+/** The `pow` params' `difficulty`. */
+export const PROOF_OF_WORK_DIFFICULTY_DESCRIPTION =
+  'The fewest leading zero bits the SHA-256 digest of `<challenge>:<nonce>` must start with.';
+
+/** The `captcha` step's `captcha_token`. */
+export const CAPTCHA_TOKEN_DESCRIPTION =
+  'For the built-in proof of work, the nonce: 1 to 16 ASCII digits, with no sign and no leading zero. For a hosted provider, the provider’s token. Printable ASCII, so 4096 characters are 4096 bytes.';
+
 export const identifier = defineStep({
   name: 'identifier',
   transports: ['interaction', 'fipa'],
@@ -109,22 +140,24 @@ export const captcha = defineStep({
   transports: ['interaction', 'fipa'],
   summary: 'Asks for a bot challenge answer.',
   description:
-    'A bot challenge, when a soft threshold requires one; the pending step resumes after it (ADR-017 Decisions 4 and 7). By default the built-in proof of work, whose script the ceremony app serves from the realm origin. An operator may name a hosted provider for the sign-up and sign-in pages only (ADR-019 Decision 5). A required challenge needs JavaScript and is never skipped.',
+    'A bot challenge, when a soft threshold requires one; the pending step resumes after it (ADR-017 Decisions 4 and 7). By default the built-in proof of work, whose script the ceremony app serves from the realm origin. An operator may name a hosted provider for the sign-up and sign-in pages only (ADR-019 Decision 5). A required challenge needs JavaScript and is never skipped. The built-in proof of work (`provider` `pow`) is solved as follows. ' +
+    PROOF_OF_WORK_RULE,
   params: {
     description: 'The challenge to solve: the built-in proof of work, or a hosted provider.',
     oneOf: [
       object(
         {
           provider: { const: 'pow', description: 'The built-in proof of work.' },
-          challenge: base64url(22, 128, 'The puzzle the engine issued.'),
+          challenge: base64url(22, 128, PROOF_OF_WORK_CHALLENGE_DESCRIPTION),
           difficulty: {
             type: 'integer',
             minimum: 1,
             maximum: 32,
-            description: 'How many leading zero bits the answer must produce.',
+            description: PROOF_OF_WORK_DIFFICULTY_DESCRIPTION,
           },
         },
-        ['provider', 'challenge', 'difficulty']
+        ['provider', 'challenge', 'difficulty'],
+        `The built-in proof of work. ${PROOF_OF_WORK_RULE}`
       ),
       object(
         {
@@ -156,8 +189,7 @@ export const captcha = defineStep({
         minLength: 1,
         maxLength: 4096,
         pattern: '^[!-~]+$',
-        description:
-          'The solution, or the provider’s token: printable ASCII, so 4096 characters are 4096 bytes.',
+        description: CAPTCHA_TOKEN_DESCRIPTION,
       },
     },
     ['captcha_token']
@@ -166,7 +198,9 @@ export const captcha = defineStep({
   amr: [],
   example: {
     params: { provider: 'pow', challenge: EXAMPLE_CHALLENGE, difficulty: 18 },
-    answer: { captcha_token: 'AAAAAAAABl9x' },
+    // The smallest nonce that solves the example puzzle: the contract-example
+    // case of test-vectors/interaction/proof-of-work.json.
+    answer: { captcha_token: '46151' },
     next: { step: 'password' },
   },
 });

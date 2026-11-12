@@ -1,3 +1,9 @@
+import {
+  CAPTCHA_TOKEN_DESCRIPTION,
+  PROOF_OF_WORK_CHALLENGE_DESCRIPTION,
+  PROOF_OF_WORK_DIFFICULTY_DESCRIPTION,
+  PROOF_OF_WORK_RULE,
+} from '@qauth-labs/shared-interaction-contract';
 import { passwordSchema } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
@@ -84,11 +90,14 @@ export const captcha = defineStep({
   transports: ['interaction', 'fipa'],
   params: z
     .xor([
-      object({
-        provider: constant('pow', 'The built-in proof of work.'),
-        challenge: base64url(22, 128, 'The puzzle the engine issued.'),
-        difficulty: integer(1, 32, 'How many leading zero bits the answer must produce.'),
-      }),
+      object(
+        {
+          provider: constant('pow', 'The built-in proof of work.'),
+          challenge: base64url(22, 128, PROOF_OF_WORK_CHALLENGE_DESCRIPTION),
+          difficulty: integer(1, 32, PROOF_OF_WORK_DIFFICULTY_DESCRIPTION),
+        },
+        `The built-in proof of work. ${PROOF_OF_WORK_RULE}`
+      ),
       object({
         provider: constant('hosted', 'A hosted provider the operator named.'),
         name: matching(z.string().min(1).max(32), '^[a-z][a-z0-9_-]{0,31}$').meta({
@@ -105,8 +114,7 @@ export const captcha = defineStep({
   personal: EMPTY_OBJECT,
   answer: object({
     captcha_token: matching(z.string().min(1).max(4096), '^[!-~]+$').meta({
-      description:
-        'The solution, or the provider’s token: printable ASCII, so 4096 characters are 4096 bytes.',
+      description: CAPTCHA_TOKEN_DESCRIPTION,
     }),
   }),
   errors: ['captcha_failed'],
