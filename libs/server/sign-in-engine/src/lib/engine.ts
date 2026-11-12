@@ -1067,28 +1067,6 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       transaction.flow === 'register' &&
       served.has('sign_in') &&
       atFirstStep(transaction);
-    /**
-     * The switch this round's answer asks for (#1079): the marker, when the
-     * transaction it found may take it; `refused` for a marker it may not
-     * take (offered on an earlier round, before the gate closed); `null` for
-     * any other answer. The round runs the rules of the flow it switches to.
-     */
-    const switchTo: FlowSwitch | 'refused' | null = !isFlowSwitch(answeredName)
-      ? null
-      : (
-            answeredName === 'register'
-              ? await registrationSwitchOpen(found)
-              : signInSwitchOpen(found)
-          )
-        ? answeredName
-        : 'refused';
-    /** The flow of the round: the transaction's, or the one this round switches to (#1079). */
-    const roundFlow =
-      switchTo === 'register' ? 'register' : switchTo === 'sign_in' ? undefined : found.flow;
-    /** A registration (#640), not a sign-in. */
-    const registering = roundFlow === 'register';
-    /** A password reset (#642), not a sign-in: one this round turns into a reset is not, yet. */
-    const resetting = roundFlow === 'reset';
     /** The round's answer while no step has taken it. */
     const turn: { pending: { readonly name: StepName; readonly answer: RoundAnswer } | null } = {
       pending:
@@ -3052,6 +3030,31 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
       if (verdict.kind === 'redirect') return redirect('request');
     }
+
+    /**
+     * The switch this round's answer asks for (#1079): the marker, when the
+     * transaction it found may take it; `refused` for a marker it may not
+     * take (offered on an earlier round, before the gate closed); `null` for
+     * any other answer. The round runs the rules of the flow it switches to.
+     * Read only once the limiters and the request checks let the round
+     * through, so a throttled round reads no gate.
+     */
+    const switchTo: FlowSwitch | 'refused' | null = !isFlowSwitch(answeredName)
+      ? null
+      : (
+            answeredName === 'register'
+              ? await registrationSwitchOpen(found)
+              : signInSwitchOpen(found)
+          )
+        ? answeredName
+        : 'refused';
+    /** The flow of the round: the transaction's, or the one this round switches to (#1079). */
+    const roundFlow =
+      switchTo === 'register' ? 'register' : switchTo === 'sign_in' ? undefined : found.flow;
+    /** A registration (#640), not a sign-in. */
+    const registering = roundFlow === 'register';
+    /** A password reset (#642), not a sign-in: one this round turns into a reset is not, yet. */
+    const resetting = roundFlow === 'reset';
 
     // The switch between a sign-in and a registration (#1079), once the
     // limiters and the transport's checks let the round through: a marker
