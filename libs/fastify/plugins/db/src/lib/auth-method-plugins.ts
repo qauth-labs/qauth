@@ -5,6 +5,7 @@
  */
 export type {
   RealmAuthMethodPlugin,
+  RealmAuthMethodPluginAssertionClient,
   RealmAuthMethodPluginBinding,
   RealmAuthMethodPluginExpectedVersion,
   RealmAuthMethodPluginState,

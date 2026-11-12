@@ -36,12 +36,19 @@ import {
   writeSdkPresetPackage,
   type WrittenSdkPresetPackage,
 } from '../../testing/sdk-preset-package';
+import {
+  SIGNED_SECRET_PRESET_ID,
+  SIGNED_SECRET_PRESET_PACKAGE,
+  SIGNED_SECRET_PRESET_TYPE,
+  signedSecretPresetPackage,
+} from '../../testing/signed-secret-preset';
 import { pluginConfigBodySchema, pluginResource } from '../admin/plugins/routes';
 import {
   AUTH_METHOD_PLUGIN_SIGNER_CALLER,
   authMethodPluginContext,
   AuthMethodPluginDisabledError,
   authMethodPluginEnabledIn,
+  authMethodPluginRuntime,
   authMethodPluginSecretCipher,
   authMethodPluginSecretContext,
   authMethodPluginStateMismatch,
@@ -106,6 +113,9 @@ async function server(row: Partial<RealmAuthMethodPlugin> | undefined) {
           config: { issuer: 'https://idp.example', clientId: 'qauth' },
           secrets: { clientSecret: CIPHERTEXT },
           version: 1,
+          assertionClientId: null,
+          assertionIssuer: null,
+          assertionAlgorithm: null,
           createdAt: 0,
           updatedAt: 0,
           ...row,
@@ -498,6 +508,9 @@ describe('a preset plugin on the generic OpenID Connect client (#951)', () => {
       config: plainConfig,
       secrets: { [EXAMPLE_PRESET_SECRET_PATH]: sealed },
       version: 1,
+      assertionClientId: null,
+      assertionIssuer: null,
+      assertionAlgorithm: null,
       createdAt: 0,
       updatedAt: 0,
     };
@@ -776,5 +789,83 @@ describe('a preset package that imports only the plugin SDK (#671)', () => {
       rankAttributeSource('oidc_corp')
     );
     expect(rankAttributeSource('corp_sso', null)).toBe(0);
+  });
+});
+
+describe("whose client a preset plugin's client assertions speak for (#1073)", () => {
+  async function runtime() {
+    return loadDeploymentAuthMethodPlugins(
+      silent(),
+      {
+        packages: [SIGNED_SECRET_PRESET_PACKAGE, PLUGIN_PACKAGE],
+        pluginApiEnabled: true,
+        nodeEnv: 'test',
+      },
+      {
+        importPackage: fixturePluginImporter({
+          [SIGNED_SECRET_PRESET_PACKAGE]: signedSecretPresetPackage(),
+          [PLUGIN_PACKAGE]: { authMethod: fixturePluginMethod({ type: 'corp_sso', id: 'corp' }) },
+        }),
+      }
+    );
+  }
+
+  it("answers a preset's client id, assertion issuer and algorithm for a realm's config", async () => {
+    const plugins = await runtime();
+    const preset = plugins.find(SIGNED_SECRET_PRESET_ID);
+    if (preset === undefined) throw new Error('the preset did not load');
+    expect(preset.kind).toBe('upstream-oidc-preset');
+
+    expect(
+      plugins.assertionClientOf(preset, { servicesId: 'com.example.signin', teamId: 'TEAM123456' })
+    ).toEqual({
+      clientId: 'com.example.signin',
+      assertionIssuer: 'TEAM123456',
+      algorithm: 'ES256',
+    });
+    // No assertion issuer: the signer then signs with the client id as iss.
+    expect(plugins.assertionClientOf(preset, { servicesId: 'com.example.signin' })).toEqual({
+      clientId: 'com.example.signin',
+      algorithm: 'ES256',
+    });
+  });
+
+  it('answers none for a provider config that authenticates with a client secret, and never echoes it', async () => {
+    const plugins = await runtime();
+    const preset = plugins.find(SIGNED_SECRET_PRESET_ID);
+    if (preset === undefined) throw new Error('the preset did not load');
+
+    expect(
+      plugins.assertionClientOf(preset, {
+        servicesId: 'com.example.signin',
+        clientSecret: 'a-client-secret-value',
+      })
+    ).toBeUndefined();
+  });
+
+  it('answers none for a plugin that exports its own AuthMethod, or one this runtime did not load', async () => {
+    const plugins = await runtime();
+    const corp = plugins.find('corp');
+    const preset = plugins.find(SIGNED_SECRET_PRESET_ID);
+    if (corp === undefined || preset === undefined) throw new Error('the plugins did not load');
+
+    expect(plugins.assertionClientOf(corp, { issuer: 'https://idp.example' })).toBeUndefined();
+    // A runtime without the preset's mapping, as a test builds one.
+    expect(
+      authMethodPluginRuntime([preset]).assertionClientOf(preset, { servicesId: 'x' })
+    ).toBeUndefined();
+    // Another plugin object under the preset's type is not the installed one.
+    expect(
+      plugins.assertionClientOf({ ...preset }, { servicesId: 'com.example.signin' })
+    ).toBeUndefined();
+  });
+
+  it("throws when the preset's mapping fails on a config its schema never took", async () => {
+    const plugins = await runtime();
+    const preset = plugins.find(SIGNED_SECRET_PRESET_ID);
+    if (preset === undefined) throw new Error('the preset did not load');
+
+    expect(() => plugins.assertionClientOf(preset, { servicesId: '' })).toThrow(TypeError);
+    expect(SIGNED_SECRET_PRESET_TYPE).toBe(preset.type);
   });
 });

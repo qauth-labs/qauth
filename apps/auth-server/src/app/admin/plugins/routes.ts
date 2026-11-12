@@ -1,5 +1,6 @@
 import type {
   RealmAuthMethodPlugin,
+  RealmAuthMethodPluginAssertionClient,
   RealmAuthMethodPluginState,
 } from '@qauth-labs/fastify-plugin-db';
 import {
@@ -136,7 +137,7 @@ const pluginParams = z.object({ realmId: z.uuid(), plugin: pluginNameSchema });
  * approval is never filed, with a body checked against no plugin's secret
  * members, for a plugin this node does not have (a rolling upgrade).
  */
-function installedPluginParams(installed: readonly InstalledAuthMethodPlugin[]) {
+export function installedPluginParams(installed: readonly InstalledAuthMethodPlugin[]) {
   const names = new Set(installed.map((plugin) => plugin.id));
   return z.object({
     realmId: z.uuid(),
@@ -620,19 +621,21 @@ function openSealed(request: FastifyRequest, path: string, sealed: string): Prom
 
 /**
  * Refuse a config the plugin's schema refuses, with 400, naming each failing
- * member and the schema's code, never a value.
+ * member and the schema's code, never a value. Answers the config as the
+ * plugin's method parsed it, its secrets in it: never stored, logged or
+ * answered.
  */
 function requireValidConfig(
   plugin: InstalledAuthMethodPlugin,
   config: Readonly<Record<string, unknown>>,
   secrets: ReadonlyMap<string, string>
-): void {
+): unknown {
   // The context's own check (#639, from the review of #939): the schema, and
   // a parsed form of plain data, which the context copies and freezes. A
   // config it would refuse is refused here, before the state is written, so
   // a configure never makes every sign-in through the plugin fail.
   try {
-    parseAuthMethodConfig(
+    return parseAuthMethodConfig(
       plugin.method,
       withConfigMembers(withoutConfigMembers(config, plugin.secretPaths), secrets)
     );
@@ -643,6 +646,28 @@ function requireValidConfig(
       `The configuration does not pass the plugin's config schema (${members.join('; ')})`
     );
   }
+}
+
+/**
+ * Whose client the plugin's client assertions speak for under a parsed
+ * config (#1073), as the realm's state stores it for the signer: `null` for
+ * a plugin whose provider config makes the signer sign nothing. Only the
+ * client id, the assertion issuer and the algorithm: a preset's mapping
+ * puts no secret member's value in either string (its method refuses such
+ * a config), so no secret reaches the stored record.
+ */
+function assertionClientOf(
+  fastify: FastifyInstance,
+  plugin: InstalledAuthMethodPlugin,
+  parsed: unknown
+): RealmAuthMethodPluginAssertionClient | null {
+  const client = fastify.authMethodPlugins.assertionClientOf(plugin, parsed);
+  if (client === undefined) return null;
+  return {
+    clientId: client.clientId,
+    ...(client.assertionIssuer === undefined ? {} : { assertionIssuer: client.assertionIssuer }),
+    algorithm: client.algorithm,
+  };
 }
 
 /** The plugin's row in the request's realm, in the handler's transaction. */
@@ -884,7 +909,7 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
         opened.set(path, await openSealed(request, path, change.sealed));
       }
       for (const [path, plaintext] of opened) plaintexts.set(path, plaintext);
-      requireValidConfig(plugin, config, plaintexts);
+      const parsed = requireValidConfig(plugin, config, plaintexts);
       const cipher = authMethodPluginSecretCipher(fastify);
       await requireKeptSecretsAtDestination(plugin, row, config, changes, {
         after: plaintexts,
@@ -904,6 +929,7 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
         config,
         secrets: ciphertexts,
         binding: { package: plugin.package, type: plugin.type },
+        assertionClient: assertionClientOf(fastify, plugin, parsed),
       });
       return answer(request, reply, plugin, row, written, named);
     }
@@ -941,7 +967,7 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       }
       if (state.enabled) return answer(request, reply, plugin, row, row);
       // A plugin is enabled only with a config its own schema accepts.
-      requireValidConfig(
+      const parsed = requireValidConfig(
         plugin,
         state.config,
         await storedSecrets(fastify, plugin, realmId, state.secrets)
@@ -952,6 +978,9 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
         config: withoutConfigMembers(state.config, plugin.secretPaths),
         secrets: state.secrets,
         binding: { package: plugin.package, type: plugin.type },
+        // Derived again from the config it enables, by the installed
+        // plugin's own mapping (#1073).
+        assertionClient: assertionClientOf(fastify, plugin, parsed),
       });
       return answer(request, reply, plugin, row, written);
     }
