@@ -20,7 +20,7 @@ import { STEPS } from './steps';
  */
 
 /** The date the page's prose was last checked; change it with the prose. */
-export const INTERACTION_PAGE_LAST_VERIFIED = '2026-10-26';
+export const INTERACTION_PAGE_LAST_VERIFIED = '2026-11-12';
 
 /** Where the docs site serves the contract's files. */
 export const CONTRACT_SITE_PATH = `/interaction/${INTERACTION_API_VERSION}/`;
