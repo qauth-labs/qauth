@@ -598,6 +598,41 @@ describe('removeCredential (#844)', () => {
     );
   });
 
+  it('keeps the removal when a session it opened cannot be ended, and logs it', async () => {
+    const fresh = credential('webauthn', REALM_ID, NOW + DAY);
+    const { fastify } = server([credential('password'), fresh], {
+      live: [
+        { id: 'sid-a', authTime: NOW - 120_000, newCredentialIds: [fresh.id] },
+        { id: 'sid-b', authTime: NOW - 90_000, newCredentialIds: [fresh.id] },
+      ],
+    });
+    const { sessionService, log, repositories } = fastify as unknown as {
+      sessionService: { revoke: ReturnType<typeof vi.fn> };
+      log: { error: ReturnType<typeof vi.fn> };
+      repositories: {
+        refreshTokens: { revokeFamiliesOfSignIns: ReturnType<typeof vi.fn> };
+      };
+    };
+    sessionService.revoke.mockRejectedValueOnce(new Error('store down'));
+    expect(
+      await removeCredential(
+        fastify,
+        REQUEST,
+        session(['pwd']),
+        { type: 'passkey', id: fresh.id },
+        MAILER,
+        NOW
+      )
+    ).toEqual({ kind: 'removed' });
+    // The other session still ends, and the sweep still runs.
+    expect(sessionService.revoke).toHaveBeenCalledTimes(2);
+    expect(repositories.refreshTokens.revokeFamiliesOfSignIns).toHaveBeenCalledTimes(2);
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ realmId: REALM_ID }),
+      'a new credential was removed, but a session it opened could not be ended'
+    );
+  });
+
   it('ends nothing more when the passkey is no longer new', async () => {
     const settled = credential('webauthn', REALM_ID, NOW);
     const { fastify } = server([credential('password'), settled], {

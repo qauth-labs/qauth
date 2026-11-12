@@ -701,12 +701,35 @@ export async function removeCredential(
     return { kind: 'removed' };
   });
   if (result.kind === 'removed' && opened.length > 0) {
-    // Each session's clients are queued a back-channel logout by its
+    // None of these can undo the removal, whose transaction already revoked
+    // the sessions' codes and families, and none may fail it: each is
+    // logged. Each session's clients are queued a back-channel logout by its
     // revocation (#624). A `reset`: a credential's removal ended it.
     for (const { id } of opened) {
-      await endBrowserSession(fastify, realmId, id, 'reset', { type: 'user', id: userId }, userId);
+      try {
+        await endBrowserSession(
+          fastify,
+          realmId,
+          id,
+          'reset',
+          { type: 'user', id: userId },
+          userId
+        );
+      } catch (error) {
+        fastify.log.error(
+          { err: error, realmId },
+          'a new credential was removed, but a session it opened could not be ended'
+        );
+      }
     }
-    await revokeWhatOpened(fastify, userId, opened);
+    try {
+      await revokeWhatOpened(fastify, userId, opened);
+    } catch (error) {
+      fastify.log.error(
+        { err: error, realmId },
+        'a new credential was removed, but the second sweep of what it opened failed'
+      );
+    }
   }
   if (result.kind === 'removed' && address !== undefined) {
     // Queued, never awaited: a notice that cannot go out is logged by the mailer.
