@@ -72,6 +72,8 @@ Each step is named `urn:qauth:ia:<name>:v1-rc.0`. A step read names the current 
 | [`select_account`](#select_account)   | Interaction API | `account`                | `account_unavailable`                 | —            | `accounts`                                 |
 | [`upstream`](#upstream)               | Interaction API | `provider`               | `provider_unavailable`                | —            | —                                          |
 | [`upstream_link`](#upstream_link)     | Interaction API | `decision`               | —                                     | —            | —                                          |
+| [`register`](#register)               | Interaction API | —                        | —                                     | —            | —                                          |
+| [`sign_in`](#sign_in)                 | Interaction API | —                        | —                                     | —            | —                                          |
 | [`device_code`](#device_code)         | Interaction API | `user_code`              | `invalid_user_code`                   | —            | —                                          |
 | [`device_confirm`](#device_confirm)   | Interaction API | `decision`               | —                                     | —            | `location`, `network`, `user_agent`        |
 | [`logout_confirm`](#logout_confirm)   | Interaction API | `decision`               | —                                     | —            | `accounts`                                 |
@@ -221,6 +223,24 @@ Shown once an upstream identity provider proved an identity no account of the re
 
 - Params: `provider`, `create`
 - Schema: [steps/upstream_link.json](/interaction/v1-rc.0/steps/upstream_link.json)
+
+### register
+
+`urn:qauth:ia:register:v1-rc.0` — Turns a sign-in into a registration.
+
+A path marker (#1079): answering it turns the sign-in into a registration in the same interaction, for the same authorization request, at the registration’s first round, as `prompt=create` (OpenID Connect Prompt Create 1.0) would have started it (ADR-017 Decision 8): the `captcha` step first where the realm or the client requires one, then the address step (`identifier`), with a passkey to create the account with before it while passkey sign-in is on, and `sign_in` beside it. The request the interaction holds does not change, and the registration ends as one `prompt=create` started: in a code for that request, with no `amr` and no `auth_time`. Offered as an alternative of a sign-in’s first step, before anyone is named, alike for every account (ADR-017 Decision 4), and only while the realm allows sign-up (`accounts.allowSignUp`), the client’s operator-set `hosted_flows` name `register` and the request carries no `max_age` and no `prompt=login`: the rules `prompt=create` meets at the authorization endpoint, but for the `openid` scope, which only `prompt=create` needs. Never offered on a sign-in to join an upstream identity to an account (`upstream_link`) nor on the account page’s sign-in. The rules are read again on every round: an answer to it once they no longer hold is refused with `invalid_answer`, and the sign-in stays where it was. The page shows it as “Create an account”. Works without JavaScript.
+
+- Params: —
+- Schema: [steps/register.json](/interaction/v1-rc.0/steps/register.json)
+
+### sign_in
+
+`urn:qauth:ia:sign_in:v1-rc.0` — Turns a registration back into a sign-in.
+
+A path marker (#1079), the way back from `register`: answering it turns the registration into a sign-in in the same interaction, for the same authorization request, at the sign-in’s first round: the `identifier` step, with a passkey before it while passkey sign-in is on and the realm’s upstream providers beside it. Offered as an alternative of a registration’s address step, before anyone is named and before any mailbox is proved, whether the registration began with `prompt=create` or with `register`. Nothing the registration kept carries over: the sign-in starts empty. After the mailbox is proved, an address an account holds goes on to that account’s sign-in by itself, as before. The page shows it as “I have an account”. Works without JavaScript.
+
+- Params: —
+- Schema: [steps/sign_in.json](/interaction/v1-rc.0/steps/sign_in.json)
 
 ### device_code
 

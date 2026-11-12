@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/register.json",
+  "title": "urn:qauth:ia:register:v1-rc.0",
+  "description": "A path marker (#1079): answering it turns the sign-in into a registration in the same interaction, for the same authorization request, at the registration’s first round, as `prompt=create` (OpenID Connect Prompt Create 1.0) would have started it (ADR-017 Decision 8): the `captcha` step first where the realm or the client requires one, then the address step (`identifier`), with a passkey to create the account with before it while passkey sign-in is on, and `sign_in` beside it. The request the interaction holds does not change, and the registration ends as one `prompt=create` started: in a code for that request, with no `amr` and no `auth_time`. Offered as an alternative of a sign-in’s first step, before anyone is named, alike for every account (ADR-017 Decision 4), and only while the realm allows sign-up (`accounts.allowSignUp`), the client’s operator-set `hosted_flows` name `register` and the request carries no `max_age` and no `prompt=login`: the rules `prompt=create` meets at the authorization endpoint, but for the `openid` scope, which only `prompt=create` needs. Never offered on a sign-in to join an upstream identity to an account (`upstream_link`) nor on the account page’s sign-in. The rules are read again on every round: an answer to it once they no longer hold is refused with `invalid_answer`, and the sign-in stays where it was. The page shows it as “Create an account”. Works without JavaScript.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:register:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:register:v1-rc.0",
+      "params": {},
+      "answer": {},
+      "personal": {},
+      "amr": []
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

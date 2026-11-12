@@ -70,6 +70,8 @@ export const INTERACTION_STEP_MAPPERS: InteractionMapperTable = Object.freeze({
   select_account: same,
   upstream: same,
   upstream_link: same,
+  register: same,
+  sign_in: same,
   device_code: same,
   device_confirm: same,
   logout_confirm: same,

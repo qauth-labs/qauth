@@ -73,7 +73,7 @@ describe('the step grammar', () => {
     expect(INTERACTION_ONLY_STEP_NAMES).toEqual(
       STEP_NAMES.filter((name) => !ADR_017_STEPS.includes(name))
     );
-    expect(INTERACTION_ONLY_STEP_NAMES).toHaveLength(10);
+    expect(INTERACTION_ONLY_STEP_NAMES).toHaveLength(12);
     for (const name of STEP_NAMES) expect(isFipaStepName(name)).toBe(ADR_017_STEPS.includes(name));
     expectTypeOf<'consent'>().not.toExtend<FipaStepName>();
     expectTypeOf<'recovery_code'>().toExtend<InteractionOnlyStepName>();
