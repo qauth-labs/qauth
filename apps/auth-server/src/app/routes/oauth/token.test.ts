@@ -1713,7 +1713,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       clientId: 'test-client-1',
       clientSecretHash: 'hash',
       enabled: true,
-      grantTypes: ['authorization_code'],
+      // A client that refreshes: only one registered for the `refresh_token`
+      // grant is given a refresh token (#1078).
+      grantTypes: ['authorization_code', 'refresh_token'],
       scopes: ['read:foo', 'write:foo'],
       audience: ['https://api.example.com'],
     };
@@ -1818,7 +1820,6 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const stub = setupAuthCodeStub();
     const { fastify, client, authCode } = stub;
     client.audience = ['https://api.example.com', ADMIN_API_AUDIENCE];
-    client.grantTypes = ['authorization_code', 'refresh_token'];
     (fastify as unknown as { policyStore: unknown }).policyStore = testPolicyStore({
       ...REALM_LIFETIMES,
       ...tokens,
@@ -2204,6 +2205,84 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       authCode.id,
       expect.anything()
     );
+  });
+
+  // #1078: the refresh grant refuses a client whose `grant_types` leave out
+  // `refresh_token`, so the code exchange gives it no refresh token, however
+  // well a stored consent covers the code.
+  describe('a refresh token only for a client whose grant_types list refresh_token (#1078)', () => {
+    it.each([
+      ['no other grant', ['authorization_code']],
+      [
+        'other grants',
+        [
+          'authorization_code',
+          'client_credentials',
+          'urn:ietf:params:oauth:grant-type:token-exchange',
+        ],
+      ],
+    ])(
+      'issues the access token but NO refresh token to a client with %s, under a covering consent',
+      async (_label, grantTypes) => {
+        const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+        client.grantTypes = grantTypes;
+        await tokenRoute(fastify);
+        if (!ctx.handler) throw new Error('Handler missing');
+
+        const result = await ctx.handler(baseRequest(), createReply());
+
+        expect(result).toMatchObject({ access_token: 'signed.jwt.token', scope: 'read:foo' });
+        expect(result).not.toHaveProperty('refresh_token');
+        // The consent decides nothing for such a client, so it is not read.
+        expect(fastify.repositories.oauthConsents.findActive).not.toHaveBeenCalled();
+        expect(fastify.jwtUtils.generateRefreshToken).not.toHaveBeenCalled();
+        expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+        expect(fastify.metrics.tokensIssued.inc).not.toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'refresh' })
+        );
+        // The code is spent all the same.
+        expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(
+          authCode.id,
+          expect.anything()
+        );
+      }
+    );
+
+    it('still issues the ID token to such a client when the scope holds openid', async () => {
+      const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+      client.grantTypes = ['authorization_code'];
+      (
+        fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({ ...authCode, scopes: ['openid', 'read:foo'] });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      const result = await ctx.handler(baseRequest(), createReply());
+
+      expect(result).toMatchObject({
+        access_token: 'signed.jwt.token',
+        id_token: 'signed.id.token',
+      });
+      expect(result).not.toHaveProperty('refresh_token');
+      expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    });
+
+    it('issues a refresh token to a client with the grant under the same consent', async () => {
+      const { fastify, ctx, client, user } = setupAuthCodeStub();
+      client.grantTypes = ['authorization_code', 'refresh_token'];
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      const result = await ctx.handler(baseRequest(), createReply());
+
+      expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+        REALM.id,
+        user.id,
+        client.id
+      );
+      expect(result).toMatchObject({ refresh_token: 'refresh-token-plain' });
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledOnce();
+    });
   });
 
   // #633: a consent stored for one resource server says nothing about
@@ -8446,7 +8525,7 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
         clientId: 'web-app',
         clientSecretHash: 'hash',
         enabled: true,
-        grantTypes: ['authorization_code'],
+        grantTypes: ['authorization_code', 'refresh_token'],
         scopes: [] as string[],
         audience: null,
         tokenEndpointAuthMethod: 'client_secret_post',
