@@ -106,6 +106,12 @@ export function proofOfWorkInput(challenge: string, nonce: string): string {
  * SHA-256 over {@link proofOfWorkInput} starts with at least `difficulty`
  * zero bits. Anything else (another provider's params, a token that is no
  * nonce) does not.
+ *
+ * The Interaction API contract states this rule in the `captcha` step's `pow`
+ * params, so a replacement ceremony app writes its solver from the contract
+ * alone (#1082). Changing it changes the contract: the tests run the shared
+ * vectors, `test-vectors/interaction/proof-of-work.json`, which the reference
+ * solver runs too.
  */
 export function solvesProofOfWork(params: StepParams<'captcha'>, token: string): boolean {
   if (params.provider !== PROOF_OF_WORK_PROVIDER) return false;

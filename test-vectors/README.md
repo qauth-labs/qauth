@@ -15,18 +15,21 @@ test-vectors/
   project.json                     the Nx project; its validate target checks every file
 ```
 
-| File                      | What it tests                                                      | Source                                                              |
-| ------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| `pkce/s256.json`          | The PKCE S256 check at the token endpoint                          | RFC 7636 §4.1, §4.2, §4.6 and Appendix B                            |
-| `webhooks/signature.json` | Standard Webhooks signatures, HMAC-SHA256 over `id.timestamp.body` | Generated with the reference library `standardwebhooks@1.1.1` (npm) |
-| `agent/act-chain.json`    | Reading an RFC 8693 `act` chain, and QAuth's depth cap of 4        | RFC 8693 §4.1, ADR-007 §2                                           |
-| `jwt/access-token.json`   | The access token checks of RFC 9068 §4                             | Generated from fixed-seed throwaway Ed25519 keys                    |
-| `dpop/proof.json`         | The DPoP proof checks of RFC 9449 §4.3, nonces and replay          | RFC 9449 Figures 2, 7 and 13, and fixed-seed throwaway Ed25519 keys |
-| `interaction/steps.json`  | Each sign-in step on the Interaction API and the FiPA endpoint     | The Interaction API v1-rc.0 contract's step examples (#590, #591)   |
+| File                             | What it tests                                                                     | Source                                                              |
+| -------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `pkce/s256.json`                 | The PKCE S256 check at the token endpoint                                         | RFC 7636 §4.1, §4.2, §4.6 and Appendix B                            |
+| `webhooks/signature.json`        | Standard Webhooks signatures, HMAC-SHA256 over `id.timestamp.body`                | Generated with the reference library `standardwebhooks@1.1.1` (npm) |
+| `agent/act-chain.json`           | Reading an RFC 8693 `act` chain, and QAuth's depth cap of 4                       | RFC 8693 §4.1, ADR-007 §2                                           |
+| `jwt/access-token.json`          | The access token checks of RFC 9068 §4                                            | Generated from fixed-seed throwaway Ed25519 keys                    |
+| `dpop/proof.json`                | The DPoP proof checks of RFC 9449 §4.3, nonces and replay                         | RFC 9449 Figures 2, 7 and 13, and fixed-seed throwaway Ed25519 keys |
+| `interaction/steps.json`         | Each sign-in step on the Interaction API and the FiPA endpoint                    | The Interaction API v1-rc.0 contract's step examples (#590, #591)   |
+| `interaction/proof-of-work.json` | The built-in proof of work of the `captcha` step: what it hashes, what it accepts | The Interaction API v1-rc.0 contract's `captcha` step (#643, #1082) |
 
 The server's tests run `pkce/s256` in `libs/server/pkce`, `jwt/access-token` in `libs/server/jwt`,
-`dpop/proof` in `libs/server/dpop`, `interaction/steps` in `libs/server/step-grammar` and
-`agent/act-chain` in `apps/auth-server`.
+`dpop/proof` in `libs/server/dpop`, `interaction/steps` in `libs/server/step-grammar`,
+`interaction/proof-of-work` in `libs/server/sign-in-engine` and `agent/act-chain` in
+`apps/auth-server`. The reference ceremony app's proof-of-work solver runs `interaction/proof-of-work`
+too, in `libs/shared/interaction-client`.
 `libs/shared/test-vectors` checks `webhooks/signature` against `node:crypto`. The webhook signer in
 `libs/server/keys` does not run these vectors yet.
 
@@ -115,17 +118,19 @@ TypeScript tests read a file with `loadVectors(id)` from `@qauth-labs/shared-tes
 (`libs/shared/test-vectors`), which validates it first. A test fails when a committed vector file is
 loaded by no test.
 
-The three generated files have their generators in `generators/`. None runs at test time; run one
+The four generated files have their generators in `generators/`. None runs at test time; run one
 by hand after adding a case, and commit what it writes:
 
 ```bash
 node test-vectors/generators/access-token.mjs
 node test-vectors/generators/dpop-proof.mjs
+node test-vectors/generators/proof-of-work.mjs
 node test-vectors/generators/webhooks-signature.mjs <path to the standardwebhooks@1.1.1 package>
 ```
 
 `access-token.mjs` and `dpop-proof.mjs` derive their keys from fixed seeds and rewrite the committed
-files byte for byte; `dpop-proof.mjs` copies the RFC 9449 proofs from the RFC.
+files byte for byte; `dpop-proof.mjs` copies the RFC 9449 proofs from the RFC. `proof-of-work.mjs`
+searches nonces from the same start on every run, so it rewrites its file byte for byte too.
 `webhooks-signature.mjs` refuses any version of the reference library other than the pinned one;
 its header says how to fetch it.
 
