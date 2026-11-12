@@ -481,7 +481,7 @@ Key contract facts:
 ```json
 {
   "access_token": "eyJ…",
-  "refresh_token": "a1b2…", // omitted for client_credentials, token-exchange, and a code no stored consent covers (its scopes at each resource)
+  "refresh_token": "a1b2…", // omitted for client_credentials, token-exchange, a client whose grant_types leave out refresh_token, and a code no stored consent covers (its scopes at each resource)
   "id_token": "eyJ…", // authorization_code grant only, when `openid` was granted
   "expires_in": 900,
   "token_type": "Bearer",

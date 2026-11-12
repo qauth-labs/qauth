@@ -1173,11 +1173,16 @@ async function handleAuthorizationCode(
   // Bearer authorize path (retired by #524; it stored no consent) yield the
   // access token (and ID token) alone; the client returns through
   // /oauth/authorize when it expires.
-  const consent = await fastify.repositories.oauthConsents.findActive(
-    ctx.realmId,
-    user.id,
-    client.id
-  );
+  //
+  // And only for a client whose `grant_types` list `refresh_token` (#1078):
+  // the refresh grant refuses any other client with `unauthorized_client`,
+  // so a refresh token minted for it is a credential it cannot use, a family
+  // that waits in the database until it expires or the consent is withdrawn.
+  // Whether `offline_access` must be requested as well is not decided here:
+  // a covering consent and the grant are the whole rule.
+  const consent = client.grantTypes.includes('refresh_token')
+    ? await fastify.repositories.oauthConsents.findActive(ctx.realmId, user.id, client.id)
+    : undefined;
   const familyCreatedAt = issuedAt;
   const refresh =
     consent && consentCovers(consent, authCode.scopes, effectiveResource)

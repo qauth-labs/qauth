@@ -105,7 +105,7 @@ function makeAuthCodeStub(opts: {
           clientId: 'app-123',
           clientSecretHash: 'argon2-hash',
           enabled: true,
-          grantTypes: ['authorization_code'],
+          grantTypes: ['authorization_code', 'refresh_token'],
           scopes: ['openid'],
           audience: ['https://api.example.com'],
           tokenEndpointAuthMethod: 'client_secret_post',

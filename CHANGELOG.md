@@ -55,6 +55,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider. `extend/auth-method-contract` links the two preset plugins beside
   the GitHub one.
 
+### Fixed
+
+- **The code exchange gives a refresh token only to a client registered for
+  the `refresh_token` grant** ([#1078], ADR-006). `/oauth/token` minted one on
+  `authorization_code` whenever a stored consent covered the code ([#633]),
+  whatever the client's `grant_types`, while the `refresh_token` grant refuses
+  a client without that grant with `unauthorized_client`. A client registered
+  for `authorization_code` alone thus received a refresh token it could never
+  use, and its family stayed in the database until it expired or the consent
+  was withdrawn. Such a client now gets the access token, and the ID token
+  under `openid`, with no `refresh_token` member, and no refresh token is
+  stored; a client with the grant gets one under a covering consent, as
+  before. Requesting `offline_access` still changes nothing either way. The
+  rule is in `integrate/oauth-flow`.
+
+  **Action for operators**: refresh tokens an earlier release issued to such a
+  client are left in place. The refresh grant refuses them while the client's
+  `grant_types` lack `refresh_token`, but adding the grant to the client later
+  makes every one of them that has not expired usable at once. Before you add
+  `refresh_token` to a client registered without it, revoke the refresh tokens
+  it holds:
+
+  ```sql
+  UPDATE refresh_tokens
+     SET revoked = true,
+         revoked_at = (extract(epoch FROM clock_timestamp()) * 1000)::bigint,
+         revoked_reason = 'refresh_grant_added'
+   WHERE oauth_client_id = '<the client row id>' AND NOT revoked;
+  ```
+
 ## [0.2.3] - 2026-11-12
 
 A patch release that carries a breaking change, as a 0.x release may (see the
@@ -4043,6 +4073,7 @@ It adds migrations 0068 and 0069.
 [#1074]: https://github.com/qauth-labs/qauth/issues/1074
 [#1075]: https://github.com/qauth-labs/qauth/issues/1075
 [#1076]: https://github.com/qauth-labs/qauth/issues/1076
+[#1078]: https://github.com/qauth-labs/qauth/issues/1078
 
 ### Deprecated
 
