@@ -462,7 +462,12 @@ describe('one subject per transaction', () => {
     const first = await built.engine.advance(null, null, ctx);
     const second = context({ loginHint: 'mallory@example.com' });
     const result = await built.engine.advance(first.transaction as SignInTransaction, null, second);
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'subject_mismatch',
+    });
     expect(second.records).toEqual([
       {
         outcome: 'ended',
@@ -522,7 +527,12 @@ describe('one subject per transaction', () => {
       answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
       proofCtx
     );
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'subject_mismatch',
+    });
     expect(proofCtx.records).toEqual([
       { outcome: 'ended', step: 'webauthn_get', reason: 'subject_mismatch', userId: USER },
     ]);
@@ -1078,7 +1088,12 @@ describe('what the second review of #614 pinned', () => {
       answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
       ctx
     );
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'subject_mismatch',
+    });
     expect(ctx.records).toEqual([
       { outcome: 'ended', step: 'webauthn_get', reason: 'subject_mismatch', userId: USER },
     ]);
@@ -1141,6 +1156,7 @@ describe('what the second review of #614 pinned', () => {
       kind: 'refused',
       reason: 'transaction_ended',
       transaction: null,
+      cause: 'transaction_invalid',
     });
     expect(ctx.records).toEqual([
       { outcome: 'ended', step: 'identifier', reason: 'transaction_invalid' },
@@ -1175,7 +1191,12 @@ describe('what the second review of #614 pinned', () => {
       answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
       ctx
     );
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'subject_mismatch',
+    });
     expect(ctx.records).toEqual([
       {
         outcome: 'ended',
@@ -1303,7 +1324,12 @@ describe('a disabled user', () => {
     accounts.set(IDENTIFIER, { ...kindAccount('passwordAndPasskey'), enabled: false });
     const ctx = context();
     const third = await built.engine.advance(second.transaction as SignInTransaction, null, ctx);
-    expect(third).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(third).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'account_disabled',
+    });
     expect(ctx.records).toMatchObject([
       { outcome: 'ended', reason: 'account_disabled', userId: USER },
     ]);
@@ -1637,7 +1663,12 @@ describe('answers and transactions', () => {
       const built = build();
       const ctx = context();
       const result = await built.engine.advance(stored as unknown as SignInTransaction, null, ctx);
-      expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+      expect(result).toEqual({
+        kind: 'refused',
+        reason: 'transaction_ended',
+        transaction: null,
+        cause: 'transaction_invalid',
+      });
       expect(ctx.records).toEqual([
         { outcome: 'ended', step: 'identifier', reason: 'transaction_invalid' },
       ]);
@@ -1655,7 +1686,12 @@ describe('answers and transactions', () => {
       passwordAnswer(PASSWORD),
       ctx
     );
-    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'transaction_expired',
+    });
     expect(ctx.records).toEqual([
       { outcome: 'ended', step: 'password', reason: 'transaction_expired' },
     ]);
@@ -1689,6 +1725,7 @@ describe('answers and transactions', () => {
       kind: 'refused',
       reason: 'transaction_ended',
       transaction: null,
+      cause: 'transaction_invalid',
     });
     expect(ctx.records).toEqual([
       { outcome: 'ended', step: 'identifier', reason: 'transaction_invalid' },
@@ -1708,7 +1745,12 @@ describe('answers and transactions', () => {
         passwordAnswer(PASSWORD),
         ctx
       );
-      expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+      expect(result).toEqual({
+        kind: 'refused',
+        reason: 'transaction_ended',
+        transaction: null,
+        cause: 'transaction_invalid',
+      });
       expect(ctx.records).toEqual([
         { outcome: 'ended', step: 'password', reason: 'transaction_invalid' },
       ]);

@@ -413,7 +413,12 @@ describe('a listed password on a password-only account', () => {
     built.updates.replace = async () => ({ kind: 'refused', reason: 'account_disabled' });
     const ctx = context(built);
     const ended = await built.engine.advance(kept(third), newPasswordAnswer(NEW_PASSWORD), ctx);
-    expect(ended).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(ended).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+      cause: 'account_disabled',
+    });
     expect(ctx.records).toEqual([
       { outcome: 'ended', step: 'new_password', reason: 'account_disabled', userId: USER },
     ]);
