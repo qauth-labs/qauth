@@ -1336,7 +1336,7 @@ describe('linking an upstream account to an existing one (#670, real containers)
       expectHomeOffered(step);
     });
 
-    it("asks for the account's second factor after the provider, and links only after it", async () => {
+    it('holds the sign-in through the provider to the MFA policy, as every sign-in through a provider: nothing links', async () => {
       policy = POLICY_REQUIRED;
       await addHomeProvider();
       const owner = await accountHolding(HOME_PERSON.sub, HOME_TYPE);
@@ -1347,16 +1347,26 @@ describe('linking an upstream account to an existing one (#670, real containers)
 
       const callback = await throughPickedProvider(jar, id, HOME_PERSON);
 
+      // The provider's proof does not complete the sign-in: the account's
+      // second factor is asked, and nothing is linked yet.
       expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
       expect(ceremonyIdOf(callback.headers['location'])).toBe(id);
       const second = await read(id);
       expect(second.step).toBe(TOTP);
       expect(second.upstreamLink).toEqual({ provider: TYPE, name: PROVIDER_NAME });
       expect(await upstreamCredentials()).toBe(0);
-      const done = await answer(jar, id, TOTP, { otp: totpCodeAt(secret, Date.now()) });
-      expect(done.statusCode, withServerLog(done.body)).toBe(303);
-      codeAt(done.headers['location']);
-      expect((await upstreamCredentialOf())?.userId).toBe(owner.id);
+
+      // A provider adds no amr value, so its TOTP cannot make the `mfa` the
+      // policy requires: the sign-in cannot complete here, as no sign-in
+      // through a provider can (#653), and the link never happens.
+      const ended = await answer(jar, id, TOTP, { otp: totpCodeAt(secret, Date.now()) });
+      expect(ended.statusCode, withServerLog(ended.body)).toBe(410);
+      expect(ended.json()).toMatchObject({ code: 'interaction_expired' });
+      expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+      expect(await upstreamCredentials()).toBe(0);
+      expect(await upstreamCredentialOf()).toBeUndefined();
+      expect(await events(SIGNED_IN)).toEqual([]);
+      expect(await events(LINKED)).toEqual([]);
     });
   });
 
