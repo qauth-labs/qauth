@@ -1800,6 +1800,9 @@ importers:
         specifier: 'catalog:'
         version: 4.6.7
     devDependencies:
+      '@qauth-labs/shared-test-vectors':
+        specifier: workspace:*
+        version: link:../../shared/test-vectors
       '@vitest/coverage-v8':
         specifier: 'catalog:'
         version: 5.0.5(vitest@5.0.5)

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { STEP_URNS, type StepName, type StepParams } from '@qauth-labs/server-step-grammar';
+import { loadVectors } from '@qauth-labs/shared-test-vectors';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -206,19 +207,6 @@ describe('the proof of work', () => {
     expect(solvesProofOfWork({ ...params, difficulty: 32 }, nonce)).toBe(false);
   });
 
-  it('agrees with the page’s solver on a shared vector', () => {
-    // The vector of `@qauth-labs/shared-interaction-client`'s solver test.
-    const challenge = 'cWF1dGgtcG93LXRlc3QtdmVjdG9yLW9mLTMyLWJ5dGVz';
-    for (const [difficulty, nonce] of [
-      [12, '2596'],
-      [16, '4124'],
-    ] as const) {
-      const params = { provider: 'pow', challenge, difficulty } as const;
-      expect(solve(params)).toBe(nonce);
-      expect(solvesProofOfWork(params, nonce)).toBe(true);
-    }
-  });
-
   it('refuses a token that is not a plain decimal nonce, and hosted params', () => {
     const params = { provider: 'pow', challenge: 'a'.repeat(43), difficulty: 1 } as const;
     for (const token of ['', '01', '-1', '+1', '1e3', ' 1', '1 ', '0x1', '1'.repeat(17), '٣']) {
@@ -265,6 +253,54 @@ describe('the proof of work', () => {
     ).toThrow();
     expect(() => checkedChallengeParams({ provider: 'pow' })).toThrow();
   });
+});
+
+/** A case of `test-vectors/interaction/proof-of-work.json`: its description says what each member means. */
+interface ProofOfWorkVectorInput {
+  readonly challenge: string;
+  readonly difficulty: number;
+  readonly captcha_token: string;
+}
+interface ProofOfWorkVectorExpected {
+  readonly digest: string;
+  readonly leading_zero_bits: number;
+  readonly accepted: boolean;
+  readonly smallest_solution: boolean;
+}
+
+// The id as a literal: shared-test-vectors' tree test finds a file's loader by it.
+const proofOfWorkVectors = loadVectors<ProofOfWorkVectorInput, ProofOfWorkVectorExpected>(
+  'interaction/proof-of-work'
+);
+
+/**
+ * The rule the Interaction API contract states for the `captcha` step's `pow`
+ * params (#1082), run on the shared vectors. The page's solver in
+ * `@qauth-labs/shared-interaction-client` runs the same file, so the two agree
+ * through the contract, not through each other.
+ */
+describe('the proof of work on the shared vectors', () => {
+  it.each(proofOfWorkVectors.cases.map((vector) => [vector.id, vector] as const))(
+    '%s',
+    (_id, { input, expected }) => {
+      const params = {
+        provider: 'pow',
+        challenge: input.challenge,
+        difficulty: input.difficulty,
+      } as const;
+      const digest = createHash('sha256')
+        .update(proofOfWorkInput(input.challenge, input.captcha_token))
+        .digest();
+      const accepted = solvesProofOfWork(params, input.captcha_token);
+      // The whole expected object, rebuilt from the code under test.
+      expect({
+        digest: digest.toString('base64url'),
+        leading_zero_bits: leadingZeroBits(digest),
+        accepted,
+        smallest_solution: accepted && solve(params) === input.captcha_token,
+      }).toEqual(expected);
+    }
+  );
 });
 
 describe('rule 5: when the challenge is due', () => {

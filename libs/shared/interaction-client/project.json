@@ -24,10 +24,11 @@
           "transitive": true
         },
         "{workspaceRoot}/apps/docs-site/public/interaction/**/*",
-        "{workspaceRoot}/.oxfmtrc.json"
+        "{workspaceRoot}/.oxfmtrc.json",
+        "{workspaceRoot}/test-vectors/interaction/proof-of-work.json"
       ],
       "metadata": {
-        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files; the first six entries are the inferred defaults re-declared, because setting `inputs` replaces them. The drift test regenerates the client from the published Interaction API document under apps/docs-site/public/interaction and formats it with the repo's Oxfmt config (hence `oxfmt` and `.oxfmtrc.json`), then compares it with the committed client. Without these entries a change to the document would replay a cached pass."
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files; the first six entries are the inferred defaults re-declared, because setting `inputs` replaces them. The drift test regenerates the client from the published Interaction API document under apps/docs-site/public/interaction and formats it with the repo's Oxfmt config (hence `oxfmt` and `.oxfmtrc.json`), then compares it with the committed client. Without these entries a change to the document would replay a cached pass. The proof-of-work solver's test reads test-vectors/interaction/proof-of-work.json by path (a shared library imports no workspace library), so that file is an input too."
       }
     },
     "typecheck": {
