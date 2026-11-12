@@ -27,6 +27,7 @@ vi.mock('./upstream-providers', () => ({
 vi.mock('./session-side-record', () => ({
   readSessionSideRecord: vi.fn(async () => ({ ...sideRecord })),
   writeSessionSideRecord,
+  deleteSessionSideRecord: vi.fn(async () => undefined),
 }));
 
 import {
@@ -70,8 +71,8 @@ function session(amr: readonly string[], ageMs = 60_000): BrowserSession {
 }
 
 let nextId = 0;
-/** A credential row of `providerType`. */
-function credential(providerType: string, realmId = REALM_ID) {
+/** A credential row of `providerType`; `newUntil` makes it new until then (#1064). */
+function credential(providerType: string, realmId = REALM_ID, newUntil: number | null = null) {
   nextId += 1;
   return {
     id: `00000000-0000-4000-8000-${String(nextId).padStart(12, '0')}`,
@@ -80,8 +81,13 @@ function credential(providerType: string, realmId = REALM_ID) {
     userId: USER_ID,
     externalSub: providerType === 'password' ? ADDRESS : `${providerType}-${nextId}`,
     disabledAt: null as number | null,
+    newUntil,
+    createdAt: NOW - 3_600_000,
   };
 }
+
+/** One day, in milliseconds: inside the window of a new factor. */
+const DAY = 86_400_000;
 
 type Row = ReturnType<typeof credential>;
 
@@ -91,7 +97,9 @@ function server(
   options: {
     mfa?: 'off' | 'optional' | 'required' | 'required_for_admins';
     admin?: boolean;
-    sessionRow?: { userId: string; recoveryCodeUsed: boolean };
+    sessionRow?: { userId: string; recoveryCodeUsed: boolean; newCredentialIds?: string[] };
+    /** The account's live sessions, as `listActiveForUser` reads them (#1064). */
+    live?: { id: string; authTime: number; newCredentialIds: string[] }[];
   } = {}
 ) {
   const deleteById = vi.fn(async (_realmId: string, id: string) => {
@@ -113,8 +121,18 @@ function server(
         deleteById,
       },
       adminGrants: { listLive: vi.fn(async () => (options.admin === true ? [{}] : [])) },
-      sessions: { findById: vi.fn(async () => options.sessionRow) },
+      sessions: {
+        findById: vi.fn(async () =>
+          options.sessionRow === undefined
+            ? undefined
+            : { newCredentialIds: [], ...options.sessionRow }
+        ),
+        listActiveForUser: vi.fn(async () => options.live ?? []),
+      },
+      authorizationCodes: { invalidateForSessions: vi.fn(async () => 0) },
+      refreshTokens: { revokeFamiliesOfSignIns: vi.fn(async () => 0) },
     },
+    sessionService: { revoke: vi.fn(async () => ({ outcome: 'ended' })) },
   } as unknown as FastifyInstance;
   return { fastify, deleteById };
 }
@@ -266,6 +284,87 @@ describe('checkFreshAuthentication (#844, #663)', () => {
         )
       ).toMatchObject({ kind: 'refused', reason: 'strongest_factor_missing' });
     }
+  });
+});
+
+describe('checkFreshAuthentication with a new factor (#1064)', () => {
+  it('counts no new factor as the strongest: the password is fresh enough', async () => {
+    const { fastify } = server([
+      credential('password'),
+      credential('webauthn', REALM_ID, NOW + DAY),
+    ]);
+    expect(
+      await checkFreshAuthentication(
+        fastify,
+        REQUEST,
+        session(['pwd']),
+        ACCOUNT_PAGE_CHANGES.passwordChange,
+        NOW
+      )
+    ).toEqual({ kind: 'fresh' });
+    // Once its window is over, it is the strongest factor again.
+    const { fastify: later } = server([
+      credential('password'),
+      credential('webauthn', REALM_ID, NOW),
+    ]);
+    expect(
+      await checkFreshAuthentication(
+        later,
+        REQUEST,
+        session(['pwd']),
+        ACCOUNT_PAGE_CHANGES.passwordChange,
+        NOW
+      )
+    ).toMatchObject({ kind: 'refused', requiredFactor: 'pop' });
+  });
+
+  it('lets the password alone remove a credential while it is new, and only that one', async () => {
+    const settled = credential('webauthn');
+    const fresh = credential('webauthn', REALM_ID, NOW + DAY);
+    const { fastify } = server([credential('password'), settled, fresh]);
+    const check = (id: string, amr: readonly string[] = ['pwd']) =>
+      checkFreshAuthentication(
+        fastify,
+        REQUEST,
+        session(amr),
+        ACCOUNT_PAGE_CHANGES.passkeyRemove,
+        NOW,
+        { type: 'passkey', id }
+      );
+    expect(await check(fresh.id)).toEqual({ kind: 'fresh' });
+    expect(await check(settled.id)).toMatchObject({ kind: 'refused', requiredFactor: 'pop' });
+    // A sign-in that proved no password removes nothing with it.
+    expect(await check(fresh.id, ['pop', 'mfa'])).toMatchObject({ kind: 'refused' });
+    // An old sign-in is too old for the password too.
+    const old = await checkFreshAuthentication(
+      fastify,
+      REQUEST,
+      session(['pwd'], (FRESH_AUTHENTICATION_MAX_AGE_SECONDS + 1) * 1000),
+      ACCOUNT_PAGE_CHANGES.passkeyRemove,
+      NOW,
+      { type: 'passkey', id: fresh.id }
+    );
+    expect(old).toMatchObject({ kind: 'refused', reason: 'authentication_too_old' });
+  });
+
+  it('takes no strongest factor a sign-in proved only through a new credential', async () => {
+    const settled = credential('webauthn');
+    const fresh = credential('webauthn', REALM_ID, NOW + DAY);
+    const verdict = (newCredentialIds: string[]) =>
+      checkFreshAuthentication(
+        server([credential('password'), settled, fresh], {
+          sessionRow: { userId: USER_ID, recoveryCodeUsed: false, newCredentialIds },
+        }).fastify,
+        REQUEST,
+        session(['pop', 'mfa']),
+        ACCOUNT_PAGE_CHANGES.passwordChange,
+        NOW
+      );
+    expect(await verdict([fresh.id])).toMatchObject({
+      kind: 'refused',
+      reason: 'strongest_factor_missing',
+    });
+    expect(await verdict([])).toEqual({ kind: 'fresh' });
   });
 });
 
@@ -445,6 +544,83 @@ describe('removeCredential (#844)', () => {
     ).toEqual({ kind: 'removed' });
     expect(sendUncounted).toHaveBeenCalledOnce();
     expect(sendUncounted).toHaveBeenCalledWith(REALM, ADDRESS, { template: 'totp_removed' });
+  });
+
+  it('ends what a new passkey opened when it is removed, and says so (#1064)', async () => {
+    const fresh = credential('webauthn', REALM_ID, NOW + DAY);
+    const { fastify } = server([credential('password'), fresh], {
+      live: [
+        { id: 'sid-opened', authTime: NOW - 120_000, newCredentialIds: [fresh.id] },
+        { id: SID, authTime: NOW - 60_000, newCredentialIds: [] },
+      ],
+    });
+    expect(
+      await removeCredential(
+        fastify,
+        REQUEST,
+        session(['pwd']),
+        { type: 'passkey', id: fresh.id },
+        MAILER,
+        NOW
+      )
+    ).toEqual({ kind: 'removed' });
+    expect(emitUserEvent).toHaveBeenCalledWith(
+      REQUEST,
+      'urn:qauth:event:user.credential_removed:v1-rc.0',
+      { type: 'passkey', credentialId: fresh.id, whileNew: true },
+      expect.objectContaining({ tx: 'tx' })
+    );
+    const { repositories, sessionService } = fastify as unknown as {
+      repositories: {
+        authorizationCodes: { invalidateForSessions: ReturnType<typeof vi.fn> };
+        refreshTokens: { revokeFamiliesOfSignIns: ReturnType<typeof vi.fn> };
+      };
+      sessionService: { revoke: ReturnType<typeof vi.fn> };
+    };
+    // In the removal's transaction, then once more after the session ended.
+    expect(repositories.authorizationCodes.invalidateForSessions.mock.calls).toEqual([
+      [USER_ID, ['sid-opened'], 'tx'],
+      [USER_ID, ['sid-opened'], undefined],
+    ]);
+    expect(repositories.refreshTokens.revokeFamiliesOfSignIns.mock.calls).toEqual([
+      [USER_ID, [NOW - 120_000], 'new_credential_removed', 'tx'],
+      [USER_ID, [NOW - 120_000], 'new_credential_removed', undefined],
+    ]);
+    // Only the session that bound or proved it ends; this one stays.
+    expect(sessionService.revoke).toHaveBeenCalledTimes(1);
+    expect(sessionService.revoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        realmId: REALM_ID,
+        sid: 'sid-opened',
+        reason: 'reset',
+        userId: USER_ID,
+      })
+    );
+  });
+
+  it('ends nothing more when the passkey is no longer new', async () => {
+    const settled = credential('webauthn', REALM_ID, NOW);
+    const { fastify } = server([credential('password'), settled], {
+      live: [{ id: 'sid-opened', authTime: NOW - 120_000, newCredentialIds: [settled.id] }],
+    });
+    await removeCredential(
+      fastify,
+      REQUEST,
+      session(['pop']),
+      { type: 'passkey', id: settled.id },
+      MAILER,
+      NOW
+    );
+    const { sessionService } = fastify as unknown as {
+      sessionService: { revoke: ReturnType<typeof vi.fn> };
+    };
+    expect(sessionService.revoke).not.toHaveBeenCalled();
+    expect(emitUserEvent).toHaveBeenCalledWith(
+      REQUEST,
+      'urn:qauth:event:user.credential_removed:v1-rc.0',
+      { type: 'passkey', credentialId: settled.id },
+      expect.anything()
+    );
   });
 
   it('answers not_found for a passkey the account does not hold', async () => {

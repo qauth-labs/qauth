@@ -17,7 +17,9 @@ import {
   checkAccountOperation,
   FRESH_AUTHENTICATION_MAX_AGE_SECONDS,
   FRESH_AUTHENTICATION_RULES,
+  holdsNewFactor,
   isFreshSignIn,
+  provedOnlyThroughNew,
   requiredFactorOf,
 } from './account-operation-guard';
 
@@ -199,6 +201,20 @@ describe('the account operation guard (#663)', () => {
       expect(
         requiredFactorOf([credential('password'), credential('webauthn', OTHER_REALM_ID)], REALM_ID)
       ).toBe('pwd');
+    });
+
+    it('counts no credential while it is new, and counts it once its window is over (#1064)', () => {
+      const NOW = 1_800_000_000_000;
+      const newPasskey = { ...credential('webauthn'), id: 'passkey-new', newUntil: NOW + 1 };
+      const rows = [credential('password'), newPasskey];
+      expect(requiredFactorOf(rows, REALM_ID, NOW)).toBe('pwd');
+      expect(requiredFactorOf(rows, REALM_ID, NOW + 1)).toBe('pop');
+      expect(holdsNewFactor('pop', rows, REALM_ID, NOW)).toBe(true);
+      expect(holdsNewFactor('otp', rows, REALM_ID, NOW)).toBe(false);
+      // A sign-in that named the new passkey proved `pop` only through it.
+      expect(provedOnlyThroughNew('pop', ['passkey-new'], rows, REALM_ID, NOW)).toBe(true);
+      expect(provedOnlyThroughNew('pop', [], rows, REALM_ID, NOW)).toBe(false);
+      expect(provedOnlyThroughNew('pop', ['passkey-new'], rows, REALM_ID, NOW + 1)).toBe(false);
     });
   });
 

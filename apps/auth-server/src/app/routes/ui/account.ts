@@ -9,6 +9,7 @@ import {
   accountCsrfAccepted,
   accountCsrfToken,
   type AccountPageChange,
+  type CredentialTarget,
   changePassword,
   checkFreshAuthentication,
   endAccountSession,
@@ -168,7 +169,8 @@ export default async function (fastify: FastifyInstance) {
     reply: FastifyReply,
     csrf: string | undefined,
     change?: AccountPageChange,
-    returnTo: AccountReturnPath = ACCOUNT_PAGE_PATH
+    returnTo: AccountReturnPath = ACCOUNT_PAGE_PATH,
+    removing?: CredentialTarget
   ): Promise<BrowserSession | null> => {
     if (!fromRealmOrigin(request)) {
       request.log.info({ accountRefused: 'origin' }, 'account page post forbidden');
@@ -197,7 +199,14 @@ export default async function (fastify: FastifyInstance) {
       return null;
     }
     if (change !== undefined) {
-      const verdict = await checkFreshAuthentication(fastify, request, session, change);
+      const verdict = await checkFreshAuthentication(
+        fastify,
+        request,
+        session,
+        change,
+        Date.now(),
+        removing
+      );
       if (verdict.kind === 'refused') {
         await sendPage(
           reply,
@@ -452,7 +461,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          "Remove one of the account's passkeys (#844; `account.passkeys.delete`). Needs a sign-in from the last five minutes with the account's strongest factor, or with a recovery code in place of a lost one. The account's last way to sign in, or the last second factor the realm requires, is refused (`409`).",
+          "Remove one of the account's passkeys (#844; `account.passkeys.delete`). Needs a sign-in from the last five minutes with the account's strongest factor, or with a recovery code in place of a lost one; a passkey still new (bound after a sign-in that proved only the password, #1064) needs one with the password, and its removal ends the sessions whose sign-in bound or proved it, their codes and their refresh families. The account's last way to sign in, or the last second factor the realm requires, is refused (`409`).",
         tags,
         'x-qauth-stability': 'experimental',
         'x-qauth-errors': [403, 404, 409],
@@ -462,11 +471,14 @@ export default async function (fastify: FastifyInstance) {
       config,
     },
     async (request, reply) => {
+      // A passkey that is still new (#1064) the password alone removes.
       const session = await admitted(
         request,
         reply,
         request.body.csrf,
-        ACCOUNT_PAGE_CHANGES.passkeyRemove
+        ACCOUNT_PAGE_CHANGES.passkeyRemove,
+        ACCOUNT_PAGE_PATH,
+        { type: 'passkey', id: request.params.passkeyId }
       );
       if (session === null) return reply;
       const result = await removeCredential(
@@ -520,7 +532,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          "Turn off the authenticator app (#844; `account.totp.delete`). Needs a sign-in from the last five minutes with the account's strongest factor, or with a recovery code in place of a lost one. The last second factor the realm requires is refused (`409`).",
+          "Turn off the authenticator app (#844; `account.totp.delete`). Needs a sign-in from the last five minutes with the account's strongest factor, or with a recovery code in place of a lost one; an app still new (bound after a sign-in that proved only the password, #1064) needs one with the password, and turning it off ends the sessions whose sign-in bound or proved it, their codes and their refresh families. The last second factor the realm requires is refused (`409`).",
         tags,
         'x-qauth-stability': 'experimental',
         'x-qauth-errors': [403, 404, 409],
@@ -529,11 +541,14 @@ export default async function (fastify: FastifyInstance) {
       config,
     },
     async (request, reply) => {
+      // An authenticator app that is still new (#1064) the password alone removes.
       const session = await admitted(
         request,
         reply,
         request.body.csrf,
-        ACCOUNT_PAGE_CHANGES.totpRemove
+        ACCOUNT_PAGE_CHANGES.totpRemove,
+        ACCOUNT_PAGE_PATH,
+        { type: 'totp' }
       );
       if (session === null) return reply;
       const result = await removeCredential(
