@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The admin API manages every client of a realm** ([#632], ADR-020 §3,
+  ADR-019 Decision 7, ADR-012, experimental routes). Under
+  `/admin/v1-rc.0/realms/{realmId}/clients`, `clients.list` lists every
+  client of the realm, whoever owns it, with a search on its `client_id` or
+  name, and `clients.get` reads one with its `ETag`; the developer API still
+  lists a developer's own clients only. `clients.create` registers a client
+  no developer owns, provisioned by the operator, answering its secret once;
+  `clients.update` takes a JSON Merge Patch, `clients.preview` answers what
+  that patch would change and need (the `AdminChangePreview` of [#589]),
+  `clients.delete` deletes the client, `clients.disable` suspends it and
+  `clients.enable` lifts the suspension. Three permissions, `clients.read`,
+  `clients.write` and `clients.security`, back them. An update is classified
+  field by field from a table that gives every member of the client
+  representation a class, so a member added without one fails the build:
+  the redirect URIs, the post-logout redirect URIs, the authentication
+  method and keys, first-party trust ([#631]), the verified domain, the
+  agent fields, an added grant type or `qauth:` scope, a back-channel
+  logout URI, a laxer environment, PKCE or DPoP switched off and a longer
+  token lifetime are security changes, which need `qauth:admin:security`
+  and an approval; the rest, a stricter environment included, are writes. A
+  patch of both needs both scopes. Registering, deleting and re-enabling a
+  client are security operations; suspending one is a write. A CIMD
+  client is read-only: a change, its preview and a deletion answer `409`,
+  naming its document. No answer carries `client_secret_hash`. A client may
+  now have token lifetimes of its own, shorter than the realm's
+  (`oauth_clients.access_token_lifespan_seconds` and
+  `refresh_token_lifespan_seconds`, migration 0071, NULL for the realm's):
+  the token endpoint and the password login issue the shorter of the two.
+  `client.created` gains the registration `admin_api`, and the client
+  events name the admin as their actor. The admin role's database user may
+  now insert, update and delete `oauth_clients` rows and revoke refresh
+  tokens (removing first-party trust revokes a client's refresh tokens),
+  and the `admin` role builds the password hasher. The new **Clients**
+  page of the operator guide describes the routes.
 - **The admin API previews a realm policy change before it is saved**
   ([#589], ADR-020 §5, experimental route). `POST
   /admin/v1-rc.0/realms/{realmId}/policies/preview`
@@ -3925,6 +3959,7 @@ It adds migrations 0068 and 0069.
 [#628]: https://github.com/qauth-labs/qauth/issues/628
 [#629]: https://github.com/qauth-labs/qauth/issues/629
 [#631]: https://github.com/qauth-labs/qauth/issues/631
+[#632]: https://github.com/qauth-labs/qauth/issues/632
 [#633]: https://github.com/qauth-labs/qauth/issues/633
 [#634]: https://github.com/qauth-labs/qauth/issues/634
 [#635]: https://github.com/qauth-labs/qauth/issues/635
