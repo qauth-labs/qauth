@@ -559,6 +559,12 @@ export function decisionOf(
           // A recovery code in place of a lost factor, which no `amr` value
           // says (#663): the session records it.
           ...(result.signIn.recoveryCode === true ? { recoveryCodeUsed: true } : {}),
+          // The account's new credentials it bound or proved (#1064), which
+          // a removal while they are new ends the session with.
+          ...(result.signIn.newCredentials === undefined ||
+          result.signIn.newCredentials.length === 0
+            ? {}
+            : { newCredentialIds: [...result.signIn.newCredentials] }),
         },
       };
     case 'refused':

@@ -259,6 +259,11 @@ export interface InteractionSignIn {
    * fresh-authentication guard.
    */
   readonly recoveryCodeUsed?: boolean;
+  /**
+   * The account's new credentials the sign-in bound or proved (#1064): the
+   * session records them.
+   */
+  readonly newCredentialIds?: readonly string[];
 }
 
 /** What the engine made of an answer. */
@@ -1352,6 +1357,7 @@ async function settleAnswer(
     ...(signIn.authTime === undefined ? {} : { authTime: signIn.authTime }),
     amr: signIn.amr,
     ...(signIn.recoveryCodeUsed === true ? { recoveryCodeUsed: true } : {}),
+    ...(signIn.newCredentialIds === undefined ? {} : { newCredentialIds: signIn.newCredentialIds }),
   });
   settled.session = { realmId: session.realmId, sid: session.sid };
   // Signed now, with the realm's cookie key from the signer (#493): a signer

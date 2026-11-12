@@ -91,6 +91,32 @@ describe('decisionOf: a registration (#640)', () => {
     });
   });
 
+  it('names the new credentials the sign-in bound or proved, for the session to record (#1064)', () => {
+    const result: RoundResult = {
+      kind: 'complete',
+      transaction: null,
+      signIn: {
+        subject: 'user-1',
+        identifier: 'a@example.com',
+        amr: ['pwd'],
+        authTime: 1,
+        newCredentials: ['credential-1'],
+      },
+    };
+
+    expect(decisionOf(reply, result, RECEIVED_AT)).toEqual({
+      kind: 'authenticated',
+      signIn: {
+        userId: 'user-1',
+        identifier: 'a@example.com',
+        amr: ['pwd'],
+        authTime: 1,
+        issuedAt: RECEIVED_AT,
+        newCredentialIds: ['credential-1'],
+      },
+    });
+  });
+
   it('ends the interaction as an expired one when registration closed since it started', () => {
     const result: RoundResult = {
       kind: 'refused',

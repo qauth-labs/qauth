@@ -624,6 +624,9 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
         authTime: input.authTime,
         amr: [...(input.amr ?? [])],
         recoveryCodeUsed: input.recoveryCodeUsed === true,
+        ...(input.newCredentialIds !== undefined && input.newCredentialIds.length > 0
+          ? { newCredentialIds: [...input.newCredentialIds] }
+          : {}),
         assuranceLevel: input.assuranceLevel ?? null,
         ipAddress: input.ipAddress ?? null,
         userAgent: input.userAgent ?? null,

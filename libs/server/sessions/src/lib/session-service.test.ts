@@ -153,6 +153,16 @@ describe('create', () => {
     expect(cache.entry(REALM_A, session.sid)?.record).not.toHaveProperty('userAgent');
   });
 
+  it('stores the new credentials a sign-in bound or proved, which the cache does not hold (#1064)', async () => {
+    const session = await serviceWith().create(signIn({ newCredentialIds: ['credential-1'] }));
+
+    expect(store.row(session.sid)?.newCredentialIds).toEqual(['credential-1']);
+    expect(cache.entry(REALM_A, session.sid)?.record).not.toHaveProperty('newCredentialIds');
+    // A sign-in that names none leaves the column to its default.
+    const plain = await serviceWith().create(signIn({ newCredentialIds: [] }));
+    expect(store.row(plain.sid)).not.toHaveProperty('newCredentialIds');
+  });
+
   it('ends a session of a realm with no lifetimes SESSION_COOKIE_TTL after creation, with no idle limit', async () => {
     const createdAt = clock.now();
     const session = await serviceWith().create(signIn());
