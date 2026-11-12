@@ -3,7 +3,7 @@ title: SSF transmitter
 description: Turn on QAuth's Shared Signals Framework transmitter, register a receiver, and run the verification event end to end.
 sidebar:
   order: 11
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-08'
 ---
 
 QAuth can be an [OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
@@ -137,6 +137,24 @@ a `client_credentials` request for one of them is refused with `invalid_scope`. 
 a list that names a scope `scopes` does not hold, and the list on a client without the
 `client_credentials` grant.
 
+A relying party that is a CIMD client (its `client_id` is the URL of its metadata document) gets
+the grant from its document, which must declare `client_credentials`,
+`token_endpoint_auth_method: private_key_jwt` and a key set. Its scopes and the list come from its
+entry in the seed manifest's `cimd_clients`, and without the list the grant issues it no token at
+all ([Tokens a CIMD client gets as itself](/operate/docker/#tokens-a-cimd-client-gets-as-itself)):
+
+```json
+{
+  "client_id": "https://notes.example.com/oauth/client.json",
+  "scopes": ["openid", "notes:read", "ssf:stream"],
+  "client_credentials_scopes": ["ssf:stream"],
+  "audience": ["https://auth.example.com"]
+}
+```
+
+Every seeder run writes a `cimd_clients` entry's list to the row, without `--rotate`, and a
+resolution of the document never changes it.
+
 Keep the realm's issuer the client's only `audience` (without one, the token's `aud` is the
 client's `client_id`, which `/ssf/` refuses). The list narrows a `client_credentials` token's
 scopes, not its `aud`, which is the client's `audience`: a resource server listed there beside the
@@ -151,10 +169,11 @@ curl -s https://auth.example.com/oauth/token \
   -d client_id=notes-app -d client_secret="$SECRET"
 ```
 
-:::caution[Without the list, the client gets a token without a user for any of its scopes]
-A client that holds `client_credentials` and has no `client_credentials_scopes` gets a token for
-itself, with no user, for any scope in its `scopes`, each scope its users grant it at sign-in
-included. Set the list on every client that signs users in and holds `client_credentials`.
+:::caution[Without the list, a client of `clients` gets a token without a user for any of its scopes]
+A client of the manifest's `clients` that holds `client_credentials` and has no
+`client_credentials_scopes` gets a token for itself, with no user, for any scope in its `scopes`,
+each scope its users grant it at sign-in included. Set the list on every such client that signs
+users in. (A CIMD client without the list gets no `client_credentials` token.)
 
 Add it to the client's manifest entry. The seeder writes an existing client only with `--rotate`,
 which also issues it a new secret; to set the stored row without rotating:

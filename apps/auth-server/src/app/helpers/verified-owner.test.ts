@@ -18,13 +18,17 @@ const USER = '0199fa20-5e1a-7000-8000-000000000001';
 const ACCOUNT = { realmId: REALM, userId: USER };
 const REFUSED = 'urn:qauth:event:user.agent_ownership_refused:v1-rc.0';
 
-/** A server whose account `USER` has `primary` as its primary credential. */
-function serverWith(primary: unknown) {
+/**
+ * A server whose account `USER` has `primary` as its primary credential, and
+ * an operator's verification at `operatorVerifiedAt` (#1052).
+ */
+function serverWith(primary: unknown, operatorVerifiedAt: number | null = null) {
   const findPrimaryByUserId = vi.fn(async () => primary);
+  const findById = vi.fn(async () => ({ id: USER, enabled: true, operatorVerifiedAt }));
   const fastify = {
-    repositories: { userCredentials: { findPrimaryByUserId } },
+    repositories: { userCredentials: { findPrimaryByUserId }, users: { findById } },
   } as unknown as FastifyInstance;
-  return { fastify, findPrimaryByUserId };
+  return { fastify, findPrimaryByUserId, findById };
 }
 
 const UNCONFIRMED_PASSWORD = {
@@ -75,6 +79,32 @@ describe('checkVerifiedOwner (ADR-015 Decision 8, #846)', () => {
     const { fastify } = serverWith(UNCONFIRMED_PASSWORD);
     expect(await isVerifiedOwner(fastify, ACCOUNT)).toBe(false);
     expect(find).not.toHaveBeenCalled();
+  });
+
+  it("counts an operator's verification of the account, read in the account's realm (#1052)", async () => {
+    const { fastify, findById } = serverWith(UNCONFIRMED_PASSWORD, 1_700_000_000_000);
+    expect(await checkVerifiedOwner(fastify, ACCOUNT)).toEqual({
+      verified: true,
+      identity: 'password',
+      operatorVerified: true,
+    });
+    expect(findById).toHaveBeenCalledWith(REALM, USER);
+
+    // An upstream identity whose provider vouches for nothing, verified by an operator.
+    expect(await isVerifiedOwner(serverWith(UPSTREAM, 1_700_000_000_000).fastify, ACCOUNT)).toBe(
+      true
+    );
+  });
+
+  it("counts an operator's verification of an account with no primary identity left (#1052)", async () => {
+    // Its primary identity unlinked while another credential still signs in.
+    const { fastify, findById } = serverWith(undefined, 1_700_000_000_000);
+    expect(await checkVerifiedOwner(fastify, ACCOUNT)).toEqual({
+      verified: true,
+      identity: 'none',
+      operatorVerified: true,
+    });
+    expect(findById).toHaveBeenCalledWith(REALM, USER);
   });
 });
 

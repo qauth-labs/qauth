@@ -359,10 +359,11 @@ export function isCimdClientIdShape(value: string): boolean {
 }
 
 /**
- * An operator's grant to a CIMD client (#770): the scopes it may receive and
- * the audience its tokens default to. Nothing else, because the client's
- * metadata document owns every other field and re-resolution rewrites them
- * (ADR-012). No secret either: a CIMD client has none.
+ * An operator's grant to a CIMD client (#770): the scopes it may receive, the
+ * scopes the `client_credentials` grant may issue it (#956) and the audience
+ * its tokens default to. Nothing else, because the client's metadata document
+ * owns every other field and re-resolution rewrites them (ADR-012). No secret
+ * either: a CIMD client has none.
  */
 export const cimdClientSpecSchema = z
   .object({
@@ -384,6 +385,21 @@ export const cimdClientSpecSchema = z
             `"${String(issue.input)}" is in the "qauth:" scope namespace, which is reserved for QAuth's own scopes: a CIMD client is never granted one`,
         })
     ),
+    // #956: the scopes the `client_credentials` grant may issue to the
+    // client, out of `scopes`. Its grant types are its document's, so the
+    // document's host, not the operator, decides whether it holds the grant
+    // (with `private_key_jwt` and a key set), and the grant's tokens name no
+    // user. The token endpoint therefore issues a CIMD client nothing on that
+    // grant unless this list names the scopes it may get as itself. Omitted
+    // ⇒ NULL ⇒ none. Unlike a `clients` entry, the grant cannot be checked
+    // here: the document may add or drop it at any re-resolution.
+    client_credentials_scopes: z
+      .array(z.string().min(1))
+      .min(1, {
+        error:
+          'client_credentials_scopes is empty: leave it out, and the client_credentials grant issues this CIMD client no token',
+      })
+      .optional(),
     // Never a QAuth API audience (#509, ADR-019 Decision 7): a CIMD client is
     // whoever controls its URL, and it never holds a family audience, as its
     // own document cannot claim one either. A pre-registered client of
@@ -401,7 +417,20 @@ export const cimdClientSpecSchema = z
       .nullable()
       .optional(),
   })
-  .strict();
+  .strict()
+  // #956: the list narrows `scopes` for one grant, so it names only scopes
+  // the entry grants, and with them none of QAuth's own.
+  .superRefine((spec, ctx) => {
+    const held = new Set(spec.scopes);
+    for (const scope of spec.client_credentials_scopes ?? []) {
+      if (held.has(scope)) continue;
+      ctx.addIssue({
+        code: 'custom',
+        message: `"${scope}" is in client_credentials_scopes but not in scopes: the list may name only scopes the client is granted`,
+        path: ['client_credentials_scopes'],
+      });
+    }
+  });
 
 export const manifestSchema = z
   .object({

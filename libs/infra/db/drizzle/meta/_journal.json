@@ -491,6 +491,13 @@
       "when": 1794091789670,
       "tag": "0069_auth_method_plugin_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1794156465986,
+      "tag": "0070_users_operator_verification",
+      "breakpoints": true
     }
   ]
 }

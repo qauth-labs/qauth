@@ -1,4 +1,9 @@
 import {
+  type AccountVerificationArgs,
+  describeAccountVerificationResult,
+  verifyAccountAt,
+} from '@qauth-labs/infra-db/account-verification';
+import {
   applyDatabaseUserGrants,
   type DatabaseUserAssignment,
   DatabaseUserGrantsError,
@@ -25,6 +30,11 @@ import {
  * The migration runner's command line (issue #474, ADR-018 §5): parse the
  * arguments, run or check, print what happened and choose the exit code.
  * `main.ts` only wires it to the process.
+ *
+ * One command beside the run (#1052): `verify-account --realm <name> --user
+ * <id>` records an operator's verification of an account on a database
+ * whose migrations are applied, for a deployment that has no admin API set
+ * up yet.
  */
 
 /** The runner's exit codes, so a deployment tells a failed run from one that could not start. */
@@ -49,10 +59,17 @@ export const RUNNER_EXIT = Object.freeze({
    * {@link RUNNER_EXIT.systemClientFailed} when both fail; stderr names both.
    */
   grantsFailed: 5,
+  /**
+   * `verify-account` (#1052): the account was not verified, because the realm
+   * holds no such account, there is no such realm, or the account is
+   * disabled. Nothing was changed.
+   */
+  accountRefused: 6,
 } as const);
 
 export const RUNNER_USAGE =
   'Usage: node main.js [--check] [--migrations-folder=<dir>]\n' +
+  '       node main.js verify-account --realm <name> --user <id>\n' +
   '       Applies the pending QAuth database migrations to DATABASE_URL, under a lock:\n' +
   '       a second runner waits, then finds nothing to do.\n' +
   '       --check                    report the pending migrations and change nothing\n' +
@@ -77,12 +94,56 @@ export const RUNNER_USAGE =
   '       applied, as the owner of the tables DATABASE_URL connects as. None of them set\n' +
   '       is a single deployment, whose one user holds every grant: nothing is granted.\n' +
   '       Exits 5 when the migrations are applied but the grants could not be, whether\n' +
-  '       or not the system client was provisioned: each failure is reported on stderr.';
+  '       or not the system client was provisioned: each failure is reported on stderr.\n' +
+  '\n' +
+  "       verify-account records an operator's verification of the account <id> of the\n" +
+  "       realm <name>, for a deployment with no admin API set up (the admin API's\n" +
+  '       users.verify does it with an approval): the account counts as verified for\n' +
+  '       sign-in and for owning an agent, and an unclaimed account is claimed;\n' +
+  '       email_verified is not changed. The verification names the operating-system\n' +
+  '       user that ran it, and a user.verified event records it. It runs only on a\n' +
+  '       database whose migrations are applied, and changes nothing else. Exits 0 when\n' +
+  '       the account is verified (an account an operator verified before keeps that\n' +
+  '       verification), 1 when migrations are pending, 2 on a usage error, 3 when it\n' +
+  '       could not run and 6 when the realm holds no such account or it is disabled.';
 
 export interface RunnerArgs {
   readonly check: boolean;
   readonly help: boolean;
   readonly migrationsFolder?: string;
+}
+
+/** The account `verify-account` verifies, or a request for its usage. */
+export type VerifyAccountArgs =
+  | ({ readonly help: false } & AccountVerificationArgs)
+  | { readonly help: true };
+
+/** A user id: `users.id` is a uuid column, and a malformed one must not reach Postgres. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Parse the arguments after `verify-account`: `--realm <name>` and `--user
+ * <id>`, each also as `--realm=<name>` and `--user=<id>`, once each, the user
+ * a UUID. Null on anything else, so the caller prints the usage instead of
+ * guessing.
+ */
+export function parseVerifyAccountArgs(argv: readonly string[]): VerifyAccountArgs | null {
+  const values: { realm?: string; user?: string } = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] as string;
+    if (arg === '--help' || arg === '-h') return { help: true };
+    const flag = (['realm', 'user'] as const).find(
+      (name) => arg === `--${name}` || arg.startsWith(`--${name}=`)
+    );
+    if (flag === undefined || values[flag] !== undefined) return null;
+    const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[++i];
+    if (value === undefined || value === '' || value.startsWith('--')) return null;
+    values[flag] = value;
+  }
+  if (values.realm === undefined || values.user === undefined || !UUID.test(values.user)) {
+    return null;
+  }
+  return { help: false, realm: values.realm, userId: values.user.toLowerCase() };
 }
 
 /** Parse `process.argv`. Null on an unknown or malformed flag. */
@@ -137,6 +198,9 @@ export async function runRunner(
   defaultMigrationsFolder: string,
   io: RunnerIo
 ): Promise<number> {
+  if (argv[2] === 'verify-account') {
+    return runVerifyAccount(argv.slice(3), env, defaultMigrationsFolder, io);
+  }
   const args = parseRunnerArgs(argv);
   if (args === null) {
     io.err(RUNNER_USAGE);
@@ -230,6 +294,59 @@ export async function runRunner(
   if (databaseUsers.configured !== true) return provisioned;
   const granted = await grantTheDatabaseUsers(connectionString, databaseUsers.users, io);
   return granted === RUNNER_EXIT.current ? provisioned : granted;
+}
+
+/**
+ * `verify-account` (#1052): record an operator's verification of one account,
+ * on a database whose migrations are all applied (an older schema has no
+ * column for it). Returns the exit code.
+ */
+async function runVerifyAccount(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv,
+  migrationsFolder: string,
+  io: RunnerIo
+): Promise<number> {
+  const args = parseVerifyAccountArgs(argv);
+  if (args === null) {
+    io.err(RUNNER_USAGE);
+    return RUNNER_EXIT.usage;
+  }
+  if (args.help) {
+    io.out(RUNNER_USAGE);
+    return RUNNER_EXIT.current;
+  }
+  const connectionString = env['DATABASE_URL'];
+  if (!connectionString) {
+    io.err('DATABASE_URL must be set in the environment.');
+    return RUNNER_EXIT.usage;
+  }
+  try {
+    const status = await checkMigrations({ connectionString, migrationsFolder });
+    if (status.pending.length > 0) {
+      io.err(
+        `${pendingLine(status.pending, status.known)} ` +
+          'Run the migration runner to apply them, then verify the account. Nothing was changed.'
+      );
+      return RUNNER_EXIT.failedOrPending;
+    }
+  } catch (error) {
+    io.err(`Cannot check the migrations: ${reasonOf(error)}`);
+    return RUNNER_EXIT.cannotRun;
+  }
+  try {
+    const result = await verifyAccountAt(connectionString, args);
+    const line = describeAccountVerificationResult(result, args);
+    if (result.status === 'verified' || result.status === 'already_verified') {
+      io.out(line);
+      return RUNNER_EXIT.current;
+    }
+    io.err(line);
+    return RUNNER_EXIT.accountRefused;
+  } catch (error) {
+    io.err(`Cannot verify the account: ${describeDatabaseError(error)}`);
+    return RUNNER_EXIT.cannotRun;
+  }
 }
 
 /**

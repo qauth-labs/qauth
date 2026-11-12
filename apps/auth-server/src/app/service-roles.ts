@@ -136,8 +136,12 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     summary: 'the admin API and key operations, on the internal listener',
     plugins: ['jwt'],
     // The plugin operations (#600) read and write `realmAuthMethodPlugins`.
+    // An operator's verification of an account (#1052) reads its
+    // credentials and records `user.verified` in `events`.
     repositories: [
       'users',
+      'userCredentials',
+      'events',
       'adminGrants',
       'adminAuditLog',
       'adminApprovals',

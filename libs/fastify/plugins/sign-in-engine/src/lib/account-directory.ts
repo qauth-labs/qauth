@@ -13,6 +13,7 @@ import {
   type SignInAccount,
   type SignInCandidate,
 } from '@qauth-labs/server-sign-in-engine';
+import { isOperatorVerified } from '@qauth-labs/shared-validation';
 
 import { TOTP_PROVIDER_TYPE } from './totp';
 
@@ -51,7 +52,15 @@ export interface AccountDirectoryRepositories {
     findById(
       realmId: string,
       id: string
-    ): Promise<{ readonly id: string; readonly enabled: boolean } | undefined>;
+    ): Promise<
+      | {
+          readonly id: string;
+          readonly enabled: boolean;
+          /** When an operator verified the account (#1052); `null` when none did. */
+          readonly operatorVerifiedAt?: number | null;
+        }
+      | undefined
+    >;
   };
   readonly adminGrants: {
     listLive(realmId: string, userId: string): Promise<readonly unknown[]>;
@@ -157,10 +166,14 @@ export function createRepositoryAccountDirectory(
       }
       const marked = credential.disabledAt !== undefined && credential.disabledAt !== null;
       const disabled = (await disabledOf(realmId, [credential]))[0] === true;
+      const addressProved = data.success && data.data.email_verified;
       return Object.freeze({
         userId: user.id,
         enabled: user.enabled,
-        verified: data.success && data.data.email_verified,
+        // Its confirmed address, or an operator's verification (#1052).
+        verified: isOperatorVerified(user) || addressProved,
+        // The address alone: what a reset reads (#1052).
+        addressProved,
         password: Object.freeze({
           disabled,
           hash: data.success ? data.data.password_hash : null,
@@ -214,7 +227,7 @@ export function createRepositoryAccountDirectory(
           disabled: row.disabledAt !== undefined && row.disabledAt !== null,
         })),
       ];
-      const verified =
+      const addressProved =
         passwords.every((row) => {
           const data = passwordCredentialDataSchema.safeParse(row.credentialData);
           return data.success && data.data.email_verified;
@@ -230,7 +243,11 @@ export function createRepositoryAccountDirectory(
         userId: user.id,
         enabled: user.enabled,
         admin: grants.length > 0,
-        verified,
+        // An operator's verification (#1052) verifies the account whatever its
+        // credentials prove, and claims it if it was unclaimed; the address
+        // stays unproved until its mailbox proves it.
+        verified: isOperatorVerified(user) || addressProved,
+        addressProved,
         factors: Object.freeze(factors),
         requiredActions: Object.freeze(requiredActions),
         // The address a sign-in a passkey proved goes on with (#651).

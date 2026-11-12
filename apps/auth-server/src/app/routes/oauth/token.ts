@@ -38,7 +38,7 @@ import {
   unlistedReservedAudiences,
   validateScopes,
 } from '../../helpers/client-auth';
-import { isAgentClient } from '../../helpers/client-resolution';
+import { isAgentClient, isCimdClient } from '../../helpers/client-resolution';
 import { consentCovers } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { dpopEventReason, verifyTokenRequestProof } from '../../helpers/dpop';
@@ -1391,7 +1391,8 @@ async function handleAuthorizationCode(
  * - `sub` = clientId (no end-user).
  * - No refresh token issued (RFC 6749 4.4.3).
  * - Scopes must be a subset of client's configured `scopes` column, and of
- *   its `client_credentials_scopes` when the operator set one (#891).
+ *   its `client_credentials_scopes` when the operator set one (#891). A CIMD
+ *   client gets none without that list (#956).
  * - `aud` resolves from client.audience (default: clientId).
  */
 async function handleClientCredentials(
@@ -1516,14 +1517,20 @@ async function handleClientCredentials(
  * scopes its users grant it never reach a token that names no user.
  *
  * null when the column is NULL (or absent): the grant may issue any scope of
- * `scopes`, as before the column existed. The stored shape is re-checked
- * here, beside the DB CHECK: anything but an array of non-empty strings
- * allows nothing, so a malformed value refuses every scope rather than
- * lifting the narrowing.
+ * `scopes`, as before the column existed. Not for a CIMD client (#956): its
+ * grant types are its metadata document's, so whoever hosts the document,
+ * not the operator, gave it `client_credentials`, and its `scopes` are what
+ * the operator granted it for its users. Without the operator's list in its
+ * `cimd_clients` entry the grant issues it nothing. The stored shape is
+ * re-checked here, beside the DB CHECK: anything but an array of non-empty
+ * strings allows nothing, so a malformed value refuses every scope rather
+ * than lifting the narrowing.
  */
 function clientCredentialsScopeAllowlist(client: OAuthClientLike): ReadonlySet<string> | null {
   const list: unknown = client.clientCredentialsScopes;
-  if (list === null || list === undefined) return null;
+  if (list === null || list === undefined) {
+    return isCimdClient({ metadata: client.metadata ?? null }) ? new Set<string>() : null;
+  }
   return Array.isArray(list) && list.every((scope) => typeof scope === 'string' && scope.length > 0)
     ? new Set<string>(list)
     : new Set<string>();

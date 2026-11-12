@@ -570,9 +570,14 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
     // A self-registered client lists no reserved audience, whatever its row
     // holds: the allowlist check lets the resource through, the gate refuses.
+    // The CIMD client has the operator's `client_credentials` list, without
+    // which it gets no scope on this grant at all (#956).
     it.each([
       ['a dynamically registered client', { metadata: { registrationType: 'dynamic' } }],
-      ['a CIMD client', { metadata: { registrationType: 'cimd' } }],
+      [
+        'a CIMD client',
+        { metadata: { registrationType: 'cimd' }, clientCredentialsScopes: ['read:foo'] },
+      ],
     ])('refuses it to %s whose row lists it', async (_label, origin) => {
       const { fastify, result } = await issue(
         { clientId: 'self-registered', audience: [ADMIN_AUDIENCE], ...origin },
@@ -799,7 +804,11 @@ describe('POST /oauth/token route — client_credentials grant', () => {
   describe('client_credentials_scopes narrows the grant (#891)', () => {
     const RP_SCOPES = ['openid', 'notes:read', 'ssf:stream'];
 
-    async function issue(clientCredentialsScopes: unknown, scope: string) {
+    async function issue(
+      clientCredentialsScopes: unknown,
+      scope: string,
+      extra: Record<string, unknown> = {}
+    ) {
       const { fastify, ctx } = createFastifyStub();
       await tokenRoute(fastify);
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
@@ -811,6 +820,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
         scopes: RP_SCOPES,
         audience: ['https://auth.example.com'],
         clientCredentialsScopes,
+        ...extra,
       });
       (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
       (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('cc.jwt');
@@ -910,6 +920,79 @@ describe('POST /oauth/token route — client_credentials grant', () => {
           reason: 'scope_not_allowed_for_grant',
         },
       ]);
+    });
+
+    // #956: a CIMD client's grant types are its document's, so the document's
+    // host gave it `client_credentials`, and its `scopes` are the operator's
+    // grant for its users. Without the operator's list it gets no token that
+    // names no user.
+    describe('a CIMD client (#956)', () => {
+      const CIMD = {
+        metadata: {
+          registrationType: 'cimd',
+          client_id_metadata_url: 'https://notes.example.com/oauth/client.json',
+        },
+      };
+
+      it.each([
+        ['NULL', null, 'notes:read'],
+        ['NULL', null, 'ssf:stream'],
+        ['NULL', null, 'openid notes:read ssf:stream'],
+        ['absent', undefined, 'notes:read'],
+      ])('refuses every scope when the list is %s: %s', async (_label, list, scope) => {
+        const { fastify, result } = await issue(list, scope, CIMD);
+
+        const error = await result.then(
+          () => undefined,
+          (thrown: unknown) => thrown
+        );
+        expect(error).toBeInstanceOf(InvalidScopeError);
+        expect(wireAnswer(error)).toMatchObject({
+          statusCode: 400,
+          message: 'invalid_scope',
+          errorDescription: `${scope} not permitted for this client with the client_credentials grant`,
+        });
+        expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+        expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+          {
+            grantType: 'client_credentials',
+            error: 'invalid_scope',
+            reason: 'scope_not_allowed_for_grant',
+          },
+        ]);
+      });
+
+      it('issues only the scopes the operator listed', async () => {
+        const { fastify, result } = await issue(['ssf:stream'], 'ssf:stream', CIMD);
+
+        await expect(result).resolves.toMatchObject({ scope: 'ssf:stream' });
+        expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+          IN_REQUEST_REALM,
+          expect.objectContaining({ sub: 'notes-app', scope: 'ssf:stream' })
+        );
+      });
+
+      it('refuses a scope the list leaves out', async () => {
+        const { fastify, result } = await issue(['ssf:stream'], 'notes:read', CIMD);
+
+        await expect(result).rejects.toThrow(InvalidScopeError);
+        expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+        expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+          {
+            grantType: 'client_credentials',
+            error: 'invalid_scope',
+            reason: 'scope_not_allowed_for_grant',
+          },
+        ]);
+      });
+
+      it('leaves a dynamically registered client as it was: any scope of scopes', async () => {
+        const { result } = await issue(null, 'notes:read', {
+          metadata: { registrationType: 'dynamic' },
+        });
+
+        await expect(result).resolves.toMatchObject({ scope: 'notes:read' });
+      });
     });
   });
 

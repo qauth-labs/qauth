@@ -57,6 +57,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `oidc_`. The Google, Microsoft and Apple
   plugins are presets in their own repositories ([#1074], [#1075], [#1076]);
   Apple sign-in also needs the signer to hold the key Apple issues ([#1073]).
+- **An operator can verify an account** ([#1052], ADR-015 Decision 8 as
+  amended 2026-11-08, experimental route). A deployment that cannot send mail
+  had no way to verify a password account but a hand-written database update.
+  `POST /admin/v1-rc.0/realms/{realmId}/users/{userId}/verification`
+  (`users.verify`) is a security operation: effect `credential-path`, the new
+  permission `users.security`, and an approval ([#512]). Its approver sees the
+  account, its credentials and the proof each holds, and the approval holds
+  only for the account as it stood when it was filed. The verification is
+  recorded on the account (`users.operator_verified_at` and
+  `operator_verified_by`, migration 0070) and counts beside the proof of its
+  primary identity: in the sign-in gate of every path ([#1051]), and in the
+  verified-owner check of an agent ([#846]). It claims an unclaimed account,
+  and never sets `email_verified`; a password reset by mail stays closed while
+  the address is unconfirmed (audited as `address_unproved`). Where no admin
+  API is set up, the migration runner's `verify-account --realm <name> --user
+  <id>` records the same verification on the host, as the operating-system
+  user that ran it. It refuses a disabled or missing account (exit 6), and runs only on a current
+  database. Both paths record the new admin event
+  `urn:qauth:event:user.verified:v1-rc.0`, whose `method` is `operator` or
+  `operator_cli`. The pair of operations stays reserved for the admin
+  console's user screen ([#682]). The admin role's database user gains the
+  event writer's grants and EXECUTE on two functions of migration 0070:
+  `user_credential_proofs`, which returns what an account's credentials prove
+  and nothing secret, and `users_record_operator_verification`, which writes
+  the verification's columns alone. It holds no SELECT on `user_credentials`
+  and no UPDATE on `users`. An
+  admin operation may now read state without `classify`, only to show it to
+  the approver and bind the approval to it; it then needs its declaration on
+  every request.
 - **The docs list QAuth's provider plugins** ([#1074], [#1075], [#1076]).
   `operate/images` names each plugin in its own repository (GitHub, Google,
   Microsoft and Apple) with its package and the redirect URI to register at
@@ -87,6 +116,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reference/experimental-features.md` and `operate/configuration.md` with
   `pnpm nx test docs-checks -- -u`, which replaces the libraries' own
   `test -- -u`. Run `pnpm install` once, for the new project.
+
+### Fixed
+
+- **A CIMD client gets no token without a user unless the operator allowed
+  it** ([#956]). A CIMD client's grant types are its metadata document's, so
+  a document with `private_key_jwt` and a key set gave its client
+  `client_credentials`, chosen by the document's host, while its `scopes` are
+  the operator's grant for its users. With no `client_credentials_scopes`
+  ([#891]) that grant issued any of them in a token whose `sub` is the
+  client's `client_id` and that names no user, and only a hand-written SQL
+  update could narrow it. For a CIMD client NULL now issues nothing: the
+  token endpoint refuses every scope on `client_credentials` with
+  `invalid_scope` (for a scope in `scopes`, event reason
+  `scope_not_allowed_for_grant`). A `cimd_clients` entry of the seed manifest
+  takes `client_credentials_scopes`, a non-empty list out of its `scopes`, and
+  every seeder run writes it, or NULL for an entry without it, printing the
+  list it removed; a CIMD resolution writes NULL on a new row and never
+  changes the list of an existing one. Other clients keep NULL as any
+  scope of `scopes`. The CIMD section of the Docker guide and the **SSF
+  transmitter** page say how to set the list.
+
+  **Action for operators**: a CIMD client without a list that gets
+  `client_credentials` tokens today gets `invalid_scope` from a node of this
+  release; a list a row already holds keeps its scopes. If such a client
+  should keep its tokens, add the scopes it needs as itself to its
+  `cimd_clients` entry's `client_credentials_scopes` and run this release's
+  `db:seed-oauth-clients`, the first that accepts the field, before the first
+  node of this release serves requests: until that run, the client's
+  requests to such a node fail with `invalid_scope`. A CIMD client
+  whose row holds a list set by hand needs it in the entry too, before that
+  run: an entry without the list removes it. A node of the
+  previous release already narrows a client's grant to its list ([#891]), so
+  the list holds on every node once it is written. Until every node runs
+  this release, a node of the previous release still issues every scope of
+  `scopes` to a CIMD client without the list.
 
 ## [0.2.2] - 2026-11-08
 
@@ -3885,6 +3949,7 @@ It adds migrations 0068 and 0069.
 [#663]: https://github.com/qauth-labs/qauth/issues/663
 [#670]: https://github.com/qauth-labs/qauth/issues/670
 [#671]: https://github.com/qauth-labs/qauth/issues/671
+[#682]: https://github.com/qauth-labs/qauth/issues/682
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689
@@ -3905,6 +3970,7 @@ It adds migrations 0068 and 0069.
 [#933]: https://github.com/qauth-labs/qauth/issues/933
 [#949]: https://github.com/qauth-labs/qauth/issues/949
 [#951]: https://github.com/qauth-labs/qauth/issues/951
+[#956]: https://github.com/qauth-labs/qauth/issues/956
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
 [#964]: https://github.com/qauth-labs/qauth/issues/964
@@ -3918,6 +3984,7 @@ It adds migrations 0068 and 0069.
 [#1031]: https://github.com/qauth-labs/qauth/issues/1031
 [#1044]: https://github.com/qauth-labs/qauth/issues/1044
 [#1051]: https://github.com/qauth-labs/qauth/issues/1051
+[#1052]: https://github.com/qauth-labs/qauth/issues/1052
 [#1064]: https://github.com/qauth-labs/qauth/issues/1064
 [#1073]: https://github.com/qauth-labs/qauth/issues/1073
 [#1074]: https://github.com/qauth-labs/qauth/issues/1074

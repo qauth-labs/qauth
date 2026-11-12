@@ -6,7 +6,7 @@ import {
   WEBAUTHN_PROVIDER_TYPE,
 } from '@qauth-labs/fastify-plugin-federation';
 import { TOTP_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-sign-in-engine';
-import { normalizeEmail } from '@qauth-labs/shared-validation';
+import { isOperatorVerified, normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 
 import { verifyAgainstDecoyHash } from './decoy-hash';
@@ -69,8 +69,9 @@ export type PasswordCredentialCheck =
       ignoredMark: boolean;
       /**
        * Whether the account is verified: its primary identity is proved
-       * (ADR-017 Decision 5). A password account's identifier is its address,
-       * so for it the proof is the confirmed address,
+       * (ADR-017 Decision 5), or an operator verified it (ADR-015 Decision 8,
+       * amended 2026-11-08; #1052). A password account's identifier is its
+       * address, so for it the proof is the confirmed address,
        * `credential_data.email_verified`. What the verified-account gate (the
        * realm's `accounts.requireVerifiedAccount`) reads.
        */
@@ -166,11 +167,20 @@ export async function verifyPasswordCredential(
     return { status: 'invalid' };
   }
 
+  // An operator's verification (#1052) is on the account, not the
+  // credential: read only when the address is not confirmed, so a verified
+  // address costs no second read.
+  const accountVerified =
+    parsed.data.email_verified ||
+    isOperatorVerified(
+      (await fastify.repositories.users.findById(params.realmId, credential.userId)) ?? {}
+    );
+
   return {
     status: 'ok',
     credential,
     ignoredMark: marked,
-    accountVerified: parsed.data.email_verified,
+    accountVerified,
     identity,
   };
 }

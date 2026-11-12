@@ -60,7 +60,7 @@ const cipher: TotpCipher = {
 
 function setup(
   options: {
-    user?: { id: string; enabled: boolean } | undefined;
+    user?: { id: string; enabled: boolean; operatorVerifiedAt?: number | null } | undefined;
     rows?: FakeRow[];
     armed?: boolean;
     recordFails?: boolean;
@@ -282,6 +282,34 @@ describe('the TOTP over user_credentials (#653)', () => {
       expect(built.opts.bound).not.toHaveBeenCalled();
       expect(built.opts.recorded).not.toHaveBeenCalled();
     }
+  });
+
+  it('binds for an account an operator verified, its address unconfirmed (#1052)', async () => {
+    // An operator's verification claims the account (ADR-017 Decision 8, as
+    // amended 2026-11-08).
+    const built = setup({
+      user: { id: USER, enabled: true, operatorVerifiedAt: T0 },
+      rows: [
+        {
+          id: 'password',
+          userId: USER,
+          realmId: REALM,
+          providerType: 'password',
+          externalSub: 'alice@example.com',
+          credentialData: { password_hash: 'h', email_verified: false },
+          disabledAt: null,
+        },
+      ],
+    });
+    const started = await built.totp.start({ ...ACCOUNT, identifier: 'alice@example.com' });
+    const bound = await built.totp.bind({
+      ...ACCOUNT,
+      clientId: CLIENT,
+      sealed: started.sealed,
+      step: 1,
+    });
+    expect(bound).toEqual({ kind: 'bound' });
+    expect(built.totpRow()).toBeDefined();
   });
 
   it("never rewrites another account's row", async () => {

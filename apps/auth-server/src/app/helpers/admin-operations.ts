@@ -87,6 +87,7 @@ import { PLUGIN_OPERATION_DEFINITIONS } from '../admin/plugins/operations';
 import { REALM_OPERATION_DEFINITIONS } from '../admin/realms/operations';
 import { SECRET_OPERATION_DEFINITIONS } from '../admin/secrets/operations';
 import { isSecretMemberPattern } from '../admin/secrets/secret-members';
+import { USER_OPERATION_DEFINITIONS } from '../admin/users/operations';
 import { classRank, isUnknownFieldError, strictestClass } from './admin-classification';
 import {
   RESERVED_OPERATIONS,
@@ -197,8 +198,13 @@ export interface AdminOperationDefinition<State = unknown> {
    */
   classify?(request: ClassifyInput, currentState: State): Classification;
   /**
-   * Reads the state `classify` compares the request with, such as the realm's
-   * current policies. `input` holds the parts of the operation's request:
+   * Reads the state the request meets: what `classify` compares it with, such
+   * as the realm's current policies, and what `render` shows an approver as
+   * the request's subject, such as the account a verification acts on
+   * (#1052). An operation without `classify` needs its declaration on every
+   * request whatever the state; its state still binds the request, and an
+   * approval of it, to the version read (`stateVersion`). `input` holds the
+   * parts of the operation's request:
    * the call's own, or those an approval is filed for (`approvals.create`,
    * whose own request is another one). The pipeline awaits it before
    * `classify`, once the caller holds at least one of the operation's
@@ -390,9 +396,6 @@ function assertOperation(operation: AdminOperationDefinition): void {
   }
   if (loadState !== undefined && typeof loadState !== 'function') {
     throw new OperationDefinitionError(`${where}: loadState is a function`);
-  }
-  if (loadState !== undefined && classify === undefined) {
-    throw new OperationDefinitionError(`${where}: loadState is read only by classify`);
   }
   if (stateVersion !== undefined && typeof stateVersion !== 'function') {
     throw new OperationDefinitionError(`${where}: stateVersion is a function`);
@@ -1077,13 +1080,15 @@ export function createAdminOperationRegistry(
 /**
  * Every admin operation, but the approval engine's own: sealing a secret for
  * a security operation (#984), reading a realm and patching its policies
- * (#517, the reference for every later one) and the plugin operations (#600).
+ * (#517, the reference for every later one), the plugin operations (#600)
+ * and an operator's verification of an account (#1052).
  */
 export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
   [
     ...SECRET_OPERATION_DEFINITIONS,
     ...REALM_OPERATION_DEFINITIONS,
     ...PLUGIN_OPERATION_DEFINITIONS,
+    ...USER_OPERATION_DEFINITIONS,
   ].map((operation) => defineOperation(operation))
 );
 

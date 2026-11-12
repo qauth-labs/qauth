@@ -230,6 +230,7 @@ describe('effectivePermissions (#507)', () => {
     expect([...effectivePermissions(all, ['qauth:admin:security'])]).toEqual([
       'realms.policies.security',
       'plugins.security',
+      'users.security',
       'approvals.approve',
     ]);
   });

@@ -16,6 +16,7 @@ import {
   type TotpCredentials,
   type TotpStore,
 } from '@qauth-labs/server-sign-in-engine';
+import { isOperatorVerified } from '@qauth-labs/shared-validation';
 
 /**
  * TOTP OVER THE AUTH SERVER'S REPOSITORY (#653; ADR-017 Decisions 7 and 8,
@@ -96,7 +97,15 @@ export interface TotpRepositories<Tx> {
       realmId: string,
       id: string,
       tx?: Tx
-    ): Promise<{ readonly id: string; readonly enabled: boolean } | undefined>;
+    ): Promise<
+      | {
+          readonly id: string;
+          readonly enabled: boolean;
+          /** When an operator verified the account (#1052); `null` when none did. */
+          readonly operatorVerifiedAt?: number | null;
+        }
+      | undefined
+    >;
   };
 }
 
@@ -171,7 +180,9 @@ function storedOf(row: TotpCredentialRow): StoredTotp | null {
  * Whether the account's address is proved (ADR-017 Decision 8): every password
  * credential's `email_verified`, and every upstream provider's credential
  * its `verified`, as the account directory reads it. An account without
- * either has no address to claim.
+ * either has no address to claim. An operator's verification claims the
+ * account whatever these say (#1052): the binding asks {@link isOperatorVerified}
+ * first.
  */
 function claimed(credentials: readonly TotpCredentialRow[]): boolean {
   return credentials.every((row) => {
@@ -228,7 +239,9 @@ export function createRepositoryTotp<Tx>(
         const held = (await credentials.findAllByUserId(userId, tx)).filter(
           (row) => row.realmId === realmId
         );
-        if (!claimed(held)) return { kind: 'refused', reason: 'account_unclaimed' };
+        if (!isOperatorVerified(user) && !claimed(held)) {
+          return { kind: 'refused', reason: 'account_unclaimed' };
+        }
         const row = await credentials.upsertTotp(
           { realmId, userId, credentialData: { secret: sealed, last_step: step }, at: clock.now() },
           tx
