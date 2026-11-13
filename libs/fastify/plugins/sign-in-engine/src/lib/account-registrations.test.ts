@@ -79,6 +79,8 @@ describe('createRepositoryAccountRegistrations', () => {
               password_hash: 'argon2id(seven amber kites over the old harbour)',
               email_verified: true,
               password_normalization: 'nfc',
+              // When it was set (#1107).
+              password_set_at: expect.any(Number),
             },
           },
         },

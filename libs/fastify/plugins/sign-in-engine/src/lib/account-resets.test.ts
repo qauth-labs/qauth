@@ -145,6 +145,8 @@ describe('createRepositoryAccountResets', () => {
             password_hash: `argon2id(${RESET.password})`,
             email_verified: true,
             password_normalization: 'nfc',
+            // When it was set (#1107).
+            password_set_at: expect.any(Number),
           },
         },
         tx: 'tx-1',
