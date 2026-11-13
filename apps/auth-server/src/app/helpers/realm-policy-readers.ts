@@ -78,6 +78,11 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // (`newFactorWindowOf` in `helpers/new-factors.ts`, #1064), read at the
   // binding.
   'accounts.newFactorWindowDays',
+  // The ceremony app's error page (`ceremonyErrorPageOf` in
+  // `helpers/ceremony-error-page.ts`, #1106), which no environment key
+  // seeds: read by an upstream provider's callback that finds no interaction
+  // left, and by the logout's endings.
+  'ceremonyApp.errorPage',
 ]);
 
 /**
