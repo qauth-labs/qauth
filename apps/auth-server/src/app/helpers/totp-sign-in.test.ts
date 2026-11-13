@@ -143,7 +143,7 @@ describe('the server TOTPs (#653)', () => {
         sealed: 'v1.sealed',
         step: 7,
       })
-    ).resolves.toEqual({ kind: 'bound' });
+    ).resolves.toEqual({ kind: 'bound', credentialId: 'row-1' });
 
     expect(resetAccount).toHaveBeenCalledWith({
       realmId: REALM_ID,
@@ -155,7 +155,7 @@ describe('the server TOTPs (#653)', () => {
     expect(emitUserEvent).toHaveBeenCalledWith(
       REQUEST,
       'urn:qauth:event:user.credential_added:v1-rc.0',
-      { type: 'totp', credentialId: 'row-1' },
+      { type: 'totp', credentialId: 'row-1', authenticator: 'app' },
       { tx: TX, realmId: REALM_ID, userId: USER_ID, actor: 'user' }
     );
 

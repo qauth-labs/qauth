@@ -39,6 +39,13 @@ export interface SessionRecord {
    * does not hold it.
    */
   recoveryCodeUsed: boolean;
+  /**
+   * The account's new credentials (#1064) the sign-in bound or proved: a
+   * passkey or an authenticator app inside the window that follows a
+   * binding after a password-only sign-in. Read from Postgres only: the
+   * cache does not hold it. Absent on a record that names none.
+   */
+  newCredentialIds?: string[];
   /** NULL when nothing above `low` was established. */
   assuranceLevel: SessionAssuranceLevel | null;
   ipAddress: string | null;
@@ -87,7 +94,12 @@ export interface StoredSession {
  */
 export type CachedSessionRecord = Omit<
   SessionRecord,
-  'ipAddress' | 'userAgent' | 'revokedAt' | 'revokedReason' | 'recoveryCodeUsed'
+  | 'ipAddress'
+  | 'userAgent'
+  | 'revokedAt'
+  | 'revokedReason'
+  | 'recoveryCodeUsed'
+  | 'newCredentialIds'
 >;
 
 /**
@@ -144,6 +156,11 @@ export interface CreateSessionInput {
    * Defaults to `false`.
    */
   recoveryCodeUsed?: boolean;
+  /**
+   * The account's new credentials the sign-in bound or proved (#1064):
+   * removing one while it is new ends the session. Defaults to none.
+   */
+  newCredentialIds?: readonly string[];
   assuranceLevel?: SessionAssuranceLevel | null;
   /** The client address of the sign-in request. */
   ipAddress?: string | null;

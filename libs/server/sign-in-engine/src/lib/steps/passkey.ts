@@ -11,6 +11,9 @@ export interface PasskeyStepDependencies {
 }
 
 /** Every refused assertion, whatever the reason: nothing says why, or whose. */
+/** The longest credential id an assertion may name (#1064): a `user_credentials.id`, a UUID. */
+const CREDENTIAL_ID_MAX_LENGTH = 64;
+
 const REFUSED: StepVerdict = Object.freeze({
   kind: 'refused',
   error: 'invalid_credentials',
@@ -83,13 +86,22 @@ export function createPasskeyStep(deps: PasskeyStepDependencies): StepHandler<'w
           response: read.answer.webauthn_response,
         })
       );
-      const verified = outcome as Partial<{ kind: string; userId: unknown; userVerified: unknown }>;
+      const verified = outcome as Partial<{
+        kind: string;
+        userId: unknown;
+        userVerified: unknown;
+        credentialId: unknown;
+      }>;
       if (verified?.kind === 'refused') return REFUSED;
       if (
         verified?.kind !== 'verified' ||
         typeof verified.userId !== 'string' ||
         verified.userId.length === 0 ||
-        typeof verified.userVerified !== 'boolean'
+        typeof verified.userVerified !== 'boolean' ||
+        (verified.credentialId !== undefined &&
+          (typeof verified.credentialId !== 'string' ||
+            verified.credentialId.length === 0 ||
+            verified.credentialId.length > CREDENTIAL_ID_MAX_LENGTH))
       ) {
         throw new SignInStoreUnavailableError('passkeys', new Error('not an assertion outcome'));
       }
@@ -102,8 +114,10 @@ export function createPasskeyStep(deps: PasskeyStepDependencies): StepHandler<'w
         deps.accounts.findByUserId(realmId, userId)
       );
       if (account === null || account.userId !== userId) return REFUSED;
+      const credentialId = verified.credentialId;
       return Object.freeze({
         kind: 'proved',
+        ...(typeof credentialId === 'string' ? { credentialId } : {}),
         account: Object.freeze({
           userId: account.userId,
           enabled: account.enabled,

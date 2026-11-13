@@ -1,6 +1,6 @@
 import { type OfferedStep, type StepName, transactionAmr } from '@qauth-labs/server-step-grammar';
 
-import type { FactorType, MfaMode, MfaPolicy, SignInAccount } from './ports';
+import type { BoundFactor, FactorType, MfaMode, MfaPolicy, SignInAccount } from './ports';
 
 /**
  * The downgrade rule and the MFA policy (ADR-017 Decision 4), as pure
@@ -24,6 +24,30 @@ export const FIRST_FACTOR_STRENGTH: Readonly<Partial<Record<FactorType, number>>
  * the MFA policy says.
  */
 export const UPSTREAM_STRENGTH = 1;
+
+/**
+ * Whether a factor is new at `now` (#1064; ADR-017 Decision 8, amended
+ * 2026-11-12): bound after a sign-in that proved only the password, inside
+ * the realm's window.
+ */
+export function isNewFactor(factor: BoundFactor, now: number): boolean {
+  return factor.newUntil !== undefined && now < factor.newUntil;
+}
+
+/**
+ * The account as the rules that guard it against its password read it
+ * (#1064): every factor that is not new. A new factor signs in as usual, but
+ * it is not the account's strongest factor for the downgrade rule, the TOTP
+ * owed after a first factor, a reset or a forced password update. Disabled
+ * factors stay, as they always count as bound.
+ */
+export function settledAccount(account: SignInAccount, now: number): SignInAccount {
+  if (!account.factors.some((factor) => isNewFactor(factor, now))) return account;
+  return Object.freeze({
+    ...account,
+    factors: Object.freeze(account.factors.filter((factor) => !isNewFactor(factor, now))),
+  });
+}
 
 /** The strength of one factor type: 0 for a factor the downgrade rule does not rank. */
 export function factorStrength(factor: FactorType | undefined): number {

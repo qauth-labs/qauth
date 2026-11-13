@@ -413,12 +413,23 @@ export function validateSsfMapping(definition: EventTypeDefinition): string[] {
           }
         }
       }
+      if (source.whenPresent !== undefined && source.whenPresent !== true) {
+        problems.push(`${at}: whenPresent is true or absent`);
+      } else if (
+        source.whenPresent === true &&
+        (data === undefined || !data.optional || member?.required !== true)
+      ) {
+        problems.push(
+          `${at}: whenPresent is for a member the SSF event requires, from an optional data member`
+        );
+      }
       if (data !== undefined && member?.required) {
         // A required member must be there on every event: from a required
         // data member, and through a map that lists every value it can take.
-        if (data.optional) {
+        // `whenPresent` sends only the events that carry the optional one.
+        if (data.optional && source.whenPresent !== true) {
           problems.push(
-            `${at}: a required member cannot come from the optional data.${source.data}`
+            `${at}: a required member cannot come from the optional data.${source.data}; set whenPresent to send only the events that carry it`
           );
         }
         if (source.map !== undefined) {

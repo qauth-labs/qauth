@@ -81,6 +81,8 @@ export interface TotpRepositories<Tx> {
         readonly userId: string;
         readonly credentialData: Readonly<Record<string, unknown>>;
         readonly at: number;
+        /** When the TOTP stops being new (#1064), `null` for one that never is. */
+        readonly newUntil?: number | null;
       },
       tx?: Tx
     ): Promise<{ readonly id: string } | undefined>;
@@ -138,9 +140,20 @@ export interface RepositoryTotpOptions<Tx = unknown> {
    * rolls the binding back. Absent, nothing is recorded.
    */
   readonly recorded?: (
-    input: TotpAccount & { readonly credentialId: string },
+    input: TotpAccount & {
+      readonly credentialId: string;
+      /** When the TOTP stops being new (#1064); absent for one that never is. */
+      readonly newUntil?: number;
+    },
     tx: Tx
   ) => Promise<void>;
+  /**
+   * How long, in milliseconds, a TOTP bound after a sign-in that proved only
+   * the password stays new in the realm (#1064; ADR-017 Decision 8, amended
+   * 2026-11-12): the realm's `accounts.newFactorWindowDays`. Read in the
+   * binding's transaction, only for a new binding; a throw binds nothing.
+   */
+  readonly newFactorWindowMs: (realmId: string) => Promise<number>;
   /** After the hard action set the mark: the "second factor disabled" notice. */
   readonly disabled: (account: TotpAccount) => Promise<void>;
   /**
@@ -229,7 +242,7 @@ export function createRepositoryTotp<Tx>(
       return stored;
     },
     accept: ({ realmId, userId, step }) => credentials.acceptTotpStep(realmId, userId, step),
-    bind: ({ realmId, userId, sealed, step }) =>
+    bind: ({ realmId, userId, sealed, step, isNew }) =>
       transaction(async (tx): Promise<TotpBinding> => {
         const user = await repos.users.findById(realmId, userId, tx);
         if (user === undefined || user.id !== userId) {
@@ -242,13 +255,26 @@ export function createRepositoryTotp<Tx>(
         if (!isOperatorVerified(user) && !claimed(held)) {
           return { kind: 'refused', reason: 'account_unclaimed' };
         }
+        const at = clock.now();
+        // A binding after a password-only sign-in is new (#1064): its window
+        // replaces whatever the old secret's row held; any other clears it.
+        const newUntil = isNew === true ? at + (await options.newFactorWindowMs(realmId)) : null;
         const row = await credentials.upsertTotp(
-          { realmId, userId, credentialData: { secret: sealed, last_step: step }, at: clock.now() },
+          {
+            realmId,
+            userId,
+            credentialData: { secret: sealed, last_step: step },
+            at,
+            newUntil,
+          },
           tx
         );
         if (row === undefined) return { kind: 'refused', reason: 'subject_mismatch' };
-        await options.recorded?.({ realmId, userId, credentialId: row.id }, tx);
-        return { kind: 'bound' };
+        await options.recorded?.(
+          { realmId, userId, credentialId: row.id, ...(newUntil === null ? {} : { newUntil }) },
+          tx
+        );
+        return { kind: 'bound', credentialId: row.id };
       }),
   };
 

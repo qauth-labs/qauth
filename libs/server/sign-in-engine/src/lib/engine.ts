@@ -46,9 +46,11 @@ import {
 import {
   factorStrength,
   FIRST_FACTOR_STRENGTH,
+  isNewFactor,
   provenFactorStrength,
   provesMfa,
   secondFactorRequired,
+  settledAccount,
   strongestBoundFactor,
 } from './factors';
 import {
@@ -123,6 +125,7 @@ import { fromStore, SignInStoreUnavailableError } from './store';
 import {
   type CeremonyStep,
   freezeTransaction,
+  MAX_NEW_CREDENTIALS,
   newSignInTransaction,
   readSignInTransaction,
   SIGN_IN_TRANSACTION_CLOCK_SKEW_MS,
@@ -1616,6 +1619,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             throw new Error(`sign-in engine: ${read.step} proved an account`);
           }
           const result = await prove(offer, verdict.account, read, verdict.breachCheck);
+          // The passkey that proved it (#1064): whether it is new decides
+          // whether a factor this transaction binds is new too.
+          if (
+            result === null &&
+            handler.factor === 'passkey' &&
+            verdict.credentialId !== undefined
+          ) {
+            state.transaction = { ...state.transaction, passkeyCredential: verdict.credentialId };
+          }
           // The engine's own checks may still refuse the proof: a failed round.
           await settleRound(
             reservation,
@@ -1798,9 +1810,100 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     /** Whether this transaction proved the mailbox: an email code answered right, for any purpose. */
     const provedMailbox = (): boolean =>
       state.transaction.verified.some((step) => step.step === 'email_code');
+    /**
+     * The account's new credentials this sign-in bound or proved (#1064): the
+     * ones it bound, and the passkey or the TOTP it proved while new.
+     */
+    const newCredentialsOf = (current: SignInAccount): string[] => {
+      const now = clock.now();
+      const ids = new Set(state.transaction.newCredentials ?? []);
+      const proved = new Set(state.transaction.verified.map((step) => factorOf(step.step)));
+      for (const factor of current.factors) {
+        if (factor.credentialId === undefined || !isNewFactor(factor, now)) continue;
+        if (
+          (factor.type === 'passkey' &&
+            proved.has('passkey') &&
+            factor.credentialId === state.transaction.passkeyCredential) ||
+          (factor.type === 'totp' && proved.has('totp'))
+        ) {
+          ids.add(factor.credentialId);
+        }
+      }
+      return [...ids];
+    };
     /** Whether the account has a factor beyond its password: a second factor or a passkey, disabled or not. */
     const boundBeyondPassword = (current: SignInAccount): boolean =>
       current.factors.some((factor) => factor.type !== 'password');
+    /**
+     * The account as the rules that guard it against its password read it
+     * (#1064; ADR-017 Decision 8, amended 2026-11-12): its factors that are
+     * not new. A new factor signs in as usual; it is not the account's
+     * strongest factor for the downgrade rule, the TOTP owed after a first
+     * factor, a reset or a forced password update.
+     */
+    const settled = (current: SignInAccount): SignInAccount => settledAccount(current, clock.now());
+    /** Whether the account holds a factor that is still new (#1064). */
+    const holdsNewFactor = (current: SignInAccount): boolean => {
+      const now = clock.now();
+      return current.factors.some((held) => isNewFactor(held, now));
+    };
+    /**
+     * Whether this transaction proved a factor beyond the password that is
+     * not new (#1064): the passkey that answered (named by the port), the
+     * account's TOTP, or a recovery code of an account that holds no new
+     * factor. It is what a reset or a forced password update asks of an
+     * account with such a factor, and what keeps a factor bound from new.
+     *
+     * A passkey the port did not name counts as not new, as every passkey did
+     * before #1064; one it named that the account no longer holds (removed
+     * meanwhile) proves nothing settled. A code may have been shown with a
+     * factor that is still new (the first binding issues the set), so it
+     * stands in for a settled factor only once no factor is new: removing a
+     * new factor deletes the set (ADR-017 Decision 8, amended 2026-11-12).
+     */
+    const provedSettledBeyondPassword = (current: SignInAccount): boolean => {
+      const now = clock.now();
+      return state.transaction.verified.some((step) => {
+        if (step.step === 'recovery_code') return !holdsNewFactor(current);
+        const factor = factorOf(step.step);
+        if (factor === 'passkey') {
+          const id = state.transaction.passkeyCredential;
+          if (id === undefined) return true;
+          const bound = current.factors.find(
+            (held) => held.type === 'passkey' && held.credentialId === id
+          );
+          return bound !== undefined && !isNewFactor(bound, now);
+        }
+        if (factor === 'totp') {
+          return current.factors.some((held) => held.type === 'totp' && !isNewFactor(held, now));
+        }
+        return false;
+      });
+    };
+    /**
+     * Whether a factor this transaction binds is new (#1064; ADR-017
+     * Decision 8, amended 2026-11-12): the account has a password, and the
+     * sign-in proved no factor beyond it that is not new itself (a password,
+     * an upstream provider, a new factor, or a recovery code while a factor
+     * is new). Such a factor is removable with the password for the realm's
+     * window. One bound after a factor that is not new is never new.
+     */
+    const bindsNew = (current: SignInAccount): boolean =>
+      current.factors.some((factor) => factor.type === 'password') &&
+      !provedSettledBeyondPassword(current);
+    /** The transaction's new credentials with `credentialId` added (#1064). */
+    const withNewCredential = (credentialId: unknown): readonly string[] | undefined => {
+      const held = state.transaction.newCredentials ?? [];
+      if (
+        typeof credentialId !== 'string' ||
+        credentialId.length === 0 ||
+        credentialId.length > 64
+      ) {
+        return state.transaction.newCredentials;
+      }
+      if (held.includes(credentialId) || held.length >= MAX_NEW_CREDENTIALS) return held;
+      return [...held, credentialId];
+    };
     /** Whether this transaction proved a factor beyond the password. */
     const provedBeyondPassword = (): boolean =>
       state.transaction.verified.some((step) => {
@@ -1836,12 +1939,6 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * more of it, and its first set of recovery codes is owed.
      */
     const enrolledPasskey = (): boolean => state.transaction.passkeyEnrolment === 'bound';
-    /**
-     * Whether this transaction met the factor beyond the password: proved it,
-     * or took a recovery code in its place (ADR-017 Decision 8). An email
-     * code never stands in for it.
-     */
-    const metBeyondPassword = (): boolean => provedBeyondPassword() || tookRecoveryCode();
     /** What the account holds of recovery codes, checked: anything else is a store fault. */
     const recoveryStatus = (codes: RecoveryCodes, subject: string): Promise<RecoveryCodeStatus> =>
       fromStore('recoveryCodes', async () => {
@@ -2944,7 +3041,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       // pages a recovery code may (#649). A disabled one still counts as
       // bound, and with no usable one and no code the reset cannot go on
       // here.
-      if (boundBeyondPassword(account) && !metBeyondPassword()) {
+      // A new factor (#1064) is not one of them: it stands for no more than
+      // the password that bound it, so the reset neither asks for it nor
+      // takes it in place of one that is not new. While one is new, no
+      // recovery code stands in either: its binding may have shown the set
+      // to whoever bound it.
+      const guarded = settled(account);
+      if (boundBeyondPassword(guarded) && !provedSettledBeyondPassword(account)) {
         const verifiedSteps = new Set(state.transaction.verified.map((step) => step.step));
         const needed: Offerable[] = [...handlers.secondFactors, ...handlers.firstFactors].filter(
           (handler) =>
@@ -2952,9 +3055,9 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             !verifiedSteps.has(handler.step) &&
             handler.factor !== undefined &&
             handler.factor !== 'password' &&
-            (handler.usableBy?.(account) ?? false)
+            (handler.usableBy?.(guarded) ?? false)
         );
-        needed.push(...(await recoveryAlternative(subject)));
+        if (!holdsNewFactor(account)) needed.push(...(await recoveryAlternative(subject)));
         if (needed.length === 0) return redirect('step_not_available');
         const offer = await offerOf(needed);
         if (!answers(offer)) return offerStep(offer);
@@ -2962,6 +3065,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         if (result !== null) return result;
         const reread = await readResetAccount();
         if (!isAccount(reread)) return reread;
+        // A passkey names no account before it answers, so a new one of the
+        // same account may have answered: it stands in for none.
+        if (!provedSettledBeyondPassword(reread)) {
+          return ended('password_reset', 'invalid_credentials');
+        }
       }
 
       const written: { epoch?: number } = {};
@@ -3698,8 +3806,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (updates === undefined || identifier === undefined || !served.has('new_password')) {
         return redirect('step_not_available');
       }
-      if (boundBeyondPassword(current)) {
-        if (!metBeyondPassword()) {
+      // A new factor (#1064) stands for no more than the password that bound
+      // it: an account whose only factors beyond the password are new proves
+      // its mailbox, as a password-only account does.
+      if (boundBeyondPassword(settled(current))) {
+        if (!provedSettledBeyondPassword(current)) {
           throw new Error('sign-in engine: a forced update before the factor beyond the password');
         }
       } else if (!provedMailbox()) {
@@ -3897,12 +4008,30 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         return null;
       }
       const held = registration;
+      // New (#1064) when the sign-in proved nothing beyond the password that
+      // is not new itself: the password may remove it for the realm's window.
+      const isNew = bindsNew(current);
       const bound: unknown = await fromStore('passkeys', () =>
-        passkeys.bind({ realmId, clientId, userId: subject, registration: held })
+        passkeys.bind({
+          realmId,
+          clientId,
+          userId: subject,
+          registration: held,
+          ...(isNew ? { isNew: true } : {}),
+        })
       );
-      const binding = bound as Partial<{ kind: string; reason: unknown }> | null;
+      const binding = bound as Partial<{
+        kind: string;
+        reason: unknown;
+        credentialId: unknown;
+      }> | null;
       if (binding?.kind === 'bound') {
-        state.transaction = { ...state.transaction, passkeyEnrolment: 'bound' };
+        const newCredentials = isNew ? withNewCredential(binding.credentialId) : undefined;
+        state.transaction = {
+          ...state.transaction,
+          passkeyEnrolment: 'bound',
+          ...(newCredentials === undefined ? {} : { newCredentials }),
+        };
         await audit('passed', 'webauthn_create');
         return null;
       }
@@ -4139,13 +4268,28 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
       if (!fresh()) return stale();
       const at = step;
+      // New (#1064) as a passkey is: after a sign-in that proved nothing
+      // beyond the password that is not new itself.
+      const isNew = bindsNew(current);
       const bound: unknown = await fromStore('totp', () =>
-        totp.bind({ ...account, clientId, sealed: held.sealed, step: at })
+        totp.bind({
+          ...account,
+          clientId,
+          sealed: held.sealed,
+          step: at,
+          ...(isNew ? { isNew: true } : {}),
+        })
       );
-      const binding = bound as Partial<{ kind: string; reason: unknown }> | null;
+      const binding = bound as Partial<{
+        kind: string;
+        reason: unknown;
+        credentialId: unknown;
+      }> | null;
       if (binding?.kind === 'bound') {
+        const newCredentials = isNew ? withNewCredential(binding.credentialId) : undefined;
         state.transaction = {
           ...state.transaction,
+          ...(newCredentials === undefined ? {} : { newCredentials }),
           totpEnrolment: undefined,
           verified: [
             ...state.transaction.verified,
@@ -4196,7 +4340,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       let needed: Offerable[] | null = null;
       // The MFA policy's set-up step (#653), in place of an offer.
       let setUp = false;
-      const strongest = strongestBoundFactor(current);
+      // A new factor (#1064) is not the account's strongest: a password
+      // sign-in of an account whose passkey is new completes without it.
+      const guarded = settled(current);
+      const strongest = strongestBoundFactor(guarded);
       if (
         provenFactorStrength(state.transaction.verified, factorOf) < strongest &&
         (!tookRecoveryCode() || codeAlone()) &&
@@ -4215,7 +4362,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           ...(await recoveryAlternative(subject)),
         ];
       } else if (
-        holdsTotp(current) &&
+        holdsTotp(guarded) &&
         !verifiedSteps.has('totp') &&
         !provesMfa(state.transaction.verified) &&
         !tookRecoveryCode()
@@ -4276,7 +4423,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         // spend another code until none is left.
         needed = [];
         setUp = true;
-      } else if (updateDue(current) && boundBeyondPassword(current) && !metBeyondPassword()) {
+      } else if (
+        updateDue(current) &&
+        boundBeyondPassword(guarded) &&
+        !provedSettledBeyondPassword(current)
+      ) {
         // The forced update (#635): an account with a factor beyond its
         // password proves it first, so a person who knows only the password,
         // a listed one above all, sets no new one (ADR-017 Decision 4, rule
@@ -4284,12 +4435,17 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         // code may, on the hosted pages; a disabled one still counts as
         // bound, and with no usable one and no code the sign-in cannot go on
         // here.
+        // A new factor (#1064) stands in for none of them, and while one is
+        // new no recovery code does: its binding may have shown the set.
         needed = [
           ...[...handlers.secondFactors, ...handlers.firstFactors].filter(
             (handler) =>
-              candidate(handler) && handler.factor !== undefined && handler.factor !== 'password'
+              candidate(handler) &&
+              (handler.usableBy?.(guarded) ?? false) &&
+              handler.factor !== undefined &&
+              handler.factor !== 'password'
           ),
-          ...(await recoveryAlternative(subject)),
+          ...(holdsNewFactor(current) ? [] : await recoveryAlternative(subject)),
         ];
         if (needed.length > 0 && emailCodes !== undefined && addressPending(current)) {
           const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);
@@ -4394,6 +4550,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     // account API's fresh-authentication guard finds it through the token's
     // `sid` (#663).
     const tookCode = state.transaction.verified.some((step) => step.step === 'recovery_code');
+    // The account's new credentials the sign-in bound or proved (#1064): the
+    // transport records them on the session, which a removal while they are
+    // new ends.
+    const newCredentials = newCredentialsOf(account);
     return Object.freeze({
       kind: 'complete',
       transaction: null,
@@ -4403,6 +4563,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         amr,
         authTime,
         ...(tookCode ? { recoveryCode: true as const } : {}),
+        ...(newCredentials.length === 0 ? {} : { newCredentials: Object.freeze(newCredentials) }),
       }),
     });
   }

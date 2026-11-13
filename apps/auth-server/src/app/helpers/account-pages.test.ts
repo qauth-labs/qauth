@@ -9,6 +9,7 @@ import {
   newRecoveryCodesPage,
   passwordChangePage,
   reauthenticatePage,
+  shownTime,
 } from './account-pages';
 
 const CSRF = 'csrf-token-of-the-session';
@@ -33,6 +34,7 @@ function overview(overrides: Partial<AccountOverview> = {}): AccountOverview {
       },
     ],
     totp: { set: true },
+    newBindings: [],
     recoveryCodes: { issued: true, unused: 9 },
     linkedAccounts: [
       { id: LINKED_ID, provider: 'acme', providerName: 'Acme', createdAt: Date.UTC(2026, 10, 2) },
@@ -141,6 +143,54 @@ describe('accountPage (#844)', () => {
     expect(page).not.toContain(`action="${ACCOUNT_PAGE_PATH}/passkeys/add"`);
     expect(page).not.toContain(`action="${ACCOUNT_PAGE_PATH}/totp/remove"`);
     for (const form of formsOf(page)) expect(form).toContain(`name="csrf" value="${CSRF}"`);
+  });
+
+  it('tells of a factor bound after a password-only sign-in, with "not you? remove it" (#1064)', () => {
+    const newUntil = Date.UTC(2026, 10, 9);
+    const page = accountPage({
+      cspNonce: NONCE,
+      csrf: CSRF,
+      overview: overview({
+        passkeys: [
+          {
+            id: PASSKEY_ID,
+            nickname: null,
+            createdAt: Date.UTC(2026, 10, 2),
+            lastUsedAt: null,
+            backedUp: false,
+            disabled: false,
+            newUntil,
+          },
+        ],
+        totp: { set: true, newUntil },
+        newBindings: [
+          { type: 'passkey', id: PASSKEY_ID, addedAt: Date.UTC(2026, 10, 2), newUntil },
+          { type: 'totp', id: 'totp-1', addedAt: Date.UTC(2026, 10, 2), newUntil },
+        ],
+      }),
+      passkeysOn: true,
+    });
+    expect(page).toContain('A passkey was added to your account');
+    expect(page).toContain('An authenticator app was added to your account');
+    expect(page).toContain('Not you? Remove it');
+    expect(page).toContain(`new until ${shownTime(newUntil)}`);
+    // Each notice removes its own factor, with the CSRF value.
+    const removals = formsOf(page).filter((form) => form.includes('Not you? Remove it'));
+    expect(removals).toHaveLength(2);
+    expect(removals[0]).toContain(`action="${ACCOUNT_PAGE_PATH}/passkeys/${PASSKEY_ID}/remove"`);
+    expect(removals[1]).toContain(`action="${ACCOUNT_PAGE_PATH}/totp/remove"`);
+    for (const form of removals) expect(form).toContain(`name="csrf" value="${CSRF}"`);
+  });
+
+  it('shows no such notice when no new factor is left to tell of', () => {
+    const page = accountPage({
+      cspNonce: NONCE,
+      csrf: CSRF,
+      overview: overview(),
+      passkeysOn: true,
+    });
+    expect(page).not.toContain('Not you? Remove it');
+    expect(page).not.toContain('new until');
   });
 
   it('shows a known notice', () => {

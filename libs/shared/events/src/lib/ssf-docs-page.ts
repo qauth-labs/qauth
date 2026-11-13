@@ -65,13 +65,14 @@ const json = (value: unknown) => code(JSON.stringify(value));
 
 function memberSource(name: string, source: SsfMemberSource): string {
   if ('value' in source) return `${code(name)}: ${json(source.value)}`;
-  if (source.map === undefined) return `${code(name)}: ${code(`data.${source.data}`)}`;
+  const present = source.whenPresent === true ? ', sent only when the event carries it' : '';
+  if (source.map === undefined) return `${code(name)}: ${code(`data.${source.data}`)}${present}`;
   const entries = Object.entries(source.map);
   if (entries.every(([, value]) => typeof value === 'string')) {
     const listed = entries.map(([key, value]) => `${code(key)} → ${json(value)}`).join(', ');
-    return `${code(name)}: by ${code(`data.${source.data}`)} (${listed})`;
+    return `${code(name)}: by ${code(`data.${source.data}`)} (${listed})${present}`;
   }
-  return `${code(name)}: by ${code(`data.${source.data}`)}`;
+  return `${code(name)}: by ${code(`data.${source.data}`)}${present}`;
 }
 
 function membersCell(definition: EventTypeDefinition): string {

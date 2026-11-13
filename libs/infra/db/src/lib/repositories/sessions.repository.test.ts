@@ -68,6 +68,7 @@ const SESSION_ROW: unknown[] = [
   String(NOW - 5_000),
   ['pwd'],
   false,
+  [],
   null,
   '192.0.2.1',
   'test-agent',
@@ -80,7 +81,7 @@ const SESSION_ROW: unknown[] = [
 
 /** The same row, live: not revoked. */
 const LIVE_ROW: unknown[] = SESSION_ROW.map((value, index) =>
-  index === 10 || index === 11 ? null : value
+  index === 11 || index === 12 ? null : value
 );
 
 const NEW_SESSION: NewSession = {
@@ -99,12 +100,16 @@ const NEW_SESSION: NewSession = {
  * new method does not compile until it is listed here, and the test below
  * fails if the factory returns one this map does not know.
  */
+/** A credential a session's sign-in bound or proved while it was new (#1064). */
+const CREDENTIAL_ID = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f00c1';
+
 const CALLS: Record<keyof SessionsRepository, (repo: SessionsRepository) => Promise<unknown>> = {
   create: (repo) => repo.create(NEW_SESSION),
   findById: (repo) => repo.findById(REALM_ID, SESSION_ID),
   updateLastSeen: (repo) => repo.updateLastSeen(REALM_ID, SESSION_ID, { minIntervalMs: 60_000 }),
   revoke: (repo) => repo.revoke(REALM_ID, SESSION_ID, 'sign_out'),
   listActiveForUser: (repo) => repo.listActiveForUser(REALM_ID, USER_ID),
+  listNamingCredential: (repo) => repo.listNamingCredential(REALM_ID, USER_ID, CREDENTIAL_ID),
   // In a transaction of the recording client, as it requires.
   recordClient: (repo) =>
     recordingDb.transaction((tx) => repo.recordClient(REALM_ID, SESSION_ID, CLIENT_ID, tx)),
@@ -613,6 +618,21 @@ describe('createSessionsRepository', () => {
     expect(text).toContain('"sessions"."expires_at" > $3');
     expect(text).toContain('order by "sessions"."created_at" desc, "sessions"."id" desc');
     expect(query.values).toEqual([REALM_ID, USER_ID, NOW]);
+  });
+
+  it('listNamingCredential lists the sessions of one user in one realm that name a credential, ended ones too (#1064)', async () => {
+    const query = await run('listNamingCredential');
+    const text = query.text.toLowerCase();
+    const where = text.slice(text.indexOf(' where '));
+
+    expect(where).toMatch(
+      /"sessions"\."realm_id" = \$1 and "sessions"\."user_id" = \$2 and "sessions"\."new_credential_ids" @> \$3::jsonb/
+    );
+    // A session that ended still names what its sign-in opened.
+    expect(where).not.toContain('revoked_at');
+    expect(where).not.toContain('expires_at');
+    expect(text).toContain('order by "sessions"."created_at" desc, "sessions"."id" desc');
+    expect(query.values).toEqual([REALM_ID, USER_ID, JSON.stringify([CREDENTIAL_ID])]);
   });
 });
 

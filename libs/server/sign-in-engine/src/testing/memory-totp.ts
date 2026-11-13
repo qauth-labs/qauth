@@ -25,6 +25,8 @@ import {
 export interface MemoryTotpRow extends StoredTotp {
   readonly realmId: string;
   readonly userId: string;
+  /** Whether the binding that wrote it was new (#1064). */
+  readonly isNew?: boolean;
 }
 
 /** A notice the memory recorded, in order. */
@@ -66,6 +68,11 @@ export interface MemoryTotp extends TotpCredentials {
   bindRefusal?: Extract<TotpBinding, { kind: 'refused' }>['reason'];
   /** Make the next notice of this kind throw, once. */
   failNext?: MemoryTotpNotice['kind'];
+  /**
+   * Name the credential a binding wrote, as the auth server's store does
+   * (#1064): `totp:<realm>:<user>`. Off by default, as before #1064.
+   */
+  namesCredentials?: boolean;
 }
 
 const keyOf = ({ realmId, userId }: TotpAccount) => `${realmId}:${userId}`;
@@ -116,7 +123,7 @@ export function createMemoryTotp(
   // The fields a test sets after the build, read at each call.
   const memory = { armed: true } as Pick<
     MemoryTotp,
-    'armed' | 'onChange' | 'bindRefusal' | 'failNext'
+    'armed' | 'onChange' | 'bindRefusal' | 'failNext' | 'namesCredentials'
   >;
   const put = (row: MemoryTotpRow) => {
     rows.set(keyOf(row), row);
@@ -152,8 +159,11 @@ export function createMemoryTotp(
         sealed: input.sealed,
         lastStep: input.step,
         disabled: false,
+        ...(input.isNew === true ? { isNew: true } : {}),
       });
-      return { kind: 'bound' };
+      return memory.namesCredentials === true
+        ? { kind: 'bound', credentialId: `totp:${keyOf(input)}` }
+        : { kind: 'bound' };
     },
   };
   const totpNotices: TotpNotices = {

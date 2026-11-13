@@ -1,4 +1,9 @@
-import type { AccountOverview, AccountPasskey, AccountSession } from './account-changes';
+import type {
+  AccountNewBinding,
+  AccountOverview,
+  AccountPasskey,
+  AccountSession,
+} from './account-changes';
 import type { AccountFactor } from './account-operation-guard';
 import { html, render, type SafeHtml } from './html';
 import { walletPageStyles } from './wallet-ui';
@@ -149,6 +154,28 @@ export interface AccountPageInput {
   readonly passkeysOn: boolean;
 }
 
+/**
+ * The notice of a factor bound after a sign-in that proved only the
+ * password, while it is new (#1064; ADR-017 Decision 8, amended 2026-11-12):
+ * shown on every session but the one that bound or proved it, with "not you?
+ * remove it", which the password alone does until the window ends.
+ */
+function newBindingNotice(binding: AccountNewBinding, csrf: string): SafeHtml {
+  const what = binding.type === 'passkey' ? 'A passkey was' : 'An authenticator app was';
+  const action =
+    binding.type === 'passkey'
+      ? `${ACCOUNT_PAGE_PATH}/passkeys/${encodeURIComponent(binding.id)}/remove`
+      : `${ACCOUNT_PAGE_PATH}/totp/remove`;
+  return html`<div class="item" role="alert">
+    <strong>${what} added to your account ${shownTime(binding.addedAt)}.</strong>
+    <p>
+      Not you? Remove it. The sessions it signed in end with it. Until
+      ${shownTime(binding.newUntil)}, your password is enough to remove it.
+    </p>
+    <div class="actions">${buttonForm({ action, csrf, label: 'Not you? Remove it' })}</div>
+  </div>`;
+}
+
 function passkeyItem(passkey: AccountPasskey, csrf: string): SafeHtml {
   const base = `${ACCOUNT_PAGE_PATH}/passkeys/${encodeURIComponent(passkey.id)}`;
   return html`<div class="item">
@@ -157,6 +184,7 @@ function passkeyItem(passkey: AccountPasskey, csrf: string): SafeHtml {
       Added ${shownTime(passkey.createdAt)} ·
       ${passkey.lastUsedAt === null ? 'never used' : `last used ${shownTime(passkey.lastUsedAt)}`} ·
       ${passkey.backedUp ? 'synced' : 'on one device'}
+      ${passkey.newUntil === undefined ? '' : html` · new until ${shownTime(passkey.newUntil)}`}
     </p>
     <div class="actions">
       <form method="post" action="${base}/rename">
@@ -221,6 +249,7 @@ export function accountPage(input: AccountPageInput): string {
           ? ''
           : html`<p class="status" role="status">${ACCOUNT_NOTICES[notice]}</p>`
       }
+      ${overview.newBindings.map((binding) => newBindingNotice(binding, csrf))}
       <p class="hint">
         Changes to how you sign in ask you to confirm it’s you first, with
         ${FACTOR_NAMES[overview.requiredFactor]}.
@@ -256,7 +285,12 @@ export function accountPage(input: AccountPageInput): string {
       <div class="item">
         ${
           overview.totp.set
-            ? html`An authenticator app is set up.
+            ? html`An authenticator app is set
+                up${
+                  overview.totp.newUntil === undefined
+                    ? ''
+                    : html`, new until ${shownTime(overview.totp.newUntil)}`
+                }.
                 <div class="actions">
                   ${buttonForm({
                     action: `${ACCOUNT_PAGE_PATH}/totp/remove`,

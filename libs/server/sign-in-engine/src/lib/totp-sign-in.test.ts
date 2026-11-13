@@ -163,6 +163,12 @@ function answer(step: StepName, fields: Record<string, unknown>): RoundAnswer {
   return { step: STEP_URNS[step], fields };
 }
 
+/** The new credentials a completed sign-in names (#1064). */
+const namedNew = (result: RoundResult): unknown =>
+  result.kind === 'complete' && 'newCredentials' in result.signIn
+    ? result.signIn.newCredentials
+    : undefined;
+
 /** The transaction a result keeps; fails the test when it keeps none. */
 function kept(result: RoundResult): SignInTransaction {
   if (result.transaction === null) throw new Error(`${result.kind} kept no transaction`);
@@ -754,5 +760,112 @@ describe('the TOTP set-up the person asked for (#844)', () => {
       signIn: { amr: ['pwd'] },
     });
     expect(built.totp.sealed).toHaveLength(0);
+  });
+});
+
+describe('a TOTP bound after a password-only sign-in (#1064)', () => {
+  /** The realm's window in these tests: 7 days. */
+  const WINDOW = 7 * 24 * 60 * MINUTE;
+  const CREDENTIAL = `totp:${REALM}:${USER}`;
+
+  /** `built`'s store names its credential, and a new binding shows new until the window ends. */
+  const naming = (built: Built) => {
+    built.totp.namesCredentials = true;
+    built.totp.onChange = (row) => {
+      const current = built.directory.accounts.get(IDENTIFIER);
+      if (current === undefined) throw new Error('no account');
+      built.directory.accounts.set(IDENTIFIER, {
+        ...current,
+        others: [
+          ...current.others.filter((factor) => factor.type !== 'totp'),
+          {
+            type: 'totp',
+            disabled: row.disabled,
+            credentialId: CREDENTIAL,
+            ...(row.isNew === true ? { newUntil: built.clock.now() + WINDOW } : {}),
+          },
+        ],
+      });
+    };
+  };
+
+  it('is new: the store is told, the sign-in names it, and the password alone signs in until the window ends', async () => {
+    const built = await build();
+    naming(built);
+    const ctx = context(built, { enrol: 'totp' });
+    const offered = await signIn(built, ctx);
+    const bound = await firstCode(built, offered, ctx);
+    expect(built.totp.rows.get(`${REALM}:${USER}`)).toMatchObject({ isNew: true });
+    const done = await built.engine.advance(
+      kept(bound),
+      answer('recovery_codes', { acknowledged: true }),
+      ctx
+    );
+    expect(done).toMatchObject({
+      kind: 'complete',
+      signIn: { amr: ['pwd', 'otp', 'mfa'], newCredentials: [CREDENTIAL] },
+    });
+    // While it is new, a password sign-in owes it nothing: the owner who
+    // holds only the password reaches the account page to remove it.
+    expect(await signIn(built)).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
+    built.clock.advance(WINDOW);
+    expect(stepOf(await signIn(built))).toBe('totp');
+  });
+
+  /** Rebind a disabled TOTP after a recovery code, as the hosted pages ask. */
+  const rebindAfterCode = async (built: Awaited<ReturnType<typeof build>>) => {
+    const ctx = context(built);
+    const offered = await signIn(built, ctx);
+    const setUp = await built.engine.advance(
+      kept(offered),
+      answer('recovery_code', { recovery_code: built.set[0] }),
+      ctx
+    );
+    expect(stepOf(setUp)).toBe('totp_setup');
+    await firstCode(built, setUp, ctx);
+    return built.totp.rows.get(`${REALM}:${USER}`);
+  };
+
+  it('is not new when a recovery code stood in for a lost one on an account with no new factor', async () => {
+    // Someone who knows the password disabled the owner's TOTP with wrong
+    // codes; the owner's code and the TOTP they bind keep the account as
+    // strong as it was.
+    const built = await build({ totp: 'disabled' });
+    naming(built);
+    const row = await rebindAfterCode(built);
+    expect(row).toMatchObject({ disabled: false });
+    expect(row?.isNew).toBeUndefined();
+  });
+
+  it('is new when a recovery code stood in while the account holds a new factor', async () => {
+    // The codes may have been shown with that new factor: they settle nothing.
+    const built = await build({
+      totp: 'disabled',
+      account: {
+        others: [
+          { type: 'passkey', disabled: false, credentialId: 'passkey-new', newUntil: T0 + WINDOW },
+        ],
+      },
+    });
+    naming(built);
+    const row = await rebindAfterCode(built);
+    expect(row).toMatchObject({ disabled: false, isNew: true });
+  });
+
+  it('is owed in full when it never was new, and the sign-in names none', async () => {
+    const built = await build({ totp: 'bound' });
+    naming(built);
+    // A TOTP that never was new is owed after the password, and the
+    // sign-in that proves it names no new credential.
+    const ctx = context(built);
+    const asked = await signIn(built, ctx);
+    expect(stepOf(asked)).toBe('totp');
+    const done = await built.engine.advance(
+      kept(asked),
+      answer('totp', { otp: built.totp.codeFor(secretOf(built)) }),
+      ctx
+    );
+    expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd', 'otp', 'mfa'] } });
+    expect(namedNew(done)).toBeUndefined();
   });
 });

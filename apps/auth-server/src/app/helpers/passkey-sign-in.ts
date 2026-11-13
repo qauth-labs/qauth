@@ -30,6 +30,8 @@ import { z } from 'zod';
 
 import { REDIS_KEYS } from '../constants/redis-keys';
 import type { EngineMailer } from './engine-mail';
+import { newFactorWindowIn } from './new-factor-window';
+import { passkeyAuthenticatorOf } from './new-factors';
 import {
   type EnrolmentTransaction,
   storePasskeyAccount,
@@ -298,7 +300,14 @@ export function createServerPasskeys(
         row.id,
         webauthnCredentialDataAfterAssertion(stored, claims, now())
       );
-      return { kind: 'verified', userId: row.userId, userVerified: claims.user_verified };
+      return {
+        kind: 'verified',
+        userId: row.userId,
+        userVerified: claims.user_verified,
+        // The credential that answered (#1064): the engine reads from it
+        // whether this sign-in proved a new passkey.
+        credentialId: row.id,
+      };
     },
 
     async startRegistration({
@@ -379,15 +388,20 @@ export function createServerPasskeys(
       return { kind: 'verified', registration: JSON.stringify(enrolment) };
     },
 
-    async bind({ realmId, userId, registration, replacing }): Promise<PasskeyBinding> {
+    async bind({ realmId, userId, registration, replacing, isNew }): Promise<PasskeyBinding> {
       const held = heldRegistrationSchema.safeParse(parseJson(registration));
       if (!held.success) throw new Error('a held passkey registration that is not well formed');
       const user = await fastify.repositories.users.findById(realmId, userId);
       if (user === undefined || !user.enabled) {
         return { kind: 'refused', reason: 'account_disabled' };
       }
+      // A passkey bound after a sign-in that proved only the password is new
+      // for the realm's window (#1064; ADR-017 Decision 8, amended 2026-11-12).
+      const newUntil =
+        isNew === true ? now() + (await newFactorWindowIn(fastify, realmId)) : undefined;
+      let created: { readonly id: string };
       try {
-        await storePasskeyEnrolment(
+        created = await storePasskeyEnrolment(
           {
             db: fastify.db,
             realms: fastify.repositories.realms,
@@ -398,16 +412,24 @@ export function createServerPasskeys(
             userId,
             enrolment: held.data,
             ...(replacing === true ? { replacing } : {}),
+            ...(newUntil === undefined ? {} : { newUntil }),
             // The binding's record commits with it (ADR-019 Decision 8).
             recorded: async (credential, tx) => {
               const request = options.requestOf();
               if (request === undefined) {
                 throw new Error('a passkey bound outside the request that asked for it');
               }
+              // What kind of passkey it is (#1064), for the CAEP
+              // credential-change every stream of the user receives.
+              const data = webauthnCredentialDataSchema.safeParse(credential.credentialData);
               await emitUserEvent(
                 request,
                 'urn:qauth:event:user.credential_added:v1-rc.0',
-                { type: 'passkey', credentialId: credential.id },
+                {
+                  type: 'passkey',
+                  credentialId: credential.id,
+                  ...(data.success ? { authenticator: passkeyAuthenticatorOf(data.data) } : {}),
+                },
                 { tx, realmId, userId, actor: 'user' }
               );
             },
@@ -433,7 +455,7 @@ export function createServerPasskeys(
       } catch (error) {
         fastify.log.error({ err: error, realmId }, 'a passkey was bound, but its notice failed');
       }
-      return { kind: 'bound' };
+      return { kind: 'bound', credentialId: created.id };
     },
 
     // The realm's `passkeys.offerAfterSignIn` (#1083), from its row, read on

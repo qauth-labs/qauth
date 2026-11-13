@@ -101,6 +101,20 @@ export const sessions = pgTable(
      */
     recoveryCodeUsed: boolean('recovery_code_used').notNull().default(false),
     /**
+     * The ids of the account's new credentials (#1064) that the session's
+     * sign-in bound or proved: a passkey or an authenticator app bound after
+     * a sign-in that proved only the password, still inside its window when
+     * the session began. Removing such a credential while it is new ends
+     * every session that names it, and the refresh families those sessions
+     * opened; and a fresh sign-in that proved a factor only through one of
+     * them is not the account's strongest factor. Empty for every other
+     * sign-in, and for a row an older release wrote.
+     */
+    newCredentialIds: jsonb('new_credential_ids')
+      .notNull()
+      .default(JSONB_EMPTY_ARRAY)
+      .$type<string[]>(),
+    /**
      * The eIDAS level of assurance the authentication established:
      * `'substantial'` or `'high'`. NULL when nothing above `low` was
      * established, as on `authorization_codes.assurance_level`, so "no
@@ -137,6 +151,10 @@ export const sessions = pgTable(
     // Purging ended rows and sweeping expired ones.
     index('idx_sessions_expires_at').on(t.expiresAt),
     check('sessions_amr_is_array', sql`jsonb_typeof(${t.amr}) = 'array'`),
+    check(
+      'sessions_new_credential_ids_is_array',
+      sql`jsonb_typeof(${t.newCredentialIds}) = 'array'`
+    ),
     check(
       'sessions_assurance_level_valid',
       sql`${t.assuranceLevel} IS NULL OR ${t.assuranceLevel} IN ('substantial', 'high')`

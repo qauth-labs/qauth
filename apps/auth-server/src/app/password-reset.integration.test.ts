@@ -41,7 +41,8 @@ import { NOT_VALID_BEFORE_MARGIN_MS } from './helpers/account-validity';
  *   and a disabled user, in body and in timing; only the account is mailed.
  * - After a reset every refresh token of the user fails and every older
  *   browser session is refused.
- * - A passkey-bound account cannot finish a reset with email alone.
+ * - A passkey-bound account cannot finish a reset with email alone; one
+ *   whose passkey a password-only sign-in bound, and is new, can (#1064).
  * - The code a reset ends in carries no `amr` and no `auth_time`, and
  *   neither do its ID token and access token (#662).
  * - The reset is not offered under `max_age` or `prompt=login`.
@@ -67,6 +68,7 @@ const UNKNOWN_EMAIL = 'nobody-here@example.test';
 const DISABLED_EMAIL = 'reset-disabled@example.test';
 const PASSKEY_EMAIL = 'reset-passkey@example.test';
 const UNCLAIMED_EMAIL = 'reset-unclaimed@example.test';
+const SETTLED_PASSKEY_EMAIL = 'reset-settled-passkey@example.test';
 const IDENTIFIER = stepUrn('identifier');
 const PASSWORD = stepUrn('password');
 const PASSWORD_RESET = stepUrn('password_reset');
@@ -668,6 +670,72 @@ describe('the password reset and the session epoch (#642, real containers)', () 
       []
     );
     expect((mails.get(PASSKEY_EMAIL) ?? []).map((mail) => mail.template)).toEqual(['code']);
+  });
+
+  it('resets past a passkey bound after a password-only sign-in while it is new, and not after (#1064)', async () => {
+    /** A passkey as a sign-in that proved only the password binds it: new until `newUntil`. */
+    const bind = (userId: string, credentialId: string, newUntil: number) =>
+      server().repositories.userCredentials.create({
+        userId,
+        realmId,
+        providerType: 'webauthn',
+        externalSub: credentialId,
+        newUntil,
+        credentialData: {
+          public_key: 'pQECAyYgASFYIK_voW-Xypst',
+          algorithm: -7,
+          sign_count: 0,
+          transports: ['internal'],
+          backup_eligible: false,
+          backed_up: false,
+          aaguid: '00000000-0000-0000-0000-000000000000',
+          rp_id: 'auth.example.com',
+          user_handle: 'dXNlci1oYW5kbGU',
+          nickname: null,
+          created_at: Date.now(),
+          last_used_at: null,
+          sign_counter_regressed_at: null,
+        },
+      });
+
+    // Inside the realm's window (seven days by default): the mailbox and a
+    // new password reset the account, and the passkey is never asked for.
+    const userId = await registerPasswordAccount(server(), PASSKEY_EMAIL);
+    await bind(userId, 'bmV3LXBhc3NrZXk', Date.now() + 7 * 86_400_000);
+    mails.clear();
+    const reset = await atPasswordStep(PASSKEY_EMAIL);
+    await answer(reset.jar, reset.id, PASSWORD_RESET);
+    const [codeMail] = await mailed(PASSKEY_EMAIL, 1);
+    const coded = await answer(reset.jar, reset.id, EMAIL_CODE, { otp: codeMail?.code ?? '' });
+    expect(coded.statusCode, coded.body).toBe(303);
+    expect((await read(reset.id)).step).toBe(NEW_PASSWORD);
+    const done = await answer(reset.jar, reset.id, NEW_PASSWORD, {
+      new_password: NEW_PASSWORD_VALUE,
+    });
+    expect(done.statusCode, done.body).toBe(303);
+    expect(await eventsOf('user.password_reset', userId)).toBe(1);
+    // The passkey stays: the owner removes it from the account page.
+    expect(
+      await query(
+        "SELECT 1 FROM user_credentials WHERE user_id = $1 AND provider_type = 'webauthn'",
+        [userId]
+      )
+    ).toHaveLength(1);
+
+    // Once the window passed, the passkey is a full factor: the mailbox alone
+    // goes no further, as for any passkey-bound account.
+    const laterId = await registerPasswordAccount(server(), SETTLED_PASSKEY_EMAIL);
+    await bind(laterId, 'c2V0dGxlZC1wYXNza2V5', Date.now() - 1);
+    const before = await passwordOf(SETTLED_PASSKEY_EMAIL);
+    const blocked = await atPasswordStep(SETTLED_PASSKEY_EMAIL);
+    await answer(blocked.jar, blocked.id, PASSWORD_RESET);
+    const [blockedMail] = await mailed(SETTLED_PASSKEY_EMAIL, 1);
+    const stopped = await answer(blocked.jar, blocked.id, EMAIL_CODE, {
+      otp: blockedMail?.code ?? '',
+    });
+    expect(stopped.statusCode, stopped.body).toBe(410);
+    expect(await passwordOf(SETTLED_PASSKEY_EMAIL)).toEqual(before);
+    expect(await eventsOf('user.password_reset', laterId)).toBe(0);
   });
 
   it('mails a disabled user nothing and changes nothing of the account', async () => {

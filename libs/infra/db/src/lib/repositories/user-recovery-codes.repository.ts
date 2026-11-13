@@ -111,6 +111,15 @@ export interface UserRecoveryCodesRepository {
    */
   confirmSet(input: ConfirmRecoveryCodeSetInput, tx?: DbClient): Promise<boolean>;
   /**
+   * Delete the account's set, if any (#1064): every code of it stops working,
+   * and the next sign-in that owes a set shows a new one. Under the same lock
+   * as a replacement.
+   *
+   * @returns How many codes were deleted: 0 when the account held no set, or
+   *   the realm has no such user.
+   */
+  deleteSet(realmId: string, userId: string, tx?: DbClient): Promise<number>;
+  /**
    * The account whose unused code has the lookup digest `digest` in the
    * realm (#655): `null` when no unused code has it, or when the codes of two
    * accounts do (which two codes of 80 bits never make), so a lookup names
@@ -282,6 +291,17 @@ export function createUserRecoveryCodesRepository(
           .set({ confirmedAt })
           .where(and(ofAccount(realmId, userId), isNull(userRecoveryCodes.confirmedAt)));
         return true;
+      });
+    },
+
+    async deleteSet(realmId, userId, tx) {
+      return (tx ?? defaultDb).transaction(async (inner) => {
+        if (!(await lockUser(inner, realmId, userId))) return 0;
+        const deleted = await inner
+          .delete(userRecoveryCodes)
+          .where(ofAccount(realmId, userId))
+          .returning({ id: userRecoveryCodes.id });
+        return deleted.length;
       });
     },
   };

@@ -17,6 +17,7 @@ import { TOTP_SECRET_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import type { EngineMailer, MailRealm } from './engine-mail';
+import { newFactorWindowIn } from './new-factor-window';
 import { realmIssuer, type RealmUrlSource } from './realm-url';
 import { emitUserEvent, type EventTransaction } from './user-events';
 
@@ -181,6 +182,9 @@ export function createServerTotp(
     {
       cipher: totpCipher(fastify),
       issuerOf: async (realmId) => totpIssuerOf(await deps.realmOf(realmId)),
+      // The realm's window for a TOTP bound after a password-only sign-in
+      // (#1064), from its row.
+      newFactorWindowMs: (realmId) => newFactorWindowIn(fastify, realmId),
       async hardActionArmed({ realmId, userId }) {
         if (!deps.hostedPages) return false;
         // Only a set the person confirmed counts as a way back: one nobody
@@ -203,7 +207,8 @@ export function createServerTotp(
         await emitUserEvent(
           request,
           'urn:qauth:event:user.credential_added:v1-rc.0',
-          { type: 'totp', credentialId },
+          // An authenticator app (#1064): CAEP's `app`.
+          { type: 'totp', credentialId, authenticator: 'app' },
           { tx, realmId, userId, actor: 'user' }
         );
       },

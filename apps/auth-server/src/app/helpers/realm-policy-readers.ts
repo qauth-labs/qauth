@@ -74,6 +74,10 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // `helpers/passkey-sign-in.ts`, #1083), read on the round that would make
   // it.
   'passkeys.offerAfterSignIn',
+  // The window of a factor bound after a password-only sign-in
+  // (`newFactorWindowOf` in `helpers/new-factors.ts`, #1064), read at the
+  // binding.
+  'accounts.newFactorWindowDays',
 ]);
 
 /**

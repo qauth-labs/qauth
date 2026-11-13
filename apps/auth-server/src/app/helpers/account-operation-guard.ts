@@ -10,6 +10,7 @@ import {
   InsufficientUserAuthenticationError,
 } from './account-operation-errors';
 import { familyOperation } from './family-token';
+import { isNewCredential } from './new-factors';
 import { requestRealm } from './request-realm';
 import { emitUserEvent } from './user-events';
 
@@ -119,8 +120,11 @@ const REFUSED_EVENT = 'urn:qauth:event:request.account_operation_refused:v1-rc.0
 
 /** A credential row, as far as {@link requiredFactorOf} reads it. */
 export interface BoundCredential {
+  readonly id?: string;
   readonly providerType: string;
   readonly realmId: string;
+  /** When the credential stops being new (#1064); `null` or absent for one that never was. */
+  readonly newUntil?: number | null;
 }
 
 /**
@@ -128,18 +132,75 @@ export interface BoundCredential {
  * in `realmId` (ADR-017 Decision 8): `pop` when a passkey is bound, else `otp`
  * when an authenticator app is, else `pwd`. A disabled factor still counts as
  * bound: disabling one never lowers what a sign-in must prove (ADR-017, the
- * downgrade rule). A row of another realm is no factor here (#489).
+ * downgrade rule). A row of another realm is no factor here (#489), nor is a
+ * credential that is new at `now` (#1064; ADR-017 Decision 8, amended
+ * 2026-11-12): bound after a sign-in that proved only the password, it is not
+ * the account's strongest factor until its window ends.
  */
 export function requiredFactorOf(
   credentials: readonly BoundCredential[],
-  realmId: string
+  realmId: string,
+  now: number = Date.now()
 ): AccountFactor {
   const held = new Set(
-    credentials.filter((row) => row.realmId === realmId).map((row) => row.providerType)
+    credentials
+      .filter((row) => row.realmId === realmId && !isNewCredential(row, now))
+      .map((row) => row.providerType)
   );
   if (held.has(WEBAUTHN_PROVIDER_TYPE)) return 'pop';
   if (held.has(TOTP_PROVIDER_TYPE)) return 'otp';
   return 'pwd';
+}
+
+/** The `amr` value a credential of `providerType` proves at a sign-in: `pop` or `otp`, else none. */
+function factorOfProvider(providerType: string): AccountFactor | undefined {
+  if (providerType === WEBAUTHN_PROVIDER_TYPE) return 'pop';
+  if (providerType === TOTP_PROVIDER_TYPE) return 'otp';
+  return undefined;
+}
+
+/**
+ * Whether the account holds a credential in `realmId` that is new at `now`
+ * and proves `factor` (#1064): only then may a sign-in's `factor` have come
+ * from a new credential alone.
+ */
+export function holdsNewFactor(
+  factor: AccountFactor,
+  credentials: readonly BoundCredential[],
+  realmId: string,
+  now: number
+): boolean {
+  return credentials.some(
+    (row) =>
+      row.realmId === realmId &&
+      isNewCredential(row, now) &&
+      factorOfProvider(row.providerType) === factor
+  );
+}
+
+/**
+ * Whether a sign-in proved `factor` only through a new credential (#1064):
+ * its session names (`named`, the session's `new_credential_ids`) a
+ * credential of the account that is still new at `now` and proves `factor`.
+ * The engine names a credential it proved only while it is new, so such a
+ * sign-in proved no other credential of that factor.
+ */
+export function provedOnlyThroughNew(
+  factor: AccountFactor,
+  named: readonly string[],
+  credentials: readonly BoundCredential[],
+  realmId: string,
+  now: number
+): boolean {
+  if (named.length === 0) return false;
+  return credentials.some(
+    (row) =>
+      row.realmId === realmId &&
+      row.id !== undefined &&
+      named.includes(row.id) &&
+      isNewCredential(row, now) &&
+      factorOfProvider(row.providerType) === factor
+  );
 }
 
 /**
@@ -204,29 +265,33 @@ function lookupFailed(request: FastifyRequest, read: string, cause: unknown) {
 }
 
 /**
- * Whether the browser session the token names (`sid`) is the recent sign-in
- * behind it, and that sign-in used a recovery code in place of a lost factor:
- * a live session of the token's user in the request's realm, signed in at the
- * token's `auth_time` (to the second the claim keeps), whose row records the
- * recovery code. Throws when the session cannot be read.
+ * The browser session the token names (`sid`), when it is the recent sign-in
+ * behind it: a live session of the token's user in the request's realm,
+ * signed in at the token's `auth_time` (to the second the claim keeps).
+ * `undefined` for a token that names none, or names another. Throws when the
+ * session cannot be read.
  */
-async function signedInWithRecoveryCode(
+async function sessionOfToken(
   request: FastifyRequest,
   claims: JWTPayload,
   realmId: string,
   now: number
-): Promise<boolean> {
+) {
   const sid = claims.sid;
-  if (typeof sid !== 'string' || sid.length === 0 || claims.authTime === undefined) return false;
+  if (typeof sid !== 'string' || sid.length === 0 || claims.authTime === undefined) {
+    return undefined;
+  }
   const session = await request.server.repositories.sessions.findById(realmId, sid);
-  if (session === undefined) return false;
-  return (
-    session.userId === claims.sub &&
-    session.recoveryCodeUsed &&
-    (session.revokedAt === null || session.revokedAt === undefined) &&
-    session.expiresAt > now &&
-    Math.floor(session.authTime / 1000) * 1000 === claims.authTime
-  );
+  if (
+    session === undefined ||
+    session.userId !== claims.sub ||
+    (session.revokedAt !== null && session.revokedAt !== undefined) ||
+    session.expiresAt <= now ||
+    Math.floor(session.authTime / 1000) * 1000 !== claims.authTime
+  ) {
+    return undefined;
+  }
+  return session;
 }
 
 /**
@@ -269,12 +334,9 @@ export async function checkAccountOperation(
   }
 
   const realmId = requestRealm(request).id;
-  let requiredFactor: AccountFactor;
+  let credentials: readonly BoundCredential[];
   try {
-    requiredFactor = requiredFactorOf(
-      await request.server.repositories.userCredentials.findAllByUserId(userId),
-      realmId
-    );
+    credentials = await request.server.repositories.userCredentials.findAllByUserId(userId);
   } catch (cause) {
     throw await refused(
       request,
@@ -284,12 +346,13 @@ export async function checkAccountOperation(
       lookupFailed(request, 'credentials', cause)
     );
   }
-  if ((claims.amr ?? []).includes(requiredFactor)) return;
-
-  if (rules.freshAuthentication === 'strongest-factor-or-recovery-code') {
-    let recovered: boolean;
+  const requiredFactor = requiredFactorOf(credentials, realmId, now);
+  // The session behind the token, read once and only when a rule needs it.
+  let read: Promise<Awaited<ReturnType<typeof sessionOfToken>>> | undefined;
+  const session = async () => {
+    read ??= sessionOfToken(request, claims, realmId, now);
     try {
-      recovered = await signedInWithRecoveryCode(request, claims, realmId, now);
+      return await read;
     } catch (cause) {
       throw await refused(
         request,
@@ -299,7 +362,22 @@ export async function checkAccountOperation(
         lookupFailed(request, 'session', cause)
       );
     }
-    if (recovered) return;
+  };
+  if ((claims.amr ?? []).includes(requiredFactor)) {
+    // The account holds a new credential of that factor (#1064): the
+    // token's sign-in counts only when its session shows it proved another.
+    if (!holdsNewFactor(requiredFactor, credentials, realmId, now)) return;
+    const own = await session();
+    if (
+      own !== undefined &&
+      !provedOnlyThroughNew(requiredFactor, own.newCredentialIds ?? [], credentials, realmId, now)
+    ) {
+      return;
+    }
+  }
+
+  if (rules.freshAuthentication === 'strongest-factor-or-recovery-code') {
+    if ((await session())?.recoveryCodeUsed === true) return;
   }
 
   throw await refused(

@@ -505,6 +505,13 @@
       "when": 1794459324617,
       "tag": "0071_client_token_lifetimes",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1794492331674,
+      "tag": "0072_new_factor_window",
+      "breakpoints": true
     }
   ]
 }

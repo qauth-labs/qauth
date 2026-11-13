@@ -257,8 +257,13 @@ describe('account policies read from the realm row (#528, real containers)', () 
       const { policies } = (await app.policyStore.get(realmId)) ?? {};
       // Sign-up is off by default (ADR-017; the upstream sign-in flow, #639);
       // the E2E harness seeds it open (`ALLOW_SIGN_UP=true`), because the
-      // suites make their accounts through `POST /auth/register`.
-      expect(policies?.accounts).toEqual({ requireVerifiedAccount: true, allowSignUp: true });
+      // suites make their accounts through `POST /auth/register`. A factor
+      // bound after a password-only sign-in is new for 7 days (#1064).
+      expect(policies?.accounts).toEqual({
+        requireVerifiedAccount: true,
+        allowSignUp: true,
+        newFactorWindowDays: 7,
+      });
       expect(policies?.password).toEqual({ minLength: 15, minScore: 2, breachListSource: 'off' });
       expect(policies?.bruteForce).toEqual({
         enabled: true,

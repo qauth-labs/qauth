@@ -183,10 +183,16 @@ export interface TotpStore {
   /**
    * Bind `sealed` as the account's TOTP, with `step` as its last accepted
    * step, replacing one it holds (a disabled one, after a recovery code), in
-   * one write, while the account is enabled and claimed.
+   * one write, while the account is enabled and claimed. `isNew` (#1064):
+   * the store records when the TOTP stops being new, the realm's
+   * `accounts.newFactorWindowDays` from now, and returns its credential id.
    */
   bind(
-    account: TotpAccount & { readonly sealed: string; readonly step: number }
+    account: TotpAccount & {
+      readonly sealed: string;
+      readonly step: number;
+      readonly isNew?: boolean;
+    }
   ): Promise<TotpBinding>;
 }
 
@@ -317,10 +323,16 @@ export function createTotpService(deps: TotpServiceDependencies): TotpCredential
       }
     },
 
-    async bind({ realmId, userId, clientId, sealed, step }): Promise<TotpBinding> {
+    async bind({ realmId, userId, clientId, sealed, step, isNew }): Promise<TotpBinding> {
       // The ciphertext opens for this account, or nothing is bound.
       (await open({ realmId, userId }, sealed)).fill(0);
-      const bound = await store.bind({ realmId, userId, sealed, step });
+      const bound = await store.bind({
+        realmId,
+        userId,
+        sealed,
+        step,
+        ...(isNew === true ? { isNew: true } : {}),
+      });
       if (bound.kind === 'bound') {
         try {
           await notices.bound({ realmId, userId, clientId });

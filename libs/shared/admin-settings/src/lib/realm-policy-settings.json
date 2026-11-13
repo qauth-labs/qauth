@@ -111,6 +111,24 @@
       "environmentBound": false
     },
     {
+      "path": "accounts.newFactorWindowDays",
+      "summary": "How many days, 1 to 30, a passkey or authenticator app bound after a sign-in that proved only the password stays new: the password alone may remove it, and it does not count as the account's strongest factor for a reset or a change.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#accounts",
+      "default": 7,
+      "secret": false,
+      "direction": "opaque",
+      "securityWhen": "any-change",
+      "class": {
+        "tightening": "security",
+        "loosening": "security",
+        "neutral": "security"
+      },
+      "effects": [
+        "credential-path"
+      ],
+      "environmentBound": false
+    },
+    {
       "path": "password.minLength",
       "summary": "The fewest characters (Unicode code points, after NFC normalisation) a new password may have, from 8 to 64; below 15 is a recorded deviation from NIST SP 800-63B-4 while a password can be the only factor.",
       "docs": "https://docs.qauth.dev/reference/realm-policies/#password",

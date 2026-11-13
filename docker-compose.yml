@@ -157,6 +157,8 @@ services:
       REQUIRE_EMAIL_VERIFIED: ${REQUIRE_EMAIL_VERIFIED:-}
       # Seeds accounts.allowSignUp of a new realm (#639).
       ALLOW_SIGN_UP: ${ALLOW_SIGN_UP:-false}
+      # Seeds accounts.newFactorWindowDays of a new realm (#1064).
+      NEW_FACTOR_WINDOW_DAYS: ${NEW_FACTOR_WINDOW_DAYS:-7}
       REGISTRATION_RATE_LIMIT: ${REGISTRATION_RATE_LIMIT:-3}
       REGISTRATION_RATE_WINDOW: ${REGISTRATION_RATE_WINDOW:-3600}
       LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-5}

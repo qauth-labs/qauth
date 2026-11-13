@@ -89,6 +89,8 @@ export function requiredRealmArgument(db: DbClient): void {
   void recoveryCodes.replaceSet({ userId: ID, codeHashes: ['h'], createdAt: 1 });
   // @ts-expect-error a recovery-code set is confirmed in a realm (#649)
   void recoveryCodes.confirmSet({ userId: ID, setId: OTHER_ID, confirmedAt: 1 });
+  // @ts-expect-error a recovery-code set is deleted in a realm (#1064)
+  void recoveryCodes.deleteSet(ID);
 
   // @ts-expect-error a provider is looked up in a realm (#639)
   void upstreamProviders.find('oidc_google');
@@ -200,6 +202,8 @@ export function requiredRealmArgument(db: DbClient): void {
 
   // @ts-expect-error a browser session is looked up in a realm
   void sessions.findById(ID);
+  // @ts-expect-error the sessions that name a credential are those of a realm (#1064)
+  void sessions.listNamingCredential(ID, OTHER_ID);
 
   // @ts-expect-error a wallet's state is redeemed in a realm (#489)
   void walletRequests.redeem('a'.repeat(64), RESPONSE_CODE);

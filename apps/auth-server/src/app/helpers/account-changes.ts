@@ -19,7 +19,9 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   type AccountFactor,
   FRESH_AUTHENTICATION_MAX_AGE_SECONDS,
+  holdsNewFactor,
   isFreshSignIn,
+  provedOnlyThroughNew,
   requiredFactorOf,
 } from './account-operation-guard';
 import { accountPoliciesOf } from './account-policies';
@@ -27,6 +29,7 @@ import { endBrowserSession, endBrowserSessions } from './browser-session';
 import type { EngineMailer } from './engine-mail';
 import type { InteractionEngines } from './interaction-engines';
 import { ACCOUNT_PAGES_ENGINE_CLIENT_ID } from './interaction-record';
+import { isNewCredential, passkeyAuthenticatorOf } from './new-factors';
 import { ladderEndUserIp } from './password-attempts';
 import { recordPasswordChange } from './password-reset';
 import { requestRealm } from './request-realm';
@@ -51,7 +54,10 @@ import { emitUserEvent } from './user-events';
  *   only while the session's sign-in is at most five minutes old and proved
  *   the account's strongest bound factor (`requiredFactorOf`: a passkey, else
  *   an authenticator app, else the password), or, where the operation lets
- *   it, used a recovery code in place of a lost one. A refusal is recorded as
+ *   it, used a recovery code in place of a lost one. A factor bound after a
+ *   sign-in that proved only the password is no strongest factor while it is
+ *   new (#1064; ADR-017 Decision 8, amended 2026-11-12), and the password
+ *   alone, after a fresh sign-in, may remove it. A refusal is recorded as
  *   `request.account_operation_refused`, as the account API's guard records
  *   it, and the page sends the person through a fresh sign-in.
  * - **One lock per account.** A change to the account's credentials locks the
@@ -105,6 +111,21 @@ export const ACCOUNT_PAGE_CHANGES = {
   sessionsEndAll: { operationId: 'account.sessions.endAll', freshAuthentication: 'none' },
 } as const satisfies Record<string, AccountPageChange>;
 
+/** The credential a removal names: one passkey, or the account's authenticator app. */
+export type CredentialTarget =
+  | { readonly type: 'passkey'; readonly id: string }
+  | { readonly type: 'totp' };
+
+/** Whether `row` is the credential `target` names. */
+function isTarget(
+  row: { readonly id: string; readonly providerType: string },
+  target: CredentialTarget
+): boolean {
+  return target.type === 'passkey'
+    ? row.id === target.id && row.providerType === WEBAUTHN_PROVIDER_TYPE
+    : row.providerType === TOTP_PROVIDER_TYPE;
+}
+
 /** Whether a session may make a change now, and why not. */
 export type FreshAuthenticationVerdict =
   | { readonly kind: 'fresh' }
@@ -121,17 +142,26 @@ const REFUSED_EVENT = 'urn:qauth:event:request.account_operation_refused:v1-rc.0
  * API guard's rules (`checkAccountOperation`) on the session's own sign-in
  * instead of a token's claims. A refusal is recorded before it is answered.
  * A read that fails throws: a change is never made unchecked.
+ *
+ * A factor that is new (#1064; ADR-017 Decision 8, amended 2026-11-12) is no
+ * strongest factor, and a sign-in that proved the strongest factor only
+ * through a new one does not count. `removing` names the credential a
+ * removal is for: while it is new, a fresh sign-in with the password alone
+ * may remove it.
  */
 export async function checkFreshAuthentication(
   fastify: FastifyInstance,
   request: FastifyRequest,
   session: BrowserSession,
   change: AccountPageChange,
-  now: number = Date.now()
+  now: number = Date.now(),
+  removing?: CredentialTarget
 ): Promise<FreshAuthenticationVerdict> {
   if (change.freshAuthentication === 'none') return { kind: 'fresh' };
-  const credentials = await fastify.repositories.userCredentials.findAllByUserId(session.userId);
-  const requiredFactor = requiredFactorOf(credentials, session.realmId);
+  const credentials = (
+    await fastify.repositories.userCredentials.findAllByUserId(session.userId)
+  ).filter((row) => row.realmId === session.realmId);
+  const requiredFactor = requiredFactorOf(credentials, session.realmId, now);
   const refuse = async (
     reason: 'authentication_too_old' | 'strongest_factor_missing'
   ): Promise<FreshAuthenticationVerdict> => {
@@ -150,10 +180,36 @@ export async function checkFreshAuthentication(
     return { kind: 'refused', reason, requiredFactor };
   };
   if (!isFreshSignIn(session.authTime, now)) return refuse('authentication_too_old');
-  if (session.amr.includes(requiredFactor)) return { kind: 'fresh' };
+  // The password alone removes a credential while it is new (#1064).
+  if (
+    removing !== undefined &&
+    session.amr.includes('pwd') &&
+    credentials.some((row) => isTarget(row, removing) && isNewCredential(row, now))
+  ) {
+    return { kind: 'fresh' };
+  }
+  // The session's row, read once and only when a rule needs it: the cache
+  // holds neither the recovery code nor the new credentials.
+  let read: ReturnType<typeof fastify.repositories.sessions.findById> | undefined;
+  const own = async () => {
+    read ??= fastify.repositories.sessions.findById(session.realmId, session.sid);
+    const row = await read;
+    return row?.userId === session.userId ? row : undefined;
+  };
+  if (session.amr.includes(requiredFactor)) {
+    if (!holdsNewFactor(requiredFactor, credentials, session.realmId, now)) {
+      return { kind: 'fresh' };
+    }
+    const row = await own();
+    if (
+      row !== undefined &&
+      !provedOnlyThroughNew(requiredFactor, row.newCredentialIds, credentials, session.realmId, now)
+    ) {
+      return { kind: 'fresh' };
+    }
+  }
   if (change.freshAuthentication === 'strongest-factor-or-recovery-code') {
-    const row = await fastify.repositories.sessions.findById(session.realmId, session.sid);
-    if (row?.recoveryCodeUsed === true && row.userId === session.userId) return { kind: 'fresh' };
+    if ((await own())?.recoveryCodeUsed === true) return { kind: 'fresh' };
   }
   return refuse('strongest_factor_missing');
 }
@@ -250,6 +306,26 @@ export interface AccountPasskey {
   readonly backedUp: boolean;
   /** The failure ladder's mark, or a rebind's: it signs in no more. */
   readonly disabled: boolean;
+  /**
+   * When it stops being new (#1064), while it is: it was bound after a
+   * sign-in that proved only the password, and the password alone may
+   * remove it until then.
+   */
+  readonly newUntil?: number;
+}
+
+/**
+ * A factor bound after a sign-in that proved only the password, still new
+ * (#1064; ADR-017 Decision 8, amended 2026-11-12), that the session the page
+ * is shown in did not bind or prove: the page tells of it, with "not you?
+ * remove it".
+ */
+export interface AccountNewBinding {
+  readonly type: 'passkey' | 'totp';
+  /** The credential's id: the passkey's in its removal path. */
+  readonly id: string;
+  readonly addedAt: number;
+  readonly newUntil: number;
 }
 
 /** One live session of the account, as the page shows it. */
@@ -267,7 +343,9 @@ export interface AccountSession {
 export interface AccountOverview {
   readonly password: { readonly set: boolean; readonly address?: string };
   readonly passkeys: readonly AccountPasskey[];
-  readonly totp: { readonly set: boolean };
+  readonly totp: { readonly set: boolean; readonly newUntil?: number };
+  /** The new factors this session did not bind or prove, oldest first (#1064). */
+  readonly newBindings: readonly AccountNewBinding[];
   readonly recoveryCodes: { readonly issued: boolean; readonly unused: number };
   readonly linkedAccounts: readonly LinkedAccount[];
   /** The realm's providers the account holds no identity of: what it may link. */
@@ -283,7 +361,8 @@ export const ACCOUNT_PAGE_SESSION_LIMIT = 50;
 export async function readAccountOverview(
   fastify: FastifyInstance,
   engines: InteractionEngines,
-  session: BrowserSession
+  session: BrowserSession,
+  now: number = Date.now()
 ): Promise<AccountOverview> {
   const { realmId, userId } = session;
   const credentials = (await fastify.repositories.userCredentials.findAllByUserId(userId)).filter(
@@ -303,10 +382,33 @@ export async function readAccountOverview(
           lastUsedAt: data.data.last_used_at,
           backedUp: data.data.backed_up,
           disabled: row.disabledAt !== null && row.disabledAt !== undefined,
+          ...(isNewCredential(row, now) ? { newUntil: row.newUntil as number } : {}),
         },
       ];
     })
     .sort((a, b) => b.createdAt - a.createdAt);
+  const totp = credentials.find((row) => row.providerType === TOTP_PROVIDER_TYPE);
+  // The new factors (#1064), but those this session bound or proved: its
+  // row names them, which the cache does not hold.
+  const fresh = credentials.filter(
+    (row) =>
+      (row.providerType === WEBAUTHN_PROVIDER_TYPE || row.providerType === TOTP_PROVIDER_TYPE) &&
+      isNewCredential(row, now)
+  );
+  const named =
+    fresh.length === 0
+      ? []
+      : ((await fastify.repositories.sessions.findById(realmId, session.sid))?.newCredentialIds ??
+        []);
+  const newBindings = fresh
+    .filter((row) => !named.includes(row.id))
+    .map((row): AccountNewBinding => ({
+      type: row.providerType === TOTP_PROVIDER_TYPE ? 'totp' : 'passkey',
+      id: row.id,
+      addedAt: row.createdAt,
+      newUntil: row.newUntil as number,
+    }))
+    .sort((a, b) => a.addedAt - b.addedAt);
   const recovery = await engines.recoveryCodes.status({ realmId, userId });
   const linked = await pageLinkedAccounts(fastify, realmId, userId, {
     list: 'ui.account.linkedAccounts',
@@ -328,7 +430,13 @@ export async function readAccountOverview(
       ...(password === undefined ? {} : { address: password.externalSub }),
     },
     passkeys,
-    totp: { set: credentials.some((row) => row.providerType === TOTP_PROVIDER_TYPE) },
+    totp: {
+      set: totp !== undefined,
+      ...(totp !== undefined && isNewCredential(totp, now)
+        ? { newUntil: totp.newUntil as number }
+        : {}),
+    },
+    newBindings,
     recoveryCodes: { issued: recovery.issued, unused: recovery.unused },
     linkedAccounts: linked.items,
     linkable,
@@ -343,7 +451,7 @@ export async function readAccountOverview(
         ipAddress: item.ipAddress,
         clients: item.clients.map((client) => client.name),
       })),
-    requiredFactor: requiredFactorOf(credentials, realmId),
+    requiredFactor: requiredFactorOf(credentials, realmId, now),
   };
 }
 
@@ -524,17 +632,38 @@ export type CredentialRemovalResult =
  * `user.credential_removed` event commit together; then the owner is told at
  * the address of the account's password (ADR-020 §3 "Emails": a notice no
  * realm switches off). An account with no password has no address to tell.
+ *
+ * A credential removed while it is new (#1064; ADR-017 Decision 8, amended
+ * 2026-11-12) takes with it what it opened: in the removal's transaction,
+ * the unredeemed codes of every session whose sign-in bound or proved it,
+ * live or ended (a family outlives its browser session), the refresh
+ * families those sign-ins opened (a family carries its session's
+ * `auth_time`, #662), and the account's recovery codes, which may have been
+ * shown with it. Then every sign-in in progress of the account ends at its
+ * next round (the password change's cutoff, `recordPasswordChange`), so none
+ * that proved the credential or took one of those codes binds a factor
+ * after it; the live sessions end; and the codes and families are swept once
+ * more, for one a session minted meanwhile. The event says so (`whileNew`).
  */
 export async function removeCredential(
   fastify: FastifyInstance,
   request: FastifyRequest,
   session: BrowserSession,
-  target: { readonly type: 'passkey'; readonly id: string } | { readonly type: 'totp' },
-  mailer: EngineMailer
+  target: CredentialTarget,
+  mailer: EngineMailer,
+  now: number = Date.now()
 ): Promise<CredentialRemovalResult> {
   const { realmId, userId } = session;
   const mfaRequired = await secondFactorRequired(fastify, realmId, userId);
   let address: string | undefined;
+  /** Whether the removed credential was new: what it opened is ended after the commit too. */
+  let removedWhileNew = false;
+  /** The sessions, live or ended, whose sign-in bound or proved the removed new credential. */
+  let opened: readonly {
+    readonly id: string;
+    readonly authTime: number;
+    readonly live: boolean;
+  }[] = [];
   const result = await fastify.db.transaction(async (tx): Promise<CredentialRemovalResult> => {
     if (!(await fastify.repositories.userCredentials.lockUser(realmId, userId, tx))) {
       return { kind: 'not_found' };
@@ -542,25 +671,44 @@ export async function removeCredential(
     const held = (await fastify.repositories.userCredentials.findAllByUserId(userId, tx)).filter(
       (row) => row.realmId === realmId
     );
-    const row = held.find((candidate) =>
-      target.type === 'passkey'
-        ? candidate.id === target.id && candidate.providerType === WEBAUTHN_PROVIDER_TYPE
-        : candidate.providerType === TOTP_PROVIDER_TYPE
-    );
+    const row = held.find((candidate) => isTarget(candidate, target));
     if (row === undefined) return { kind: 'not_found' };
     // What the account keeps that still signs in: a marked credential is
     // none, nor the identity of a provider switched off.
     const others = held.filter((candidate) => candidate.id !== row.id && isLive(candidate));
     if (!(await signsInNow(fastify, realmId, others))) return { kind: 'last_credential' };
     if (mfaRequired && !others.some(isSecondFactor)) return { kind: 'second_factor_required' };
+    const whileNew = isNewCredential(row, now);
     const deleted = await fastify.repositories.userCredentials.deleteById(realmId, row.id, tx);
     if (deleted === undefined || deleted.userId !== userId) {
       throw new Error('a locked credential could not be deleted');
     }
+    if (whileNew) {
+      removedWhileNew = true;
+      opened = (
+        await fastify.repositories.sessions.listNamingCredential(realmId, userId, row.id, tx)
+      ).map((candidate) => ({
+        id: candidate.id,
+        authTime: candidate.authTime,
+        live: candidate.revokedAt === null && candidate.expiresAt > now,
+      }));
+      await revokeWhatOpened(fastify, userId, opened, tx);
+      await fastify.repositories.userRecoveryCodes.deleteSet(realmId, userId, tx);
+    }
+    const data = webauthnCredentialDataSchema.safeParse(row.credentialData);
     await emitUserEvent(
       request,
       'urn:qauth:event:user.credential_removed:v1-rc.0',
-      { type: target.type, credentialId: row.id },
+      {
+        type: target.type,
+        credentialId: row.id,
+        ...(target.type === 'totp'
+          ? { authenticator: 'app' as const }
+          : data.success
+            ? { authenticator: passkeyAuthenticatorOf(data.data) }
+            : {}),
+        ...(whileNew ? { whileNew: true as const } : {}),
+      },
       { tx, realmId, userId, clientId: null, actor: 'user' }
     );
     address = held.find(
@@ -568,6 +716,48 @@ export async function removeCredential(
     )?.externalSub;
     return { kind: 'removed' };
   });
+  if (result.kind === 'removed' && removedWhileNew) {
+    // None of these can undo the removal, whose transaction already revoked
+    // the sessions' codes and families and deleted the recovery codes, and
+    // none may fail it: each is logged. The cutoff first: a sign-in in
+    // progress that proved the credential, or took a code of the deleted
+    // set, binds nothing after it. Each live session's clients are queued a
+    // back-channel logout by its revocation (#624). A `reset`: a
+    // credential's removal ended it.
+    try {
+      await recordPasswordChange(fastify, realmId, userId, Date.now());
+    } catch (error) {
+      fastify.log.error(
+        { err: error, realmId },
+        'a new credential was removed, but the sign-ins in progress could not be ended'
+      );
+    }
+    for (const { id } of opened.filter((candidate) => candidate.live)) {
+      try {
+        await endBrowserSession(
+          fastify,
+          realmId,
+          id,
+          'reset',
+          { type: 'user', id: userId },
+          userId
+        );
+      } catch (error) {
+        fastify.log.error(
+          { err: error, realmId },
+          'a new credential was removed, but a session it opened could not be ended'
+        );
+      }
+    }
+    try {
+      await revokeWhatOpened(fastify, userId, opened);
+    } catch (error) {
+      fastify.log.error(
+        { err: error, realmId },
+        'a new credential was removed, but the second sweep of what it opened failed'
+      );
+    }
+  }
   if (result.kind === 'removed' && address !== undefined) {
     // Queued, never awaited: a notice that cannot go out is logged by the mailer.
     mailer.sendUncounted(requestRealm(request), address, {
@@ -575,6 +765,31 @@ export async function removeCredential(
     });
   }
   return result;
+}
+
+/**
+ * End the unredeemed codes the `sessions` minted and the refresh families
+ * their sign-ins opened (#1064): codes first, so one redeemed meanwhile
+ * opens no family after the sweep.
+ */
+async function revokeWhatOpened(
+  fastify: FastifyInstance,
+  userId: string,
+  sessions: readonly { readonly id: string; readonly authTime: number }[],
+  tx?: Parameters<Parameters<FastifyInstance['db']['transaction']>[0]>[0]
+): Promise<void> {
+  if (sessions.length === 0) return;
+  await fastify.repositories.authorizationCodes.invalidateForSessions(
+    userId,
+    sessions.map(({ id }) => id),
+    tx
+  );
+  await fastify.repositories.refreshTokens.revokeFamiliesOfSignIns(
+    userId,
+    sessions.map(({ authTime }) => authTime),
+    'new_credential_removed',
+    tx
+  );
 }
 
 /**

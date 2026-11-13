@@ -98,22 +98,22 @@ states:
 
   checkingToken:
     title: Refuse an act-chain token and a stale sign-in
-    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:244
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:309
     always:
       - guard: delegated
         target: delegated_token_refused.act_chain
         say: 'a token with an act chain'
-        source: apps/auth-server/src/app/helpers/account-operation-guard.ts:246
+        source: apps/auth-server/src/app/helpers/account-operation-guard.ts:311
       - guard: stale
         target: insufficient_user_authentication.too_old
         say: 'a sign-in older than five minutes'
-        source: apps/auth-server/src/app/helpers/account-operation-guard.ts:261
+        source: apps/auth-server/src/app/helpers/account-operation-guard.ts:326
       - target: readingFactors
         say: 'a fresh sign-in'
 
   readingFactors:
     title: Read the account's bound factors
-    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:274
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:349
     invoke: { action: UserCredential.findAllByUserId }
     on:
       DONE:
@@ -125,12 +125,12 @@ states:
 
   checkingFactor:
     title: Ask for the account's strongest factor
-    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:287
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:366
     always:
       - guard: weakerFactor
         target: insufficient_user_authentication.strongest_factor
         say: "the sign-in did not use the account's strongest factor"
-        source: apps/auth-server/src/app/helpers/account-operation-guard.ts:309
+        source: apps/auth-server/src/app/helpers/account-operation-guard.ts:387
       - target: unlinking
         say: 'the guard lets the request through'
 
@@ -265,15 +265,15 @@ assertions:
   - id: no-unlink-on-a-stale-sign-in
     never: 'unlinked and stale'
     say: 'A sign-in older than five minutes never unlinks'
-    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:261
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:326
   - id: no-unlink-by-an-agent
     never: 'unlinked and delegated'
     say: 'An act-chain token never unlinks'
-    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:246
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:311
   - id: no-unlink-without-the-strongest-factor
     never: 'unlinked and weakerFactor'
     say: "Only a sign-in with the account's strongest factor unlinks"
-    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:287
+    source: apps/auth-server/src/app/helpers/account-operation-guard.ts:366
   - id: the-last-way-in-stays
     never: 'unlinked and lastWayIn'
     say: 'An unlink never leaves the account without a way to sign in'

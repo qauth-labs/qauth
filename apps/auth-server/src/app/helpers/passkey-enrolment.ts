@@ -60,6 +60,12 @@ export async function storePasskeyEnrolment(
      */
     readonly replacing?: boolean;
     /**
+     * When the passkey stops being new (#1064; ADR-017 Decision 8, amended
+     * 2026-11-12): it was bound after a sign-in that proved only the
+     * account's password. Absent for a passkey that never is new.
+     */
+    readonly newUntil?: number;
+    /**
      * Record the stored passkey in the enrolment's transaction, after step 3
      * (and the rebind's disabling): a throw rolls the enrolment back.
      */
@@ -110,6 +116,7 @@ async function writePasskey(
     readonly realmId: string;
     readonly userId: string;
     readonly enrolment: WebAuthnEnrolment;
+    readonly newUntil?: number;
   }
 ): Promise<UserCredential> {
   await lockRealmRpId(deps, tx, input);
@@ -119,6 +126,7 @@ async function writePasskey(
       realmId: input.realmId,
       providerType: WEBAUTHN_PROVIDER_TYPE,
       ...passkeyCredentialOf(input.enrolment),
+      ...(input.newUntil === undefined ? {} : { newUntil: input.newUntil }),
     },
     tx
   );

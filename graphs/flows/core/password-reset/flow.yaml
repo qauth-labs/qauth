@@ -21,7 +21,9 @@
 #   address: a reset would keep its sub, so it waits for PRO-17 (#641), which ends such an account at the first
 #   mailbox proof.
 # - An email code never stands in for an authenticator: an account that holds a passkey or a TOTP, disabled or not,
-#   proves it next, or the reset goes on elsewhere (on the hosted pages, a recovery code, once F2c adds them).
+#   proves it next, or the reset goes on elsewhere (on the hosted pages, a recovery code, once F2c adds them). A new
+#   one (#1064: bound after a sign-in that proved only the password, inside the realm's window) neither blocks the
+#   reset nor meets it, and while one is new no recovery code stands in for the others.
 # - One database transaction replaces the hash, marks the address verified, clears the password's disabled mark and
 #   its update_password required action, revokes every refresh family of the user, advances the user's session
 #   epoch and records the reset. Then the user's browser sessions end, the password's ladder counters clear, and the
@@ -37,7 +39,8 @@ summary: >-
   round, and the request must not ask for a fresh sign-in. The engine mails an 8-digit recovery code through the capped
   sender, only to an enabled account with a password and a proved address, and asks for it with the same step for
   every address. A right
-  code proves the mailbox and fixes the account. An account with a passkey or a TOTP proves it next. Then the engine
+  code proves the mailbox and fixes the account. An account with a passkey or a TOTP proves it next, unless the factor
+  is new: bound after a password-only sign-in, inside the realm's window (#1064). Then the engine
   asks for a new password, checks it against the realm's policy and breach list, and in one database transaction
   replaces the hash, verifies the address, clears the password's disabled mark, revokes every refresh family and
   advances the session epoch; the user's sessions end, the password's counters clear and the notice is mailed. The
@@ -111,11 +114,16 @@ context:
       unclaimed: 'an enabled account holds the address with a password, its address never proved'
   # The other authenticators the account holds, beside its password.
   otherFactor:
-    values: [none, usable, unusable]
+    values: [none, onlyNew, usable, unusable]
     initial: any
     say:
       none: 'the account holds no passkey and no TOTP'
-      usable: 'the account holds a passkey or a TOTP whose step the transport serves'
+      onlyNew: >-
+        every passkey and TOTP it holds is new (#1064): bound after a sign-in that proved only the password, inside the
+        realm's window, so the reset reads the account without them
+      usable: >-
+        it holds a passkey or a TOTP that is not new, whose step the transport serves; a new one proved in its place
+        does not count
       unusable: 'the account holds one the transport cannot serve: a disabled one, or one with no step yet'
   # The realm's password policy and breach list on the new password.
   newPassword:
@@ -178,7 +186,7 @@ guards:
   capped: "sendCaps == 'capped'"
   mailable: "holder == 'enabled'"
   notMailable: "holder != 'enabled'"
-  factorPending: "otherFactor != 'none' and not factorProved"
+  factorPending: "otherFactor in ['usable', 'unusable'] and not factorProved"
   newPasswordRejected: "newPassword == 'rejected'"
   newPasswordListed: "newPassword == 'listed'"
 
@@ -423,7 +431,8 @@ states:
       On every round once the mailbox is proved. A disabled account, or one no longer there, ends the reset with
       nothing written. An account that holds a passkey or a TOTP, a disabled one included, proves it before any new
       password: an email code never stands in for an authenticator. One the transport cannot serve sends the person
-      elsewhere.
+      elsewhere. A new one (#1064) is read as not held: it neither blocks the reset nor meets it, so the owner whose
+      password let someone bind a factor resets past it.
     invoke: { external: accountDirectory }
     on:
       DONE:
@@ -836,8 +845,13 @@ assertions:
     never: 'passwordReplaced and not mailboxProved'
     say: 'Nothing is written before the mailbox is proved'
   - id: email-never-stands-in
-    never: "passwordReplaced and otherFactor != 'none' and not factorProved"
-    say: 'An account with a passkey or a TOTP never resets with its mailbox alone'
+    never: "passwordReplaced and otherFactor in ['usable', 'unusable'] and not factorProved"
+    say: 'An account with a passkey or a TOTP that is not new never resets with its mailbox alone'
+  - id: a-new-factor-blocks-no-reset
+    never: "state in ['offeringFactor', 'factorRefused', 'redirected'] and otherFactor == 'onlyNew' and mailboxProved"
+    say: >-
+      A passkey or a TOTP bound after a password-only sign-in is not asked for while it is new: it never stands
+      between the owner and the reset
   - id: no-change-before-the-password
     never: 'passwordReplaced and not passwordAccepted'
     say: "No password is replaced before the new one passes the realm's policy and breach list"

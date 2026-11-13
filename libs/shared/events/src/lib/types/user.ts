@@ -399,6 +399,30 @@ const ownCredentialType = () =>
     '`passkey`: a WebAuthn passkey. `totp`: an authenticator app (TOTP). The set may grow in a minor release.'
   );
 
+/**
+ * The kinds of authenticator a credential of {@link OWN_CREDENTIAL_TYPES} is
+ * (#1064), so CAEP `credential-change` can name its `credential_type`.
+ */
+export const CREDENTIAL_AUTHENTICATORS = ['platform', 'roaming', 'app'] as const;
+
+const credentialAuthenticator = () =>
+  extensibleEnum(CREDENTIAL_AUTHENTICATORS)
+    .describe(
+      '`platform`: a passkey on the device it was made on. `roaming`: a passkey on an authenticator carried to the device, such as a security key or a phone. `app`: an authenticator app (TOTP). For a passkey, read from the transports the client reported at its registration: `internal` is the device’s own, any other a roaming one, and with none reported a passkey that may be synced is a platform’s. Absent on an event recorded before #1064. The set may grow in a minor release.'
+    )
+    .optional();
+
+/** The CAEP `credential_type` of each {@link CREDENTIAL_AUTHENTICATORS} value (CAEP 1.0 §3.3). */
+const CAEP_CREDENTIAL_TYPES = {
+  platform: 'fido2-platform',
+  roaming: 'fido2-roaming',
+  app: 'app',
+} as const;
+
+/** Why an event without `authenticator` has no SSF event. */
+const CREDENTIAL_SSF_NOTE =
+  'Sent when the event carries `authenticator`, as every one QAuth records since #1064 does; an event recorded before it is not sent. CAEP 1.0 `credential-change` tells a platform passkey (`fido2-platform`) from a roaming one (`fido2-roaming`), and an authenticator app is `app`.';
+
 export const userPasswordChanged = defineEventType({
   name: 'user.password_changed',
   version: 1,
@@ -425,7 +449,7 @@ export const userCredentialAdded = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'A passkey or an authenticator app (TOTP) was bound to a person’s account, in a step of the hosted pages the person answered: after a sign-in that offered or asked for it, in a recovery that replaced a lost passkey, or from the hosted account page after a fresh sign-in. A passkey an account was registered with is recorded by the registration (`user.registered`).',
+    'A passkey or an authenticator app (TOTP) was bound to a person’s account, in a step of the hosted pages the person answered: after a sign-in that offered or asked for it, in a recovery that replaced a lost passkey, or from the hosted account page after a fresh sign-in. A passkey an account was registered with is recorded by the registration (`user.registered`). One bound after a sign-in that proved only the password is new for the realm’s `accounts.newFactorWindowDays` (#1064).',
   category: 'user',
   severity: 'info',
   since: FIRST_RELEASE,
@@ -433,11 +457,17 @@ export const userCredentialAdded = defineEventType({
   data: z.strictObject({
     type: ownCredentialType(),
     credentialId: recordId('The id of the account credential that was bound.'),
+    authenticator: credentialAuthenticator(),
   }),
   security: true,
-  ssf: 'none',
-  ssfNote:
-    'CAEP 1.0 `credential-change` tells a platform passkey (`fido2-platform`) from a roaming one (`fido2-roaming`), and QAuth does not record which kind of authenticator created a passkey.',
+  ssf: {
+    event: CAEP_CREDENTIAL_CHANGE,
+    members: {
+      credential_type: { data: 'authenticator', map: CAEP_CREDENTIAL_TYPES, whenPresent: true },
+      change_type: { value: 'create' },
+    },
+  },
+  ssfNote: CREDENTIAL_SSF_NOTE,
 });
 
 export const userCredentialRemoved = defineEventType({
@@ -445,7 +475,7 @@ export const userCredentialRemoved = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'A person removed a passkey or their authenticator app (TOTP) from their account on the hosted account page, after a fresh sign-in with the account’s strongest factor or with a recovery code in place of a lost one. The account no longer signs in with it.',
+    'A person removed a passkey or their authenticator app (TOTP) from their account on the hosted account page, after a fresh sign-in with the account’s strongest factor or with a recovery code in place of a lost one; or, while it was new (bound after a sign-in that proved only the password, #1064), after a fresh sign-in with the password. The account no longer signs in with it.',
   category: 'user',
   severity: 'warning',
   since: FIRST_RELEASE,
@@ -453,11 +483,23 @@ export const userCredentialRemoved = defineEventType({
   data: z.strictObject({
     type: ownCredentialType(),
     credentialId: recordId('The id of the account credential that was removed.'),
+    authenticator: credentialAuthenticator(),
+    whileNew: z
+      .literal(true)
+      .optional()
+      .describe(
+        'Present when the credential was still new (#1064): bound after a sign-in that proved only the password, inside the realm’s `accounts.newFactorWindowDays`. Every live session whose sign-in bound or proved it ended with it, as did its unredeemed codes and the refresh families those sign-ins opened.'
+      ),
   }),
   security: true,
-  ssf: 'none',
-  ssfNote:
-    'CAEP 1.0 `credential-change` tells a platform passkey (`fido2-platform`) from a roaming one (`fido2-roaming`), and QAuth does not record which kind of authenticator created a passkey.',
+  ssf: {
+    event: CAEP_CREDENTIAL_CHANGE,
+    members: {
+      credential_type: { data: 'authenticator', map: CAEP_CREDENTIAL_TYPES, whenPresent: true },
+      change_type: { value: 'delete' },
+    },
+  },
+  ssfNote: CREDENTIAL_SSF_NOTE,
 });
 
 export const userPasskeyRenamed = defineEventType({

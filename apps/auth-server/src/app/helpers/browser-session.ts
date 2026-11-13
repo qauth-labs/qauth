@@ -62,6 +62,14 @@ export interface BrowserSignIn {
    * let the session rebind a factor. Absent, `false`.
    */
   recoveryCodeUsed?: boolean;
+  /**
+   * The account's new credentials the sign-in bound or proved (#1064; ADR-017
+   * Decision 8): the session records them, so removing one while it is new
+   * ends the session, and a fresh sign-in that proved a factor only through
+   * one of them does not count as the account's strongest factor. Absent,
+   * none.
+   */
+  newCredentialIds?: readonly string[];
 }
 
 /**
@@ -94,6 +102,9 @@ export async function createBrowserSession(
     // Only a sign-in that took a recovery code says so (#663); the column
     // defaults to false for every other.
     ...(signIn.recoveryCodeUsed === true ? { recoveryCodeUsed: true } : {}),
+    ...(signIn.newCredentialIds !== undefined && signIn.newCredentialIds.length > 0
+      ? { newCredentialIds: signIn.newCredentialIds }
+      : {}),
     assuranceLevel: signIn.assuranceLevel ?? null,
     ipAddress: origin?.ip ?? null,
     userAgent: origin?.userAgent ?? null,

@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A factor bound after a password-only sign-in is new for a window, and the
+  owner can undo it with the password** ([#1064], ADR-017 Decision 8, ADR-020
+  §3). Since [#1052] the first passkey or TOTP of a verified password-only
+  account binds without a mailed code, so someone who knew only the password
+  could bind a factor of their own and the owner's reset could not pass it. A
+  passkey or authenticator app bound after a sign-in that proved only the
+  password is now _new_ for the realm's `accounts.newFactorWindowDays`
+  (default 7, from 1 to 30; `NEW_FACTOR_WINDOW_DAYS` seeds it). While new it
+  signs in as usual, but the downgrade rule, the TOTP owed after the first
+  factor, a reset, a forced password update and the fresh authentication a
+  change needs read the account without it, and the password alone, after a
+  fresh sign-in, removes it. Removing it ends the sessions whose sign-in bound
+  or proved it, revokes their refresh-token families and unused authorization
+  codes (ended sessions' too, while `SESSION_RETENTION_DAYS` keeps them),
+  deletes the account's recovery codes, which the binding may have shown to
+  whoever bound it, ends every sign-in in progress of the account, and
+  records `user.credential_removed` with `whileNew`. After the window it is a
+  full factor. A factor bound after a sign-in that proved a settled factor
+  beyond the password is never new, and a recovery code counts as one, in a
+  reset or a forced password update too, only on an account that holds no
+  new factor. Changing the window either way is a
+  security operation (`credential-path`). The owner learns of every
+  binding through the account's own channels: `user.credential_added` and
+  `user.credential_removed` now name the authenticator (`platform`,
+  `roaming` or `app`) and go to every Shared Signals stream subscribed to the
+  user as a CAEP `credential-change` ([#410]); the account page shows the
+  binding to the account's other sessions, with "Not you? Remove it" while
+  the factor is new; mail is one more channel. Migration 0072 adds
+  `user_credentials.new_until` and `sessions.new_credential_ids` without
+  rewriting either table; a factor an older release binds is never new.
 - **A realm can turn off the passkey offer after a password sign-in**
   ([#1083], ADR-017 Decisions 4 and 8, ADR-020 §3). With passkeys on
   (`WEBAUTHN_ENABLED`), the sign-in engine offers to add a passkey

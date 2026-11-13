@@ -765,3 +765,119 @@ describe('the session epoch', () => {
     expect(result).toMatchObject({ kind: 'refused', reason: 'unavailable' });
   });
 });
+
+describe('a factor bound after a password-only sign-in (#1064)', () => {
+  const DAY = 24 * 60 * 60_000;
+  /** An account whose passkey is new until `until`. */
+  const withNewPasskey = (until: number): readonly [string, FakeAccount][] => [
+    [
+      ADDRESS,
+      passwordAccount(USER, PASSWORD, {
+        others: [{ type: 'passkey', disabled: false, credentialId: 'passkey-1', newUntil: until }],
+      }),
+    ],
+  ];
+
+  it('does not stand in the reset’s way while it is new: the mailbox sets a new password', async () => {
+    const built = build(withNewPasskey(T0 + 7 * DAY));
+    const ctx = context(built);
+    const afterCode = await toAfterCode(built, ctx);
+    expect(afterCode).toMatchObject({ kind: 'step', offer: { current: RESET_PASSWORD_STEP } });
+    const done = await built.engine.advance(kept(afterCode), newPasswordAnswer(NEW_PASSWORD), ctx);
+    expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER, recovered: true } });
+    expect(built.resets.resets).toHaveLength(1);
+  });
+
+  it('is proved after the code once the window is over, as any passkey', async () => {
+    const built = build(withNewPasskey(T0 + 7 * DAY));
+    built.clock.advance(7 * DAY);
+    const result = await toAfterCode(built, context(built));
+    // This engine has no passkey port: the step cannot be asked here.
+    expect(result).toEqual({ kind: 'redirect', reason: 'step_not_available', transaction: null });
+    expect(built.resets.resets).toEqual([]);
+  });
+
+  it('stands in for no factor that is not new: a new TOTP does not unlock the reset of a settled passkey', async () => {
+    const totp = fakeTotp();
+    const built = build(
+      [
+        [
+          ADDRESS,
+          passwordAccount(USER, PASSWORD, {
+            others: [
+              { type: 'passkey', disabled: false, credentialId: 'passkey-1' },
+              { type: 'totp', disabled: false, credentialId: 'totp-1', newUntil: T0 + 7 * DAY },
+            ],
+          }),
+        ],
+      ],
+      { steps: [totp.handler] }
+    );
+    const ctx = context(built);
+    const afterCode = await toAfterCode(built, ctx);
+    // The settled passkey is what the reset asks for; this engine cannot.
+    expect(afterCode).toEqual({
+      kind: 'redirect',
+      reason: 'step_not_available',
+      transaction: null,
+    });
+    expect(totp.verify).not.toHaveBeenCalled();
+  });
+
+  /** A settled TOTP, a passkey new until `T0 + 7 days`, and a set of recovery codes. */
+  async function withCodesAndNewPasskey() {
+    const totp = fakeTotp();
+    const codes = createMemoryRecoveryCodes();
+    const built = build(
+      [
+        [
+          ADDRESS,
+          passwordAccount(USER, PASSWORD, {
+            others: [
+              { type: 'totp', disabled: false, credentialId: 'totp-1' },
+              {
+                type: 'passkey',
+                disabled: false,
+                credentialId: 'passkey-1',
+                newUntil: T0 + 7 * DAY,
+              },
+            ],
+          }),
+        ],
+      ],
+      { steps: [totp.handler], recoveryCodes: codes }
+    );
+    await codes.replace({ realmId: REALM, userId: USER });
+    return { built, totp, codes };
+  }
+
+  it('takes no recovery code in place of a settled factor while a factor is new, nor offers one', async () => {
+    const { built, totp, codes } = await withCodesAndNewPasskey();
+    const ctx = context(built);
+    const afterCode = await toAfterCode(built, ctx);
+    // The new passkey's binding may have shown the codes to whoever bound
+    // it: only the settled TOTP meets the reset.
+    expect(afterCode).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'totp' }, alternatives: [] },
+    });
+    const proved = await built.engine.advance(
+      kept(afterCode),
+      answer('totp', { otp: '123456' }),
+      ctx
+    );
+    expect(totp.verify).toHaveBeenCalledTimes(1);
+    expect(proved).toMatchObject({ kind: 'step', offer: { current: RESET_PASSWORD_STEP } });
+    expect(codes.usedNotices).toEqual([]);
+  });
+
+  it('offers the recovery code beside the settled factor again once the window is over', async () => {
+    const { built } = await withCodesAndNewPasskey();
+    built.clock.advance(7 * DAY);
+    const afterCode = await toAfterCode(built, context(built));
+    expect(afterCode).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'totp' }, alternatives: [{ step: 'recovery_code' }] },
+    });
+  });
+});

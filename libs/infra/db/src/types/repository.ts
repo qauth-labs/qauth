@@ -351,6 +351,11 @@ export interface UserCredentialsRepository {
       readonly userId: string;
       readonly credentialData: Readonly<Record<string, unknown>>;
       readonly at: number;
+      /**
+       * When the TOTP stops being new (#1064), or `null` for one that never
+       * is: a rewrite replaces the old secret's window with the new one's.
+       */
+      readonly newUntil?: number | null;
     },
     tx?: DbClient
   ): Promise<UserCredential | undefined>;
@@ -815,6 +820,20 @@ export interface RefreshTokensRepository {
    */
   revokeAllForUser(userId: string, reason?: string, tx?: DbClient): Promise<void>;
   /**
+   * Revoke the refresh families the given sign-ins of a user opened
+   * (#1064): every unrevoked token, expired ones too, of each family of the
+   * user one of whose tokens carries one of `authTimes`, the `auth_time` of
+   * each sign-in's browser session.
+   *
+   * @returns Count of rows revoked by this call.
+   */
+  revokeFamiliesOfSignIns(
+    userId: string,
+    authTimes: readonly number[],
+    reason: string,
+    tx?: DbClient
+  ): Promise<number>;
+  /**
    * Revoke every active refresh token one user holds for one client.
    *
    * Consent revocation calls this: withdrawing a grant must also end the
@@ -992,6 +1011,15 @@ export interface AuthorizationCodesRepository {
    * (consent revocation). Returns count of invalidated codes.
    */
   invalidateForUserAndClient(userId: string, oauthClientId: string, tx?: DbClient): Promise<number>;
+  /**
+   * Invalidate every unredeemed code of a user that one of `sessionIds`
+   * minted (#1064). Returns count of invalidated codes.
+   */
+  invalidateForSessions(
+    userId: string,
+    sessionIds: readonly string[],
+    tx?: DbClient
+  ): Promise<number>;
   /**
    * Delete expired codes
    * Returns count of deleted codes
@@ -1637,6 +1665,19 @@ export interface SessionsRepository {
    * `expires_at`. Served by the partial index `idx_sessions_realm_user_active`.
    */
   listActiveForUser(realmId: string, userId: string, tx?: DbClient): Promise<Session[]>;
+  /**
+   * A user's sessions in a realm whose sign-in bound or proved the new
+   * credential `credentialId` (#1064; `new_credential_ids`), newest first:
+   * live or ended alike, for as long as an ended one is kept
+   * (`SESSION_RETENTION_DAYS`), since the refresh families a sign-in opened
+   * outlive its browser session.
+   */
+  listNamingCredential(
+    realmId: string,
+    userId: string,
+    credentialId: string,
+    tx?: DbClient
+  ): Promise<Session[]>;
   /**
    * Record that a live session served a client (issue #549): the
    * `session_clients` row back-channel logout reads, written in the

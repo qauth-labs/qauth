@@ -418,6 +418,12 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
         'credential-path',
       ]),
       policyCase('lets anyone sign up', { accounts: { allowSignUp: true } }, ['credential-path']),
+      policyCase('lengthens the new-factor window', { accounts: { newFactorWindowDays: 30 } }, [
+        'credential-path',
+      ]),
+      policyCase('shortens the new-factor window', { accounts: { newFactorWindowDays: 1 } }, [
+        'credential-path',
+      ]),
       policyCase(
         'raises the environment ceiling',
         { posture: { maxEnvironmentLaxity: 'development' } },

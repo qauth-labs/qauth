@@ -49,6 +49,10 @@ const TABLE: Readonly<Record<string, readonly [string | null, string, string]>> 
   'tokens.adminAccessTokenLifespanSeconds': [null, 'lower-is-stricter', 'loosening'],
   'accounts.requireVerifiedAccount': ['REQUIRE_VERIFIED_ACCOUNT', 'true-is-stricter', 'loosening'],
   'accounts.allowSignUp': ['ALLOW_SIGN_UP', 'false-is-stricter', 'loosening'],
+  // #1064: neither way is stricter. A longer window keeps a factor bound
+  // after a password-only sign-in removable with the password for longer; a
+  // shorter one leaves the owner less time to undo an intruder's.
+  'accounts.newFactorWindowDays': ['NEW_FACTOR_WINDOW_DAYS', 'opaque', 'any-change'],
   'password.minLength': ['PASSWORD_MIN_LENGTH', 'higher-is-stricter', 'loosening'],
   'password.minScore': ['PASSWORD_MIN_SCORE', 'higher-is-stricter', 'loosening'],
   'password.breachListSource': ['PASSWORD_BREACH_LIST_SOURCE', 'ordered', 'loosening'],

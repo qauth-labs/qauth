@@ -15347,7 +15347,7 @@
         "tags": [
           "UI"
         ],
-        "description": "Remove one of the account's passkeys (#844; `account.passkeys.delete`). Needs a sign-in from the last five minutes with the account's strongest factor, or with a recovery code in place of a lost one. The account's last way to sign in, or the last second factor the realm requires, is refused (`409`).",
+        "description": "Remove one of the account's passkeys (#844; `account.passkeys.delete`). Needs a sign-in from the last five minutes with the account's strongest factor, or with a recovery code in place of a lost one; a passkey still new (bound after a sign-in that proved only the password, #1064) needs one with the password, and its removal ends the sessions whose sign-in bound or proved it, their codes and their refresh families, the account's recovery codes and every sign-in in progress. The account's last way to sign in, or the last second factor the realm requires, is refused (`409`).",
         "requestBody": {
           "required": true,
           "content": {
@@ -15529,7 +15529,7 @@
         "tags": [
           "UI"
         ],
-        "description": "Turn off the authenticator app (#844; `account.totp.delete`). Needs a sign-in from the last five minutes with the account's strongest factor, or with a recovery code in place of a lost one. The last second factor the realm requires is refused (`409`).",
+        "description": "Turn off the authenticator app (#844; `account.totp.delete`). Needs a sign-in from the last five minutes with the account's strongest factor, or with a recovery code in place of a lost one; an app still new (bound after a sign-in that proved only the password, #1064) needs one with the password, and turning it off ends the sessions whose sign-in bound or proved it, their codes and their refresh families, the account's recovery codes and every sign-in in progress. The last second factor the realm requires is refused (`409`).",
         "requestBody": {
           "required": true,
           "content": {

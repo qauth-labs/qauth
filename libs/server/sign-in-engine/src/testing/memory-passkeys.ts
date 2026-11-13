@@ -56,6 +56,13 @@ export interface MemoryPasskeys extends PasskeyCeremonies {
   forceUserVerified?: boolean;
   /** The account a binding finds: `account_disabled` or `subject_mismatch` refuse it. */
   bindRefusal?: 'account_disabled' | 'subject_mismatch';
+  /**
+   * Name the credential in a verified assertion and a binding, as the auth
+   * server's port does (#1064): its id. Off by default, as before #1064.
+   */
+  namesCredentials?: boolean;
+  /** Whether each binding was new (#1064), in order. */
+  readonly bindings: { readonly id: string; readonly isNew: boolean }[];
 }
 
 /** The challenge of the ceremony `params` offered: the request options' or the creation options'. */
@@ -134,6 +141,7 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
   const ceremonies = new Map<string, Ceremony>();
   const notices: { realmId: string; userId: string }[] = [];
   const calls: string[] = [];
+  const bindings: { id: string; isNew: boolean }[] = [];
   const challenge = () => randomBytes(32).toString('base64url');
   const take = (key: string, kind: Ceremony['kind']): Ceremony | undefined => {
     const ceremony = ceremonies.get(key);
@@ -146,6 +154,7 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
     ceremonies,
     notices,
     calls,
+    bindings,
     async startAssertion({ key }) {
       calls.push('startAssertion');
       const started = challenge();
@@ -170,7 +179,12 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
       // The provider refuses a sign-in assertion without UV; a port that lies
       // about it (`forceUserVerified`) is how a test reaches the engine's own check.
       if (!userVerified && memory.forceUserVerified === undefined) return { kind: 'refused' };
-      return { kind: 'verified', userId: passkey.userId, userVerified };
+      return {
+        kind: 'verified',
+        userId: passkey.userId,
+        userVerified,
+        ...(memory.namesCredentials === true ? { credentialId: passkey.id } : {}),
+      };
     },
     async startRegistration({ key, userId, identifier }): Promise<PasskeyRegistrationStart> {
       calls.push('startRegistration');
@@ -220,7 +234,7 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
       }
       return { kind: 'verified', registration: JSON.stringify({ id: answer.id, userId }) };
     },
-    async bind({ realmId, userId, registration, replacing }): Promise<PasskeyBinding> {
+    async bind({ realmId, userId, registration, replacing, isNew }): Promise<PasskeyBinding> {
       calls.push(replacing === true ? 'bind replacing' : 'bind');
       if (memory.bindRefusal !== undefined) return { kind: 'refused', reason: memory.bindRefusal };
       const held = JSON.parse(registration) as { id: string; userId: string };
@@ -234,8 +248,11 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
       }
       passkeys.set(held.id, passkey);
       notices.push({ realmId, userId });
+      bindings.push({ id: held.id, isNew: isNew === true });
       memory.onBind?.(passkey);
-      return { kind: 'bound' };
+      return memory.namesCredentials === true
+        ? { kind: 'bound', credentialId: held.id }
+        : { kind: 'bound' };
     },
   };
   return memory;

@@ -218,8 +218,48 @@ describe('the SSF rule of the registry (#540)', () => {
       { event: CAEP_SESSION_REVOKED, clientOnly: false as never },
       'ssf.clientOnly is true or absent',
     ],
+    [
+      'whenPresent on a required data member',
+      {
+        event: CAEP_CREDENTIAL_CHANGE,
+        members: {
+          credential_type: { data: 'label', whenPresent: true },
+          change_type: { value: 'create' },
+        },
+      },
+      'whenPresent is for a member the SSF event requires, from an optional data member',
+    ],
+    [
+      'whenPresent on a member the event does not require',
+      {
+        event: CAEP_SESSION_REVOKED,
+        members: { reason_admin: { data: 'note', whenPresent: true } },
+      },
+      'whenPresent is for a member the SSF event requires, from an optional data member',
+    ],
+    [
+      'a whenPresent that is not true',
+      {
+        event: CAEP_TOKEN_CLAIMS_CHANGE,
+        members: { claims: { data: 'note', whenPresent: false as never } },
+      },
+      'whenPresent is true or absent',
+    ],
   ])('fails %s', (_label, mapping, message) => {
     expect(validate([withMapping(mapping as SsfEventMapping)]).join('\n')).toContain(message);
+  });
+
+  it('lets a required member come from an optional data member with whenPresent (#1064)', () => {
+    const problems = validate([
+      withMapping({
+        event: CAEP_CREDENTIAL_CHANGE,
+        members: {
+          credential_type: { data: 'note', whenPresent: true },
+          change_type: { value: 'create' },
+        },
+      }),
+    ]);
+    expect(problems.join('\n')).not.toContain('ssf.members');
   });
 
   it('keeps a key subject to a type with no subject, and never to one client', () => {
@@ -359,6 +399,43 @@ describe('the mapping table of #540', () => {
     ]) {
       expect(eventOf(type), type).toBe(CAEP_CREDENTIAL_CHANGE);
     }
+  });
+
+  it('maps a passkey or an authenticator app bound or removed to CAEP credential-change (#1064)', () => {
+    const added = ssfMappingOf(
+      getEventType('urn:qauth:event:user.credential_added:v1-rc.0') as EventTypeDefinition
+    );
+    const removed = ssfMappingOf(
+      getEventType('urn:qauth:event:user.credential_removed:v1-rc.0') as EventTypeDefinition
+    );
+    const event = (data: Record<string, unknown>) => ({
+      time: '2026-11-12T09:00:00.000Z',
+      category: 'user' as const,
+      actor: { type: 'user' as const, id: 'u-1' },
+      data,
+    });
+    if (added === undefined || removed === undefined) throw new Error('no mapping');
+    expect(added.event).toBe(CAEP_CREDENTIAL_CHANGE);
+    expect(
+      ssfEventMembers(added, event({ type: 'passkey', authenticator: 'platform' }))
+    ).toMatchObject({
+      credential_type: 'fido2-platform',
+      change_type: 'create',
+      initiating_entity: 'user',
+    });
+    expect(
+      ssfEventMembers(added, event({ type: 'passkey', authenticator: 'roaming' }))
+    ).toMatchObject({
+      credential_type: 'fido2-roaming',
+    });
+    expect(
+      ssfEventMembers(removed, event({ type: 'totp', authenticator: 'app', whileNew: true }))
+    ).toMatchObject({
+      credential_type: 'app',
+      change_type: 'delete',
+    });
+    // An event recorded before #1064 carries no authenticator: it is not sent.
+    expect(ssfEventMembers(added, event({ type: 'passkey' }))).toBeUndefined();
   });
 
   it('maps user disable and enable to RISC account-disabled and account-enabled (#748)', () => {

@@ -128,44 +128,44 @@ initial: idle
 states:
   idle:
     title: Wait for a page load or a ceremony post
-    source: apps/auth-server/src/app/routes/ui/account.ts:99
+    source: apps/auth-server/src/app/routes/ui/account.ts:100
     on:
       OPEN_OVERVIEW:
         target: resolvingSession
         effect: [openOverview]
         say: 'GET /ui/account'
-        source: apps/auth-server/src/app/routes/ui/account.ts:218
+        source: apps/auth-server/src/app/routes/ui/account.ts:227
       OPEN_PASSWORD:
         target: resolvingSession
         effect: [openPasswordPage]
         say: 'GET /ui/account/password'
-        source: apps/auth-server/src/app/routes/ui/account.ts:250
+        source: apps/auth-server/src/app/routes/ui/account.ts:259
       REAUTHENTICATE:
         target: checkingOrigin
         effect: [askReauthenticate]
         say: 'POST /ui/account/reauthenticate: "Confirm it''s you", with the page to come back to'
-        source: apps/auth-server/src/app/routes/ui/account.ts:346
+        source: apps/auth-server/src/app/routes/ui/account.ts:355
       ADD_PASSKEY:
         target: checkingOrigin
         effect: [askPasskey]
         say: 'POST /ui/account/passkeys/add'
-        source: apps/auth-server/src/app/routes/ui/account.ts:373
+        source: apps/auth-server/src/app/routes/ui/account.ts:382
       SET_UP_TOTP:
         target: checkingOrigin
         effect: [askTotp]
         say: 'POST /ui/account/totp/setup'
-        source: apps/auth-server/src/app/routes/ui/account.ts:485
+        source: apps/auth-server/src/app/routes/ui/account.ts:497
       LINK:
         target: checkingOrigin
         effect: [askLink]
         say: 'POST /ui/account/linked-accounts/link, with the provider'
-        source: apps/auth-server/src/app/routes/ui/account.ts:693
+        source: apps/auth-server/src/app/routes/ui/account.ts:708
 
   # The page loads
 
   resolvingSession:
     title: Read the browser session of the cookie
-    source: apps/auth-server/src/app/routes/ui/account.ts:231
+    source: apps/auth-server/src/app/routes/ui/account.ts:240
     invoke: { external: browserSessionStore }
     on:
       DONE:
@@ -177,12 +177,12 @@ states:
 
   decidingPage:
     title: Sign a browser with no session in first
-    source: apps/auth-server/src/app/routes/ui/account.ts:232
+    source: apps/auth-server/src/app/routes/ui/account.ts:241
     always:
       - guard: noSession
         target: startingSignIn
         say: 'no live session'
-        source: apps/auth-server/src/app/routes/ui/account.ts:233
+        source: apps/auth-server/src/app/routes/ui/account.ts:242
       - target: readingOverview
         say: 'a live session'
 
@@ -207,8 +207,10 @@ states:
     description: >-
       The credentials of the session's realm, the recovery code set's state, the linked upstream accounts, the
       providers it may link and up to 50 live sessions; then the session's account CSRF value, minted once and kept in
-      its side record.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:285
+      its side record. Where the account holds a new passkey or authenticator app (#1064: bound after a sign-in that
+      proved only the password, inside the realm's window), the session's own row is read too, so that a binding
+      this session's sign-in made is not shown back to it as a notice.
+    source: apps/auth-server/src/app/helpers/account-changes.ts:363
     invoke: { external: accountStore }
     on:
       DONE:
@@ -220,7 +222,7 @@ states:
 
   choosingPage:
     title: Show the overview, or the password form of an account that has one
-    source: apps/auth-server/src/app/routes/ui/account.ts:269
+    source: apps/auth-server/src/app/routes/ui/account.ts:278
     always:
       - guard: opensOverview
         target: overview_shown
@@ -228,7 +230,7 @@ states:
       - guard: noPassword
         target: not_found.no_password
         say: 'an account with no password has none to change'
-        source: apps/auth-server/src/app/routes/ui/account.ts:270
+        source: apps/auth-server/src/app/routes/ui/account.ts:279
       - target: password_form_shown
         say: 'the password form'
 
@@ -236,18 +238,18 @@ states:
 
   checkingOrigin:
     title: Refuse a post from another site
-    source: apps/auth-server/src/app/routes/ui/account.ts:173
+    source: apps/auth-server/src/app/routes/ui/account.ts:175
     always:
       - guard: foreignOrigin
         target: forbidden.foreign_origin
         say: 'not from a page of the realm origin'
-        source: apps/auth-server/src/app/routes/ui/account.ts:93
+        source: apps/auth-server/src/app/routes/ui/account.ts:94
       - target: resolvingPostSession
         say: 'from a page of the realm origin'
 
   resolvingPostSession:
     title: Read the browser session of the cookie
-    source: apps/auth-server/src/app/routes/ui/account.ts:184
+    source: apps/auth-server/src/app/routes/ui/account.ts:186
     invoke: { external: browserSessionStore }
     on:
       DONE:
@@ -259,7 +261,7 @@ states:
 
   checkingPostSession:
     title: Send a post with no session to the overview, which signs the person in
-    source: apps/auth-server/src/app/routes/ui/account.ts:185
+    source: apps/auth-server/src/app/routes/ui/account.ts:187
     always:
       - guard: noSession
         target: see_other.no_session
@@ -269,7 +271,7 @@ states:
 
   readingCsrf:
     title: Read the session's account CSRF value
-    source: apps/auth-server/src/app/helpers/account-changes.ts:175
+    source: apps/auth-server/src/app/helpers/account-changes.ts:231
     invoke: { external: sessionSideRecord }
     on:
       DONE:
@@ -281,12 +283,12 @@ states:
 
   checkingCsrf:
     title: Refuse a form without the session's CSRF value
-    source: apps/auth-server/src/app/routes/ui/account.ts:190
+    source: apps/auth-server/src/app/routes/ui/account.ts:192
     always:
       - guard: wrongCsrf
         target: forbidden.csrf
         say: 'none, or another, compared in constant time'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:182
+        source: apps/auth-server/src/app/helpers/account-changes.ts:238
       - target: choosingCeremony
         say: 'the right value'
 
@@ -296,7 +298,7 @@ states:
       - guard: reauthenticating
         target: startingCeremony
         say: '"Confirm it''s you" needs nothing more'
-        source: apps/auth-server/src/app/routes/ui/account.ts:365
+        source: apps/auth-server/src/app/routes/ui/account.ts:374
       - guard: addingPasskey
         target: checkingPasskeys
         say: 'a passkey'
@@ -308,7 +310,7 @@ states:
 
   checkingPasskeys:
     title: Offer a passkey only while passkeys are on
-    source: apps/auth-server/src/app/routes/ui/account.ts:389
+    source: apps/auth-server/src/app/routes/ui/account.ts:398
     always:
       - guard: passkeysOff
         target: not_found.passkeys_off
@@ -318,7 +320,7 @@ states:
 
   readingTotp:
     title: Read whether the account holds an authenticator app
-    source: apps/auth-server/src/app/routes/ui/account.ts:501
+    source: apps/auth-server/src/app/routes/ui/account.ts:513
     invoke: { action: UserCredential.findAllByUserId }
     on:
       DONE:
@@ -330,7 +332,7 @@ states:
 
   checkingTotp:
     title: Set up one authenticator app at a time
-    source: apps/auth-server/src/app/routes/ui/account.ts:502
+    source: apps/auth-server/src/app/routes/ui/account.ts:514
     always:
       - guard: totpHeld
         target: conflict.totp_held
@@ -340,7 +342,7 @@ states:
 
   readingProviders:
     title: Read the providers the account may link
-    source: apps/auth-server/src/app/routes/ui/account.ts:709
+    source: apps/auth-server/src/app/routes/ui/account.ts:724
     invoke: { external: upstreamProviderCatalog }
     on:
       DONE:
@@ -352,7 +354,7 @@ states:
 
   checkingProvider:
     title: Link only a provider the account may link
-    source: apps/auth-server/src/app/routes/ui/account.ts:710
+    source: apps/auth-server/src/app/routes/ui/account.ts:725
     always:
       - guard: otherProvider
         target: not_found.provider
@@ -387,8 +389,11 @@ states:
     description: >-
       Every method with its state and its actions: change the password, rename, remove or add a passkey, set up or
       turn off the authenticator app, get new recovery codes, link or unlink an upstream account, sign one session out
-      or sign out everywhere. A notice of the last change is shown when the query names one.
-    source: apps/auth-server/src/app/routes/ui/account.ts:237
+      or sign out everywhere. A notice of the last change is shown when the query names one. A new passkey or
+      authenticator app that another session's sign-in bound is shown first, as an alert with its time and a "Not
+      you? Remove it" form, which removes it with the password alone while it is new (account.account-page-changes);
+      each new one's row says until when it is new (#1064).
+    source: apps/auth-server/src/app/routes/ui/account.ts:246
     response:
       status: 200
       headers:
@@ -399,7 +404,7 @@ states:
   password_form_shown:
     type: final
     title: Show the "change your password" form
-    source: apps/auth-server/src/app/routes/ui/account.ts:273
+    source: apps/auth-server/src/app/routes/ui/account.ts:282
     response:
       status: 200
       headers:
@@ -410,7 +415,7 @@ states:
   not_found.no_password:
     type: final
     title: Say the account has no password to change
-    source: apps/auth-server/src/app/routes/ui/account.ts:271
+    source: apps/auth-server/src/app/routes/ui/account.ts:280
     response:
       status: 404
       headers:
@@ -420,7 +425,7 @@ states:
   sign_in_required.no_session:
     type: final
     title: Send the browser through a sign-in that comes back to the page
-    source: apps/auth-server/src/app/routes/ui/account.ts:233
+    source: apps/auth-server/src/app/routes/ui/account.ts:242
     response:
       status: 303
       headers:
@@ -431,7 +436,7 @@ states:
     type: final
     title: Send a post with no session to the overview
     description: Nothing is read or changed; the overview signs the person in.
-    source: apps/auth-server/src/app/routes/ui/account.ts:187
+    source: apps/auth-server/src/app/routes/ui/account.ts:189
     response:
       status: 303
       headers:
@@ -441,7 +446,7 @@ states:
     type: final
     title: Refuse a post from another site
     description: request.csrf_rejected is recorded with the form account.
-    source: apps/auth-server/src/app/routes/ui/account.ts:181
+    source: apps/auth-server/src/app/routes/ui/account.ts:183
     response:
       status: 403
       headers:
@@ -452,7 +457,7 @@ states:
     type: final
     title: Refuse a form without the session's CSRF value
     description: request.csrf_rejected is recorded with the form account, for the session's account.
-    source: apps/auth-server/src/app/routes/ui/account.ts:191
+    source: apps/auth-server/src/app/routes/ui/account.ts:193
     response:
       status: 403
       headers:
@@ -462,7 +467,7 @@ states:
   not_found.passkeys_off:
     type: final
     title: Refuse a passkey while passkeys are off
-    source: apps/auth-server/src/app/routes/ui/account.ts:389
+    source: apps/auth-server/src/app/routes/ui/account.ts:398
     response:
       status: 404
       headers:
@@ -472,7 +477,7 @@ states:
   conflict.totp_held:
     type: final
     title: Refuse a second authenticator app
-    source: apps/auth-server/src/app/routes/ui/account.ts:503
+    source: apps/auth-server/src/app/routes/ui/account.ts:515
     response:
       status: 409
       headers:
@@ -482,7 +487,7 @@ states:
   not_found.provider:
     type: final
     title: Refuse a provider the account may not link
-    source: apps/auth-server/src/app/routes/ui/account.ts:711
+    source: apps/auth-server/src/app/routes/ui/account.ts:726
     response:
       status: 404
       headers:
@@ -496,7 +501,7 @@ states:
       The ceremony page of the interaction; for a link, the route that starts the provider in it. When the ceremony
       finishes, the browser comes back to the account page with the notice of its intent (confirmed, passkey, totp,
       linked), signed in with a new session; a cancel comes back with none.
-    source: apps/auth-server/src/app/routes/ui/account.ts:159
+    source: apps/auth-server/src/app/routes/ui/account.ts:160
     response:
       status: 303
       headers:
@@ -516,28 +521,28 @@ assertions:
   - id: no-ceremony-from-another-site
     never: 'ceremonyStarted and foreignOrigin'
     say: 'A post from another site starts no ceremony'
-    source: apps/auth-server/src/app/routes/ui/account.ts:173
+    source: apps/auth-server/src/app/routes/ui/account.ts:175
   - id: no-ceremony-without-the-csrf-value
     never: 'ceremonyStarted and wrongCsrf'
     say: "A post without the session's CSRF value starts no ceremony"
-    source: apps/auth-server/src/app/routes/ui/account.ts:190
+    source: apps/auth-server/src/app/routes/ui/account.ts:192
   - id: no-ceremony-without-a-session
     never: 'ceremonyStarted and noSession'
     say: 'A post with no session starts no ceremony: only a page load starts a sign-in'
-    source: apps/auth-server/src/app/routes/ui/account.ts:185
+    source: apps/auth-server/src/app/routes/ui/account.ts:187
   - id: no-sign-in-for-a-session
     never: 'signInStarted and not noSession'
     say: 'A browser with a live session is shown the page, not sent to sign in'
-    source: apps/auth-server/src/app/routes/ui/account.ts:232
+    source: apps/auth-server/src/app/routes/ui/account.ts:241
   - id: no-passkey-while-off
     never: 'ceremonyStarted and addingPasskey and passkeysOff'
     say: 'No passkey ceremony starts while passkeys are off'
-    source: apps/auth-server/src/app/routes/ui/account.ts:389
+    source: apps/auth-server/src/app/routes/ui/account.ts:398
   - id: one-authenticator-app
     never: 'ceremonyStarted and settingUpTotp and totpHeld'
     say: 'No set-up starts for an account that holds an authenticator app'
-    source: apps/auth-server/src/app/routes/ui/account.ts:502
+    source: apps/auth-server/src/app/routes/ui/account.ts:514
   - id: no-link-to-another-provider
     never: "ceremonyStarted and request == 'link' and otherProvider"
     say: 'A link starts only for a provider the realm offers and the account holds no identity of'
-    source: apps/auth-server/src/app/routes/ui/account.ts:710
+    source: apps/auth-server/src/app/routes/ui/account.ts:725

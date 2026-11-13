@@ -39,10 +39,20 @@ export type SsfJsonValue =
  * data value as a string, so `true` and `false` for a flag). A `data` member
  * the event leaves out, or a value `map` does not list, leaves the SSF member
  * out.
+ *
+ * A member the SSF event requires comes from a required data member, so
+ * every event of the type is sent. `whenPresent` lets it come from an
+ * optional one instead (#1064): an event that leaves the data member out
+ * lacks a required member and is not sent, as one recorded before the type
+ * carried it.
  */
 export type SsfMemberSource =
   | { readonly value: SsfJsonValue }
-  | { readonly data: string; readonly map?: Readonly<Record<string, SsfJsonValue>> };
+  | {
+      readonly data: string;
+      readonly map?: Readonly<Record<string, SsfJsonValue>>;
+      readonly whenPresent?: true;
+    };
 
 /**
  * What names a mapped event's subject, the SET's `sub_id` (RFC 9493, SSF 1.0

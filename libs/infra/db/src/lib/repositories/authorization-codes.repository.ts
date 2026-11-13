@@ -1,5 +1,5 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, eq, getTableColumns, gt, lt } from 'drizzle-orm';
+import { and, eq, getTableColumns, gt, inArray, lt } from 'drizzle-orm';
 
 import type {
   AuthorizationCode,
@@ -163,6 +163,35 @@ export function createAuthorizationCodesRepository(
         .where(and(eq(authorizationCodes.userId, userId), eq(authorizationCodes.used, false)))
         .returning();
 
+      return result.length;
+    },
+
+    /**
+     * Invalidate every unredeemed code a user holds that one of the given
+     * browser sessions minted (#1064): removing a factor while it is new ends
+     * the sessions it opened, and a code they minted must not open a refresh
+     * family after them.
+     *
+     * @returns Count of invalidated codes
+     */
+    async invalidateForSessions(
+      userId: string,
+      sessionIds: readonly string[],
+      tx?: DbClient
+    ): Promise<number> {
+      if (sessionIds.length === 0) return 0;
+      const invoker = tx ?? defaultDb;
+      const result = await invoker
+        .update(authorizationCodes)
+        .set({ used: true, usedAt: Date.now() })
+        .where(
+          and(
+            eq(authorizationCodes.userId, userId),
+            eq(authorizationCodes.used, false),
+            inArray(authorizationCodes.sessionId, [...sessionIds])
+          )
+        )
+        .returning({ id: authorizationCodes.id });
       return result.length;
     },
 

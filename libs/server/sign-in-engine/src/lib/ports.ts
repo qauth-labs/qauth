@@ -35,6 +35,18 @@ export type LadderCounter = (typeof LADDER_COUNTERS)[number];
 export interface BoundFactor {
   readonly type: FactorType;
   readonly disabled: boolean;
+  /** The credential's id (`user_credentials.id`), when the directory names it. */
+  readonly credentialId?: string;
+  /**
+   * When the factor stops being new, in epoch milliseconds (#1064; ADR-017
+   * Decision 8, amended 2026-11-12): a passkey or an authenticator app a
+   * sign-in bound after it proved only the account's password. While the
+   * engine's clock is before it, the factor signs in as usual, but it is
+   * not the account's strongest factor: the downgrade rule, the TOTP owed
+   * after a first factor, a reset and a forced password update read only
+   * the factors that are not new. Absent for a factor that never was new.
+   */
+  readonly newUntil?: number;
 }
 
 /**
@@ -802,7 +814,17 @@ export interface AddressVerifier {
  * The engine refuses every one alike, as `invalid_credentials`.
  */
 export type PasskeyAssertion =
-  | { readonly kind: 'verified'; readonly userId: string; readonly userVerified: boolean }
+  | {
+      readonly kind: 'verified';
+      readonly userId: string;
+      readonly userVerified: boolean;
+      /**
+       * The id of the account credential that answered (#1064): the engine
+       * reads from it whether the passkey is new, so a binding after it is
+       * new too. Absent, the passkey counts as not new.
+       */
+      readonly credentialId?: string;
+    }
   | { readonly kind: 'refused' };
 
 /**
@@ -833,9 +855,10 @@ export const PASSKEY_REGISTRATION_MAX_LENGTH = 16384;
 export type PasskeyBinding =
   /**
    * The passkey is bound and the binding notice is queued. The security log's
-   * own event of it comes with the account pages (#686).
+   * own event of it comes with the account pages (#686). `credentialId` is
+   * the new credential's id (#1064), which a new binding's session records.
    */
-  | { readonly kind: 'bound' }
+  | { readonly kind: 'bound'; readonly credentialId?: string }
   /**
    * Nothing was bound: the realm holds the credential id already
    * (`credential_exists`, the step is offered again), or the account is
@@ -916,6 +939,11 @@ export interface PasskeyCeremonies {
    * `replacing` is the rebind after a lost passkey (#655): in the same write,
    * every other passkey of the account in the realm is disabled, so the lost
    * one signs in no more. A disabled passkey still counts as bound.
+   *
+   * `isNew` (#1064; ADR-017 Decision 8, amended 2026-11-12): the sign-in
+   * proved the account's password and no factor beyond it that is not new
+   * itself. The port stores when the passkey stops being new, the realm's
+   * `accounts.newFactorWindowDays` from now.
    */
   bind(input: {
     readonly realmId: string;
@@ -923,6 +951,7 @@ export interface PasskeyCeremonies {
     readonly userId: string;
     readonly registration: string;
     readonly replacing?: boolean;
+    readonly isNew?: boolean;
   }): Promise<PasskeyBinding>;
   /**
    * Whether the realm offers a passkey after a password sign-in (#1083): its
@@ -983,8 +1012,11 @@ export type TotpSetupCheck =
 
 /** What binding a new secret to an account found (#653). */
 export type TotpBinding =
-  /** The secret is the account's TOTP now, replacing a disabled one, and the notice is queued. */
-  | { readonly kind: 'bound' }
+  /**
+   * The secret is the account's TOTP now, replacing a disabled one, and the
+   * notice is queued. `credentialId` is the TOTP credential's id (#1064).
+   */
+  | { readonly kind: 'bound'; readonly credentialId?: string }
   /**
    * Nothing was bound: the account is disabled or gone (`account_disabled`,
    * `subject_mismatch`), or its address was never proved
@@ -1028,13 +1060,16 @@ export interface TotpCredentials {
    * Bind a sealed secret to the account, with `step` as its last accepted
    * step, replacing the TOTP it holds, then queue the "TOTP added" notice; a
    * notice that fails is reported and binds the secret all the same. The
-   * account's TOTP counter ends with the old secret.
+   * account's TOTP counter ends with the old secret. `isNew` as for a
+   * passkey ({@link PasskeyCeremonies.bind}, #1064): the port stores when
+   * the TOTP stops being new.
    */
   bind(
     input: TotpAccount & {
       readonly clientId: string;
       readonly sealed: string;
       readonly step: number;
+      readonly isNew?: boolean;
     }
   ): Promise<TotpBinding>;
   /**

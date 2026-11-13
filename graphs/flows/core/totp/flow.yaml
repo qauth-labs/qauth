@@ -17,6 +17,9 @@
 # - An account that holds a TOTP owes it after the first factor, a disabled one counting as bound (ADR-017 Decision 4:
 #   disabling a factor never lowers what a sign-in must prove), unless the transaction proved mfa another way (a
 #   passkey) or took a recovery code in its place on the hosted pages. The amr is ["pwd","otp","mfa"].
+# - A TOTP bound after a sign-in that proved only the password is new for the realm's window (#1064; ADR-017
+#   Decision 8, amended 2026-11-12): it proves the account as any TOTP does, but it is owed only where the MFA policy
+#   requires a second factor, and the password alone removes it from the account page while it is new.
 # - Across transactions, clients, transports and IPs, one counter per (realm, user) counts wrong codes: the ladder of
 #   PRO-12 (#615) from 5 failures, with no known-IP exemption, never cleared by a correct first factor. At 100 in a row
 #   the TOTP is disabled, only while the hosted pages are on and the account keeps an unused recovery code or another
@@ -38,7 +41,8 @@ summary: >-
   after a password, and so, whatever the policy, does one whose disabled TOTP a recovery code stood in for:
   a new secret, bound only after a first valid code, within 5 minutes of the factor the transaction proved, to a
   verified account and with no emailed code (the account decides, never a channel). Then the first set of recovery
-  codes is shown.
+  codes is shown. A TOTP bound after a sign-in that proved only the password is new for the realm's window, and its
+  binding reaches the user's Shared Signals streams as a CAEP credential-change (#1064).
 
 scope:
   shows: >-
@@ -84,6 +88,19 @@ context:
       none: 'the account holds no TOTP'
       usable: 'the account holds a TOTP that is not disabled'
       disabled: 'the account holds a TOTP its ladder disabled'
+  # Whether the account's TOTP is new (#1064): bound after a sign-in that proved only the password, inside the realm's
+  # accounts.newFactorWindowDays.
+  totpNew:
+    values: [false, true]
+    initial: any
+  # Whether the account holds a passkey that is new (#1064; flows/core/passkey).
+  passkeyNew:
+    values: [false, true]
+    initial: any
+  # Whether the account holds a password. A factor bound on an account without one is never new.
+  passwordHeld:
+    values: [false, true]
+    initial: any
   # Whether the transaction proved mfa another way: a passkey, after the downgrade rule.
   mfaProved:
     values: [false, true]
@@ -162,6 +179,10 @@ context:
   secretBound: { values: [false, true], initial: false }
   # the "TOTP added" notice was queued
   bindingNoticed: { values: [false, true], initial: false }
+  # The TOTP being bound is new: it stores when the realm's window ends.
+  storedNew: { values: [false, true], initial: false }
+  # The binding's user.credential_added is committed with it, for the user's Shared Signals streams.
+  signalled: { values: [false, true], initial: false }
   # this round wrote an audit record of the step
   audited: { values: [false, true], initial: false }
   # the round waited out MIN_RESPONSE_TIME_MS.LOGIN (500 ms), counted from the round's arrival
@@ -172,7 +193,7 @@ context:
   codeForFactor: { values: [false, true], initial: false }
 
 guards:
-  owed: "totp != 'none' and not mfaProved and not codeTaken"
+  owed: "totp != 'none' and not mfaProved and not codeTaken and (not totpNew or mfaRequired)"
   usable: "totp == 'usable' and servesTotp"
   setupOwed: >-
     not mfaProved and ((mfaRequired and afterPassword and (totp == 'none' or codeTaken)) or (codeTaken and totp ==
@@ -185,6 +206,12 @@ guards:
   unclaimed: 'not addressProved'
   stale: "authAge == 'stale'"
   validSetupCode: "setupCode == 'valid'"
+  # A recovery code stands in for a settled factor only on an account that holds no new factor (ADR-017 Decision 8,
+  # amended 2026-11-12): the first binding shows the set, so while that factor is new the codes may be its taker's.
+  codeSettles: 'codeTaken and not totpNew and not passkeyNew'
+  # The set-up follows no proved passkey and no proved TOTP, so only a code that settles proved a factor beyond the
+  # password that is not new.
+  bindsNew: '(passwordHeld or afterPassword) and not codeSettles'
   disabled: 'totpDisabled'
 
 effects:
@@ -205,7 +232,9 @@ effects:
   confirmSetup: { set: { setupConfirmed: true } }
   proveAddress: { set: { addressProved: true } }
   # the binding's first code is the bound TOTP's proof: totp joins the verified steps, and the amr carries otp and mfa
-  bindSecret: { set: { secretBound: true, bindingNoticed: true, totpProved: true } }
+  bindSecret:
+    { set: { secretBound: true, bindingNoticed: true, signalled: true, totpProved: true } }
+  markNew: { set: { storedNew: true } }
   audit: { set: { audited: true } }
   waitFloor: { set: { floorWaited: true } }
   # what another transaction or the clock may have changed by the next answer
@@ -256,7 +285,8 @@ states:
     description: >-
       A first factor proved the account, and the account was read again with every factor it holds, a disabled one
       included. An account that holds a TOTP owes it, unless the transaction proved mfa another way or took a
-      recovery code in its place; after a password, an account the MFA policy needs a second factor of, with none
+      recovery code in its place, or the TOTP is new (#1064) and the MFA policy requires no second factor; after a
+      password, an account the MFA policy needs a second factor of, with none
       bound (or with a lost one a recovery code stood in for), owes a new one, and, whatever the policy, so does an
       account whose disabled TOTP a recovery code stood in for: else every later sign-in would spend another code.
       After a first factor that adds no amr (an upstream sign-in) a TOTP cannot make mfa, so no set-up is offered
@@ -468,14 +498,23 @@ states:
         target: ended
         effect: [audit, waitFloor]
         say: 'the last factor is more than 5 minutes old: nothing is bound, and the transaction ends'
+      - guard: bindsNew
+        target: bindingSecret
+        effect: [markNew]
+        say: "only the password was proved: the TOTP is bound new, until the end of the realm's window"
       - target: bindingSecret
-        say: 'the binding may go ahead'
+        say: >-
+          the account holds no password, or a recovery code stood in on an account that holds no new factor: the TOTP
+          is a full factor
 
   bindingSecret:
     title: Bind the secret to the account
     description: >-
       One write stores the ciphertext and the accepted step as the account's TOTP, replacing a disabled one, while the
-      account is enabled and claimed; then the account's TOTP counter ends, so a new secret starts a new run, and the
+      account is enabled and claimed. A new one stores when the realm's window ends, read from the realm's row, and
+      the transaction names it, so the session the sign-in opens does too. user.credential_added, naming the
+      authenticator app, commits with the write and goes to every Shared Signals stream subscribed to the user as a
+      CAEP credential-change (#1064). Then the account's TOTP counter ends, so a new secret starts a new run, and the
       "TOTP added" notice is mailed. The binding's first code counts as the bound TOTP's proof: totp joins the
       verified steps, and totp_setup is audited as passed.
     invoke: { external: userCredentials }
@@ -740,6 +779,27 @@ assertions:
   - id: every-binding-is-told
     never: 'secretBound and not bindingNoticed'
     say: 'Every bound TOTP mails the binding notice'
+  - id: every-binding-is-signalled
+    never: 'secretBound and not signalled'
+    say: "Every bound TOTP reaches the user's Shared Signals streams as a CAEP credential-change"
+  - id: new-after-the-password-alone
+    never: >-
+      secretBound and (passwordHeld or afterPassword) and not (codeTaken and not totpNew and not passkeyNew) and not
+      storedNew
+    say: >-
+      A TOTP set up after a sign-in that proved only the password, or a recovery code while the account holds a new
+      factor, is always new: the owner can remove it with the password, and it blocks no reset
+  - id: a-code-without-a-new-factor-settles
+    never: 'secretBound and storedNew and codeTaken and not totpNew and not passkeyNew'
+    say: >-
+      A TOTP set up again after a recovery code, on an account that holds no new factor, is a full factor: whoever
+      disables the owner's TOTP with wrong codes does not make the owner's rebind weaker
+  - id: a-settled-totp-is-owed
+    never: "state == 'goesOn' and totp == 'usable' and not totpNew and not mfaProved and not codeTaken"
+    say: 'An account whose TOTP is not new never completes the first factor without it, a passkey or a recovery code'
+  - id: a-new-totp-under-the-policy-is-owed
+    never: "state == 'goesOn' and totp == 'usable' and mfaRequired and not mfaProved and not codeTaken"
+    say: 'Where the MFA policy requires a second factor, a new TOTP is asked for as any TOTP is'
   - id: a-disabled-totp-is-set-up-again
     never: "state == 'goesOn' and codeTaken and totp == 'disabled' and not mfaProved"
     say: >-

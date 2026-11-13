@@ -31,6 +31,23 @@ interface CredentialRow {
    * the credential, in epoch ms, else `null`. Absent reads as no mark.
    */
   readonly disabledAt?: number | null;
+  /**
+   * When the credential stops being new (#1064): a passkey or a TOTP bound
+   * after a sign-in that proved only the password. `null` or absent for one
+   * that never was new.
+   */
+  readonly newUntil?: number | null;
+}
+
+/** A passkey's or a TOTP's id and window, as the engine reads them (#1064). */
+function namedOf(row: CredentialRow): {
+  readonly credentialId: string;
+  readonly newUntil?: number;
+} {
+  return {
+    credentialId: row.id,
+    ...(row.newUntil === undefined || row.newUntil === null ? {} : { newUntil: row.newUntil }),
+  };
 }
 
 /**
@@ -219,12 +236,14 @@ export function createRepositoryAccountDirectory(
         ...passkeys.map((row) => ({
           type: 'passkey' as const,
           disabled: row.disabledAt !== undefined && row.disabledAt !== null,
+          ...namedOf(row),
         })),
         // A TOTP's mark is honoured always (#653): its hard action sets the
         // mark only while it is armed, so a mark is never one to ignore.
         ...totps.map((row) => ({
           type: 'totp' as const,
           disabled: row.disabledAt !== undefined && row.disabledAt !== null,
+          ...namedOf(row),
         })),
       ];
       const addressProved =
