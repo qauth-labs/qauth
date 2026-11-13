@@ -35,6 +35,7 @@ import { env } from '../../config/env';
 import { accountRoundOf, engineClientIdOf, finishAccountInteraction } from './account-interaction';
 import { accountPoliciesOf } from './account-policies';
 import { finishAuthorization } from './authorization-interaction';
+import { ceremonyErrorPageOf, sendToCeremonyErrorPage } from './ceremony-error-page';
 import { matchFlowSecret, readFlowSecrets } from './flow-cookie';
 import {
   answerInteraction,
@@ -51,7 +52,10 @@ import {
   listedUpstreamProvider,
   refusedLinkStep,
   refusedUpstreamStep,
+  restartedStep,
+  restartNoticeOf,
   type UpstreamProviderError,
+  upstreamRefusalCodeOf,
 } from './interaction-outcomes';
 import {
   eventClientIdOf,
@@ -120,10 +124,22 @@ import { emitUserEvent } from './user-events';
  *    an account that has one, the MFA policy, the inline verification of an
  *    address nobody vouched for.
  *
- * Every refusal is audited as `user.sign_in_failed` (`method: upstream`).
- * A cancel or an error at the provider shows the provider-error page, with
- * the way back to the first step; anything else shows the one error page
- * with the request's trace id. Neither sends anything to the client.
+ * Every refusal is audited as `user.sign_in_failed` (`method: upstream`)
+ * and logged under the callback's request id, and nothing goes to the
+ * client (#1106; ADR-019 Decisions 5 and 7, ADR-020 §3):
+ *
+ * - An interaction this browser still holds goes back to its ceremony page,
+ *   with the `upstream` step current and refused: its `error` from a closed
+ *   set that names no account (ADR-017 Decision 4), the provider, and the
+ *   callback's trace id. A transaction the engine ended starts the sign-in
+ *   again at that step, with a notice of why, as an answer's does (#1081).
+ * - A callback with no interaction left (it expired, moved on, or belongs to
+ *   another browser) goes to the realm's error page (`ceremonyApp.errorPage`)
+ *   with `code` and `trace_id`, or, where the realm names none, shows the
+ *   auth server's own error page with the request's trace id.
+ * - The pages keep their own: a cancel or an error at the provider shows the
+ *   provider-error page, anything else the error page, each with the way
+ *   back to the first step.
  */
 
 /** How long a started provider waits for its callback, in seconds. */
@@ -813,16 +829,17 @@ export async function decideUpstreamLinkChoice(
 }
 
 /**
- * Send the browser back to the ceremony page of the interaction a provider
- * did not sign the person in for (#1081): the step it was picked at, with
+ * Send the browser back to the ceremony page of the interaction the
+ * callback refused (#1081, #1106): the step the provider was picked at, with
  * the `upstream` step current and refused with `error`, the provider in its
- * params, as the engine refuses a provider it cannot start. The page offers
- * the other ways in; nothing goes to the client. A step that offers no
- * `upstream` step is shown again as it was. An interaction that ended or
- * moved on meanwhile gets the error page, as every other refusal of the
- * callback does; the refusal was recorded already.
+ * params and this request's trace id, as the engine refuses a provider it
+ * cannot start. The page offers the other ways in; nothing goes to the
+ * client. A step that offers no `upstream` step is shown again as it was.
+ * An interaction that ended or moved on meanwhile gets the ending of a
+ * callback with no interaction left; the refusal was recorded already.
  */
-async function backWithProviderError(
+async function backWithRefusal(
+  fastify: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply,
   pending: PendingUpstreamSignIn,
@@ -849,13 +866,39 @@ async function backWithProviderError(
     );
   } catch (thrown) {
     if (thrown instanceof InteractionExpiredError) {
+      return endWithoutInteraction(fastify, request, reply, pending.wayBack);
+    }
+    // A store that could not answer the round may not take this write
+    // either: the auth server's own error page, with this request's trace id.
+    if (error === 'service_unavailable') {
+      request.log.warn({ err: thrown }, 'a refused upstream step could not be written');
       return sendUpstreamErrorPage(request, reply, pending.wayBack);
     }
     throw thrown;
   }
-  if (result.kind !== 'step') return sendUpstreamErrorPage(request, reply, pending.wayBack);
+  if (result.kind !== 'step') {
+    return endWithoutInteraction(fastify, request, reply, pending.wayBack);
+  }
   reply.header('Cache-Control', 'no-store');
   return reply.redirect(ceremonyPageUrlOf(requestRealm(request), pending.interactionId), 303);
+}
+
+/**
+ * End a callback that has no interaction left to go back to (#1106): it
+ * expired or ended, it moved on, or this browser is not the one that
+ * started it. A realm that names its ceremony app's error page gets `303`
+ * to it with `interaction_expired` and this request's trace id; any other
+ * shows the auth server's own error page.
+ */
+function endWithoutInteraction(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  wayBack?: string
+): FastifyReply {
+  const page = ceremonyErrorPageOf(fastify, requestRealm(request));
+  if (page !== null) return sendToCeremonyErrorPage(request, reply, page, 'interaction_expired');
+  return sendUpstreamErrorPage(request, reply, wayBack);
 }
 
 /** What the callback host needs beyond the server. */
@@ -929,10 +972,58 @@ export function upstreamRouteHost(
     const receivedAt = Date.now();
     const realm = requestRealm(request);
     const pending = takenBy.get(request);
-    const wayBack = pending?.wayBack;
-    const refuse = async (reason: string, userId?: string, audited = false) => {
-      if (!audited) await auditUpstreamRefusal(request, reason, userId);
-      return sendUpstreamErrorPage(request, reply, wayBack);
+    // The provider of the callback's type in the realm, for a callback this
+    // browser started: its name goes on the refused step.
+    const provider = pending === undefined ? undefined : await providerOf(method, request);
+
+    /**
+     * End the callback for a refusal: recorded as `user.sign_in_failed` with
+     * `reason` (unless the engine audited it), and logged under this
+     * request's id, the `trace_id` the person is shown (#1106). An
+     * interaction still live goes back to its ceremony page, its `upstream`
+     * step refused with `code`, or with the one `reason` maps to; a callback
+     * with no interaction left gets the error page. The pages keep their own.
+     */
+    const refuse = async (
+      reason: string,
+      options: {
+        readonly userId?: string;
+        readonly audited?: boolean;
+        readonly code?: UpstreamProviderError;
+      } = {}
+    ): Promise<FastifyReply> => {
+      request.log.info(
+        { upstreamProvider: method.type, upstreamRefusal: reason },
+        'upstream sign-in refused'
+      );
+      if (options.audited !== true) await auditUpstreamRefusal(request, reason, options.userId);
+      if (pending?.mode === 'pages') {
+        // The person cancelled or declined at the provider, or it answered
+        // an error: the provider-error page. Anything else: the error page.
+        if (reason === 'declined' || reason === 'provider_error') {
+          return sendUpstreamPage(
+            reply,
+            upstreamProviderErrorPage({
+              cspNonce: reply.cspNonce.style,
+              providerName: provider?.entry.name ?? 'Your sign-in provider',
+              wayBack: pending.wayBack,
+            })
+          );
+        }
+        return sendUpstreamErrorPage(request, reply, pending.wayBack);
+      }
+      const code = options.code ?? upstreamRefusalCodeOf(reason);
+      if (pending === undefined || code === null) {
+        return endWithoutInteraction(fastify, request, reply, pending?.wayBack);
+      }
+      return backWithRefusal(
+        fastify,
+        request,
+        reply,
+        pending,
+        { type: method.type, entry: provider?.entry },
+        code
+      );
     };
 
     let completion: UpstreamStepCompletion;
@@ -946,36 +1037,9 @@ export function upstreamRouteHost(
     if (pending === undefined) {
       return refuse(completion.kind === 'failed' ? completion.reason : 'transaction_mismatch');
     }
-    const provider = await providerOf(method, request);
-    if (
-      completion.kind === 'declined' ||
-      (completion.kind === 'failed' && completion.reason === 'provider_error')
-    ) {
-      // The person cancelled or declined at the provider, or it answered an
-      // error: nothing goes to the client. An interaction's ceremony page
-      // shows it (#1081); the pages' way back is the first step.
-      await auditUpstreamRefusal(
-        request,
-        completion.kind === 'declined' ? 'declined' : 'provider_error'
-      );
-      if (pending.mode === 'interaction') {
-        return backWithProviderError(
-          request,
-          reply,
-          pending,
-          { type: method.type, entry: provider?.entry },
-          completion.kind === 'declined' ? 'provider_declined' : 'provider_error'
-        );
-      }
-      return sendUpstreamPage(
-        reply,
-        upstreamProviderErrorPage({
-          cspNonce: reply.cspNonce.style,
-          providerName: provider?.entry.name ?? 'Your sign-in provider',
-          wayBack: pending.wayBack,
-        })
-      );
-    }
+    // The person cancelled or declined at the provider: nothing goes to the
+    // client, and the ceremony page offers the other ways in (#1081).
+    if (completion.kind === 'declined') return refuse('declined');
     if (completion.kind === 'failed') {
       if (completion.cause !== undefined) {
         request.log.warn(
@@ -983,7 +1047,12 @@ export function upstreamRouteHost(
           'upstream verification refused'
         );
       }
-      return refuse(completion.reason);
+      // The provider answered an error, or an answer that failed the
+      // method's checks, or it could not be used: it signed nobody in.
+      return refuse(completion.reason, {
+        code:
+          completion.reason === 'upstream_unavailable' ? 'provider_unavailable' : 'provider_error',
+      });
     }
     if (provider === undefined) return refuse('upstream_unavailable');
 
@@ -994,7 +1063,7 @@ export function upstreamRouteHost(
     // Read before the interaction's turn is taken; nothing is written until
     // it is: a new account only once the turn is this callback's.
     const known = await lookUpAccount(fastify, request, realm, type, subject);
-    if (known?.kind === 'refused') return refuse(known.reason, known.userId);
+    if (known?.kind === 'refused') return refuse(known.reason, { userId: known.userId });
     let account: ResolvedAccount | null = known;
 
     const engines = parts.engines();
@@ -1132,15 +1201,41 @@ export function upstreamRouteHost(
                   : { sendCode: engines.sendCode(request) }),
             })
           );
+          if (
+            round.kind === 'refused' &&
+            round.reason === 'transaction_ended' &&
+            pending.mode === 'interaction'
+          ) {
+            // The engine ended its transaction (it outlived its age, or the
+            // provider proved another account than the one it named), and
+            // audited the end: the sign-in starts again at the step the
+            // provider was picked at, with a new transaction from the next
+            // answer and a notice of why that names no account, as an
+            // answer's restart does (#1081).
+            return {
+              kind: 'step',
+              step: restartedStep(state.step),
+              personal: state.personal,
+              signInTransaction: null,
+              restartNotice: restartNoticeOf(round.cause),
+            };
+          }
           return upstreamRoundDecision(reply, round, receivedAt);
         }
       );
     } catch (error) {
       if (error instanceof UpstreamSignInRefusal) {
-        return refuse(error.reason, error.userId ?? accountIdOf(account), error.audited);
+        return refuse(error.reason, {
+          userId: error.userId ?? accountIdOf(account),
+          audited: error.audited,
+        });
       }
       if (error instanceof InteractionExpiredError) return refuse('interaction_expired');
-      if (error instanceof TooManyRequestsError) return refuse('throttled', accountIdOf(account));
+      if (error instanceof TooManyRequestsError) {
+        // The step says it; the 303 back to the page carries no `Retry-After`.
+        reply.removeHeader('Retry-After');
+        return refuse('throttled', { userId: accountIdOf(account) });
+      }
       if (error instanceof TemporarilyUnavailableError) return refuse('unavailable');
       throw error;
     }

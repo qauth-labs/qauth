@@ -13,9 +13,11 @@ import type { UpstreamLinkRefusal } from './upstream-links';
  * - **A restart.** The engine ended its transaction, and the sign-in went
  *   back to its first step: the step read carries a notice of why
  *   ({@link restartNoticeOf}), once.
- * - **A provider that did not sign the person in.** The callback sends the
- *   browser back to the ceremony page, whose `upstream` step carries the
- *   error and the provider ({@link refusedUpstreamStep}).
+ * - **A provider callback that did not sign the person in** (#1081, #1106).
+ *   The callback sends the browser back to the ceremony page, whose
+ *   `upstream` step carries the error, the provider
+ *   ({@link refusedUpstreamStep}) and the callback's trace id, for every
+ *   refusal that leaves the interaction live ({@link upstreamRefusalCodeOf}).
  * - **A refused link** (#670). The `upstream_link` step comes back with its
  *   reason ({@link refusedLinkStep}); where the sign-in had already finished
  *   the interaction, as the first step of the request's next one.
@@ -52,8 +54,55 @@ const UPSTREAM_STEP_URN = stepUrn('upstream');
 /** The `upstream_link` step's name (`urn:qauth:ia:upstream_link:v1-rc.0`, #670). */
 const UPSTREAM_LINK_STEP_URN = stepUrn('upstream_link');
 
-/** Why an upstream provider did not sign the person in (#1081). */
-export type UpstreamProviderError = 'provider_declined' | 'provider_error';
+/**
+ * Why an upstream provider's callback did not sign the person in (#1081,
+ * #1106): the `upstream` step's errors a callback writes.
+ */
+export type UpstreamProviderError =
+  | 'provider_declined'
+  | 'provider_error'
+  | 'provider_unavailable'
+  | 'unknown_identity'
+  | 'too_many_requests'
+  | 'service_unavailable';
+
+/**
+ * The `upstream` step's error for a refusal of the providers' callback
+ * (#1106), by the reason its `user.sign_in_failed` event records, or `null`
+ * for a callback that has no interaction left to go back to: one that does
+ * not belong to the interaction's state (`transaction_mismatch`) or found it
+ * ended (`interaction_expired`).
+ *
+ * No error says anything about an account the person has not proved
+ * (ADR-017 Decision 4), so every reason that depends on the account behind
+ * the identity is `unknown_identity`, the same as for an identity no account
+ * holds: a credential that is disabled, not well formed or of another
+ * issuer, an account that is disabled or cannot be verified, and one no step
+ * of this sign-in can complete. A reason this list does not know is
+ * `unknown_identity` as well, so a new one never tells more.
+ */
+export function upstreamRefusalCodeOf(reason: string): UpstreamProviderError | null {
+  switch (reason) {
+    case 'transaction_mismatch':
+    case 'interaction_expired':
+      return null;
+    case 'declined':
+      return 'provider_declined';
+    case 'provider_error':
+    case 'invalid_response':
+    case 'method_fault':
+    case 'verification_refused':
+      return 'provider_error';
+    case 'upstream_unavailable':
+      return 'provider_unavailable';
+    case 'throttled':
+      return 'too_many_requests';
+    case 'unavailable':
+      return 'service_unavailable';
+    default:
+      return 'unknown_identity';
+  }
+}
 
 /** A provider as the `upstream` and `upstream_link` steps name it: its type and its name. */
 export interface StepProvider {
@@ -92,6 +141,21 @@ export function refusedUpstreamStep(
     ...(Object.keys(alternativeParams).length === 0 ? {} : { alternativeParams }),
     error,
   };
+}
+
+/**
+ * `step` as a restarted sign-in shows it again (#1106): the step the person
+ * picked a provider at, without the error and the provider of an earlier
+ * refusal, which the restart notice replaces.
+ */
+export function restartedStep(step: InteractionStep): InteractionStep {
+  if (step.error === undefined) return step;
+  const rest: InteractionStep = { ...step };
+  delete rest.error;
+  if (step.name !== UPSTREAM_STEP_URN) return rest;
+  const params: Record<string, unknown> = { ...step.params };
+  delete params['error_provider'];
+  return { ...rest, params };
 }
 
 /**
