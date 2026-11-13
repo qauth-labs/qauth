@@ -141,6 +141,12 @@ export interface ServerTotpDependencies {
    */
   readonly requestOf: () => FastifyRequest | undefined;
   /**
+   * The OAuth client a binding's request came through, which its event
+   * names: the account API's caller (#1109). Absent, the event names none,
+   * as a sign-in's binding, whose engine client is no client a person sees.
+   */
+  readonly clientIdOf?: (request: FastifyRequest) => string | null;
+  /**
    * Whether the hosted pages are on (`INTERACTION_UI_ENABLED`): a recovery
    * code is redeemed there, so without them the hard action is never armed.
    */
@@ -209,7 +215,7 @@ export function createServerTotp(
           'urn:qauth:event:user.credential_added:v1-rc.0',
           // An authenticator app (#1064): CAEP's `app`.
           { type: 'totp', credentialId, authenticator: 'app' },
-          { tx, realmId, userId, actor: 'user' }
+          { tx, realmId, userId, clientId: deps.clientIdOf?.(request) ?? null, actor: 'user' }
         );
       },
       async bound({ realmId, userId }) {
