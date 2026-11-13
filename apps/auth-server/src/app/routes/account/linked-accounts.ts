@@ -1,5 +1,5 @@
-import { JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { NotFoundError } from '@qauth-labs/shared-errors';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { type PageQuery, pageQuerySchema, pageSchema } from '../../api-conventions/paging';
@@ -9,6 +9,7 @@ import { accountOperation } from '../../helpers/account-operation-guard';
 import { createEngineMailer } from '../../helpers/engine-mail';
 import { requestRealm } from '../../helpers/request-realm';
 import { pageLinkedAccounts, unlinkUpstreamIdentity } from '../../helpers/upstream-links';
+import { tokenUserIdOf } from './token-subject';
 
 /**
  * The account API's linked upstream accounts (#670; ADR-020 Appendix "Linked
@@ -36,17 +37,6 @@ const linkedAccountSchema = z.object({
 
 /** The path parameters of one linked account. */
 const linkedAccountParamsSchema = z.object({ linkedAccountId: z.uuid() });
-
-/**
- * The token's `sub`: a user of the request's realm once the guard passed. A
- * missing one is an invariant broken, refused as a bad token rather than
- * trusted.
- */
-function tokenUserIdOf(request: FastifyRequest): string {
-  const sub = request.jwtPayload?.sub;
-  if (!sub) throw new JWTInvalidError('Missing JWT payload');
-  return sub;
-}
 
 export function registerAccountLinkedAccountRoutes(fastify: FastifyInstance): void {
   // The unlink notice goes out after the answer, through the engine's mail;

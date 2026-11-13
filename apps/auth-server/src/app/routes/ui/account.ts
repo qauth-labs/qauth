@@ -9,7 +9,6 @@ import {
   accountCsrfAccepted,
   accountCsrfToken,
   type AccountPageChange,
-  changePassword,
   checkFreshAuthentication,
   type CredentialTarget,
   endAccountSession,
@@ -20,6 +19,7 @@ import {
   renamePasskey,
 } from '../../helpers/account-changes';
 import { accountCeremonies, type AccountCeremony } from '../../helpers/account-interaction';
+import { changePassword } from '../../helpers/account-password-change';
 import {
   ACCOUNT_NOTICES,
   ACCOUNT_PAGE_PATH,
@@ -242,7 +242,7 @@ export default async function (fastify: FastifyInstance) {
         return startCeremony(request, reply, { intent: 'sign_in', returnTo: ACCOUNT_PAGE_PATH });
       }
       const notice = NOTICES.find((name) => name === request.query.notice);
-      const overview = await readAccountOverview(fastify, ceremonies.engines(), session);
+      const overview = await readAccountOverview(fastify, session);
       return sendPage(
         reply,
         accountPage({
@@ -275,7 +275,7 @@ export default async function (fastify: FastifyInstance) {
           returnTo: `${ACCOUNT_PAGE_PATH}/password`,
         });
       }
-      const overview = await readAccountOverview(fastify, ceremonies.engines(), session);
+      const overview = await readAccountOverview(fastify, session);
       if (!overview.password.set) {
         return message(reply, 404, 'No password', 'Your account has no password to change.');
       }
@@ -510,7 +510,7 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const session = await admitted(request, reply, request.body.csrf);
       if (session === null) return reply;
-      const overview = await readAccountOverview(fastify, ceremonies.engines(), session);
+      const overview = await readAccountOverview(fastify, session);
       if (overview.totp.set) {
         return message(
           reply,
@@ -721,7 +721,7 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const session = await admitted(request, reply, request.body.csrf);
       if (session === null) return reply;
-      const overview = await readAccountOverview(fastify, ceremonies.engines(), session);
+      const overview = await readAccountOverview(fastify, session);
       const provider = overview.linkable.find((entry) => entry.provider === request.body.provider);
       if (provider === undefined) return notFound(reply);
       return startCeremony(request, reply, {
