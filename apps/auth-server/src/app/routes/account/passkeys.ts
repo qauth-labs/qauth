@@ -342,7 +342,7 @@ export function registerAccountPasskeyRoutes(fastify: FastifyInstance): void {
       security: [{ bearerAuth: [] }],
       'x-qauth-stability': 'stable',
       ...remove.schema,
-      'x-qauth-errors': [400, 401, 403, 404, 409],
+      'x-qauth-errors': [400, 401, 403, 404, 409, 503],
       params: passkeyParamsSchema,
       response: { 204: z.null() },
     },
