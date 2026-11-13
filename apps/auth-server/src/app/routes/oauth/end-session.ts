@@ -35,7 +35,7 @@ export default async function (fastify: FastifyInstance) {
     },
   };
   const description =
-    'OpenID Connect RP-Initiated Logout 1.0 end-session endpoint. A valid id_token_hint that names the browser session (its account by sub, the session by sid) ends that session at once; otherwise a signed-in browser is asked to confirm, and nothing ends until it answers. Goes back to a registered post_logout_redirect_uri with state, or shows a page; an unregistered one gets an information page and never a redirect. A client the operator did not set up is not redirected to before the browser has seen a QAuth page: the signed-out page links to its return URI. Refresh tokens are not revoked here.';
+    'OpenID Connect RP-Initiated Logout 1.0 end-session endpoint. A valid id_token_hint that names the browser session (its account by sub, the session by sid) ends that session at once; otherwise a signed-in browser is asked to confirm, and nothing ends until it answers. Goes back to a registered post_logout_redirect_uri with state, or shows a page; an unregistered one gets an information page and never a redirect. A client the operator did not set up is not redirected to before the browser has seen a QAuth page: the signed-out page links to its return URI. A realm that names its ceremony app’s error page (its ceremonyApp.errorPage policy) gets 303 to that page, on the realm’s own origin, in place of each of these pages. Refresh tokens are not revoked here.';
 
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.get(
@@ -79,7 +79,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'The sign-out status page of RP-initiated logout: whether this browser is still signed in. Takes no parameter.',
+          'The sign-out status page of RP-initiated logout: whether this browser is still signed in. Takes no parameter. A realm that names its ceremony app’s error page (its ceremonyApp.errorPage policy) gets 303 to that page instead, with code=logout_finished and signed_out.',
         tags: ['OAuth', 'OIDC'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [429],
