@@ -112,6 +112,10 @@ GET /oauth/authorize?response_type=code&client_id=account-console
 - The person may decline the passkey, and an account whose address was never verified binds none,
   so a code does not mean a passkey was added. Exchange it, then read
   `GET /account/v1-rc.0/passkeys` with the new token and compare the list with the one you had.
+- The person may sign in to another account than the one your console shows: the set-up binds the
+  passkey to whichever account signed in. Check that the new token's `sub` (and the ID token's) is
+  the user you started the set-up for before you use the token; otherwise discard it and start
+  over (a `login_hint` with that user's address pre-fills the sign-in, but does not bind it).
 - The new token comes from a sign-in that just happened, so it also meets the fresh-authentication
   rule above for the next five minutes. A passkey added after a sign-in that proved only the
   password is new for the realm's window (ADR-017 Decision 8): until the window ends, a fresh
