@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-11-12'
+lastVerified: '2026-11-13'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -1050,6 +1050,41 @@ operation here. Afterwards the account's other browser sessions, its refresh tok
 unredeemed authorization codes end, the session the token names in `sid` stays signed in,
 `user.password_changed` is recorded and the owner gets the "password changed" notice. Access
 tokens already issued stay valid until they expire. **`204 No Content`**. Errors: `400`, `401`, `403`, `404`, `422`, `429`, `503`.
+
+### `GET /account/v1-rc.0/passkeys`
+
+The user's passkeys (#1108), newest first, a page at a time: each with its `id`, its `nickname`
+(`Passkey` for one the person never named), `backedUp` (whether it syncs, such as through a
+password manager), `createdAt` and `lastUsedAt` (`null` when it never signed in). Adding one is no
+operation here: it is an authorization request with
+[`qauth_action=setup_passkey`](/integrate/oauth-flow/#adding-a-passkey-qauth_actionsetup_passkey),
+which the hosted pages run on the realm's origin. Takes an act-chain token. Errors: `400`, `401`,
+`403`.
+
+### `GET /account/v1-rc.0/passkeys/{passkeyId}`
+
+One of the user's passkeys, as the list shows it, with its `ETag`. One of another user is the same
+`404` as one that does not exist. Takes an act-chain token. Errors: `400`, `401`, `403`, `404`.
+
+### `PATCH /account/v1-rc.0/passkeys/{passkeyId}`
+
+Rename one of the user's passkeys: a JSON Merge Patch (`application/merge-patch+json`) of
+`nickname`, at most 64 characters with no markup bracket or control character, sent with
+`If-Match`, the `ETag` of the last read. A stale value is `412` `precondition_failed`, a missing one
+`428` `precondition_required`. A name is no credential, so it needs no fresh sign-in, but it
+refuses an act-chain token. Answers the renamed passkey and its new `ETag`. Errors: `400`, `401`,
+`403`, `404`, `412`, `415`, `428`.
+
+### `DELETE /account/v1-rc.0/passkeys/{passkeyId}`
+
+Remove one of the user's passkeys, on the hosted account page's logic. Needs a fresh sign-in with
+the account's strongest factor, or one that used a recovery code in place of a lost passkey, and
+refuses an act-chain token. A passkey still new, bound after a sign-in that proved only the
+password (ADR-017 Decision 8), is removed after a fresh sign-in with the password alone, and its
+removal also ends the sessions, codes and refresh tokens its sign-in opened and deletes the
+account's recovery codes. The account's last way to sign in is `409` `last_credential`, and the
+last second factor the realm requires of the account `409` `second_factor_required`. The owner gets
+the "passkey removed" notice. **`204 No Content`**. Errors: `400`, `401`, `403`, `404`, `409`.
 
 ---
 
