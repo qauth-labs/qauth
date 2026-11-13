@@ -365,7 +365,11 @@ export const signInMethodsSchema = object(
     password: object(
       {
         set: boolean('Whether the account has a password. A passkey-only account has none.'),
-        changedAt: nullable(dateTime('When it was last set; `null` without one.')),
+        changedAt: nullable(
+          dateTime(
+            'When it was last set; `null` without one, and for a password set before the server recorded the time.'
+          )
+        ),
       },
       ['set', 'changedAt']
     ),

@@ -1031,7 +1031,8 @@ not exist. **`204 No Content`**. Errors: `400`, `401`, `403`, `404`, `409`.
 ### `GET /account/v1-rc.0/sign-in-methods`
 
 The user's sign-in methods at a glance (#1107): whether a password is set and when it was last
-set (`changedAt`, `null` without one), the number of passkeys, whether an authenticator app (TOTP)
+set (`changedAt`, `null` without one and for a password set before the server recorded the
+time), the number of passkeys, whether an authenticator app (TOTP)
 is on, the recovery codes left, the number of linked upstream accounts and wallets, whether the
 account has a contact address, and `freshAuthenticationFactor`, the `amr` value a fresh sign-in
 must hold before a change to the account (`pop`, `otp` or `pwd`). Takes an act-chain token. Sent
@@ -1047,8 +1048,8 @@ password the realm's password policy or breach list refuses is `422` `weak_passw
 `reasons` say why. An account without a password is `404`: setting a first password is no
 operation here. Afterwards the account's other browser sessions, its refresh tokens and its
 unredeemed authorization codes end, the session the token names in `sid` stays signed in,
-`user.password_changed` is recorded and the owner gets the "password changed" notice.
-**`204 No Content`**. Errors: `400`, `401`, `403`, `404`, `422`, `429`, `503`.
+`user.password_changed` is recorded and the owner gets the "password changed" notice. Access
+tokens already issued stay valid until they expire. **`204 No Content`**. Errors: `400`, `401`, `403`, `404`, `422`, `429`, `503`.
 
 ---
 

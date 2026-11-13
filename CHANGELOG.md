@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   account's other browser sessions and its refresh tokens while keeping the
   session the token names in `sid`, records `user.password_changed` with the
   calling client and sends the "password changed" notice. A password set from
-  now on records its set time in its credential (`password_set_at`). The
+  now on records its set time in its credential (`password_set_at`); one set
+  before reads `changedAt: null`. Every account API answer now carries
+  `Cache-Control: no-store`, errors included, as the contract states. The
   `api` role's database user gets `SELECT` on `user_recovery_codes` and
   `DELETE` on `user_required_actions` (see the upgrade notes).
 - **A factor bound after a password-only sign-in is new for a window, and the

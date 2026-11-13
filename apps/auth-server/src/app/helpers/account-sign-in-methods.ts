@@ -52,9 +52,10 @@ export interface AccountSignInMethods {
     /** The password's address: where the account's notices go. */
     readonly address?: string;
     /**
-     * When the password was last set, in epoch milliseconds (#1107): the time
-     * its credential records, or, for one set before #1107 recorded it, the
-     * credential's last update, which a password write always was.
+     * When the password was last set, in epoch milliseconds (#1107), as its
+     * credential records it. A password set before #1107 recorded the time
+     * has none: the credential's other times are those of other writes too
+     * (an address verification, the failure ladder's mark).
      */
     readonly setAt?: number;
   };
@@ -66,6 +67,12 @@ export interface AccountSignInMethods {
   readonly linkedCount: number;
   /** The `amr` value a fresh authentication must hold (ADR-017 Decision 8). */
   readonly requiredFactor: AccountFactor;
+}
+
+/** The time a password credential records it was set, when it records one. */
+function setAtOf(credentialData: unknown): { readonly setAt?: number } {
+  const setAt = passwordSetAtOf(credentialData);
+  return setAt === undefined ? {} : { setAt };
 }
 
 /** The account's credentials of `realmId`: a row of another realm is none of its methods here (#489). */
@@ -119,7 +126,7 @@ export async function signInMethodsOf(
         : {
             set: true,
             address: password.externalSub,
-            setAt: passwordSetAtOf(password.credentialData) ?? password.updatedAt,
+            ...setAtOf(password.credentialData),
           },
     passkeys,
     totp: {

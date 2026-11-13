@@ -1320,10 +1320,11 @@ in the log; the change then writes nothing.
 
 A password set from this release records when it was set, in its credential's
 `password_set_at`, which the read answers as `changedAt`. For a password set
-before, the read answers the time of its credential's last write, which was the
-time it was set. During a rolling upgrade a node of the previous release that
-changes or resets a password set on a node of this release leaves that time
-behind, so `changedAt` names the earlier time until the password is set again.
+before, the time was never recorded, and the read answers `null` until the
+password is next set. During a rolling upgrade a node of the previous release
+that changes or resets a password set on a node of this release leaves that
+time behind, so `changedAt` names the earlier time until the password is set
+again.
 
 ## Upgrading within 1.x
 

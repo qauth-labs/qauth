@@ -14,7 +14,6 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { accountPoliciesOf } from './account-policies';
 import { endBrowserSessions } from './browser-session';
 import type { EngineMailer } from './engine-mail';
-import { ladderEndUserIp } from './password-attempts';
 import { recordPasswordChange } from './password-reset';
 import { requestRealm } from './request-realm';
 import { emitUserEvent } from './user-events';
@@ -71,6 +70,14 @@ export interface PasswordChanger {
   readonly sid?: string;
   /** The OAuth client the change came through: the account API's caller. */
   readonly clientId?: string | null;
+  /**
+   * The person's own address, as the failure ladder keys it
+   * (`ladderEndUserIp`): the hosted page's request comes from their
+   * browser. An account API request comes from its caller's backend, whose
+   * address is no person's: without one the attempt still counts, but is
+   * neither exempted nor recorded as a known address of the account.
+   */
+  readonly endUserIp?: string;
 }
 
 /**
@@ -114,7 +121,7 @@ export async function changePassword(
     attempt = await fastify.passwordAttempts.reserve({
       realmId: realm.id,
       identifier: credential.externalSub,
-      ...ladderEndUserIp(request),
+      ...(changer.endUserIp === undefined ? {} : { endUserIp: changer.endUserIp }),
     });
   } catch (error) {
     if (!(error instanceof SignInStoreUnavailableError)) throw error;

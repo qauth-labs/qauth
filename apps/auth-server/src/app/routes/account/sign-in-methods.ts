@@ -108,8 +108,7 @@ export function registerAccountSignInMethodRoutes(fastify: FastifyInstance): voi
         requestRealm(request).id,
         tokenUserIdOf(request)
       );
-      // Per-user data: keep it out of any shared or proxy cache.
-      reply.header('Cache-Control', 'no-store');
+      // `Cache-Control: no-store` comes from the account API's own hook.
       return reply.send({
         password: {
           set: methods.password.set,
@@ -153,6 +152,9 @@ export function registerAccountSignInMethodRoutes(fastify: FastifyInstance): voi
           // The session the token names stays signed in; every other ends.
           ...(typeof claims?.sid === 'string' && claims.sid.length > 0 ? { sid: claims.sid } : {}),
           clientId: claims?.clientId ?? null,
+          // No end-user address: the request comes from the caller's
+          // backend, whose address the failure ladder must not record as
+          // the person's known one.
         },
         { current: request.body.currentPassword, next: request.body.newPassword, mailer }
       );

@@ -369,6 +369,20 @@ describe('the account API’s sign-in methods and password change (#1107, real c
       expect(delegated.json()).toEqual(body);
     });
 
+    it('answers no set time for a password set before the server recorded one', async () => {
+      const { userId } = await passwordAccount();
+      // A credential as a release before #1107 wrote it; a later write to it
+      // (here the address's verification) is no time the password was set.
+      await query(
+        "UPDATE user_credentials SET credential_data = credential_data - 'password_set_at', updated_at = $2 WHERE user_id = $1 AND provider_type = 'password'",
+        [userId, Date.now()]
+      );
+
+      const response = await read(await token(userId));
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({ password: { set: true, changedAt: null } });
+    });
+
     it('answers for an account with a passkey and a linked upstream account', async () => {
       const { userId } = await passwordAccount();
       await bindPasskey(userId);
@@ -443,6 +457,8 @@ describe('the account API’s sign-in methods and password change (#1107, real c
       });
       expect(refused.statusCode, refused.body).toBe(400);
       expect(refused.headers['content-type']).toMatch(/^application\/problem\+json/);
+      // Every account API answer, an error too, is kept out of caches.
+      expect(refused.headers['cache-control']).toBe('no-store');
       expect(refused.json()).toMatchObject({
         code: 'invalid_current_password',
         type: 'https://docs.qauth.dev/reference/problem-types/#invalid-current-password',
@@ -531,10 +547,12 @@ describe('the account API’s sign-in methods and password change (#1107, real c
       expect(delegated.json()).toMatchObject({ code: 'delegated_token_refused' });
 
       expect(
-        (await query<{ data: Record<string, unknown> }>(
-          'SELECT data FROM events WHERE type = $1 AND subject_id = $2 ORDER BY seq',
-          [REFUSED, userId]
-        )).map((row) => row.data)
+        (
+          await query<{ data: Record<string, unknown> }>(
+            'SELECT data FROM events WHERE type = $1 AND subject_id = $2 ORDER BY seq',
+            [REFUSED, userId]
+          )
+        ).map((row) => row.data)
       ).toEqual([
         { operation: 'account.password.change', reason: 'authentication_too_old', maxAge: 300 },
         { operation: 'account.password.change', reason: 'delegated_token' },
@@ -556,21 +574,28 @@ describe('the account API’s sign-in methods and password change (#1107, real c
       });
       expect(changed.statusCode, changed.body).toBe(204);
       expect(changed.body).toBe('');
+      expect(changed.headers['cache-control']).toBe('no-store');
 
       // The new password is the account's.
       const hash = await passwordHashOf(userId);
       if (hash === undefined) throw new Error('the password is gone');
       expect(await app().passwordHasher.verifyPassword(hash, NEW_PASSWORD)).toBe(true);
       // The other session ended; the token's own did not.
-      const sessions = await query<{ id: string; revoked_at: string | null; revoked_reason: string | null }>(
-        'SELECT id::text AS id, revoked_at, revoked_reason FROM sessions WHERE user_id = $1',
-        [userId]
-      );
+      const sessions = await query<{
+        id: string;
+        revoked_at: string | null;
+        revoked_reason: string | null;
+      }>('SELECT id::text AS id, revoked_at, revoked_reason FROM sessions WHERE user_id = $1', [
+        userId,
+      ]);
       expect(sessions.find((row) => row.id === own)).toMatchObject({ revoked_at: null });
       expect(sessions.find((row) => row.id === other)).toMatchObject({
         revoked_at: expect.anything(),
         revoked_reason: 'reset',
       });
+      // As the session store reads them: the own session lives, the other is gone.
+      expect(await app().sessionService.get({ realmId, sid: own })).not.toBeNull();
+      expect(await app().sessionService.get({ realmId, sid: other })).toBeNull();
       // Every refresh token ended.
       expect(
         await query('SELECT revoked, revoked_reason FROM refresh_tokens WHERE id = $1::uuid', [

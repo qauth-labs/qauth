@@ -19,7 +19,6 @@ import {
   renamePasskey,
 } from '../../helpers/account-changes';
 import { accountCeremonies, type AccountCeremony } from '../../helpers/account-interaction';
-import { changePassword } from '../../helpers/account-password-change';
 import {
   ACCOUNT_NOTICES,
   ACCOUNT_PAGE_PATH,
@@ -31,9 +30,11 @@ import {
   passwordChangePage,
   reauthenticatePage,
 } from '../../helpers/account-pages';
+import { changePassword } from '../../helpers/account-password-change';
 import { createBackgroundTasks } from '../../helpers/background-tasks';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { ACCOUNT_RETURN_PATHS, type AccountReturnPath } from '../../helpers/interaction-record';
+import { ladderEndUserIp } from '../../helpers/password-attempts';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { buildRealmUrl, realmIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
@@ -318,11 +319,17 @@ export default async function (fastify: FastifyInstance) {
         `${ACCOUNT_PAGE_PATH}/password`
       );
       if (session === null) return reply;
-      const result = await changePassword(fastify, request, session, {
-        current: request.body.current_password,
-        next: request.body.new_password,
-        mailer: ceremonies.engines().mailer,
-      });
+      const result = await changePassword(
+        fastify,
+        request,
+        // The person's browser: the ladder may record its address as known.
+        { userId: session.userId, sid: session.sid, ...ladderEndUserIp(request) },
+        {
+          current: request.body.current_password,
+          next: request.body.new_password,
+          mailer: ceremonies.engines().mailer,
+        }
+      );
       const again = async (status: number, errors: readonly string[]) =>
         sendPage(
           reply,
