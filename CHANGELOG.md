@@ -209,6 +209,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    WHERE oauth_client_id = '<the client row id>' AND NOT revoked;
   ```
 
+### Removed
+
+- **`PQC_TOKEN_DELIVERY=self-contained` and `PQC_SELF_CONTAINED_ACK`, which
+  did nothing** ([#875], ADR-005; only with `HYBRID_SIGNING_ENABLED`, which is
+  off by default). The configuration accepted `self-contained`, behind the
+  acknowledgement `PQC_SELF_CONTAINED_ACK=true`, but the server never built a
+  way to carry a hybrid token's ML-DSA-65 signature with the token: it stored
+  the signature under the token's `jti` and returned it from introspection as
+  `pqc_signature` whatever the setting said, with no warning. `reference` is
+  now the only value `PQC_TOKEN_DELIVERY` accepts, and the configuration page
+  says what it does. The token and introspection responses do not change.
+
+  **Action for operators**: a deployment that sets
+  `PQC_TOKEN_DELIVERY=self-contained` no longer starts; unset it or set it to
+  `reference`, the delivery it already had. `PQC_SELF_CONTAINED_ACK` is a
+  removed key: set to any value that is not blank, `false` included, it stops
+  the boot with a message that names `PQC_TOKEN_DELIVERY=reference`. Unset it.
+
 ## [0.2.3] - 2026-11-12
 
 A patch release that carries a breaking change, as a 0.x release may (see the
@@ -4169,6 +4187,7 @@ It adds migrations 0068 and 0069.
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 [#846]: https://github.com/qauth-labs/qauth/issues/846
 [#857]: https://github.com/qauth-labs/qauth/issues/857
+[#875]: https://github.com/qauth-labs/qauth/issues/875
 [#891]: https://github.com/qauth-labs/qauth/issues/891
 [#896]: https://github.com/qauth-labs/qauth/issues/896
 [#901]: https://github.com/qauth-labs/qauth/issues/901

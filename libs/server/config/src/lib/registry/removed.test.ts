@@ -58,6 +58,35 @@ describe('refuseRemovedKeys', () => {
   });
 });
 
+/*
+ * PQC_SELF_CONTAINED_ACK (issue #875) acknowledged PQC_TOKEN_DELIVERY=
+ * self-contained, which the server never built: hybrid tokens were delivered
+ * by reference whatever it said. A deployment that still sets it must learn
+ * that the setting it relies on did nothing.
+ */
+describe('refuseRemovedKeys (PQC_SELF_CONTAINED_ACK)', () => {
+  it.each(['true', 'false', '1', '0'])(
+    'PQC_SELF_CONTAINED_ACK=%s stops the boot, naming the delivery that applies',
+    (value) => {
+      const refuse = () => refuseRemovedKeys({ PQC_SELF_CONTAINED_ACK: value });
+      expect(refuse).toThrow(RemovedConfigKeyError);
+      expect(refuse).toThrow('PQC_SELF_CONTAINED_ACK was removed in 0.3.0 and is set.');
+      expect(refuse).toThrow('PQC_TOKEN_DELIVERY=reference');
+      expect(refuse).toThrow('Unset PQC_SELF_CONTAINED_ACK.');
+    }
+  );
+
+  it('treats a blank value as unset, as docker-compose forwards one', () => {
+    expect(() => refuseRemovedKeys({ PQC_SELF_CONTAINED_ACK: '' })).not.toThrow();
+  });
+
+  it('runs before the schema, in readConfiguredEnv', () => {
+    expect(() =>
+      readConfiguredEnv(CONFIG_KEY_REGISTRY, { PQC_SELF_CONTAINED_ACK: 'true' })
+    ).toThrow('PQC_SELF_CONTAINED_ACK was removed in 0.3.0');
+  });
+});
+
 describe('REMOVED_CONFIG_KEYS', () => {
   it('names no key the registry still reads, under its name or an old one', () => {
     const read = new Set(
@@ -68,7 +97,10 @@ describe('REMOVED_CONFIG_KEYS', () => {
     }
   });
 
-  it('holds the two private-address switches', () => {
-    expect(REMOVED_CONFIG_KEYS.map(({ name }) => name)).toEqual([...SWITCHES]);
+  it('holds the two private-address switches and the self-contained acknowledgement', () => {
+    expect(REMOVED_CONFIG_KEYS.map(({ name }) => name)).toEqual([
+      ...SWITCHES,
+      'PQC_SELF_CONTAINED_ACK',
+    ]);
   });
 });

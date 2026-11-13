@@ -20,16 +20,18 @@ import { z } from 'zod';
  * actually enforceable (separately-parsed schemas cannot see each other's
  * fields).
  *
- * `PQC_TOKEN_DELIVERY` (#247) selects how the ML-DSA-65 component reaches a
+ * `PQC_TOKEN_DELIVERY` (#247) names how the ML-DSA-65 component reaches a
  * verifier when hybrid is on. A hybrid token's detached ML-DSA-65 signature is
  * a fixed ~4412 base64url bytes (measured — see `server-jwt`'s
  * `token-size.bench.test.ts`); that alone exceeds a 4 KB cookie and a 2 KB URL,
- * and an inlined compound token (~5128 B) exceeds both. `reference` (the
- * DEFAULT) keeps the bearer token a plain ~716 B Ed25519 JWS and delivers the
+ * and an inlined compound token (~5128 B) exceeds both. `reference`, the only
+ * value, keeps the bearer token a plain ~716 B Ed25519 JWS and delivers the
  * PQC material out-of-band via RFC 7662 introspection (a POST body, no
- * header/cookie ceiling). `self-contained` is allowed ONLY with an explicit
- * `PQC_SELF_CONTAINED_ACK=true`, so no deployment can SILENTLY ship tokens that
- * blow header/cookie limits (ADR-005 / #247 AC#3).
+ * header/cookie ceiling). `self-contained`, which would carry it with the
+ * token, is refused until it is built (#875): the server never had a way to
+ * deliver it, so accepting the value left the operator believing a setting
+ * that changed nothing. `PQC_SELF_CONTAINED_ACK`, its acknowledgement, is a
+ * removed key (`registry/removed.ts`).
  *
  * FAIL-SAFE DEFAULTS: `ed25519`, hybrid off, `reference` delivery — post-quantum
  * is strictly opt-in and size-safe by default.
@@ -73,6 +75,14 @@ function describeInvalidMlDsaSeed(seed: string): string | null {
   return null;
 }
 
+/**
+ * Why a `PQC_TOKEN_DELIVERY` other than `reference` stops the boot (#875).
+ * `self-contained` was accepted once, behind `PQC_SELF_CONTAINED_ACK`, and
+ * changed nothing: the server always delivered by reference.
+ */
+const PQC_TOKEN_DELIVERY_REFUSAL =
+  "PQC_TOKEN_DELIVERY must be 'reference': introspection returns a hybrid token's ML-DSA-65 signature as pqc_signature. 'self-contained', which would carry the signature with the token, is not built. Unset PQC_TOKEN_DELIVERY or set it to 'reference'.";
+
 export const cryptoEnvSchema = z
   .object({
     SIGNING_ALGORITHM_MODE: z.enum(['ed25519', 'ed25519+ml-dsa-65']).default('ed25519'),
@@ -88,21 +98,13 @@ export const cryptoEnvSchema = z
     JWT_MLDSA_KID: z.string().optional(),
     /**
      * How the PQC (ML-DSA-65) component is delivered when hybrid is on (#247).
-     * `reference` (default) → introspection-first, bearer stays a small Ed25519
-     * JWS. `self-contained` → the operator intends to carry the ~4.4 KB PQC
-     * material with the token; permitted only alongside `PQC_SELF_CONTAINED_ACK`.
+     * `reference`, the only value: the bearer stays a small Ed25519 JWS, the
+     * signature is stored under the token's `jti`, and introspection returns
+     * it as `pqc_signature`. Any other value stops the boot (#875).
      */
-    PQC_TOKEN_DELIVERY: z.enum(['reference', 'self-contained']).default('reference'),
-    /**
-     * Explicit acknowledgement that `self-contained` PQC delivery ships a
-     * ~4.4 KB detached signature that exceeds cookie/URL budgets and must only
-     * run over large-buffer request headers (#247 AC#3). Required to select
-     * `self-contained`; ignored otherwise.
-     */
-    PQC_SELF_CONTAINED_ACK: z
-      .enum(['true', 'false', '1', '0'])
-      .default('false')
-      .transform((v) => v === 'true' || v === '1'),
+    PQC_TOKEN_DELIVERY: z
+      .enum(['reference'], { error: PQC_TOKEN_DELIVERY_REFUSAL })
+      .default('reference'),
   })
   .superRefine((data, ctx) => {
     // #248 F8: a CONFIGURED seed must be well-formed whether or not hybrid is
@@ -143,17 +145,6 @@ export const cryptoEnvSchema = z
     // No ML-DSA-65 variable is required (#491): the realm's key store holds
     // the hybrid pair, a fresh deployment generates it, and the key boot step
     // refuses to start a realm whose active token keys are half a pair.
-    // #247 AC#3: self-contained hybrid tokens carry a ~4.4 KB detached ML-DSA
-    // signature that overflows cookie/URL budgets — never let a deployment pick
-    // it silently. Reference/introspection delivery is the safe default.
-    if (data.PQC_TOKEN_DELIVERY === 'self-contained' && !data.PQC_SELF_CONTAINED_ACK) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['PQC_TOKEN_DELIVERY'],
-        message:
-          "PQC_TOKEN_DELIVERY='self-contained' ships a ~4.4 KB detached ML-DSA-65 signature that exceeds 4 KB cookie and 2 KB URL limits. Set PQC_SELF_CONTAINED_ACK=true to confirm a large-buffer header-only delivery channel, or use the default PQC_TOKEN_DELIVERY='reference' (introspection).",
-      });
-    }
   })
   .transform((data) => {
     const enabledSignatureAlgorithms: readonly SignatureAlgorithm[] =
@@ -168,10 +159,9 @@ export const cryptoEnvSchema = z
         data.JWT_MLDSA_PRIVATE_KEY_PATH
       ),
       JWT_MLDSA_KID: data.JWT_MLDSA_KID,
-      // #247: effective PQC delivery. Only meaningful when hybrid is on; a
-      // classical (Ed25519-only) deployment issues small self-contained JWTs and
-      // has no PQC component to deliver, so the field is reported as-is for
-      // observability but drives nothing until hybrid issuance is wired.
+      // #247: the PQC delivery, always `reference` (#875). Only meaningful
+      // when hybrid is on; a classical (Ed25519-only) deployment has no PQC
+      // component to deliver.
       PQC_TOKEN_DELIVERY: data.PQC_TOKEN_DELIVERY,
       enabledSignatureAlgorithms,
     };

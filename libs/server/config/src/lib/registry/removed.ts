@@ -31,6 +31,12 @@ export const REMOVED_CONFIG_KEYS: readonly RemovedConfigKey[] = Object.freeze([
     replacement:
       "A trusted issuer's discovery URL on a private address is listed, for its realms, in the file EGRESS_ALLOWLIST_PATH names; the jwks_uri its discovery document names never reaches a private address. Tests reach a local issuer through createTestEgressClient.",
   },
+  {
+    name: 'PQC_SELF_CONTAINED_ACK',
+    removedIn: '0.3.0',
+    replacement:
+      "It acknowledged PQC_TOKEN_DELIVERY=self-contained, which was never built: a hybrid token's ML-DSA-65 signature reaches a verifier only through introspection, PQC_TOKEN_DELIVERY=reference.",
+  },
 ]);
 
 /**

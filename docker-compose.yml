@@ -362,6 +362,9 @@ services:
       SIGNING_ALGORITHM_MODE:
       HYBRID_SIGNING_ENABLED:
       PQC_TOKEN_DELIVERY:
+      # Removed in 0.3.0 and forwarded only so that a value left in .env
+      # stops the boot with a message naming PQC_TOKEN_DELIVERY=reference,
+      # instead of being dropped here unnoticed. Blank is unset.
       PQC_SELF_CONTAINED_ACK:
       JWT_MLDSA_KID:
       JWT_MLDSA_PRIVATE_KEY:

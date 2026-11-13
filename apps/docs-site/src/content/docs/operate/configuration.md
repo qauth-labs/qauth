@@ -230,10 +230,9 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Signing
 
-| Key                      | Role       | Default     | Since | Description                                                                                                                                                                                               |
-| ------------------------ | ---------- | ----------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PQC_SELF_CONTAINED_ACK` | deployment | `false`     | 0.1.0 | Confirm that `self-contained` hybrid tokens, whose ML-DSA-65 signature exceeds cookie and URL size limits, travel only where large headers are accepted; `PQC_TOKEN_DELIVERY=self-contained` requires it. |
-| `PQC_TOKEN_DELIVERY`     | deployment | `reference` | 0.1.0 | How the ML-DSA-65 signature of a hybrid token reaches a verifier: `reference`, through introspection, or `self-contained`, with the token.                                                                |
+| Key                  | Role       | Default     | Since | Description                                                                                                                                                                                                                                                             |
+| -------------------- | ---------- | ----------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PQC_TOKEN_DELIVERY` | deployment | `reference` | 0.1.0 | How the ML-DSA-65 signature of a hybrid token reaches a verifier; `reference`, the only value, stores it under the token's `jti` for the token's lifetime, and introspection returns it as `pqc_signature`; any other value, `self-contained` included, stops the boot. |
 
 ### Keys and secrets
 
@@ -459,6 +458,7 @@ The server no longer reads these keys and refuses to start while one is set, wha
 | -------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `CIMD_ALLOW_PRIVATE_ADDRESSES`   | 0.2.0      | A metadata document or client jwks_uri never reaches a private address now; list an operator-set private destination in the file EGRESS_ALLOWLIST_PATH names, and reach a test server through createTestEgressClient.                                           |
 | `ID_JAG_ALLOW_PRIVATE_ADDRESSES` | 0.2.0      | A trusted issuer's discovery URL on a private address is listed, for its realms, in the file EGRESS_ALLOWLIST_PATH names; the jwks_uri its discovery document names never reaches a private address. Tests reach a local issuer through createTestEgressClient. |
+| `PQC_SELF_CONTAINED_ACK`         | 0.3.0      | It acknowledged PQC_TOKEN_DELIVERY=self-contained, which was never built: a hybrid token's ML-DSA-65 signature reaches a verifier only through introspection, PQC_TOKEN_DELIVERY=reference.                                                                     |
 
 ## Adding a key
 
