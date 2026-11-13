@@ -86,19 +86,16 @@ const FAILED_EVENT = 'user.recovery_codes_failed';
 /** The account API's audience, which the app lists for its console's calls (#663). */
 const ACCOUNT_AUDIENCE = accountContract.ACCOUNT_API_AUDIENCE;
 /**
- * The account operations the suite mounts behind the account API's guard
- * (#663), where no route serves them yet; the password change is served
- * (#1107) and called where it is.
+ * The account operations the suite calls on their served routes, behind the
+ * account API's guard (#663): the password change (#1107) and the passkey
+ * removal (#1108).
  */
-const GUARDED = ['account.passkeys.delete'] as const;
-/** The guarded operations the suite calls: its probes, and the served password change. */
-type Called = (typeof GUARDED)[number] | 'account.password.change';
-const PASSKEY_ID = '00000000-0000-4000-8000-0000000000e1';
+type Called = 'account.passkeys.delete' | 'account.password.change';
 
-/** Where a guarded operation is called: its contract path, its parameter filled. */
-function guardedUrl(id: Called): string {
+/** Where an account operation is called: its contract path, the passkey it names filled in. */
+function accountUrl(id: Called, passkeyId = ''): string {
   const { path } = accountContract.operationNamed(id);
-  return `${accountContract.ACCOUNT_API_PREFIX}${path.replace(/\{[^}]+\}/g, PASSKEY_ID)}`;
+  return `${accountContract.ACCOUNT_API_PREFIX}${path.replace('{passkeyId}', passkeyId)}`;
 }
 /** The background tasks of the engines this suite builds: run now, failures dropped. */
 const TASKS: BackgroundTasks = {
@@ -146,38 +143,12 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     infra = await startE2eInfrastructure();
-    booted = await bootAuthServer(
-      {
-        ...baseEnvironment(infra, await generateJwtPem()),
-        INTERACTION_UI_ENABLED: 'true',
-        // Each test registers its account through POST /auth/register.
-        REGISTRATION_RATE_LIMIT: '10000',
-      },
-      {
-        // The account operations a recovery code may and may not reach,
-        // behind the account API's guard with the contract's rules (#663).
-        // No route serves them yet; the guard is the app's own module.
-        routes: async (scope) => {
-          const { accountOperation } = await import('./helpers/account-operation-guard');
-          for (const id of GUARDED) {
-            const operation = accountContract.operationNamed(id);
-            scope.route({
-              method: operation.method.toUpperCase() as 'POST' | 'DELETE',
-              url: `${accountContract.ACCOUNT_API_PREFIX}${operation.path.replace(/\{([^}]+)\}/g, ':$1')}`,
-              preValidation: accountOperation({
-                operationId: operation.id,
-                operationClass: operation.class,
-                permission: operation.permission,
-                freshAuthentication: operation.freshAuthentication,
-                actChain: operation.actChain,
-              }).guard,
-              config: { surface: 'api' },
-              handler: async () => ({ ran: id }),
-            });
-          }
-        },
-      }
-    );
+    booted = await bootAuthServer({
+      ...baseEnvironment(infra, await generateJwtPem()),
+      INTERACTION_UI_ENABLED: 'true',
+      // Each test registers its account through POST /auth/register.
+      REGISTRATION_RATE_LIMIT: '10000',
+    });
     const { emailService } = booted.app;
     const original = emailService.sendEngineMail.bind(emailService);
     emailService.sendEngineMail = async (realm, to, mail: EngineMail, context) => {
@@ -548,17 +519,14 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
       scope: SCOPES.join(' '),
     });
 
-    const call = (id: Called) =>
+    const call = (id: Called, passkeyId?: string) =>
       server().inject({
         method: accountContract.operationNamed(id).method.toUpperCase() as 'POST' | 'DELETE',
-        url: guardedUrl(id),
+        url: accountUrl(id, passkeyId),
         headers: { authorization: `Bearer ${accessToken}` },
       });
-    // Removing the lost passkey, one half of the rebind, takes the code.
-    const rebind = await call('account.passkeys.delete');
-    expect(rebind.statusCode, rebind.body).toBe(200);
-    // Changing the password does not: it needs the passkey itself. The
-    // served route's guard refuses it before reading the body.
+    // Changing the password does not take the code: it needs the passkey
+    // itself. The served route's guard refuses it before reading the body.
     const change = await call('account.password.change');
     expect(change.statusCode, change.body).toBe(401);
     expect(change.headers['www-authenticate']).toBe(
@@ -572,6 +540,16 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
         maxAge: 0,
       },
     ]);
+    // Removing the lost passkey, one half of the rebind, takes the code.
+    const passkeys = () =>
+      query<{ id: string }>(
+        "SELECT id FROM user_credentials WHERE user_id = $1 AND provider_type = 'webauthn'",
+        [userId]
+      );
+    const [lost] = await passkeys();
+    const rebind = await call('account.passkeys.delete', lost?.id);
+    expect(rebind.statusCode, rebind.body).toBe(204);
+    expect(await passkeys()).toEqual([]);
   });
 
   it('invalidates every code of the old set when the set is regenerated, and tells the user', async () => {
