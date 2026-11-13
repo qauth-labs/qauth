@@ -1306,6 +1306,86 @@ describe('the restart notice (#1081)', () => {
   });
 });
 
+describe('the trace id of a refused step (#1106)', () => {
+  const REFUSED: InteractionStep = { ...PASSWORD_STEP, error: 'invalid_credentials' };
+  const recordOf = (id: string) =>
+    readInteractionRecord(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(id)
+    );
+
+  it('keeps the id of the request that refused the step, while the step holds its error', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const refused = await owner.answer(id, 0, { kind: 'step', step: REFUSED });
+    expect(refused.statusCode, refused.body).toBe(200);
+    const { traceId } = (refused.json() as { view: { traceId?: string } }).view;
+    expect(traceId).toMatch(/^req-/);
+    expect((await recordOf(id))?.traceId).toBe(traceId);
+    // Any reader of the id sees it beside the error.
+    const read = await new Browser().request('GET', `${INTERACTION_API_PREFIX}/${id}`);
+    expect(read.json()).toMatchObject({ step: REFUSED, traceId });
+    // The next state drops it.
+    const next = await owner.answer(id, 1, { kind: 'step', step: PASSWORD_STEP });
+    expect(next.statusCode, next.body).toBe(200);
+    expect(next.json()).not.toHaveProperty('view.traceId');
+    expect(await recordOf(id)).not.toHaveProperty('traceId');
+  });
+
+  it('gives each refusal the id of its own request', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const first = await owner.answer(id, 0, { kind: 'step', step: REFUSED });
+    const second = await owner.answer(id, 1, { kind: 'step', step: REFUSED });
+    const traceOf = (response: LightMyRequestResponse) =>
+      (response.json() as { view: { traceId?: string } }).view.traceId;
+    expect(traceOf(second)).toMatch(/^req-/);
+    expect(traceOf(second)).not.toBe(traceOf(first));
+  });
+
+  it('keeps none for a step without an error, nor for a sign-in that proved the account', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const answered = await owner.answer(id, 0, { kind: 'step', step: PASSWORD_STEP });
+    expect(answered.json()).not.toHaveProperty('view.traceId');
+    expect(await recordOf(id)).not.toHaveProperty('traceId');
+    await owner.answer(id, 1, { kind: 'step', step: REFUSED });
+    const signedIn = await owner.answer(id, 2, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+      step: CONSENT_STEP,
+    });
+    expect(signedIn.statusCode, signedIn.body).toBe(200);
+    expect(await recordOf(id)).not.toHaveProperty('traceId');
+  });
+
+  it('gives a next interaction that starts at a refused step the id of the request that started it', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const response = await owner.request(
+      'POST',
+      `${INTERACTION_API_PREFIX}/${id}/finish-and-continue-at`,
+      {
+        step: {
+          name: stepUrn('upstream_link'),
+          params: { provider: { provider: 'oidc_corp', name: 'Corp SSO' }, create: false },
+          alternatives: [],
+          error: 'already_linked',
+        },
+      }
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    const next = new URL((response.json() as { location: string }).location).pathname
+      .split('/')
+      .at(-1) as string;
+    const read = await new Browser().request('GET', `${INTERACTION_API_PREFIX}/${next}`);
+    expect((read.json() as { traceId?: string }).traceId).toMatch(/^req-/);
+  });
+});
+
 describe('a next interaction at the step a finish found (#1081)', () => {
   const REFUSED_LINK: InteractionStep = {
     name: stepUrn('upstream_link'),

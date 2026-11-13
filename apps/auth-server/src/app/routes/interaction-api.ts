@@ -265,6 +265,9 @@ function stepRead(view: InteractionView) {
     // Why the sign-in is back at its first step (#1081), on the one read
     // that shows it.
     ...(view.notice === undefined ? {} : { notice: view.notice }),
+    // The request that refused the step (#1106), with its `error`: the page
+    // shows it, so an operator can find that request in the log.
+    ...(view.traceId === undefined ? {} : { trace_id: view.traceId }),
     brand: DEFAULT_BRAND,
     expiresAt: new Date(view.deadline).toISOString(),
   };
