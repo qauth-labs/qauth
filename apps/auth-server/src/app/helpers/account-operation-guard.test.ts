@@ -433,7 +433,10 @@ describe('the account operation guard (#663)', () => {
     });
 
     it('challenges it once the window is over, or for a passkey of another realm', async () => {
-      for (const credentials of [rows(Date.now() - 1), rows(Date.now() + 3_600_000, OTHER_REALM_ID)]) {
+      for (const credentials of [
+        rows(Date.now() - 1),
+        rows(Date.now() + 3_600_000, OTHER_REALM_ID),
+      ]) {
         const harness = await buildHarness();
         harness.credentials.mockResolvedValue(credentials);
         harness.claims = { ...harness.claims, amr: ['pwd'], authTime: signedInAgo(30) };
