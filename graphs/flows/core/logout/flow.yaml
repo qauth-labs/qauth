@@ -12,7 +12,10 @@
 # - Each exit is a final state named <outcome>.<cause> or <error>.<cause>, with the response the browser gets. An
 #   exit with `redirect: success` sends the browser to the app's post_logout_redirect_uri with state (§3); every other
 #   exit is a page or an answer of QAuth's own (`redirect: never`). A refused request gets an HTML info page, never a
-#   redirect. An error the error handler answers is an RFC 9457 problem document.
+#   redirect to the app. A realm that names its ceremony app's error page (ceremonyApp.errorPage, #1106) gets a 303 to
+#   that page, on its own origin, instead of each page the logout ends on with no app to go back to: the refusal, the
+#   signed-out page, the page that offers an unvetted app's return URI, and the status page; the exits that do so are
+#   named <outcome>.error_page. An error the error handler answers is an RFC 9457 problem document.
 # - The request checks run in a fixed order and each refuses on its own, so one variable (returnTo) says which of the
 #   return checks fails first, if any, as core.consent does with allowGate.
 # - `invoke: { external }` names a store the domain graph holds no entity for: the browser sessions (the session
@@ -34,7 +37,9 @@ summary: >-
   nothing ends until the person answers it. The person signs out of this account or of every account on the browser,
   or stays signed in; either way the browser goes back to the app's registered URI with state, or to the sign-out
   status page. An app the operator did not set up is never redirected to before the browser has seen a QAuth page: the
-  signed-out page links to its return URI instead.
+  signed-out page links to its return URI instead. A realm that names its ceremony app's error page gets a 303 to it in
+  place of each of these pages, with what the page would have said: the refusal, or the sign-out with the app's host as
+  text.
 
 scope:
   shows: >-
@@ -173,6 +178,14 @@ context:
     say:
       live: 'the session the step was started for is still live when the step is answered'
       ended: 'it ended meanwhile: a sign-out in another tab, a revoke, or its own end'
+  errorPage:
+    values: [none, named]
+    initial: any
+    say:
+      none: "the realm names no ceremony app error page (ceremonyApp.errorPage, the default): QAuth's own pages"
+      named: >-
+        the realm names one, a path on its origin under /ui/ (#1106): a 303 to it replaces each page the logout ends on
+        with no app to go back to
   sessionEnded: { values: [false, true], initial: false }
   confirmed: { values: [false, true], initial: false }
   interactionOpen: { values: [false, true], initial: false }
@@ -183,6 +196,7 @@ guards:
   canOfferReturn: "returnTo == 'registeredUnvetted'"
   canReturnAtFinish: "returnTo in ['registered', 'registeredUnvetted'] and recheck == 'kept'"
   declined: "decision == 'stay'"
+  errorPageNamed: "errorPage == 'named'"
 
 effects:
   endSession: { set: { sessionEnded: true } }
@@ -223,6 +237,7 @@ main:
     decision: logout
     recheck: kept
     sessionAtFinish: live
+    errorPage: none
   events: [END_SESSION, DONE, DONE]
 
 initial: idle
@@ -288,6 +303,9 @@ states:
   checkingClient:
     title: Check client_id against the hint
     always:
+      - guard: "clientGate == 'mismatch' and hintValid and errorPageNamed"
+        target: invalid_request.error_page
+        say: "client_id is not the hint's audience; user.sign_out_failed (client_id_mismatch), and the realm's error page"
       - guard: "clientGate == 'mismatch' and hintValid"
         target: invalid_request.client_mismatch
         say: "client_id is not the hint's audience; user.sign_out_failed (client_id_mismatch) is recorded"
@@ -301,6 +319,9 @@ states:
       the one client_id names; its post_logout_redirect_uris are matched exactly, as strings (§3.1). A refusal records
       user.sign_out_failed with its reason and shows the info page; nothing ends and the browser is never redirected.
     always:
+      - guard: "returnTo in ['noClient', 'unregistered', 'clientUnusable'] and errorPageNamed"
+        target: invalid_request.error_page
+        say: "a return check fails; user.sign_out_failed with its reason as below, and the realm's error page"
       - guard: "returnTo == 'noClient'"
         target: invalid_request.return_without_client
         say: 'no client is named; user.sign_out_failed (post_logout_redirect_uri_without_client) is recorded'
@@ -337,6 +358,9 @@ states:
         - guard: canReturn
           target: nothing_to_end.returned
           say: 'the request carries a registered return URI of a client the operator set up'
+        - guard: errorPageNamed
+          target: nothing_to_end.error_page
+          say: "there is no app to send the browser back to, and the realm names its ceremony app's error page"
         - guard: canOfferReturn
           target: nothing_to_end.offered
           say: 'the request carries a registered return URI of a client the operator did not set up'
@@ -372,6 +396,9 @@ states:
         - guard: canReturn
           target: signed_out.returned
           say: 'the request carries a registered return URI of a client the operator set up'
+        - guard: errorPageNamed
+          target: signed_out.error_page
+          say: "there is no app to send the browser back to, and the realm names its ceremony app's error page"
         - guard: canOfferReturn
           target: signed_out.offered
           say: 'the request carries a registered return URI of a client the operator did not set up'
@@ -623,6 +650,12 @@ states:
       The page the confirm step ends on when there is nowhere to return. It takes no parameter, so nobody can make it
       say anything but the truth about this browser.
     always:
+      - guard: "errorPageNamed and account == 'none'"
+        target: status.error_page_signed_out
+        say: "the browser holds no live session, and the realm names its ceremony app's error page"
+      - guard: errorPageNamed
+        target: status.error_page_signed_in
+        say: "the browser holds a live session, and the realm names its ceremony app's error page"
       - guard: "account == 'none'"
         target: status.signed_out
         say: 'the browser holds no live session'
@@ -713,6 +746,74 @@ states:
       body: >-
         "You are signed out.", the host of post_logout_redirect_uri, and, for an http(s) URI, a link to it with state
         added when the request had one
+
+  # Exits: the realm's ceremony app error page, in place of QAuth's own pages (#1106)
+
+  signed_out.error_page:
+    type: final
+    title: Send the signed-out browser to the realm's error page
+    description: >-
+      There is no app to send the browser back to: no return URI, or one of an app the operator did not set up. The
+      ceremony app's page says the browser is signed out, and shows the app's host as text when the return URI is a
+      web URL; it builds no link from it, so an app nobody vetted is never one click away.
+    redirect: never
+    response:
+      status: 303
+      headers:
+        Location: >-
+          <issuer><the realm's ceremonyApp.errorPage>?code=logout_finished&trace_id=<the request id>&signed_out=true,
+          with &host=<the return URI's host> for an app the operator did not set up
+        Set-Cookie: >-
+          __Host-qauth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, with Secure when SESSION_COOKIE_SECURE is
+          on
+        Cache-Control: no-store
+
+  nothing_to_end.error_page:
+    type: final
+    title: Send the browser to the realm's error page; it was not signed in
+    redirect: never
+    response:
+      status: 303
+      headers:
+        Location: >-
+          <issuer><the realm's ceremonyApp.errorPage>?code=logout_finished&trace_id=<the request id>&signed_out=true,
+          with &host=<the return URI's host> for an app the operator did not set up
+        Cache-Control: no-store
+
+  invalid_request.error_page:
+    type: final
+    title: Send a refused request to the realm's error page
+    description: >-
+      user.sign_out_failed is recorded with the refusal's reason, as for the info page. Nothing ends, and nothing goes
+      to the app.
+    redirect: never
+    response:
+      status: 303
+      headers:
+        Location: "<issuer><the realm's ceremonyApp.errorPage>?code=logout_refused&trace_id=<the request id>"
+        Cache-Control: no-store
+
+  status.error_page_signed_out:
+    type: final
+    title: Send the status page's browser to the realm's error page, signed out
+    redirect: never
+    response:
+      status: 303
+      headers:
+        Location: >-
+          <issuer><the realm's ceremonyApp.errorPage>?code=logout_finished&trace_id=<the request id>&signed_out=true
+        Cache-Control: no-store
+
+  status.error_page_signed_in:
+    type: final
+    title: Send the status page's browser to the realm's error page, still signed in
+    redirect: never
+    response:
+      status: 303
+      headers:
+        Location: >-
+          <issuer><the realm's ceremonyApp.errorPage>?code=logout_finished&trace_id=<the request id>&signed_out=false
+        Cache-Control: no-store
 
   # Exits: the answer and the cancel, as the Interaction API answers them
 
@@ -986,8 +1087,8 @@ assertions:
   - id: a-refused-request-ends-nothing
     never: >-
       state in ['invalid_request.client_mismatch', 'invalid_request.return_without_client',
-      'invalid_request.return_not_registered', 'invalid_request.return_client_unusable'] and (sessionEnded or
-      interactionOpen)
+      'invalid_request.return_not_registered', 'invalid_request.return_client_unusable', 'invalid_request.error_page']
+      and (sessionEnded or interactionOpen)
     say: 'A refused request ends no session and starts no interaction'
   - id: back-only-to-a-registered-uri
     never: >-
@@ -1005,6 +1106,22 @@ assertions:
     say: >-
       A client the operator did not set up is never redirected to before the browser has seen a QAuth page: the
       signed-out page offers its return URI as a link
+  - id: the-error-page-replaces-the-own-pages
+    never: >-
+      (errorPageNamed and state in ['signed_out.page', 'nothing_to_end.page', 'signed_out.offered',
+      'nothing_to_end.offered', 'status.signed_out', 'status.signed_in', 'invalid_request.client_mismatch',
+      'invalid_request.return_without_client', 'invalid_request.return_not_registered',
+      'invalid_request.return_client_unusable']) or (not errorPageNamed and state in ['signed_out.error_page',
+      'nothing_to_end.error_page', 'invalid_request.error_page', 'status.error_page_signed_out',
+      'status.error_page_signed_in'])
+    say: >-
+      A realm that names its ceremony app's error page gets a 303 to it in place of each page the logout ends on with
+      no app to go back to, and only such a realm does (#1106)
+  - id: the-error-page-tells-the-truth
+    never: >-
+      (state == 'status.error_page_signed_out' and account != 'none') or (state == 'status.error_page_signed_in' and
+      account == 'none') or (state == 'signed_out.error_page' and not sessionEnded)
+    say: "The error page's signed_out says what is true of this browser, as the status page does"
   - id: no-step-without-a-session
     never: "interactionOpen and account == 'none'"
     say: 'The confirm step is shown only to a browser that is signed in'
