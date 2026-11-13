@@ -13,6 +13,12 @@
  *     pnpm nx run infra-db:db:suspend-oauth-client -- \
  *     --realm=<realm name> --client-id=<client_id> [--lift]
  *
+ * A suspension revokes, in its transaction, every refresh token of the
+ * client and spends its unredeemed authorization codes (#893): lifting it
+ * brings none of them back, and the client's users sign in again. A
+ * suspension by hand revokes nothing; lifting it with this script revokes
+ * what it left.
+ *
  * Lifting a suspension does not touch `enabled`. A client that is also
  * disabled stays disabled until its owner re-enables it; the script says so.
  */
@@ -54,10 +60,17 @@ async function main(): Promise<void> {
         );
         break;
       case 'suspended':
-        console.log(`Client "${result.clientId}" is suspended.`);
+        console.log(
+          `Client "${result.clientId}" is suspended. Revoked ${result.revokedTokens} refresh ` +
+            `token${result.revokedTokens === 1 ? '' : 's'} and its unredeemed authorization codes.`
+        );
         break;
       case 'lifted':
-        console.log(`Client "${result.clientId}" is no longer suspended.`);
+        console.log(
+          `Client "${result.clientId}" is no longer suspended. Revoked ${result.revokedTokens} ` +
+            `refresh token${result.revokedTokens === 1 ? '' : 's'} and the unredeemed authorization ` +
+            'codes left from before the suspension.'
+        );
         break;
     }
     if (!result.suspended && !result.enabled) {

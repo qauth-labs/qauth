@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/user.disabled.v1-rc.0.json",
   "title": "urn:qauth:event:user.disabled:v1-rc.0",
-  "description": "The user.disabled event, v1-rc.0. An operator disabled an account: it can no longer sign in or obtain tokens, and every browser session and token issued to it before now stays refused, also after it is enabled again.",
+  "description": "The user.disabled event, v1-rc.0. An operator disabled an account: it can no longer sign in or obtain tokens, and every browser session and token issued to it before now stays refused, also after it is enabled again. The operator tool also ends, in the same transaction, the browser sessions, refresh tokens and unredeemed authorization codes the account holds, and records a `user.session_revoked` for each session it ended.",
   "type": "object",
   "properties": {
     "id": {

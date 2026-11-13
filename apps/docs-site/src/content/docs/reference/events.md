@@ -223,6 +223,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.recovery_codes_failed:v1-rc.0`](#userrecovery_codes_failed-v1-rc0)               | user     | critical | v0.2.0 |
 | [`urn:qauth:event:user.disabled:v1-rc.0`](#userdisabled-v1-rc0)                                         | admin    | warning  | v0.2.0 |
 | [`urn:qauth:event:user.enabled:v1-rc.0`](#userenabled-v1-rc0)                                           | admin    | info     | v0.2.0 |
+| [`urn:qauth:event:user.session_revoked:v1-rc.0`](#usersession_revoked-v1-rc0)                           | admin    | info     | v0.3.0 |
 | [`urn:qauth:event:user.upstream_linked:v1-rc.0`](#userupstream_linked-v1-rc0)                           | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.upstream_unlinked:v1-rc.0`](#userupstream_unlinked-v1-rc0)                       | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.upstream_link_failed:v1-rc.0`](#userupstream_link_failed-v1-rc0)                 | user     | warning  | v0.2.0 |
@@ -440,7 +441,7 @@ Wrong recovery codes reached 100 in a row for an account, each after a first pro
 
 ### user.disabled v1-rc.0
 
-An operator disabled an account: it can no longer sign in or obtain tokens, and every browser session and token issued to it before now stays refused, also after it is enabled again.
+An operator disabled an account: it can no longer sign in or obtain tokens, and every browser session and token issued to it before now stays refused, also after it is enabled again. The operator tool also ends, in the same transaction, the browser sessions, refresh tokens and unredeemed authorization codes the account holds, and records a `user.session_revoked` for each session it ended.
 
 - Identifier: `urn:qauth:event:user.disabled:v1-rc.0`
 - Category: `admin` · Severity: `warning` · Since: v0.2.0
@@ -461,6 +462,21 @@ An operator enabled a disabled account again. The person signs in again: what wa
 - Security type · SSF: `https://schemas.openid.net/secevent/risc/event-type/account-enabled` ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
+
+### user.session_revoked v1-rc.0
+
+An operator's or an admin's action on an account ended one of its browser sessions, not the person's own sign-out: the operator tool disabled the account, and ended each session it held. One event per session ended, in the transaction that ended it.
+
+- Identifier: `urn:qauth:event:user.session_revoked:v1-rc.0`
+- Category: `admin` · Severity: `info` · Since: v0.3.0
+- Subject: `user`, when known
+- Schema: [user.session_revoked.v1-rc.0.json](/schemas/events/user.session_revoked.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/session-revoked` ([SSF events](/reference/ssf-events/))
+
+| Member   | Type                                        | Required | Meaning                                                                            |
+| -------- | ------------------------------------------- | -------- | ---------------------------------------------------------------------------------- |
+| `sid`    | UUID                                        | yes      | The session that ended: the `sid` its ID tokens carry (#549).                      |
+| `reason` | one of `account_disabled`, or a later value | yes      | `account_disabled`: the account was disabled. The set may grow in a minor release. |
 
 ### user.upstream_linked v1-rc.0
 
@@ -919,7 +935,7 @@ A developer replaced a client's secret. The old secret stopped working.
 
 ### client.suspended v1-rc.0
 
-An operator or an admin suspended a client: it can no longer obtain tokens until the suspension is lifted.
+An operator or an admin suspended a client: it can no longer obtain tokens until the suspension is lifted. The refresh tokens and unredeemed authorization codes it held are revoked with it, so lifting the suspension brings none back.
 
 - Identifier: `urn:qauth:event:client.suspended:v1-rc.0`
 - Category: `admin` · Severity: `warning` · Since: v0.2.0

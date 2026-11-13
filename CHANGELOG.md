@@ -138,6 +138,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Disabling an account ends what it holds at once, and each of its sessions
+  is signalled; a client's suspension ends its tokens for good** ([#893]).
+  Since [#748] a disabled account's sessions and tokens were refused at their
+  next use, but nothing ended them: no Shared Signals receiver heard of the
+  sessions, and the refresh tokens stayed live rows that related the user to
+  receivers. `db:disable-user` now ends, in the disabling transaction, the
+  account's browser sessions (each client a session signed in to with a
+  back-channel logout URI is sent a logout token), its refresh tokens
+  (`account_disabled`) and its unredeemed authorization codes, and records a
+  new admin event, `user.session_revoked`, for each session it ended, which
+  the SSF transmitter sends as a CAEP `session-revoked` naming the session,
+  beside the RISC `account-disabled` of `user.disabled`. The refusal at next
+  use stays the authority, for what the transaction does not see and for an
+  account disabled by hand, which still ends nothing at once and sends no
+  signal. Suspending a client, with `db:suspend-oauth-client` or the admin
+  API's `clients.disable`, now revokes every refresh token the client holds
+  (`client_suspended`) and spends its unredeemed codes in the same
+  transaction, so lifting the suspension brings none of them back; lifting
+  one with the tool or `clients.enable` revokes what a suspension by hand, or
+  one made before this release, left. Disabling a realm by hand stays a
+  pause: enabling it again brings back what it held. `operate/accounts` and
+  the SSF transmitter guide say what each switch ends and sends.
 - **The sign-in that links an upstream account may go through a provider the
   account already holds** ([#1080], ADR-020 §3, ADR-017 Decision 4). An
   account made through one upstream provider holds no password and, until its
@@ -4189,6 +4211,7 @@ It adds migrations 0068 and 0069.
 [#857]: https://github.com/qauth-labs/qauth/issues/857
 [#875]: https://github.com/qauth-labs/qauth/issues/875
 [#891]: https://github.com/qauth-labs/qauth/issues/891
+[#893]: https://github.com/qauth-labs/qauth/issues/893
 [#896]: https://github.com/qauth-labs/qauth/issues/896
 [#901]: https://github.com/qauth-labs/qauth/issues/901
 [#908]: https://github.com/qauth-labs/qauth/issues/908

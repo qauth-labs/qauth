@@ -1012,6 +1012,12 @@ export interface AuthorizationCodesRepository {
    */
   invalidateForUserAndClient(userId: string, oauthClientId: string, tx?: DbClient): Promise<number>;
   /**
+   * Invalidate every unredeemed code of one client, whatever its user
+   * (#893: suspending the client ends them, so lifting the suspension brings
+   * none back). Returns count of invalidated codes.
+   */
+  invalidateForClient(oauthClientId: string, tx?: DbClient): Promise<number>;
+  /**
    * Invalidate every unredeemed code of a user that one of `sessionIds`
    * minted (#1064). Returns count of invalidated codes.
    */

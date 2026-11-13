@@ -130,7 +130,7 @@ export const clientSuspended = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'An operator or an admin suspended a client: it can no longer obtain tokens until the suspension is lifted.',
+    'An operator or an admin suspended a client: it can no longer obtain tokens until the suspension is lifted. The refresh tokens and unredeemed authorization codes it held are revoked with it, so lifting the suspension brings none back.',
   category: 'admin',
   severity: 'warning',
   since: FIRST_RELEASE,
