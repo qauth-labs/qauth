@@ -105,21 +105,25 @@ const ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
 /**
  * The routes added since the manifest replaced the autoload: the account and
  * developer APIs under their versioned prefixes (#524), with the account
- * API's later operations (#670, #1107).
+ * API's later operations (#670, #1107, #1108).
  */
 const ROUTES_ADDED_SINCE: readonly string[] = [
   'DELETE /account/v1-rc.0/consents/:consentId',
   'DELETE /account/v1-rc.0/linked-accounts/:linkedAccountId',
+  'DELETE /account/v1-rc.0/passkeys/:passkeyId',
   'DELETE /developer/v1-rc.0/clients/:clientId',
   'DELETE /developer/v1-rc.0/clients/:clientId/api-keys/:keyId',
   'DELETE /developer/v1-rc.0/consents/:consentId',
   'GET /account/v1-rc.0/consents',
   'GET /account/v1-rc.0/linked-accounts',
+  'GET /account/v1-rc.0/passkeys',
+  'GET /account/v1-rc.0/passkeys/:passkeyId',
   'GET /account/v1-rc.0/sign-in-methods',
   'GET /developer/v1-rc.0/clients',
   'GET /developer/v1-rc.0/clients/:clientId',
   'GET /developer/v1-rc.0/clients/:clientId/api-keys',
   'GET /developer/v1-rc.0/consents',
+  'PATCH /account/v1-rc.0/passkeys/:passkeyId',
   'PATCH /developer/v1-rc.0/clients/:clientId',
   'POST /account/v1-rc.0/password/change',
   'POST /developer/v1-rc.0/clients',

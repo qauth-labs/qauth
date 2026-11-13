@@ -139,6 +139,11 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   // The account API's sign-in methods and password change (#1107).
   'GET /account/v1-rc.0/sign-in-methods',
   'POST /account/v1-rc.0/password/change',
+  // The account API's passkeys (#1108).
+  'GET /account/v1-rc.0/passkeys',
+  'GET /account/v1-rc.0/passkeys/:passkeyId',
+  'PATCH /account/v1-rc.0/passkeys/:passkeyId',
+  'DELETE /account/v1-rc.0/passkeys/:passkeyId',
 ];
 
 /** The routes removed since: the metrics moved to the internal listener (#500). */

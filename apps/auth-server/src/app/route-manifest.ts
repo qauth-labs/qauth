@@ -225,6 +225,9 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'sessions',
     ],
     repositories: [
+      // A passkey removal (#1108) reads whether the account holds an admin
+      // grant, where the realm's MFA policy requires a second factor of admins.
+      'adminGrants',
       'authorizationCodes',
       'events',
       'oauthClients',
@@ -240,7 +243,8 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'sessions',
       'userCredentials',
       // The sign-in methods' read counts the unused recovery codes, and the
-      // password change clears the account's `update_password` (#1107).
+      // password change clears the account's `update_password` (#1107); a
+      // passkey removed while new deletes the set (#1108).
       'userRecoveryCodes',
       'userRequiredActions',
       'users',
