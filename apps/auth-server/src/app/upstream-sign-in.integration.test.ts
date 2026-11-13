@@ -1230,6 +1230,15 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
     describe('a sign-in transaction the engine ends at the callback (#1106)', () => {
       it('starts the sign-in again at its first round: a new transaction, the notice, and no refused step', async () => {
         const app = server.app();
+        // A returning account: an identity no account holds stops at the
+        // choice of #670 first, and the engine's round runs only for it.
+        const first = new CookieJar();
+        codeAt(
+          (await createAtChoice(app, first, await signInAtProvider(app, first))).headers['location']
+        );
+        const usersBefore = await users(app);
+        const codesBefore = await codes(app);
+        const refusalsBefore = await refusals(app);
         const jar = new CookieJar();
         const started = await startProvider(app, jar);
         const answer = provider.authorize(started.providerRequest, PERSON);
@@ -1265,8 +1274,9 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         };
         expect(restarted.signInTransaction?.createdAt).toBeGreaterThan(agedAt + 60 * 60 * 1000);
         expect(jar.get(SESSION_COOKIE)).toBeUndefined();
-        expect(await codes(app)).toBe(0);
-        expect(await refusals(app)).toEqual(['transaction_expired']);
+        expect(await users(app)).toBe(usersBefore);
+        expect(await codes(app)).toBe(codesBefore);
+        expect(await refusals(app)).toEqual([...refusalsBefore, 'transaction_expired']);
         expect(refusalLogIds()).toEqual([]);
       });
     });
