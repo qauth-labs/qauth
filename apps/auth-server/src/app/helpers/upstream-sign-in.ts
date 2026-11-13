@@ -34,6 +34,7 @@ import { z } from 'zod';
 import { env } from '../../config/env';
 import { accountRoundOf, engineClientIdOf, finishAccountInteraction } from './account-interaction';
 import { accountPoliciesOf } from './account-policies';
+import { actionRoundOf, asksForSetUp } from './authorization-actions';
 import { finishAuthorization } from './authorization-interaction';
 import { ceremonyErrorPageOf, sendToCeremonyErrorPage } from './ceremony-error-page';
 import { matchFlowSecret, readFlowSecrets } from './flow-cookie';
@@ -313,8 +314,9 @@ export function upstreamRoundContext(
     realm: { id: realmId },
     client: { id: engineClientIdOf(state) },
     ...ladderEndUserIp(request),
-    // An account page's round (#844): a fresh sign-in, and the factor it binds.
-    ...(state.purpose === 'account' ? accountRoundOf(state.request) : {}),
+    // An account page's round (#844), or one of a request that asks for a
+    // set-up (`qauth_action`, #1108): a fresh sign-in, and the factor it binds.
+    ...(state.purpose === 'account' ? accountRoundOf(state.request) : actionRoundOf(state.request)),
     ...extra,
     audit: async (record) => {
       const event = signInAuditEvent(record);
@@ -1141,9 +1143,10 @@ export function upstreamRouteHost(
             // chooses between a new account and the existing one they sign
             // in to next. Nothing is matched, by an email or anything else.
             // An account page's sign-in (#844) never registers: it offers the
-            // existing account only.
+            // existing account only; nor does a request's set-up (#1108).
             const create =
               state.purpose === 'authorization' &&
+              !asksForSetUp(state.request) &&
               newAccountRefusal(fastify, realm, provider, attributes, 'interaction') === null &&
               keepsUpstreamAttributes(attributes);
             return {

@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { AuthorizeQuery } from '../schemas/oauth';
 import { accountPoliciesOf } from './account-policies';
+import { actionRoundOf, asksForSetUp } from './authorization-actions';
 import type { BackgroundTasks } from './background-tasks';
 import type { StartInteractionInput } from './interaction';
 import {
@@ -41,7 +42,9 @@ export type PasskeyFirstStarter = (
  *
  * A registration (`prompt=create`, #655) with no `login_hint` starts at the
  * same first round, as a registration's: it offers a passkey to create the
- * account with, preferred, and the address step beside it.
+ * account with, preferred, and the address step beside it. A request that
+ * asks for a passkey set-up (`qauth_action`, #1108) starts at a fresh
+ * sign-in's first round, with no switch to a registration.
  *
  * With a `login_hint`, or with passkey sign-in off, the answer is `null`: the
  * identifier step, the hint as its prefill, from which the engine asks for
@@ -73,9 +76,12 @@ export function passkeyFirstStarter(
         ...(query.prompt === 'create' ? { flow: 'register' as const } : {}),
         // The interaction of an authorization request: the person may switch
         // between a sign-in and a registration (#1079), as on every round
-        // the Interaction API runs for it.
-        switchFlows: true,
+        // the Interaction API runs for it; never on one that asks for a
+        // set-up (`qauth_action`, #1108), which registers nobody.
+        ...(asksForSetUp(query) ? {} : { switchFlows: true }),
         ...(query.prompt === 'login' || query.max_age !== undefined ? { freshSignIn: true } : {}),
+        // A set-up: a fresh sign-in, and the passkey it binds (#1108).
+        ...actionRoundOf(query),
         receivedAt: Date.now(),
         ...ladderEndUserIp(request),
         environment,
