@@ -180,6 +180,16 @@
 > outlive the family's first token.
 >
 > - Decision 3: a browser-based client's refresh family never slides, whatever the realm sets.
+>
+> **Amended 2026-11-13** with the maintainer's decision of that day on a provider-issued key
+> (#1073). Decision 9 pre-publishes the next signing key in JWKS before it signs, so a verifier
+> that reads the JWKS knows the key first. A provider such as Sign in with Apple issues the
+> client's `upstream_client_assertion` key itself and holds its public half before QAuth holds the
+> key; it never reads QAuth's JWKS for it. The window would protect nothing there, and would keep a
+> wrong, revoked or leaked provider key signing for its length.
+>
+> - Decision 9: the switch to a provider-issued key waiting as `next` runs as soon as it is
+>   approved, with no pre-publication window. Keys QAuth generates keep the overlap.
 
 ## Context
 
