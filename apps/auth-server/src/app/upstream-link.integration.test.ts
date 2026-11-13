@@ -176,6 +176,8 @@ interface StepView {
   readonly upstreamLink?: { readonly provider: string; readonly name: string };
   /** Why the last answer, or the link (#1081), was refused. */
   readonly error?: string;
+  /** The id the server logged the request that refused the step under (#1106). */
+  readonly trace_id?: string;
 }
 
 /** The callback URL the provider of `type` sends the browser back to. */
@@ -1361,10 +1363,11 @@ describe('linking an upstream account to an existing one (#670, real containers)
 
       const refused = await throughPickedProvider(jar, id, HOME_STRANGER);
 
-      // The error page with its way back; nobody signed in, nothing created.
-      expect(refused.statusCode, withServerLog(refused.body)).toBe(400);
-      expect(refused.body).toContain(ERROR_TITLE);
-      expect(refused.headers['location']).toBeUndefined();
+      // Back to the ceremony page (#1106), not a page of the auth server's
+      // own; nobody signed in, nothing created.
+      expect(refused.statusCode, withServerLog(refused.body)).toBe(303);
+      expect(ceremonyIdOf(refused.headers['location'])).toBe(id);
+      expect(refused.body).not.toContain(ERROR_TITLE);
       expect(jar.get(SESSION_COOKIE)).toBeUndefined();
       expect(await users()).toBe(usersBefore);
       expect(await upstreamCredentialOf(HOME_STRANGER.sub, HOME_TYPE)).toBeUndefined();
@@ -1380,11 +1383,20 @@ describe('linking an upstream account to an existing one (#670, real containers)
       expect(failed[0]?.subject_id).toBeNull();
       expect(failed[0]?.data).toMatchObject({ method: 'upstream' });
 
-      // The interaction still holds the identity to link, at the link's
-      // first step: the identity the account holds still links it.
+      // The upstream step is current and refused with unknown_identity, the
+      // provider and the callback's trace id; the other ways in stay, and
+      // the interaction still holds the identity to link: the identity the
+      // account holds still links it.
       const step = await read(id);
-      expect(step.step).toBe(IDENTIFIER);
-      expectHomeOffered(step);
+      expect(step.step).toBe(UPSTREAM);
+      expect(step.error).toBe('unknown_identity');
+      expect(step.trace_id).toMatch(/.+/);
+      expect(step.params?.[UPSTREAM]).toEqual({
+        providers: [{ provider: HOME_TYPE, name: HOME_NAME }],
+        error_provider: { provider: HOME_TYPE, name: HOME_NAME },
+      });
+      expect(step.alternatives).toContain(IDENTIFIER);
+      expect(step.upstreamLink).toEqual({ provider: TYPE, name: PROVIDER_NAME });
       const done = await throughPickedProvider(jar, id, HOME_PERSON);
       expect(done.statusCode, withServerLog(done.body)).toBe(303);
       codeAt(done.headers['location']);
@@ -1406,7 +1418,8 @@ describe('linking an upstream account to an existing one (#670, real containers)
 
       const refused = await throughPickedProvider(jar, id, HOME_STRANGER);
 
-      expect(refused.statusCode, withServerLog(refused.body)).toBe(400);
+      expect(refused.statusCode, withServerLog(refused.body)).toBe(303);
+      expect((await read(id)).error).toBe('unknown_identity');
       expect(jar.get(SESSION_COOKIE)).toBeUndefined();
       expect(await users()).toBe(usersBefore);
       expect(await upstreamCredentials()).toBe(0);
@@ -1423,6 +1436,53 @@ describe('linking an upstream account to an existing one (#670, real containers)
       ).toBe(1);
       expect(await events(SIGNED_IN)).toEqual([]);
       expect(await events(LINKED)).toEqual([]);
+      expect(await codes()).toBe(0);
+    });
+
+    it('answers the same refused step whatever account is behind the identity (#1106)', async () => {
+      await addHomeProvider();
+      const owner = await accountHolding(HOME_PERSON.sub, HOME_TYPE);
+
+      /** What the step a link's sign-in through `person` comes back to says, and offers. */
+      async function refusedFor(person: FakeSignIn) {
+        const jar = new CookieJar();
+        const id = await atChoice(jar);
+        await chooseLink(jar, id);
+        const refused = await throughPickedProvider(jar, id, person);
+        expect(refused.statusCode, withServerLog(refused.body)).toBe(303);
+        expect(ceremonyIdOf(refused.headers['location'])).toBe(id);
+        expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+        const view = await read(id);
+        expect(view.trace_id).toMatch(/.+/);
+        return {
+          step: view.step,
+          error: view.error,
+          upstream: view.params?.[UPSTREAM],
+          alternatives: view.alternatives,
+          upstreamLink: view.upstreamLink,
+        };
+      }
+
+      // An identity no account holds; the account's own identity, its
+      // credential disabled; the same, the account disabled.
+      const stranger = await refusedFor(HOME_STRANGER);
+      await app().dbPool.query('UPDATE user_credentials SET disabled_at = $2 WHERE id = $1', [
+        owner.credentialId,
+        Date.now(),
+      ]);
+      const disabledCredential = await refusedFor(HOME_PERSON);
+      await app().dbPool.query('UPDATE user_credentials SET disabled_at = NULL WHERE id = $1', [
+        owner.credentialId,
+      ]);
+      await app().dbPool.query('UPDATE users SET enabled = false WHERE id = $1', [owner.id]);
+      const disabledAccount = await refusedFor(HOME_PERSON);
+
+      expect(stranger).toMatchObject({ step: UPSTREAM, error: 'unknown_identity' });
+      expect(disabledCredential).toEqual(stranger);
+      expect(disabledAccount).toEqual(stranger);
+      expect(await upstreamCredentials()).toBe(0);
+      expect(await events(LINKED)).toEqual([]);
+      expect(await events(SIGNED_IN)).toEqual([]);
       expect(await codes()).toBe(0);
     });
 

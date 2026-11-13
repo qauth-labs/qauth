@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { createTestEgressClient } from '@qauth-labs/fastify-plugin-egress';
 import {
   type LocalHttpsFixture,
@@ -235,11 +237,26 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
   }
 
   /**
-   * The server's warnings and errors in the current test: a refusal answers
-   * the same page whatever its cause, and a fault only its trace id, so an
-   * assertion on an answer carries them to say why.
+   * The server's log lines in the current test, from warnings up (from
+   * `info` up in a block that asks for it): a refusal answers the same page
+   * whatever its cause, and a fault only its trace id, so an assertion on an
+   * answer carries them to say why.
    */
   const serverLog: string[] = [];
+
+  /** The request ids of this test's `upstream sign-in refused` log lines (#1106), in order. */
+  function refusalLogIds(): string[] {
+    return serverLog.flatMap((line) => {
+      try {
+        const entry = JSON.parse(line) as { msg?: unknown; reqId?: unknown };
+        return entry.msg === 'upstream sign-in refused' && typeof entry.reqId === 'string'
+          ? [entry.reqId]
+          : [];
+      } catch {
+        return [];
+      }
+    });
+  }
 
   /** `body`, with the server's warnings and errors of this test after it. */
   function withServerLog(body: string): string {
@@ -248,10 +265,14 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
 
   /**
    * Boot a deployment for the enclosing block with `environment` over the
-   * base one, its egress through the test-only client, and before each test
-   * reset it and seed the client and the two providers.
+   * base one, its egress through the test-only client, its log from
+   * `logLevel` up, and before each test reset it and seed the client and the
+   * two providers.
    */
-  function bootForBlock(environment: Record<string, string>): BlockServer {
+  function bootForBlock(
+    environment: Record<string, string>,
+    logLevel: 'info' | 'warn' = 'warn'
+  ): BlockServer {
     let booted: BootedAuthServer | undefined;
     let realmId = '';
 
@@ -268,6 +289,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         {
           egressClientFactory: createTestEgressClient,
           logStream: { write: (line: string) => void serverLog.push(line) },
+          logLevel,
         }
       );
     }, 240_000);
@@ -535,6 +557,30 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
     return rows
       .map((row) => ({ key: row.attrKey, value: row.attrValue, verified: row.verified }))
       .sort((a, b) => a.key.localeCompare(b.key));
+  }
+
+  /**
+   * Block the end-user IP `address` in the realm's round limits for ten
+   * minutes, as its hard limit of failed rounds does (ADR-017 Decision 7):
+   * every sign-in round from it is throttled. The key is the IP's HMAC under
+   * the realm's cookie key, as the server's round limiter writes it.
+   */
+  async function blockAddress(app: FastifyInstance, address: string): Promise<void> {
+    const { createServerDigests } = await import('./helpers/password-attempts');
+    const { clientAddressKey } = await import('./helpers/client-address');
+    const realmId = (await app.repositories.realms.findByName(E2E_REALM_NAME))?.id;
+    if (realmId === undefined) throw new Error('default realm missing');
+    const hmac = await createServerDigests(app).ipDigest({
+      realmId,
+      identifier: clientAddressKey({ ip: address } as Parameters<typeof clientAddressKey>[0]),
+    });
+    const ttl = 10 * 60_000;
+    await app.redis.set(
+      `round-limits:{${realmId}}:ip:${hmac}:block`,
+      String(Date.now() + ttl),
+      'PX',
+      ttl
+    );
   }
 
   /** Give the account a passkey: a `webauthn` credential, as an enrolment stores it. */
@@ -831,7 +877,8 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
   });
 
   describe('with the Interaction API ceremony page (INTERACTION_UI_ENABLED on), sign-up on', () => {
-    const server = bootForBlock({ INTERACTION_UI_ENABLED: 'true', ALLOW_SIGN_UP: 'true' });
+    // From `info` up: a refusal's log line names the request a refused step's trace id is (#1106).
+    const server = bootForBlock({ INTERACTION_UI_ENABLED: 'true', ALLOW_SIGN_UP: 'true' }, 'info');
 
     /** The step read of the interaction `id`, as the ceremony app's server makes it. */
     async function stepOf(app: FastifyInstance, id: string) {
@@ -843,7 +890,21 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         alternatives: string[];
         params: Record<string, unknown>;
         error?: string;
+        trace_id?: string;
       };
+    }
+
+    /** Set the realm's policies `update`, as an admin does (#516). */
+    async function realmPolicies(
+      app: FastifyInstance,
+      update: Record<string, Record<string, unknown>>
+    ): Promise<void> {
+      const current = await app.policyStore.get(server.realmId());
+      if (current === undefined) throw new Error('no policies for the realm');
+      await app.policyStore.update(server.realmId(), update, {
+        expectedVersion: current.version,
+      });
+      app.realmHostCache.clear();
     }
 
     /**
@@ -903,9 +964,10 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
 
     describe('an account that holds a passkey', () => {
       // Upstream ranks below a passkey (ADR-017 Decision 4): the sign-in
-      // cannot complete through the provider alone. No passkey step handler
-      // is registered with the engine yet (#651), so it fails closed here
-      // too; once one is, this callback goes to the ceremony page instead.
+      // cannot complete through the provider alone. This deployment serves
+      // no passkey step (WebAuthn off), so no step can complete it: the
+      // callback goes back to the ceremony page with the one code that says
+      // nothing of the account (#1106).
       it('never completes through the provider alone, MFA off: no session and no code', async () => {
         const app = server.app();
         const first = new CookieJar();
@@ -916,9 +978,20 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         const sessionsBefore = await sessions(app);
 
         const jar = new CookieJar();
-        const refused = await signInAtProvider(app, jar);
+        const started = await startProvider(app, jar);
+        const refused = await callbackAt(
+          app,
+          jar,
+          TYPE,
+          provider.authorize(started.providerRequest, PERSON)
+        );
 
-        expectErrorPage(refused);
+        expect(refused.statusCode, withServerLog(refused.body)).toBe(303);
+        expect(ceremonyIdOf(refused.headers['location'])).toBe(started.interactionId);
+        const step = await stepOf(app, started.interactionId);
+        expect(step.step).toBe(UPSTREAM);
+        expect(step.error).toBe('unknown_identity');
+        expect(step.trace_id).toMatch(/.+/);
         expect(jar.get(SESSION_COOKIE)).toBeUndefined();
         expect(await sessions(app)).toBe(sessionsBefore);
         expect(await codes(app)).toBe(1);
@@ -1040,6 +1113,47 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         expect(await refusals(app)).toEqual(['provider_error']);
       });
 
+      it("carries the callback's own trace id, the id its refusal is logged under (#1106)", async () => {
+        const app = server.app();
+
+        const step = await answeredWith(app, 'access_denied');
+
+        expect(step.trace_id).toMatch(/.+/);
+        expect(refusalLogIds()).toEqual([step.trace_id]);
+      });
+
+      it('brings a throttled callback back with too_many_requests, and nothing for the client (#1106)', async () => {
+        const app = server.app();
+        // A returning account: the engine's round, which the round limits
+        // admit, runs for it.
+        const first = new CookieJar();
+        codeAt(
+          (await createAtChoice(app, first, await signInAtProvider(app, first))).headers['location']
+        );
+        const usersBefore = await users(app);
+        const jar = new CookieJar();
+        const started = await startProvider(app, jar);
+        const answer = provider.authorize(started.providerRequest, PERSON);
+        await blockAddress(app, '127.0.0.1');
+
+        const back = await callbackAt(app, jar, TYPE, answer);
+
+        expect(back.statusCode, withServerLog(back.body)).toBe(303);
+        expect(ceremonyIdOf(back.headers['location'])).toBe(started.interactionId);
+        expect(back.headers['retry-after']).toBeUndefined();
+        const step = await stepOf(app, started.interactionId);
+        expect(step.step).toBe(UPSTREAM);
+        expect(step.error).toBe('too_many_requests');
+        expect(step.params[UPSTREAM]).toMatchObject({
+          error_provider: { provider: TYPE, name: 'Corp' },
+        });
+        expect(step.trace_id).toBe(refusalLogIds()[0]);
+        expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+        expect(await users(app)).toBe(usersBefore);
+        expect(await codes(app)).toBe(1);
+        expect((await refusals(app)).at(-1)).toBe('throttled');
+      });
+
       it('leaves the interaction answerable: the person goes on another way from there', async () => {
         const app = server.app();
         const { jar, id, csrf } = await answeredWith(app, 'access_denied');
@@ -1059,6 +1173,57 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         expect(answered.statusCode, withServerLog(answered.body)).toBe(200);
         expect(answered.json()).toMatchObject({ result: 'step' });
         expect(await codes(app)).toBe(0);
+      });
+    });
+
+    describe('a callback with no interaction left (#1106)', () => {
+      /**
+       * Start the provider and sign the person in there, end the interaction
+       * meanwhile (as its expiry does), and come back to the callback.
+       */
+      async function callbackAfterExpiry(app: FastifyInstance): Promise<LightMyRequestResponse> {
+        const jar = new CookieJar();
+        const started = await startProvider(app, jar);
+        const answer = provider.authorize(started.providerRequest, PERSON);
+        const idHash = createHash('sha256').update(started.interactionId).digest('hex');
+        await app.redis.del(
+          `interaction:${server.realmId()}:${idHash}`,
+          `interaction-turn:${server.realmId()}:${idHash}`
+        );
+        return callbackAt(app, jar, TYPE, answer);
+      }
+
+      it("answers 303 to the realm's error page with interaction_expired and the trace id, and no page", async () => {
+        const app = server.app();
+        await realmPolicies(app, { ceremonyApp: { errorPage: '/ui/error' } });
+        const usersBefore = await users(app);
+
+        const response = await callbackAfterExpiry(app);
+
+        expect(response.statusCode, withServerLog(response.body)).toBe(303);
+        expect(response.body).toBe('');
+        expect(response.headers['cache-control']).toBe('no-store');
+        const location = new URL(String(response.headers['location']));
+        expect(`${location.origin}${location.pathname}`).toBe(`${ORIGIN}/ui/error`);
+        expect([...location.searchParams]).toEqual([
+          ['code', 'interaction_expired'],
+          ['trace_id', refusalLogIds()[0] ?? 'no refusal logged'],
+        ]);
+        expect(await users(app)).toBe(usersBefore);
+        expect(await codes(app)).toBe(0);
+        expect(await refusals(app)).toEqual(['interaction_expired']);
+      });
+
+      it("shows the auth server's own error page when the realm names none", async () => {
+        const app = server.app();
+
+        const response = await callbackAfterExpiry(app);
+
+        expectErrorPage(response);
+        expect(response.body).toContain(
+          `<code>${refusalLogIds()[0] ?? 'no refusal logged'}</code>`
+        );
+        expect(await refusals(app)).toEqual(['interaction_expired']);
       });
     });
   });

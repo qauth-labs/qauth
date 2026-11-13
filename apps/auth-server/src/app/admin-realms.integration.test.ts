@@ -79,6 +79,7 @@ interface RealmBody {
     tokens: { accessTokenLifespanSeconds: number; refreshTokenLifespanSeconds: number };
     bruteForce: { lockoutSeconds: number; windowSeconds: number };
     mail: { provider: string; smtp: Record<string, unknown> };
+    ceremonyApp: { errorPage: string | null };
   };
 }
 
@@ -470,6 +471,45 @@ describe('the realm operations of the admin API (#517, real containers)', () => 
         .sort()
     ).toEqual(['/bruteForce/lockoutSeconds', '/bruteForce/windowSeconds']);
     expect((await read(realm.id, editor.token)).etag).toBe(etag);
+  });
+
+  // #1106: the ceremony app's error page is a path on the realm's origin,
+  // never another origin; any change of it is a write.
+  it('refuses a ceremony app error page that is not a path under /ui/ with 422, and takes one that is', async () => {
+    const realm = await tenant('alpha');
+    const editor = await adminWith(realm.id, 'editor', 'qauth:admin:read qauth:admin:write');
+    const { etag } = await read(realm.id, editor.token);
+
+    for (const errorPage of [
+      'https://evil.example/ui/error',
+      '//evil.example/ui/error',
+      'ui/error',
+      '/oauth/authorize',
+      '/ui/',
+      '/ui/../oauth/authorize',
+      '/ui/%2e%2e/oauth',
+      '/ui\\error',
+      '/ui//evil.example',
+      '/ui/error?code=x',
+      '/ui/error#x',
+    ]) {
+      const refused = await patch(realm.id, editor.token, { ceremonyApp: { errorPage } }, etag);
+      expect(refused.statusCode, errorPage).toBe(422);
+      expect(refused.json()).toMatchObject({ code: 'unprocessable_content' });
+      expect(
+        refused.json<{ errors: { pointer: string }[] }>().errors.map((error) => error.pointer)
+      ).toEqual(['/ceremonyApp/errorPage']);
+    }
+    expect((await read(realm.id, editor.token)).etag).toBe(etag);
+
+    const set = await patch(
+      realm.id,
+      editor.token,
+      { ceremonyApp: { errorPage: '/ui/sign-in/error' } },
+      etag
+    );
+    expect(set.statusCode, set.body).toBe(200);
+    expect(set.json<RealmBody>().policies.ceremonyApp.errorPage).toBe('/ui/sign-in/error');
   });
 
   // Scenario 8: a realm outside the caller's grants does not exist for it.
