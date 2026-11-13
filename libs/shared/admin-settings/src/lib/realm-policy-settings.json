@@ -312,6 +312,22 @@
       "environmentBound": false
     },
     {
+      "path": "ceremonyApp.errorPage",
+      "summary": "The path on the realm origin, under `/ui/`, of the ceremony app’s page for the endings that leave no interaction to show (a provider callback whose sign-in has ended, the logout’s own pages), or null to keep the auth server’s own pages.",
+      "docs": "https://docs.qauth.dev/reference/realm-policies/#ceremonyapp",
+      "default": null,
+      "secret": false,
+      "direction": "opaque",
+      "securityWhen": "never",
+      "class": {
+        "tightening": "write",
+        "loosening": "write",
+        "neutral": "write"
+      },
+      "effects": [],
+      "environmentBound": false
+    },
+    {
       "path": "registration.dynamicRegistrationAllowedScopes",
       "summary": "The scopes a dynamically registered client may hold; a scope outside the list is dropped from the registration, and no scope of the reserved qauth: namespace can be listed.",
       "docs": "https://docs.qauth.dev/reference/realm-policies/#registration",

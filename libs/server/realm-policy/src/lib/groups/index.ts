@@ -3,6 +3,11 @@ import { ADMIN_POLICY_GROUP } from './admin';
 import { BOT_CHALLENGE_POLICY_GROUP } from './bot-challenge';
 import { BRUTE_FORCE_POLICY_GROUP } from './brute-force';
 import {
+  CEREMONY_APP_PAGE_MAX_LENGTH,
+  CEREMONY_APP_PAGE_PATTERN,
+  CEREMONY_APP_POLICY_GROUP,
+} from './ceremony-app';
+import {
   createMailTransportRule,
   MAIL_POLICY_GROUP,
   mailTransportGaps,
@@ -23,6 +28,9 @@ export {
   ADMIN_POLICY_GROUP,
   BOT_CHALLENGE_POLICY_GROUP,
   BRUTE_FORCE_POLICY_GROUP,
+  CEREMONY_APP_PAGE_MAX_LENGTH,
+  CEREMONY_APP_PAGE_PATTERN,
+  CEREMONY_APP_POLICY_GROUP,
   createMailTransportRule,
   MAIL_POLICY_GROUP,
   mailTransportGaps,
@@ -49,6 +57,7 @@ export const BUILT_IN_POLICY_GROUPS = Object.freeze({
   bruteForce: BRUTE_FORCE_POLICY_GROUP,
   botChallenge: BOT_CHALLENGE_POLICY_GROUP,
   passkeys: PASSKEYS_POLICY_GROUP,
+  ceremonyApp: CEREMONY_APP_POLICY_GROUP,
   registration: REGISTRATION_POLICY_GROUP,
   mail: MAIL_POLICY_GROUP,
   posture: POSTURE_POLICY_GROUP,

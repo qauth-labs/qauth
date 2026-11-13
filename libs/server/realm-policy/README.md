@@ -52,7 +52,8 @@ counts as a loosening.
 ## Groups and the registry
 
 `REALM_POLICY_REGISTRY` holds the built-in groups: `tokens`, `accounts`, `password`, `bruteForce`,
-`botChallenge`, `passkeys`, `registration`, `mail`, `posture` and `admin`. Another area adds its own:
+`botChallenge`, `passkeys`, `ceremonyApp`, `registration`, `mail`, `posture` and `admin`. Another
+area adds its own:
 
 ```typescript
 import { registerPolicyGroup } from '@qauth-labs/server-realm-policy';

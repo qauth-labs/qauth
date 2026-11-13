@@ -3,7 +3,7 @@ title: Realm policies
 description: Every realm policy field with its default, the environment key that seeds it, which way is stricter and when a change is a security operation, generated from the schema in libs/server/realm-policy.
 sidebar:
   order: 8
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-13'
 ---
 
 <!-- Generated from libs/server/realm-policy by its tests. Do not edit by hand: change the schema and run `pnpm nx test docs-checks -- -u`. -->
@@ -18,8 +18,9 @@ which changes are security operations all come from it, and so does this page.
 Most of them already live on the realm row: the access, development access and refresh token
 lifetimes, the verified-account, password and brute-force policy, the environment ceiling, the
 scopes a dynamically registered client may hold, whether and from which hosts the realm accepts a
-Client ID Metadata Document, the mail transport and sender, and whether the hosted sign-in offers
-a passkey after a password sign-in. The rest are still read from the environment, for every realm:
+Client ID Metadata Document, the mail transport and sender, whether the hosted sign-in offers a
+passkey after a password sign-in, and the ceremony app's error page, which no environment key
+seeds. The rest are still read from the environment, for every realm:
 the verification link's lifetime and resend rule. Nothing reads the `admin` group yet. Once a
 policy lives on the realm row, the environment only seeds a new realm's value, and the realm row
 owns it from then on.
@@ -121,6 +122,12 @@ needs what its strictest change needs.
 | Field                       | Default | Seeded from                   | Stricter when | Class   | Description                                                                                                                                                                                                                               |
 | --------------------------- | ------- | ----------------------------- | ------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `passkeys.offerAfterSignIn` | `true`  | `PASSKEY_OFFER_AFTER_SIGN_IN` | `true`        | `write` | Whether the hosted sign-in offers to add a passkey after a password sign-in, to a verified account whose only factor is that password, while passkeys are on (`WEBAUTHN_ENABLED`); a passkey added from the account page is not affected. |
+
+### `ceremonyApp`
+
+| Field                   | Default | Seeded from | Stricter when | Class   | Description                                                                                                                                                                                                                                  |
+| ----------------------- | ------- | ----------- | ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ceremonyApp.errorPage` | none    | none        | not ordered   | `write` | The path on the realm origin, under `/ui/`, of the ceremony app’s page for the endings that leave no interaction to show (a provider callback whose sign-in has ended, the logout’s own pages), or null to keep the auth server’s own pages. |
 
 ### `registration`
 

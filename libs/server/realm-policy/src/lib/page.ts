@@ -16,7 +16,7 @@ export const REALM_POLICIES_PAGE_PATH =
   'apps/docs-site/src/content/docs/reference/realm-policies.md';
 
 /** The date the page's hand-written prose was last checked; change it with the prose. */
-export const REALM_POLICIES_PAGE_LAST_VERIFIED = '2026-11-01';
+export const REALM_POLICIES_PAGE_LAST_VERIFIED = '2026-11-13';
 
 /** Where the schema lives, as the page names it. */
 const SOURCE_PATH = 'libs/server/realm-policy';
@@ -159,8 +159,9 @@ which changes are security operations all come from it, and so does this page.
 Most of them already live on the realm row: the access, development access and refresh token
 lifetimes, the verified-account, password and brute-force policy, the environment ceiling, the
 scopes a dynamically registered client may hold, whether and from which hosts the realm accepts a
-Client ID Metadata Document, the mail transport and sender, and whether the hosted sign-in offers
-a passkey after a password sign-in. The rest are still read from the environment, for every realm:
+Client ID Metadata Document, the mail transport and sender, whether the hosted sign-in offers a
+passkey after a password sign-in, and the ceremony app's error page, which no environment key
+seeds. The rest are still read from the environment, for every realm:
 the verification link's lifetime and resend rule. Nothing reads the \`admin\` group yet. Once a
 policy lives on the realm row, the environment only seeds a new realm's value, and the realm row
 owns it from then on.

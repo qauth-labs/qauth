@@ -37,6 +37,7 @@ const TABLE_DEFAULTS: RealmPolicies = {
   bruteForce: { enabled: true, maxAttempts: 5, windowSeconds: 900, lockoutSeconds: 900 },
   botChallenge: { requiredAtSignUp: false, difficulty: 18 },
   passkeys: { offerAfterSignIn: true },
+  ceremonyApp: { errorPage: null },
   registration: {
     dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
     cimd: { enabled: true, trustPolicy: 'accept-any-https', trustedDomains: [] },
