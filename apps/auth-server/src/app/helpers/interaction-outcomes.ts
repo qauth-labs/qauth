@@ -144,21 +144,6 @@ export function refusedUpstreamStep(
 }
 
 /**
- * `step` as a restarted sign-in shows it again (#1106): the step the person
- * picked a provider at, without the error and the provider of an earlier
- * refusal, which the restart notice replaces.
- */
-export function restartedStep(step: InteractionStep): InteractionStep {
-  if (step.error === undefined) return step;
-  const rest: InteractionStep = { ...step };
-  delete rest.error;
-  if (step.name !== UPSTREAM_STEP_URN) return rest;
-  const params: Record<string, unknown> = { ...step.params };
-  delete params['error_provider'];
-  return { ...rest, params };
-}
-
-/**
  * The provider of `type` as `step`'s `upstream` step lists it (#1081): its
  * name as the person saw it, for a provider the realm no longer serves.
  */

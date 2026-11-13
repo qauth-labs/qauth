@@ -45,14 +45,13 @@ import {
   interactionFlowBinding,
   type InteractionState,
 } from './interaction';
-import { decisionOf, type InteractionEngines } from './interaction-engines';
+import { decisionOf, type InteractionEngines, requestRoundFlagsOf } from './interaction-engines';
 import { InvalidAnswerError } from './interaction-errors';
 import { InteractionExpiredError } from './interaction-expired';
 import {
   listedUpstreamProvider,
   refusedLinkStep,
   refusedUpstreamStep,
-  restartedStep,
   restartNoticeOf,
   type UpstreamProviderError,
   upstreamRefusalCodeOf,
@@ -1208,17 +1207,31 @@ export function upstreamRouteHost(
           ) {
             // The engine ended its transaction (it outlived its age, or the
             // provider proved another account than the one it named), and
-            // audited the end: the sign-in starts again at the step the
-            // provider was picked at, with a new transaction from the next
-            // answer and a notice of why that names no account, as an
-            // answer's restart does (#1081).
-            return {
-              kind: 'step',
-              step: restartedStep(state.step),
-              personal: state.personal,
-              signInTransaction: null,
-              restartNotice: restartNoticeOf(round.cause),
-            };
+            // audited the end: the sign-in starts again at its first round,
+            // in the same interaction, as an answer's restart does (#1081):
+            // a new transaction for what the request asked for, and a notice
+            // of why that names no account. The round starts no provider.
+            const restart = await engine.advance(
+              null,
+              null,
+              upstreamRoundContext(request, state, {
+                receivedAt: Date.now(),
+                environment,
+                ...requestRoundFlagsOf(state, link?.state === 'signing_in'),
+                ...(link?.state === 'signing_in'
+                  ? linkSignInRound(engines, request, link.provider)
+                  : {
+                      sendCode: engines.sendCode(request),
+                      startUpstream: async () => {
+                        throw new Error('a restarted sign-in’s first round starts no provider');
+                      },
+                    }),
+              })
+            );
+            const decision = decisionOf(reply, restart, receivedAt);
+            if (decision.kind !== 'step')
+              throw new UpstreamSignInRefusal('transaction_ended', true);
+            return { ...decision, restartNotice: restartNoticeOf(round.cause) };
           }
           return upstreamRoundDecision(reply, round, receivedAt);
         }

@@ -891,6 +891,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         params: Record<string, unknown>;
         error?: string;
         trace_id?: string;
+        notice?: string;
       };
     }
 
@@ -1224,6 +1225,49 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
           `<code>${refusalLogIds()[0] ?? 'no refusal logged'}</code>`
         );
         expect(await refusals(app)).toEqual(['interaction_expired']);
+      });
+    });
+    describe('a sign-in transaction the engine ends at the callback (#1106)', () => {
+      it('starts the sign-in again at its first round: a new transaction, the notice, and no refused step', async () => {
+        const app = server.app();
+        const jar = new CookieJar();
+        const started = await startProvider(app, jar);
+        const answer = provider.authorize(started.providerRequest, PERSON);
+        // The transaction the pick started, aged past its two hours.
+        const key = `interaction:${server.realmId()}:${createHash('sha256').update(started.interactionId).digest('hex')}`;
+        const stored = JSON.parse((await app.redis.get(key)) ?? 'null') as {
+          signInTransaction: { createdAt: number };
+        };
+        const agedAt = Date.now() - 3 * 60 * 60 * 1000;
+        await app.redis.set(
+          key,
+          JSON.stringify({
+            ...stored,
+            signInTransaction: { ...stored.signInTransaction, createdAt: agedAt },
+          }),
+          'KEEPTTL'
+        );
+
+        const back = await callbackAt(app, jar, TYPE, answer);
+
+        expect(back.statusCode, withServerLog(back.body)).toBe(303);
+        expect(ceremonyIdOf(back.headers['location'])).toBe(started.interactionId);
+        const step = await stepOf(app, started.interactionId);
+        // The first round, as an answer's restart asks for it (#1081): the
+        // provider is offered again, and nothing names an account.
+        expect(step.step).toBe(IDENTIFIER);
+        expect(step.alternatives).toContain(UPSTREAM);
+        expect(step.error).toBeUndefined();
+        expect(step.trace_id).toBeUndefined();
+        expect(step.notice).toBe('expired');
+        const restarted = JSON.parse((await app.redis.get(key)) ?? 'null') as {
+          signInTransaction: { createdAt: number } | null;
+        };
+        expect(restarted.signInTransaction?.createdAt).toBeGreaterThan(agedAt + 60 * 60 * 1000);
+        expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+        expect(await codes(app)).toBe(0);
+        expect(await refusals(app)).toEqual(['transaction_expired']);
+        expect(refusalLogIds()).toEqual([]);
       });
     });
   });

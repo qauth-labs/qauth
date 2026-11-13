@@ -16,6 +16,7 @@ import {
   REGISTRATION_NOT_ALLOWED,
   type RepositoryRecoveryCodes,
   RESET_NOT_ALLOWED,
+  type RoundContext,
   type RoundResult,
   type SignInEngine,
   storedStepOf,
@@ -33,7 +34,7 @@ import { type BackgroundTasks } from './background-tasks';
 import { createServerBotChallenge, registrationChallengeRequired } from './bot-challenge';
 import { endBrowserSessions } from './browser-session';
 import { type CodeMail, createEngineMailer, type EngineMailer } from './engine-mail';
-import type { InteractionDecision } from './interaction';
+import type { InteractionDecision, InteractionState } from './interaction';
 import { InvalidAnswerError } from './interaction-errors';
 import { InteractionExpiredError } from './interaction-expired';
 import { EVENT_CLIENT_ID_MAX_LENGTH } from './interaction-record';
@@ -495,6 +496,44 @@ export function createInteractionEngines(
     forRequest: (request, rounds) => roundRequests.run(request, rounds),
     recoveryCodes,
     mailer,
+  };
+}
+
+/**
+ * The flags of a sign-in round that the interaction's own request decides:
+ * every round of an answer takes them, and so does the first round of a
+ * sign-in a provider's callback starts again (#1106), so that a restart asks
+ * for what the request asked for. `linking` is a sign-in to the account an
+ * upstream identity joins (#670).
+ */
+export function requestRoundFlagsOf(
+  state: Extract<InteractionState, { readonly purpose: 'authorization' | 'account' }>,
+  linking: boolean
+): Pick<RoundContext, 'flow' | 'switchFlows' | 'freshSignIn' | 'withheldUpstream'> {
+  // The authorization request, when the interaction is for one; the hosted
+  // account page's (#844) is for no client.
+  const authorization = state.purpose === 'authorization' ? state.request : undefined;
+  return {
+    // `prompt=create` (#640): the engine's rounds are a registration's; a
+    // sign-in to link an upstream account (#670) registers nobody.
+    ...(authorization?.prompt === 'create' && !linking ? { flow: 'register' as const } : {}),
+    // The person may switch between a sign-in and a registration (#1079):
+    // on an authorization request's interaction, never on one that links an
+    // upstream account (#670), whatever state the link is in.
+    ...(authorization !== undefined && !linking && state.upstreamLink === undefined
+      ? { switchFlows: true }
+      : {}),
+    // `prompt=login` and `max_age` ask for a fresh sign-in, which a password
+    // reset never is (#642; ADR-017 Decision 8): no reset is offered. A
+    // sign-in to link an upstream account (#670) is always a fresh one.
+    ...(authorization?.prompt === 'login' || authorization?.max_age !== undefined || linking
+      ? { freshSignIn: true }
+      : {}),
+    // A sign-in to link an upstream account (#670) offers the realm's other
+    // providers (#1080; ADR-020 §3), never the one it links.
+    ...(linking && state.upstreamLink !== undefined
+      ? { withheldUpstream: state.upstreamLink.provider }
+      : {}),
   };
 }
 

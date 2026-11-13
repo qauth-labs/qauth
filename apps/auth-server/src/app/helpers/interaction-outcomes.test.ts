@@ -5,7 +5,6 @@ import {
   listedUpstreamProvider,
   refusedLinkStep,
   refusedUpstreamStep,
-  restartedStep,
   restartNoticeOf,
   type TransactionEndCause,
   upstreamRefusalCodeOf,
@@ -218,44 +217,5 @@ describe('upstreamRefusalCodeOf (#1106)', () => {
       const refused = refusedUpstreamStep(STEP, CORP, code as NonNullable<typeof code>);
       expect(interactionStepSchema.safeParse(refused).success, reason).toBe(true);
     }
-  });
-});
-
-describe('restartedStep (#1106)', () => {
-  it("drops an earlier refusal's error and provider, and keeps the rest", () => {
-    const refused = refusedUpstreamStep(
-      {
-        name: IDENTIFIER,
-        params: {},
-        alternatives: [UPSTREAM],
-        alternativeParams: { [UPSTREAM]: { providers: [CORP] } },
-      },
-      CORP,
-      'provider_declined'
-    ) as InteractionStep;
-    const restarted = restartedStep(refused);
-    expect(restarted).not.toHaveProperty('error');
-    expect(restarted.params).toEqual({ providers: [CORP] });
-    expect(restarted.alternatives).toEqual(refused.alternatives);
-    expect(interactionStepSchema.safeParse(restarted).success).toBe(true);
-  });
-
-  it('keeps a step with no error as it is', () => {
-    const step: InteractionStep = { name: IDENTIFIER, params: {}, alternatives: [UPSTREAM] };
-    expect(restartedStep(step)).toBe(step);
-  });
-
-  it('drops the error of a step that is not the upstream step, and nothing else', () => {
-    const step: InteractionStep = {
-      name: stepUrn('password'),
-      params: {},
-      alternatives: [],
-      error: 'invalid_credentials',
-    };
-    expect(restartedStep(step)).toEqual({
-      name: stepUrn('password'),
-      params: {},
-      alternatives: [],
-    });
   });
 });
