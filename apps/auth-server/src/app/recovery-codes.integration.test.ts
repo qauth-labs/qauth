@@ -85,12 +85,18 @@ const USED_EVENT = 'user.recovery_code_used';
 const FAILED_EVENT = 'user.recovery_codes_failed';
 /** The account API's audience, which the app lists for its console's calls (#663). */
 const ACCOUNT_AUDIENCE = accountContract.ACCOUNT_API_AUDIENCE;
-/** The account operations the suite mounts behind the account API's guard (#663). */
-const GUARDED = ['account.passkeys.delete', 'account.password.change'] as const;
+/**
+ * The account operations the suite mounts behind the account API's guard
+ * (#663), where no route serves them yet; the password change is served
+ * (#1107) and called where it is.
+ */
+const GUARDED = ['account.passkeys.delete'] as const;
+/** The guarded operations the suite calls: its probes, and the served password change. */
+type Called = (typeof GUARDED)[number] | 'account.password.change';
 const PASSKEY_ID = '00000000-0000-4000-8000-0000000000e1';
 
 /** Where a guarded operation is called: its contract path, its parameter filled. */
-function guardedUrl(id: (typeof GUARDED)[number]): string {
+function guardedUrl(id: Called): string {
   const { path } = accountContract.operationNamed(id);
   return `${accountContract.ACCOUNT_API_PREFIX}${path.replace(/\{[^}]+\}/g, PASSKEY_ID)}`;
 }
@@ -542,7 +548,7 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
       scope: SCOPES.join(' '),
     });
 
-    const call = (id: (typeof GUARDED)[number]) =>
+    const call = (id: Called) =>
       server().inject({
         method: accountContract.operationNamed(id).method.toUpperCase() as 'POST' | 'DELETE',
         url: guardedUrl(id),
@@ -551,7 +557,8 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
     // Removing the lost passkey, one half of the rebind, takes the code.
     const rebind = await call('account.passkeys.delete');
     expect(rebind.statusCode, rebind.body).toBe(200);
-    // Changing the password does not: it needs the passkey itself.
+    // Changing the password does not: it needs the passkey itself. The
+    // served route's guard refuses it before reading the body.
     const change = await call('account.password.change');
     expect(change.statusCode, change.body).toBe(401);
     expect(change.headers['www-authenticate']).toBe(

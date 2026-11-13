@@ -38,6 +38,7 @@ import {
 import {
   DelegatedTokenRefusedError,
   InsufficientUserAuthenticationError,
+  InvalidCurrentPasswordError,
   LastCredentialError,
 } from '../helpers/account-operation-errors';
 import { AccountVerificationConflictError } from '../helpers/account-verification-errors';
@@ -228,8 +229,9 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
  * Framework transmitter's refusals (SSF 1.0 §8.1 defines no error body, so its
  * routes answer problem documents), the admin pipeline's refusal of a
  * security operation that carries no approval, an approval's refused move,
- * a refused realm policy update, a sandbox realm's ceiling among them, and the
- * account API's step-up challenge and act-chain refusal. Each code is one the problem types page
+ * a refused realm policy update, a sandbox realm's ceiling among them, the
+ * account API's step-up challenge and act-chain refusal, and its password
+ * change's wrong current password. Each code is one the problem types page
  * publishes, for the status the class carries.
  *
  * A test fails when an error class of the app that declares a `statusCode` has
@@ -316,6 +318,12 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // An account change that would leave no way to sign in (#670): unlinking
   // the last upstream account of an account that holds nothing else.
   { errorClass: LastCredentialError, code: 'last_credential', oauthError: 'invalid_request' },
+  // The account API's password change with a wrong current password (#1107).
+  {
+    errorClass: InvalidCurrentPasswordError,
+    code: 'invalid_current_password',
+    oauthError: 'invalid_request',
+  },
   // `@qauth-labs/server-ssf`, through the SSF plugin: a stream request the
   // protocol refuses. Its message, which echoes no value, is the `detail`.
   { errorClass: SsfRequestError, code: 'bad_request', oauthError: 'invalid_request' },

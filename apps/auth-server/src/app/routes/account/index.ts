@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { registerAccountConsentRoutes } from './consents';
 import { registerAccountLinkedAccountRoutes } from './linked-accounts';
+import { registerAccountSignInMethodRoutes } from './sign-in-methods';
 
 /**
  * THE ACCOUNT API, `/account/v1-rc.0` (ADR-019 Decision 7, #524).
@@ -10,7 +11,8 @@ import { registerAccountLinkedAccountRoutes } from './linked-accounts';
  * the active grants the user gave, and their revocation, which replace the
  * cookie-authenticated `/consents` (a deprecated alias until the account
  * console, v0.4, moves); then the linked upstream accounts and their
- * removal (#670).
+ * removal (#670); then the sign-in methods' read and the password change
+ * (#1107).
  *
  * Every route is guarded by `requireFamilyToken('account')` (#509): a token
  * whose only audience is `urn:qauth:aud:account:v1-rc.0`, as the account
@@ -30,4 +32,5 @@ export const autoPrefix = '/account/v1-rc.0';
 export default async function (fastify: FastifyInstance) {
   registerAccountConsentRoutes(fastify);
   registerAccountLinkedAccountRoutes(fastify);
+  registerAccountSignInMethodRoutes(fastify);
 }

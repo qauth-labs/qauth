@@ -27,11 +27,14 @@ import {
  *   operations;
  * - a recovery-code sign-in passes only on the rebind operations.
  *
- * No account operation that asks for fresh authentication is served yet
- * (ACC-01 to ACC-05 build them on this guard), so the suite mounts one probe
- * per operation at the contract's own method and path, guarded with the
+ * Most account operations that ask for fresh authentication are not served
+ * yet (ACC-01 to ACC-05 build them on this guard), so the suite mounts one
+ * probe per operation at the contract's own method and path, guarded with the
  * contract's own rules, the way those routes will be. Each probe answers
- * `{ ran }` once the guard lets the call through. Tokens are minted as the
+ * `{ ran }` once the guard lets the call through. The password change is
+ * served (#1107): a refusal is checked on its route, whose guard runs before
+ * it reads the body, and a call the guard lets through on a probe of the same
+ * rules, `account.recoveryCodes.regenerate`. Tokens are minted as the
  * code exchange mints the account API's (`auth_time`, `amr`, `sid`); the
  * recovery-code suite (`recovery-codes.integration.test.ts`) walks the same
  * rebind through a real sign-in and code exchange.
@@ -46,8 +49,8 @@ const PASSKEY_ID = '00000000-0000-4000-8000-0000000000e1';
 
 /** The probed operations: every rule set and every kind of change the guard refuses an act chain on. */
 const PROBED = [
-  // Credentials: the password, a passkey, the authenticator app.
-  'account.password.change',
+  // Credentials: a passkey, the authenticator app, the recovery codes. The
+  // password change is served (#1107) and called where it is.
   'account.passkeys.delete',
   'account.passkeys.update',
   'account.totp.enrollment.create',
@@ -62,9 +65,11 @@ const PROBED = [
 ] as const;
 
 type ProbedOperation = (typeof PROBED)[number];
+/** The operations the suite calls: its probes, and the served password change. */
+type CalledOperation = ProbedOperation | 'account.password.change';
 
 /** The operation's path with its parameters filled, under the account prefix. */
-function urlOf(id: ProbedOperation): string {
+function urlOf(id: CalledOperation): string {
   const { path } = contract.operationNamed(id);
   return `${contract.ACCOUNT_API_PREFIX}${path.replace(/\{[^}]+\}/g, PASSKEY_ID)}`;
 }
@@ -195,7 +200,7 @@ describe('the account API’s fresh-authentication guard (#663, real containers)
     );
   }
 
-  function call(id: ProbedOperation, bearer: string): Promise<LightMyRequestResponse> {
+  function call(id: CalledOperation, bearer: string): Promise<LightMyRequestResponse> {
     return app().inject({
       method: contract.operationNamed(id).method.toUpperCase() as 'GET',
       url: urlOf(id),
@@ -255,10 +260,11 @@ describe('the account API’s fresh-authentication guard (#663, real containers)
     ]);
 
     // The same sign-in passes where no passkey is bound: the password is
-    // then the strongest factor.
+    // then the strongest factor. On a probe of the same rules: the served
+    // password change would go on to read its body.
     const other = await account();
     const response = await call(
-      'account.password.change',
+      'account.recoveryCodes.regenerate',
       await token(other, { authTime: signedInAgo(10), amr: ['pwd'] })
     );
     expect(response.statusCode, response.body).toBe(200);
@@ -269,7 +275,7 @@ describe('the account API’s fresh-authentication guard (#663, real containers)
     const fresh = await token(userId, { authTime: signedInAgo(5), amr: ['pop', 'mfa'] });
 
     for (const id of [
-      'account.password.change',
+      'account.recoveryCodes.regenerate',
       'account.passkeys.delete',
       'account.addressChange.create',
       'account.deletion.create',

@@ -399,7 +399,7 @@ export const PROBLEM_CODES = {
     type: 'weak-password',
     title: 'Weak password',
     description:
-      'The new password does not meet the password policy. `reasons` lists why (`too_short`, `too_long`, `blocklisted`, `too_weak`), and `errors` carries a message for each, then any feedback, under `/password`.',
+      'The new password does not meet the password policy. `reasons` lists why (`too_short`, `too_long`, `blocklisted`, `too_weak`, and `breached` for a password on the breach list). Outside the account API, `errors` carries a message for each, then any feedback, under `/password`.',
   },
   sandbox_ceiling: {
     status: 422,
@@ -509,6 +509,14 @@ export const PROBLEM_SCHEMA_ID = 'Problem';
 export const PROBLEM_SCHEMA_REF = `#/components/schemas/${PROBLEM_SCHEMA_ID}`;
 
 /**
+ * Why a new password was refused, in a `weak_password` document's `reasons`:
+ * the password policy's reasons (#634), and `breached` for a password on the
+ * breach list, as the account API names it (#1107). A later release may add
+ * reasons.
+ */
+const WEAK_PASSWORD_REASONS = [...PASSWORD_REJECTION_REASONS, 'breached'] as const;
+
+/**
  * One field the request got wrong. `pointer` is an RFC 6901 JSON Pointer into
  * the part of the request that failed: the body, or the object of query or
  * path parameters (`/limit`).
@@ -547,7 +555,7 @@ export const problemSchema = z
     trace_id: z.string(),
     errors: z.array(problemFieldErrorSchema).optional(),
     reasons: z
-      .array(z.string().meta({ 'x-extensible-enum': [...PASSWORD_REJECTION_REASONS] }))
+      .array(z.string().meta({ 'x-extensible-enum': [...WEAK_PASSWORD_REASONS] }))
       .optional()
       .meta({
         description:

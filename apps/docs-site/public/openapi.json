@@ -123,7 +123,8 @@
                 "too_short",
                 "too_long",
                 "blocklisted",
-                "too_weak"
+                "too_weak",
+                "breached"
               ]
             }
           },
@@ -1605,6 +1606,346 @@
           },
           "500": {
             "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/v1-rc.0/sign-in-methods": {
+      "get": {
+        "operationId": "account.signInMethods.get",
+        "tags": [
+          "Account API"
+        ],
+        "description": "Read the token's user's sign-in methods at a glance: whether a password is set and when it was last set, how many passkeys, whether an authenticator app (TOTP) is on, how many recovery codes are left, how many upstream accounts and wallets are linked, whether there is a contact address, and the factor a fresh authentication must hold.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "read",
+        "x-qauth-permission": "signInMethods.read",
+        "x-qauth-fresh-authentication": "none",
+        "x-qauth-act-chain": "accepted",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "password": {
+                      "type": "object",
+                      "properties": {
+                        "set": {
+                          "type": "boolean"
+                        },
+                        "changedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "set",
+                        "changedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "passkeys": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "count"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "totp": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "enabled"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "recoveryCodes": {
+                      "type": "object",
+                      "properties": {
+                        "remaining": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 10
+                        }
+                      },
+                      "required": [
+                        "remaining"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "linkedAccounts": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "count"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "hasContactAddress": {
+                      "type": "boolean"
+                    },
+                    "freshAuthenticationFactor": {
+                      "type": "string",
+                      "enum": [
+                        "pop",
+                        "otp",
+                        "pwd"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "password",
+                    "passkeys",
+                    "totp",
+                    "recoveryCodes",
+                    "linkedAccounts",
+                    "hasContactAddress",
+                    "freshAuthenticationFactor"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/v1-rc.0/password/change": {
+      "post": {
+        "operationId": "account.password.change",
+        "tags": [
+          "Account API"
+        ],
+        "description": "Change the token's user's password, with the current one. Needs a fresh sign-in with the account's strongest factor and refuses an act-chain token. A wrong current password is 400 invalid_current_password and counts on the account's failure ladder; a new password the realm's password policy or breach list refuses is 422 weak_password with its reasons. Afterwards the account's other browser sessions and its refresh-token families end, the session the token names stays, and the owner is told. An account without a password is 404.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "currentPassword": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "format": "password",
+                    "writeOnly": true,
+                    "description": "The password the account has now."
+                  },
+                  "newPassword": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "format": "password",
+                    "writeOnly": true,
+                    "description": "The new password. The realm’s password policy and breach list apply."
+                  }
+                },
+                "required": [
+                  "currentPassword",
+                  "newPassword"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "write",
+        "x-qauth-permission": "password.write",
+        "x-qauth-fresh-authentication": "strongest-factor",
+        "x-qauth-act-chain": "refused",
+        "responses": {
+          "204": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
             "content": {
               "application/problem+json": {
                 "schema": {

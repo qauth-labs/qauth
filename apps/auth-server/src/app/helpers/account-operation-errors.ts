@@ -67,3 +67,20 @@ export class LastCredentialError extends Error {
     this.name = 'LastCredentialError';
   }
 }
+
+/**
+ * A password change whose current password is wrong (#1107): `400`, the
+ * `invalid_current_password` problem document. The wrong password counted on
+ * the account's failure ladder, as a failed sign-in does. A reset that
+ * replaced the password while the change was made is answered the same: the
+ * password the caller named is no longer the account's.
+ */
+export class InvalidCurrentPasswordError extends Error {
+  readonly statusCode = 400;
+  readonly code = 'INVALID_CURRENT_PASSWORD';
+
+  constructor() {
+    super('The current password is not the account’s password.');
+    this.name = 'InvalidCurrentPasswordError';
+  }
+}
