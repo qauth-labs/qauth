@@ -1,21 +1,16 @@
-import {
-  normalisePasskeyNickname,
-  PASSWORD_PROVIDER_TYPE,
-  WEBAUTHN_PROVIDER_TYPE,
-  webauthnCredentialDataSchema,
-} from '@qauth-labs/fastify-plugin-federation';
+import { WEBAUTHN_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-federation';
 import type { BrowserSession, ListedSession } from '@qauth-labs/fastify-plugin-sessions';
-import {
-  NO_SECOND_FACTOR_POLICY,
-  TOTP_PROVIDER_TYPE,
-} from '@qauth-labs/fastify-plugin-sign-in-engine';
+import { TOTP_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
+import { isSecondFactor } from './account-credentials';
 import {
   type AccountFactor,
+  type CredentialTarget,
   FRESH_AUTHENTICATION_MAX_AGE_SECONDS,
   holdsNewFactor,
   isFreshSignIn,
+  isTargetCredential,
   provedOnlyThroughNew,
   requiredFactorOf,
 } from './account-operation-guard';
@@ -25,18 +20,21 @@ import {
   signInMethodsOf,
 } from './account-sign-in-methods';
 import { endBrowserSession, endBrowserSessions } from './browser-session';
-import type { EngineMailer } from './engine-mail';
 import type { InteractionEngines } from './interaction-engines';
-import { ACCOUNT_PAGES_ENGINE_CLIENT_ID } from './interaction-record';
-import { isNewCredential, passkeyAuthenticatorOf } from './new-factors';
-import { recordPasswordChange } from './password-reset';
-import { requestRealm } from './request-realm';
+import { isNewCredential } from './new-factors';
 import { csrfTokensEqual, generateCsrfToken } from './session-cookie';
 import { readSessionSideRecord, writeSessionSideRecord } from './session-side-record';
-import { type LinkedAccount, pageLinkedAccounts, signsInNow } from './upstream-links';
+import { type LinkedAccount, pageLinkedAccounts } from './upstream-links';
 import { upstreamProviderCatalog } from './upstream-providers';
 import { emitUserEvent } from './user-events';
 
+export {
+  type CredentialRemovalResult,
+  type CredentialTarget,
+  type PasskeyRenameResult,
+  removeCredential,
+  renamePasskey,
+} from './account-credentials';
 export type { AccountPasskey } from './account-sign-in-methods';
 
 /**
@@ -74,10 +72,11 @@ export type { AccountPasskey } from './account-sign-in-methods';
  * Adding a passkey, setting up an authenticator app and linking an upstream
  * account are no changes here: each runs as an interaction of the sign-in
  * engine (`account-interaction.ts`), whose fresh sign-in comes first. The
- * password change and the sign-in methods' read are the account API's too,
- * so they live apart (`account-password-change.ts`,
- * `account-sign-in-methods.ts`), where its routes reach them without the
- * rest of the page (#1107).
+ * password change, the sign-in methods' read and the passkey and
+ * authenticator app changes are the account API's too, so they live apart
+ * (`account-password-change.ts`, `account-sign-in-methods.ts`,
+ * `account-credentials.ts`), where its routes reach them without the rest of
+ * the page (#1107, #1108).
  */
 
 /** A change of the account page, by the account API operation it stands for. */
@@ -114,21 +113,6 @@ export const ACCOUNT_PAGE_CHANGES = {
   sessionEnd: { operationId: 'account.sessions.delete', freshAuthentication: 'none' },
   sessionsEndAll: { operationId: 'account.sessions.endAll', freshAuthentication: 'none' },
 } as const satisfies Record<string, AccountPageChange>;
-
-/** The credential a removal names: one passkey, or the account's authenticator app. */
-export type CredentialTarget =
-  | { readonly type: 'passkey'; readonly id: string }
-  | { readonly type: 'totp' };
-
-/** Whether `row` is the credential `target` names. */
-function isTarget(
-  row: { readonly id: string; readonly providerType: string },
-  target: CredentialTarget
-): boolean {
-  return target.type === 'passkey'
-    ? row.id === target.id && row.providerType === WEBAUTHN_PROVIDER_TYPE
-    : row.providerType === TOTP_PROVIDER_TYPE;
-}
 
 /** Whether a session may make a change now, and why not. */
 export type FreshAuthenticationVerdict =
@@ -188,7 +172,7 @@ export async function checkFreshAuthentication(
   if (
     removing !== undefined &&
     session.amr.includes('pwd') &&
-    credentials.some((row) => isTarget(row, removing) && isNewCredential(row, now))
+    credentials.some((row) => isTargetCredential(row, removing) && isNewCredential(row, now))
   ) {
     return { kind: 'fresh' };
   }
@@ -250,53 +234,6 @@ export async function accountCsrfAccepted(
     { realmId: session.realmId, userId: session.userId, clientId: null, actor: 'user' }
   );
   return false;
-}
-
-/** A credential row, as far as these rules read it. */
-interface CredentialRow {
-  readonly id: string;
-  readonly providerType: string;
-  readonly realmId: string;
-  /** The failure ladder's mark, or a rebind's (#655). */
-  readonly disabledAt?: number | null;
-}
-
-/**
- * Whether a credential still signs in: one the failure ladder or a rebind
- * marked does not, until a reset or a new set-up, so it is no way in that a
- * removal may leave the account with.
- */
-function isLive(credential: CredentialRow): boolean {
-  return credential.disabledAt === null || credential.disabledAt === undefined;
-}
-
-/** Whether a credential is a second factor: a passkey or an authenticator app. */
-function isSecondFactor(credential: CredentialRow): boolean {
-  return (
-    credential.providerType === WEBAUTHN_PROVIDER_TYPE ||
-    credential.providerType === TOTP_PROVIDER_TYPE
-  );
-}
-
-/**
- * Whether the realm's MFA policy requires a second factor of the account,
- * as the engine reads it (`secondFactorRequired`): `required`, or
- * `required_for_admins` for an account holding an admin grant.
- */
-async function secondFactorRequired(
-  fastify: FastifyInstance,
-  realmId: string,
-  userId: string
-): Promise<boolean> {
-  // As the engines read it: the test support's reader, or none required.
-  const policy = await (fastify.signInMfaPolicy ?? NO_SECOND_FACTOR_POLICY).read({
-    realmId,
-    clientId: ACCOUNT_PAGES_ENGINE_CLIENT_ID,
-  });
-  const modes = [policy.realm, policy.client];
-  if (modes.includes('required')) return true;
-  if (!modes.includes('required_for_admins')) return false;
-  return (await fastify.repositories.adminGrants.listLive(realmId, userId)).length > 0;
 }
 
 // ── The overview ─────────────────────────────────────────────────────────────
@@ -416,226 +353,6 @@ export async function readAccountOverview(
       })),
     requiredFactor: methods.requiredFactor,
   };
-}
-
-// ── Passkeys and the authenticator app ───────────────────────────────────────
-
-/** What a removal did. */
-export type CredentialRemovalResult =
-  | { readonly kind: 'removed' }
-  /** No such credential of the account: another account's reads the same. */
-  | { readonly kind: 'not_found' }
-  /** It is the account's last way to sign in. */
-  | { readonly kind: 'last_credential' }
-  /** It is the last second factor the realm's policy requires of the account. */
-  | { readonly kind: 'second_factor_required' };
-
-/**
- * Remove one of the account's passkeys (`account.passkeys.delete`) or its
- * authenticator app (`account.totp.delete`), under the user's row lock. The
- * caller has checked a fresh sign-in and the CSRF token. The delete and its
- * `user.credential_removed` event commit together; then the owner is told at
- * the address of the account's password (ADR-020 §3 "Emails": a notice no
- * realm switches off). An account with no password has no address to tell.
- *
- * A credential removed while it is new (#1064; ADR-017 Decision 8, amended
- * 2026-11-12) takes with it what it opened: in the removal's transaction,
- * the unredeemed codes of every session whose sign-in bound or proved it,
- * live or ended (a family outlives its browser session), the refresh
- * families those sign-ins opened (a family carries its session's
- * `auth_time`, #662), and the account's recovery codes, which may have been
- * shown with it. Then every sign-in in progress of the account ends at its
- * next round (the password change's cutoff, `recordPasswordChange`), so none
- * that proved the credential or took one of those codes binds a factor
- * after it; the live sessions end; and the codes and families are swept once
- * more, for one a session minted meanwhile. The event says so (`whileNew`).
- */
-export async function removeCredential(
-  fastify: FastifyInstance,
-  request: FastifyRequest,
-  session: BrowserSession,
-  target: CredentialTarget,
-  mailer: EngineMailer,
-  now: number = Date.now()
-): Promise<CredentialRemovalResult> {
-  const { realmId, userId } = session;
-  const mfaRequired = await secondFactorRequired(fastify, realmId, userId);
-  let address: string | undefined;
-  /** Whether the removed credential was new: what it opened is ended after the commit too. */
-  let removedWhileNew = false;
-  /** The sessions, live or ended, whose sign-in bound or proved the removed new credential. */
-  let opened: readonly {
-    readonly id: string;
-    readonly authTime: number;
-    readonly live: boolean;
-  }[] = [];
-  const result = await fastify.db.transaction(async (tx): Promise<CredentialRemovalResult> => {
-    if (!(await fastify.repositories.userCredentials.lockUser(realmId, userId, tx))) {
-      return { kind: 'not_found' };
-    }
-    const held = (await fastify.repositories.userCredentials.findAllByUserId(userId, tx)).filter(
-      (row) => row.realmId === realmId
-    );
-    const row = held.find((candidate) => isTarget(candidate, target));
-    if (row === undefined) return { kind: 'not_found' };
-    // What the account keeps that still signs in: a marked credential is
-    // none, nor the identity of a provider switched off.
-    const others = held.filter((candidate) => candidate.id !== row.id && isLive(candidate));
-    if (!(await signsInNow(fastify, realmId, others))) return { kind: 'last_credential' };
-    if (mfaRequired && !others.some(isSecondFactor)) return { kind: 'second_factor_required' };
-    const whileNew = isNewCredential(row, now);
-    const deleted = await fastify.repositories.userCredentials.deleteById(realmId, row.id, tx);
-    if (deleted === undefined || deleted.userId !== userId) {
-      throw new Error('a locked credential could not be deleted');
-    }
-    if (whileNew) {
-      removedWhileNew = true;
-      opened = (
-        await fastify.repositories.sessions.listNamingCredential(realmId, userId, row.id, tx)
-      ).map((candidate) => ({
-        id: candidate.id,
-        authTime: candidate.authTime,
-        live: candidate.revokedAt === null && candidate.expiresAt > now,
-      }));
-      await revokeWhatOpened(fastify, userId, opened, tx);
-      await fastify.repositories.userRecoveryCodes.deleteSet(realmId, userId, tx);
-    }
-    const data = webauthnCredentialDataSchema.safeParse(row.credentialData);
-    await emitUserEvent(
-      request,
-      'urn:qauth:event:user.credential_removed:v1-rc.0',
-      {
-        type: target.type,
-        credentialId: row.id,
-        ...(target.type === 'totp'
-          ? { authenticator: 'app' as const }
-          : data.success
-            ? { authenticator: passkeyAuthenticatorOf(data.data) }
-            : {}),
-        ...(whileNew ? { whileNew: true as const } : {}),
-      },
-      { tx, realmId, userId, clientId: null, actor: 'user' }
-    );
-    address = held.find(
-      (candidate) => candidate.providerType === PASSWORD_PROVIDER_TYPE
-    )?.externalSub;
-    return { kind: 'removed' };
-  });
-  if (result.kind === 'removed' && removedWhileNew) {
-    // None of these can undo the removal, whose transaction already revoked
-    // the sessions' codes and families and deleted the recovery codes, and
-    // none may fail it: each is logged. The cutoff first: a sign-in in
-    // progress that proved the credential, or took a code of the deleted
-    // set, binds nothing after it. Each live session's clients are queued a
-    // back-channel logout by its revocation (#624). A `reset`: a
-    // credential's removal ended it.
-    try {
-      await recordPasswordChange(fastify, realmId, userId, Date.now());
-    } catch (error) {
-      fastify.log.error(
-        { err: error, realmId },
-        'a new credential was removed, but the sign-ins in progress could not be ended'
-      );
-    }
-    for (const { id } of opened.filter((candidate) => candidate.live)) {
-      try {
-        await endBrowserSession(
-          fastify,
-          realmId,
-          id,
-          'reset',
-          { type: 'user', id: userId },
-          userId
-        );
-      } catch (error) {
-        fastify.log.error(
-          { err: error, realmId },
-          'a new credential was removed, but a session it opened could not be ended'
-        );
-      }
-    }
-    try {
-      await revokeWhatOpened(fastify, userId, opened);
-    } catch (error) {
-      fastify.log.error(
-        { err: error, realmId },
-        'a new credential was removed, but the second sweep of what it opened failed'
-      );
-    }
-  }
-  if (result.kind === 'removed' && address !== undefined) {
-    // Queued, never awaited: a notice that cannot go out is logged by the mailer.
-    mailer.sendUncounted(requestRealm(request), address, {
-      template: target.type === 'passkey' ? 'passkey_removed' : 'totp_removed',
-    });
-  }
-  return result;
-}
-
-/**
- * End the unredeemed codes the `sessions` minted and the refresh families
- * their sign-ins opened (#1064): codes first, so one redeemed meanwhile
- * opens no family after the sweep.
- */
-async function revokeWhatOpened(
-  fastify: FastifyInstance,
-  userId: string,
-  sessions: readonly { readonly id: string; readonly authTime: number }[],
-  tx?: Parameters<Parameters<FastifyInstance['db']['transaction']>[0]>[0]
-): Promise<void> {
-  if (sessions.length === 0) return;
-  await fastify.repositories.authorizationCodes.invalidateForSessions(
-    userId,
-    sessions.map(({ id }) => id),
-    tx
-  );
-  await fastify.repositories.refreshTokens.revokeFamiliesOfSignIns(
-    userId,
-    sessions.map(({ authTime }) => authTime),
-    'new_credential_removed',
-    tx
-  );
-}
-
-/**
- * Rename one of the account's passkeys (`account.passkeys.update`): a name is
- * no credential, so it needs no fresh sign-in (ADR-020 §3). The name is tidied
- * as an enrolment tidies it; an empty one removes it. The write and its
- * `user.passkey_renamed` event commit together.
- */
-export async function renamePasskey(
-  fastify: FastifyInstance,
-  request: FastifyRequest,
-  session: BrowserSession,
-  input: { readonly id: string; readonly nickname: string }
-): Promise<{ readonly kind: 'renamed' | 'not_found' }> {
-  const { realmId, userId } = session;
-  return fastify.db.transaction(async (tx) => {
-    if (!(await fastify.repositories.userCredentials.lockUser(realmId, userId, tx))) {
-      return { kind: 'not_found' as const };
-    }
-    const row = (await fastify.repositories.userCredentials.findAllByUserId(userId, tx)).find(
-      (candidate) =>
-        candidate.id === input.id &&
-        candidate.realmId === realmId &&
-        candidate.providerType === WEBAUTHN_PROVIDER_TYPE
-    );
-    if (row === undefined) return { kind: 'not_found' as const };
-    const data = webauthnCredentialDataSchema.safeParse(row.credentialData);
-    if (!data.success) throw new Error('a passkey whose credential_data is not one');
-    await fastify.repositories.userCredentials.updateCredentialData(
-      row.id,
-      { ...row.credentialData, nickname: normalisePasskeyNickname(input.nickname) },
-      tx
-    );
-    await emitUserEvent(
-      request,
-      'urn:qauth:event:user.passkey_renamed:v1-rc.0',
-      { credentialId: row.id },
-      { tx, realmId, userId, clientId: null, actor: 'user' }
-    );
-    return { kind: 'renamed' as const };
-  });
 }
 
 // ── Recovery codes ───────────────────────────────────────────────────────────

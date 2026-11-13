@@ -46,6 +46,11 @@ import { emitUserEvent } from './user-events';
  *    sign-in that used a recovery code in place of a lost factor passes too.
  *    A recovery code adds no `amr` value, so the guard reads the browser
  *    session the token names in `sid`, which records it.
+ * 5. A removal of a passkey or the authenticator app that is still new
+ *    (#1064; ADR-017 Decision 8, amended 2026-11-12) passes on a recent
+ *    sign-in that proved the password alone, as the hosted account page's
+ *    removal does (#1108): the route names the credential it removes
+ *    ({@link AccountOperationOptions.removing}).
  *
  * A failed read of the account's factors or of the session refuses the call
  * with 503 and `Retry-After`: the guard never lets a call through on what it
@@ -117,6 +122,21 @@ type RefusalReason =
   | 'lookup_failed';
 
 const REFUSED_EVENT = 'urn:qauth:event:request.account_operation_refused:v1-rc.0';
+
+/** The credential a removal names: one passkey, or the account's authenticator app. */
+export type CredentialTarget =
+  | { readonly type: 'passkey'; readonly id: string }
+  | { readonly type: 'totp' };
+
+/** Whether `row` is the credential `target` names. */
+export function isTargetCredential(
+  row: { readonly id?: string; readonly providerType: string },
+  target: CredentialTarget
+): boolean {
+  return target.type === 'passkey'
+    ? row.id === target.id && row.providerType === WEBAUTHN_PROVIDER_TYPE
+    : row.providerType === TOTP_PROVIDER_TYPE;
+}
 
 /** A credential row, as far as {@link requiredFactorOf} reads it. */
 export interface BoundCredential {
@@ -295,13 +315,17 @@ async function sessionOfToken(
 }
 
 /**
- * The checks of steps 2 to 4 for a request whose token the family guard has
+ * The checks of steps 2 to 5 for a request whose token the family guard has
  * already accepted (`request.jwtPayload`). Throws the error that answers a
  * refusal, after recording it.
+ *
+ * @param removing - the credential a removal is for (step 5): while it is
+ *   new, a recent sign-in that proved the password removes it
  */
 export async function checkAccountOperation(
   request: FastifyRequest,
-  rules: AccountOperationRules
+  rules: AccountOperationRules,
+  removing?: CredentialTarget
 ): Promise<void> {
   const claims = request.jwtPayload as JWTPayload;
   const userId = subjectOf(claims);
@@ -345,6 +369,18 @@ export async function checkAccountOperation(
       { reason: 'lookup_failed' },
       lookupFailed(request, 'credentials', cause)
     );
+  }
+  // Step 5: the password alone, after a fresh sign-in, removes a credential
+  // while it is new (#1064; ADR-017 Decision 8, amended 2026-11-12).
+  if (
+    removing !== undefined &&
+    (claims.amr ?? []).includes('pwd') &&
+    credentials.some(
+      (row) =>
+        row.realmId === realmId && isTargetCredential(row, removing) && isNewCredential(row, now)
+    )
+  ) {
+    return;
   }
   const requiredFactor = requiredFactorOf(credentials, realmId, now);
   // The session behind the token, read once and only when a rule needs it.
@@ -403,6 +439,17 @@ export interface AccountOperationGuard {
   };
 }
 
+/** What a route adds to its operation's rules. */
+export interface AccountOperationOptions {
+  /**
+   * The credential the request removes, read from the request before it is
+   * validated (step 5): `undefined` when it names none. A value no credential
+   * of the account has matches none, so the rule of the strongest factor
+   * applies.
+   */
+  readonly removing?: (request: FastifyRequest) => CredentialTarget | undefined;
+}
+
 /**
  * The guard of one account operation, built once per route: its
  * `preValidation` hook, which runs before validation so a caller without a
@@ -414,7 +461,10 @@ export interface AccountOperationGuard {
  * @throws {Error} at build time for an id that is no account operation id or
  *   a rule the contract does not define
  */
-export function accountOperation(rules: AccountOperationRules): AccountOperationGuard {
+export function accountOperation(
+  rules: AccountOperationRules,
+  options: AccountOperationOptions = {}
+): AccountOperationGuard {
   if (!OPERATION_ID.test(rules.operationId)) {
     throw new Error(`accountOperation: ${rules.operationId} is not an account operation id`);
   }
@@ -436,7 +486,7 @@ export function accountOperation(rules: AccountOperationRules): AccountOperation
   return Object.freeze({
     guard: async function accountOperationGuard(request: FastifyRequest, reply: FastifyReply) {
       await access.guard(request, reply);
-      await checkAccountOperation(request, frozen);
+      await checkAccountOperation(request, frozen, options.removing?.(request));
     },
     schema: Object.freeze({
       operationId: frozen.operationId,
