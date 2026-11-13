@@ -144,8 +144,11 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   ssf_streams: { api: SIUD, delivery: S },
   user_attributes: { web: SIU, api: SIU },
   // `admin` reads nothing of it: what `users.verify` shows of an account's
-  // credentials comes through `user_credential_proofs` (#1052).
-  user_credentials: { web: SIU, api: SIU },
+  // credentials comes through `user_credential_proofs` (#1052). A removal
+  // deletes the row: a passkey's or an authenticator app's on the hosted
+  // account page, on `web` (#844), and in the account API, on `api`
+  // (#1108), and an upstream account's unlink on `api` (#670).
+  user_credentials: { web: SIUD, api: SIUD },
   // Each account's recovery codes (#649): the sign-in engine, on `web`,
   // reads an account's codes, takes one (an `UPDATE … WHERE used_at IS NULL`)
   // and replaces a set (a `DELETE` and an `INSERT` in one transaction) when
