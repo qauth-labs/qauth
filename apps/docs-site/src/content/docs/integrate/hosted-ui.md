@@ -3,7 +3,7 @@ title: Hosted UI
 description: The server-rendered login, consent, and resume screens an integrator's users see during authorization_code + PKCE.
 sidebar:
   order: 3
-lastVerified: '2026-11-12'
+lastVerified: '2026-11-13'
 ---
 
 `authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
@@ -201,13 +201,35 @@ The provider sends the browser back to `/upstream/{type}/callback` on the realm
 host. Only the browser that started may complete the sign-in, once; the account
 is found by the provider's subject under its issuer, never by email, and a new
 one is created only when the realm allows sign-up (`ALLOW_SIGN_UP`). On success
-the browser goes back to the authorization request under its new session. A
-cancel or an error at the provider brings the browser back to the ceremony
-page, whose step read makes the `upstream` step current with the error
-`provider_declined` or `provider_error` and names the provider, beside the
-other ways in (#1081); the server-rendered pages show a page with a way back to
-the first step instead. Every other failure shows one error page with the
-request's trace id. Nothing of either reaches the client.
+the browser goes back to the authorization request under its new session.
+
+With the Interaction API's ceremony page on (`INTERACTION_UI_ENABLED`), every
+refusal of the callback brings the browser back to the ceremony page while its
+interaction is still live (#1081, #1106). The step read makes the `upstream`
+step current again, beside the other ways in, with the provider in
+`error_provider`, the refusal in `error` and the callback's `trace_id`: the id
+the server logged the refusal under, which the page shows so an operator can
+find it. The `error` is one of a closed set, and none says anything about an
+account the person has not proved, so each is the same for every account
+(ADR-017 Decision 4):
+
+| `error`                | When                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `provider_declined`    | The person cancelled or refused at the provider.                                                                          |
+| `provider_error`       | The provider answered another error, or an answer that failed its checks.                                                 |
+| `provider_unavailable` | The provider could not be reached or used.                                                                                |
+| `unknown_identity`     | The identity the provider proved signs in to no account here: no account holds it, or the account cannot sign in with it. |
+| `too_many_requests`    | The realm's sign-in limits held the attempt back.                                                                         |
+| `service_unavailable`  | A store the sign-in needs could not answer.                                                                               |
+
+A callback with no interaction left (it expired or moved on, or the browser is
+not the one that started it) goes to the
+[ceremony app's error page](#the-ceremony-apps-error-page) when the realm
+names one, and otherwise shows the auth server's error page with the request's
+trace id. The server-rendered pages, used while the Interaction API is off,
+keep their own: a page with a way back to the first step for a cancel or an
+error at the provider, and one error page with the request's trace id for
+every other failure. Nothing of any of them reaches the client.
 
 The provider proves the account as a password does, and the sign-in then asks
 for what the account still owes (ADR-017 Decision 4): an account that holds a
@@ -288,6 +310,40 @@ stays where it was. A sign-in to
 [link an upstream account](#linking-an-upstream-account-to-an-existing-one)
 never offers it, nor does the account page's sign-in. `/ui/login`, the page
 the Interaction API off serves, offers neither.
+
+## The ceremony app's error page
+
+Some endings leave no interaction for a ceremony page to read: an upstream
+provider's callback whose interaction is gone, and the pages an
+[RP-initiated logout](/integrate/oauth-flow/#rp-initiated-logout) ends on. A
+realm may name a page of its ceremony app for them, in its
+[`ceremonyApp.errorPage`](/reference/realm-policies/#ceremonyapp) policy
+(#1106). The value is a path on the realm's own origin under `/ui/`, which the
+ceremony app serves as it serves `/ui/interaction/{id}`, such as `/ui/error`;
+the policy refuses anything else, a URL of another origin included, so the
+setting can never send the browser off the realm. Set it with the admin API's
+`PATCH /admin/v1-rc.0/realms/{realmId}/policies`, a JSON merge patch such as
+`{"ceremonyApp": {"errorPage": "/ui/error"}}` with the realm's `ETag` in
+`If-Match`; a change needs `qauth:admin:write`. `null`, the default, keeps the
+auth server's own pages.
+
+With it set, the auth server answers `303 See Other` to the page and renders
+none of its own:
+
+| Ending                                                                                                            | Query                                                         |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| An upstream provider's callback with no interaction left                                                          | `code=interaction_expired`, `trace_id`                        |
+| A refused sign-out request (a return URI the app did not register, a client that is not the hint's audience, ...) | `code=logout_refused`, `trace_id`                             |
+| A sign-out with no app to send the browser back to, or an app the operator did not set up                         | `code=logout_finished`, `trace_id`, `signed_out=true`, `host` |
+| The sign-out status page, `/oauth/end-session/status`                                                             | `code=logout_finished`, `trace_id`, `signed_out=true\|false`  |
+
+`host` is the app's host, for an app the operator did not set up whose return
+URI is a web URL: text for the page to show, never a link. Anyone can write the
+same URL, so the page treats every member of the query as display data, builds
+no link or redirect from any of them, and reads no interaction. The
+[Interaction API reference](/reference/interaction-api/#error-page) holds the
+codes and the rules a page that serves them follows. The confirmation step of
+the sign-out, drawn as a plain form while the Interaction API is off, stays.
 
 ## `/ui/resume/{handle}`
 
