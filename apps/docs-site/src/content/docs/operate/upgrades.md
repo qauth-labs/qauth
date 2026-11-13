@@ -1295,6 +1295,36 @@ signs in again:
 Both fail closed: a resource server that asks for a recent sign-in, or for a
 given method, sends the user to sign in again.
 
+### The account API reads sign-in methods and changes passwords
+
+The account API serves `GET /account/v1-rc.0/sign-in-methods` and
+`POST /account/v1-rc.0/password/change`
+([#1107](https://github.com/qauth-labs/qauth/issues/1107)) on the `api` role.
+The read counts the account's unused recovery codes, and the change clears the
+account's `update_password` action, as the hosted account page's change does,
+so the `api` role's database user gets two grants more. A deployment whose
+migration runner grants the roles' database users
+([above](#each-role-can-connect-as-a-database-user-of-its-own)), or whose roles
+connect as the one user that owns the tables, needs nothing. One that applies
+the grants by hand applies the statements of `databaseUserGrantStatements`
+from `@qauth-labs/infra-db` again, or these, before the new version starts:
+
+```sql
+GRANT SELECT ON TABLE "user_recovery_codes" TO <api_role>;
+GRANT DELETE ON TABLE "user_required_actions" TO <api_role>;
+```
+
+Nothing checks the grants at boot. Without the first the read answers `500`,
+and without the second the change does, with `permission denied` for the table
+in the log; the change then writes nothing.
+
+A password set from this release records when it was set, in its credential's
+`password_set_at`, which the read answers as `changedAt`. For a password set
+before, the read answers the time of its credential's last write, which was the
+time it was set. During a rolling upgrade a node of the previous release that
+changes or resets a password set on a node of this release leaves that time
+behind, so `changedAt` names the earlier time until the password is set again.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]
