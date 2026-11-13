@@ -1,0 +1,405 @@
+# A passkey set-up through an authorization request (#1108; ADR-020 §1 and §3, ADR-017 Decision 8): the account console,
+# on a host whose origin cannot create a passkey for the realm, sends the person to /oauth/authorize with
+# qauth_action=setup_passkey, the setup_passkey required action of #686. The request runs as the hosted account page's
+# "Add a passkey" ceremony does (account.account-page): a fresh sign-in, then the engine's passkey enrolment
+# (webauthn_create), drawn by the ceremony app on the realm origin; then it ends at the client's redirect URI with a
+# code, as any authorization request does.
+#
+# - Each exit is a final state named <error>.<cause>, one per distinct cause, or after what happened, with the response
+#   the browser gets. /oauth/authorize is an OAuth protocol endpoint: a refusal here goes back to the client's
+#   redirect_uri with error, error_description, state and iss (RFC 6749 §4.1.2.1, RFC 9207 §2).
+# - The two requests are drawn as one walk, as core.authorization draws them: the GET or POST that starts the
+#   interaction, and the Interaction API's answer that finishes it (POST /interaction/v1-rc.0/{id}/answer).
+# - The enrolment is the engine's, with its rules: an unclaimed account binds no passkey, and the person may decline
+#   it. The code comes back either way, so a client reads the account's passkeys (GET /account/v1-rc.0/passkeys) to
+#   learn whether one was added.
+schema: delurio-graph/0
+kind: flow
+id: account.passkey-set-up
+status: captured
+domain: qauth
+title: Add a passkey through an authorization request
+summary: >-
+  An authorization request with qauth_action=setup_passkey from a client whose audience lists the account API, while
+  the interaction UI and passkey sign-in are on, starts an interaction whatever session the browser has. The person
+  signs in fresh, with the account's strongest bound factor, then is asked for a passkey, which the ceremony app
+  creates on the realm origin. A request that also asks for prompt=create or qauth_link, from any other client, or to a
+  server that cannot run the set-up is refused at the client's redirect URI; under prompt=none it gets login_required.
+  Nobody registers in such an interaction.
+
+scope:
+  shows: >-
+    GET and POST /oauth/authorize with qauth_action=setup_passkey, from the request to the redirect, and the answer of
+    the Interaction API that finishes its interaction
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "the authorization endpoint's checks that need no user (the client, its redirect URI, PKCE, the grant and the
+      scope), which answer before this flow runs: core.authorization"
+    - 'a refusal for a client no operator provisioned, which is shown on the issuer instead of redirected (RFC 9700
+      §4.11.2), as core.authorization draws it'
+    - "the sign-in's steps: core.sign-in, and core.passkey for the passkey-first round"
+    - "the enrolment's steps past the person's choice, a registration the verifier refuses (the step offered again)
+      and the first recovery codes shown after it: core.passkey and core.recovery-code"
+    - 'the consent step, when one is owed after the sign-in: core.consent'
+    - 'an interaction nobody finished, which expires (interaction.expired)'
+
+context:
+  prompt:
+    values: [other, create, none]
+    initial: any
+    say:
+      other: 'the request asks for no prompt, or for login, consent or select_account'
+      create: 'it asks for prompt=create'
+      none: 'it asks for prompt=none'
+  link:
+    values: [absent, present]
+    initial: any
+    say:
+      absent: 'the request carries no qauth_link'
+      present: 'it carries one'
+  audience:
+    values: [account, other]
+    initial: any
+    say:
+      account: "the client's audience lists the account API's (urn:qauth:aud:account:v1-rc.0), as an operator sets it"
+      other: 'it does not: every self-registered client, and any client an operator did not give it'
+  offered:
+    values: [yes, no]
+    initial: any
+    say:
+      yes: 'the interaction UI (INTERACTION_UI_ENABLED) and passkey sign-in (WEBAUTHN_ENABLED) are on'
+      no: 'either is off'
+  signIn:
+    values: [finished, cancelled]
+    initial: any
+    say:
+      finished: 'the person signs in, with the factors the engine asks for'
+      cancelled: 'the person cancels the interaction'
+  account:
+    values: [claimed, unclaimed]
+    initial: any
+    say:
+      claimed: 'the account is verified, or the sign-in proved its mailbox'
+      unclaimed: 'it is neither'
+  choice:
+    values: [create, decline]
+    initial: any
+    say:
+      create: "the person creates a passkey on the ceremony app's page"
+      decline: 'the person declines it'
+  signedInFresh: { values: [false, true], initial: false }
+  bound: { values: [false, true], initial: false }
+
+guards:
+  promptCreate: "prompt == 'create'"
+  withLink: "link == 'present'"
+  otherAudience: "audience == 'other'"
+  notOffered: "offered == 'no'"
+  promptNone: "prompt == 'none'"
+  cancelled: "signIn == 'cancelled'"
+  unclaimed: "account == 'unclaimed'"
+  declined: "choice == 'decline'"
+
+effects:
+  signInFresh: { set: { signedInFresh: true } }
+  bind: { set: { bound: true } }
+
+failures:
+  startingInteraction: { from: interactionStore, server: [server_error] }
+  signingIn: { from: core.sign-in, cancelled: [access_denied] }
+  bindingPasskey: { from: core.passkey, store: [temporarily_unavailable] }
+
+main:
+  given:
+    prompt: other
+    link: absent
+    audience: account
+    offered: yes
+    signIn: finished
+    account: claimed
+    choice: create
+  events: [AUTHORIZE, DONE, DONE, DONE]
+
+initial: idle
+states:
+  idle:
+    title: Wait for an authorization request that asks for a passkey set-up
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:167
+    on:
+      AUTHORIZE:
+        target: checkingAction
+        say: 'GET or POST /oauth/authorize with qauth_action=setup_passkey, past the checks that need no user'
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:171
+
+  checkingAction:
+    title: Refuse a set-up the request cannot ask for
+    description: >-
+      Before the person sees any page, and before prompt=create, qauth_link or the browser session is read. A value of
+      qauth_action other than setup_passkey never gets here: the route's schema answers 400 and never redirects.
+    source: apps/auth-server/src/app/helpers/authorization-actions.ts:72
+    always:
+      - guard: promptCreate
+        target: invalid_request.action_with_prompt_create
+        say: 'the request also asks for prompt=create: a registration binds no factor the person asked for'
+        source: apps/auth-server/src/app/helpers/authorization-actions.ts:78
+      - guard: withLink
+        target: invalid_request.action_with_link
+        say: 'the request also carries qauth_link, a flow of its own'
+        source: apps/auth-server/src/app/helpers/authorization-actions.ts:85
+      - guard: otherAudience
+        target: unauthorized_client.action_not_allowed_for_client
+        say: "the client's audience does not list the account API"
+        source: apps/auth-server/src/app/helpers/authorization-actions.ts:92
+      - guard: notOffered
+        target: invalid_request.action_not_offered
+        say: 'the interaction UI or passkey sign-in is off: nothing would bind a passkey'
+        source: apps/auth-server/src/app/helpers/authorization-actions.ts:99
+      - guard: promptNone
+        target: login_required.set_up
+        say: 'prompt=none: the request is decided as one with no session, and a set-up always signs in'
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:205
+      - target: startingInteraction
+        say: 'the set-up may run'
+
+  startingInteraction:
+    title: Start the interaction, whatever session the browser has
+    description: >-
+      The request is decided as one with no browser session, so it signs in. The interaction holds the request with its
+      qauth_action, which every round of its sign-in reads: a fresh sign-in, the passkey enrolment asked for, and no
+      switch to a registration. The browser is sent to the ceremony page with the interaction id.
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:319
+    invoke: { external: interactionStore }
+    on:
+      DONE:
+        target: signingIn
+        say: 'the interaction starts: 302 to the ceremony page'
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:356
+      FAIL.server:
+        target: server_error.interaction_store
+        say: 'the interaction store fails'
+
+  signingIn:
+    title: Sign the person in fresh
+    description: >-
+      Every round of the engine runs with freshSignIn and enrol set (helpers/authorization-actions.ts, actionRoundOf):
+      no earlier session or sign-in stands in, a password reset does not either, and the downgrade rule asks for the
+      account's strongest bound factor. Passkey-first when the request has no login_hint; no upstream provider creates an
+      account here.
+    source: apps/auth-server/src/app/helpers/interaction-engines.ts:543
+    invoke: { flow: core.sign-in }
+    on:
+      DONE:
+        target: checkingAccount
+        effect: [signInFresh]
+        say: "the sign-in's factors are proved"
+      FAIL.cancelled:
+        target: access_denied.cancelled
+        say: 'the person cancels the interaction'
+
+  checkingAccount:
+    title: Bind no passkey to an unclaimed account
+    source: libs/server/sign-in-engine/src/lib/engine.ts:3908
+    always:
+      - guard: unclaimed
+        target: code_issued.unclaimed
+        effect: [signInFresh]
+        say: 'the account is not claimed: the sign-in completes with no enrolment'
+        source: libs/server/sign-in-engine/src/lib/engine.ts:3908
+      - target: offeringPasskey
+        say: 'the account is claimed'
+
+  offeringPasskey:
+    title: Ask for a passkey, which the person may decline
+    description: >-
+      The webauthn_create step, drawn on the ceremony app's "add a passkey" page (/ui/passkey-enrolment), with the
+      realm's relying party. It is asked for, so the realm's passkeys.offerAfterSignIn does not turn it off; it stays
+      optional.
+    source: libs/server/sign-in-engine/src/lib/engine.ts:4521
+    always:
+      - guard: declined
+        target: code_issued.declined
+        effect: [signInFresh]
+        say: 'the person declines the passkey'
+      - target: bindingPasskey
+        say: 'the person creates one'
+
+  bindingPasskey:
+    title: Verify and bind the passkey
+    source: libs/server/sign-in-engine/src/lib/engine.ts:4526
+    invoke: { flow: core.passkey }
+    on:
+      DONE:
+        target: code_issued.passkey_bound
+        effect: [bind]
+        say: 'the passkey is bound, user.credential_added recorded, and the person told'
+      FAIL.store:
+        target: temporarily_unavailable.binding
+        say: 'a store the binding needs fails; nothing is bound'
+
+  # Exits: refused before the person sees any page
+
+  invalid_request.action_with_prompt_create:
+    type: final
+    title: Refuse a set-up beside prompt=create
+    description: authorization.failed is recorded with the reason action_with_prompt_create.
+    redirect: error
+    code: invalid_request
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:183
+    response:
+      status: 302
+      headers:
+        Location: >-
+          redirect_uri with error=invalid_request, error_description=qauth_action cannot be combined with
+          prompt=create, state when the request had one, and iss
+
+  invalid_request.action_with_link:
+    type: final
+    title: Refuse a set-up beside qauth_link
+    description: authorization.failed is recorded with the reason action_with_link.
+    redirect: error
+    code: invalid_request
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:183
+    response:
+      status: 302
+      headers:
+        Location: >-
+          redirect_uri with error=invalid_request, error_description=qauth_action cannot be combined with qauth_link,
+          state when the request had one, and iss
+
+  unauthorized_client.action_not_allowed_for_client:
+    type: final
+    title: Refuse a client whose audience does not list the account API
+    description: authorization.failed is recorded with the reason action_not_allowed_for_client.
+    redirect: error
+    code: unauthorized_client
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:183
+    response:
+      status: 302
+      headers:
+        Location: >-
+          redirect_uri with error=unauthorized_client, error_description=the client may not ask for qauth_action,
+          state when the request had one, and iss
+
+  invalid_request.action_not_offered:
+    type: final
+    title: Refuse a set-up the server cannot run
+    description: >-
+      authorization.failed is recorded with the reason action_not_offered. A code without a passkey would read as a
+      set-up done, so the request is refused rather than run without the enrolment.
+    redirect: error
+    code: invalid_request
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:183
+    response:
+      status: 302
+      headers:
+        Location: >-
+          redirect_uri with error=invalid_request, error_description=qauth_action=setup_passkey is not supported, state
+          when the request had one, and iss
+
+  login_required.set_up:
+    type: final
+    title: Tell the client prompt=none cannot set up a passkey
+    redirect: error
+    code: login_required
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:345
+    response:
+      status: 302
+      headers:
+        Location: >-
+          redirect_uri with error=login_required, error_description=authentication is required but prompt=none was
+          requested, state when the request had one, and iss
+
+  server_error.interaction_store:
+    type: final
+    title: Fail when the interaction cannot start
+    redirect: never
+    response:
+      status: 500
+      body: the error handler's RFC 6749 body, error=server_error
+
+  # Exits: when the interaction finishes
+
+  code_issued.passkey_bound:
+    type: final
+    title: Send the code with the passkey bound
+    description: >-
+      The request is decided again for the new session: the consent step first when one is owed (core.consent), then
+      the code.
+    redirect: success
+    carries: [code, state, iss]
+    source: apps/auth-server/src/app/routes/interaction-api.ts:400
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: 'for a form post, redirect_uri with code, state when the request had one, and iss'
+        Set-Cookie: 'the new session cookie'
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  code_issued.declined:
+    type: final
+    title: Send the code with no passkey, which the person declined
+    redirect: success
+    carries: [code, state, iss]
+    source: apps/auth-server/src/app/routes/interaction-api.ts:400
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: 'for a form post, redirect_uri with code, state when the request had one, and iss'
+        Set-Cookie: 'the new session cookie'
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  code_issued.unclaimed:
+    type: final
+    title: Send the code with no passkey, which an unclaimed account cannot bind
+    redirect: success
+    carries: [code, state, iss]
+    source: apps/auth-server/src/app/routes/interaction-api.ts:400
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: 'for a form post, redirect_uri with code, state when the request had one, and iss'
+        Set-Cookie: 'the new session cookie'
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  access_denied.cancelled:
+    type: final
+    title: Tell the client the person cancelled
+    redirect: error
+    code: access_denied
+    source: apps/auth-server/src/app/helpers/interaction-redirect.ts:24
+    response:
+      status: '303 for a form post; 200 for a JSON cancel'
+      headers:
+        Location: 'for a form post, redirect_uri with error=access_denied, state when the request had one, and iss'
+      body: 'for a JSON cancel, { result: redirect, location: the same URL }'
+
+  temporarily_unavailable.binding:
+    type: final
+    title: Answer a binding whose store failed
+    redirect: never
+    response:
+      status: 503
+      headers:
+        Retry-After: the seconds to wait
+      body:
+        status: 503
+        code: temporarily_unavailable
+        trace_id: the request id
+
+assertions:
+  - id: no-passkey-without-a-fresh-sign-in
+    never: 'bound and not signedInFresh'
+    say: 'A set-up binds a passkey only after a sign-in in its own interaction'
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:205
+  - id: only-a-client-of-the-account-api
+    never: 'bound and otherAudience'
+    say: 'Only a client whose audience lists the account API sets up a passkey'
+    source: apps/auth-server/src/app/helpers/authorization-actions.ts:92
+  - id: no-passkey-for-an-unclaimed-account
+    never: 'bound and unclaimed'
+    say: 'An unclaimed account binds no passkey'
+    source: libs/server/sign-in-engine/src/lib/engine.ts:3908
+  - id: no-passkey-the-person-declined
+    never: 'bound and declined'
+    say: 'A passkey the person declined is never bound'
+    source: libs/server/sign-in-engine/src/lib/engine.ts:4521

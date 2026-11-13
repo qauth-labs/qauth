@@ -25,7 +25,7 @@ operations:
   GET /ui/recovery-code/{interactionId}: { flow: [recovery-code, passkey-sign-up] }
   GET /ui/recovery-codes/{interactionId}: { flow: [recovery-code] }
   GET /ui/passkey/{interactionId}: { flow: [passkey] }
-  GET /ui/passkey-enrolment/{interactionId}: { flow: [passkey, passkey-sign-up] }
+  GET /ui/passkey-enrolment/{interactionId}: { flow: [passkey, passkey-sign-up, passkey-set-up] }
   GET /ui/totp/{interactionId}: { flow: [totp] }
   GET /ui/totp-setup/{interactionId}: { flow: [totp] }
   GET /ui/account: { flow: [account-page] }
