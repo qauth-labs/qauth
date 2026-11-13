@@ -240,7 +240,14 @@ export const upstream = defineStep({
   }),
   personal: EMPTY_OBJECT,
   answer: object({ provider: upstreamProvider('The `provider` of the entry the person picked.') }),
-  errors: ['provider_unavailable', 'provider_declined', 'provider_error'],
+  errors: [
+    'provider_unavailable',
+    'provider_declined',
+    'provider_error',
+    'unknown_identity',
+    'too_many_requests',
+    'service_unavailable',
+  ],
   amr: [],
 });
 

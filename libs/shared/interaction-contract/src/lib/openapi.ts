@@ -19,6 +19,7 @@ import {
   problemSchema,
   redirectResultSchema,
 } from './envelope';
+import { errorPageDescription } from './error-page';
 import {
   FLOW_COOKIE_NAME,
   INTERACTION_API_PREFIX,
@@ -475,6 +476,7 @@ export function documentDescription(): string {
     `## Rules\n\n${bullets(API_RULES)}`,
     `## Versioning\n\n${bullets(VERSIONING_RULES)}`,
     `## Paths\n\n${bullets([RESERVED_PREFIX_RULE, DOCUMENT_PATH_RULE])}`,
+    `## Error page\n\n${errorPageDescription()}`,
   ].join('\n\n');
 }
 

@@ -1,4 +1,17 @@
-export { RESTART_NOTICES, type RestartNotice } from './lib/envelope';
+export {
+  isTraceId,
+  RESTART_NOTICES,
+  type RestartNotice,
+  TRACE_ID_MAX_LENGTH,
+  TRACE_ID_PATTERN,
+} from './lib/envelope';
+export {
+  ERROR_PAGE_CODES,
+  ERROR_PAGE_PARAMETERS,
+  ERROR_PAGE_RULES,
+  type ErrorPageCode,
+  type ErrorPageParameter,
+} from './lib/error-page';
 export * from './lib/identifiers';
 export { buildInteractionOpenApi, INTERACTION_OPENAPI, type OpenApiDocument } from './lib/openapi';
 export {
