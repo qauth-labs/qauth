@@ -19,7 +19,11 @@ import {
   provedOnlyThroughNew,
   requiredFactorOf,
 } from './account-operation-guard';
-import { type AccountPasskey, accountCredentials, signInMethodsOf } from './account-sign-in-methods';
+import {
+  accountCredentials,
+  type AccountPasskey,
+  signInMethodsOf,
+} from './account-sign-in-methods';
 import { endBrowserSession, endBrowserSessions } from './browser-session';
 import type { EngineMailer } from './engine-mail';
 import type { InteractionEngines } from './interaction-engines';
