@@ -381,7 +381,7 @@ export const ACCOUNT_OPERATIONS: readonly AccountOperation[] = [
     tag: 'Sign-in methods',
     summary: 'Start an authenticator-app enrolment',
     description:
-      'Draw a new TOTP secret and return it once, as text and as an `otpauth://` URI. Nothing is bound until the enrolment is confirmed; a new enrolment replaces one not yet confirmed. For the first second factor of a password-only account QAuth also mails an 8-digit code, unless the sign-in already proved that mailbox. An account that has TOTP gets `conflict`; an unclaimed account cannot enrol. A sign-in that used a recovery code in place of a lost second factor may enrol a new one.',
+      'Draw a new TOTP secret and return it once, as text and as an `otpauth://` URI. Nothing is bound until the enrolment is confirmed within ten minutes; a new enrolment replaces one not yet confirmed. No code is mailed: a verified account binds its first second factor after the fresh sign-in alone (ADR-017 Decision 8). An account that has TOTP gets `conflict`, as do an unclaimed account, which binds no factor, and one with no address for the app to show. A sign-in that used a recovery code in place of a lost second factor may enrol a new one.',
     class: 'write',
     permission: 'totp.write',
     freshAuthentication: 'strongest-factor-or-recovery-code',
@@ -409,7 +409,7 @@ export const ACCOUNT_OPERATIONS: readonly AccountOperation[] = [
     tag: 'Sign-in methods',
     summary: 'Confirm an authenticator-app enrolment',
     description:
-      'Bind the started enrolment’s secret with a first valid code, and the mailed code when the enrolment asked for one. The first second factor of the account also issues the first set of recovery codes, returned once. The "authenticator app added" notice goes out. Without a started enrolment, or after it lapsed, the answer is `not_found`.',
+      'Bind the started enrolment’s secret with a first valid code; a wrong code is `invalid_code`, binds nothing, and leaves the enrolment for another. The first second factor of the account also issues the first set of recovery codes, returned once. The "authenticator app added" notice goes out. Without a started enrolment, or after it lapsed, the answer is `not_found`.',
     class: 'write',
     permission: 'totp.write',
     freshAuthentication: 'strongest-factor-or-recovery-code',
