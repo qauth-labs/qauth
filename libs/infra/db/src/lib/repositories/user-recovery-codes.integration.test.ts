@@ -79,6 +79,34 @@ describe('recovery codes (real Postgres, #649)', () => {
     expect(unused.map((code) => code.codeHash).sort()).toEqual([...HASHES].sort());
   });
 
+  it('reads the current set as when it was issued and how many codes are unused (#1109)', async () => {
+    const { realmId, userId } = await seedUser('realm-current');
+    await expect(codes.currentSet(realmId, userId)).resolves.toBeUndefined();
+
+    await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 1_000 });
+    await expect(codes.currentSet(realmId, userId)).resolves.toEqual({
+      issuedAt: 1_000,
+      unused: 10,
+    });
+    const [first] = await codes.findUnused(realmId, userId);
+    if (first === undefined) throw new Error('no code');
+    await codes.markUsed({ realmId, userId, id: first.id, usedAt: 2_000 });
+    await expect(codes.currentSet(realmId, userId)).resolves.toEqual({
+      issuedAt: 1_000,
+      unused: 9,
+    });
+
+    // A regeneration replaces the set: its own time, every code unused.
+    await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 5_000 });
+    await expect(codes.currentSet(realmId, userId)).resolves.toEqual({
+      issuedAt: 5_000,
+      unused: 10,
+    });
+    // Another realm's call reads none.
+    const other = await seedUser('realm-current-other');
+    await expect(codes.currentSet(other.realmId, userId)).resolves.toBeUndefined();
+  });
+
   it('takes a code once', async () => {
     const { realmId, userId } = await seedUser('realm-take');
     await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 1_000 });

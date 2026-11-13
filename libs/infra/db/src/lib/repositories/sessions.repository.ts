@@ -45,6 +45,13 @@ import { createEventsRepository } from './events.repository';
  */
 const CLIENT_SESSION_ENDED_EVENT = 'urn:qauth:event:user.client_session_ended:v1-rc.0';
 
+/**
+ * The most credentials a session names as bound or proved while new (#1064):
+ * a sign-in names at most a few, and {@link SessionsRepository.nameNewCredential}
+ * adds one a later change made under the session, so the row stays small.
+ */
+export const SESSION_NEW_CREDENTIALS_MAX = 16;
+
 /** Options of {@link createSessionsRepository}. */
 export interface SessionsRepositoryOptions {
   /**
@@ -461,6 +468,30 @@ export function createSessionsRepository(
           )
         )
         .orderBy(desc(sessions.createdAt), desc(sessions.id));
+    },
+
+    async nameNewCredential(
+      realmId: string,
+      sessionId: string,
+      userId: string,
+      credentialId: string,
+      tx?: DbClient
+    ): Promise<boolean> {
+      const named = JSON.stringify([credentialId]);
+      const written = await (tx ?? defaultDb)
+        .update(sessions)
+        .set({ newCredentialIds: sql`${sessions.newCredentialIds} || ${named}::jsonb` })
+        .where(
+          and(
+            eq(sessions.realmId, realmId),
+            eq(sessions.id, sessionId),
+            eq(sessions.userId, userId),
+            sql`NOT (${sessions.newCredentialIds} @> ${named}::jsonb)`,
+            sql`jsonb_array_length(${sessions.newCredentialIds}) < ${SESSION_NEW_CREDENTIALS_MAX}`
+          )
+        )
+        .returning({ id: sessions.id });
+      return written.length > 0;
     },
 
     async recordClient(

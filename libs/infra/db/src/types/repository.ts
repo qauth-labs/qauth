@@ -1685,6 +1685,27 @@ export interface SessionsRepository {
     tx?: DbClient
   ): Promise<Session[]>;
   /**
+   * Name the new credential `credentialId` on the session `sessionId` of
+   * `userId` (#1064; `new_credential_ids`): a factor bound under the session
+   * after its sign-in proved only the password, such as the account API's
+   * authenticator app enrolment (#1109), is one the session opened, so a
+   * removal while it is new ends the session and the refresh families of its
+   * sign-in, as it ends those of a sign-in that bound one. Live or ended
+   * alike: the families outlive the browser session.
+   *
+   * @returns `true` when the session now names the credential; `false` when
+   *   it is no session of that user in the realm, names the credential
+   *   already, or names as many credentials as a session may
+   *   (`SESSION_NEW_CREDENTIALS_MAX`)
+   */
+  nameNewCredential(
+    realmId: string,
+    sessionId: string,
+    userId: string,
+    credentialId: string,
+    tx?: DbClient
+  ): Promise<boolean>;
+  /**
    * Record that a live session served a client (issue #549): the
    * `session_clients` row back-channel logout reads, written in the
    * transaction that mints the authorization code. A session that served the
