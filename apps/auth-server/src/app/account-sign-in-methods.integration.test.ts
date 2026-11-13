@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -63,10 +63,11 @@ const SUITE_KEYS = [
 /** A TOTP time step, in milliseconds. */
 const STEP_MS = 30_000;
 
-/** The SHA-1 digest of a password as a breach list holds it: 40 uppercase hex characters. */
-function breachDigest(password: string): string {
-  return createHash('sha1').update(password, 'utf8').digest('hex').toUpperCase();
-}
+/**
+ * The SHA-1 digest of {@link LISTED_PASSWORD}, as the breach list file holds
+ * it: 40 uppercase hex characters, written out as a test vector.
+ */
+const LISTED_DIGEST = 'A0E0899D8318F7892920FE14CD72B00343B94BDB';
 
 /** A passkey's `credential_data`, as an enrolment stores it. */
 function passkeyData(n: number): Record<string, unknown> {
@@ -104,7 +105,7 @@ describe('the account API’s sign-in methods and password change (#1107, real c
     // The server reads the operator's breach list at boot.
     listDirectory = await mkdtemp(join(tmpdir(), 'qauth-account-breach-list-'));
     const listPath = join(listDirectory, 'breached-passwords.txt');
-    await writeFile(listPath, `${breachDigest(LISTED_PASSWORD)}\n`, 'utf8');
+    await writeFile(listPath, `${LISTED_DIGEST}\n`, 'utf8');
     // A value an earlier file in this worker set must not make the range
     // lookup configured.
     delete process.env['BREACHED_PASSWORD_RANGE_URL'];
