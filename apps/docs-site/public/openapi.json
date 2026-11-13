@@ -2617,6 +2617,705 @@
         }
       }
     },
+    "/account/v1-rc.0/totp/enrollment": {
+      "post": {
+        "operationId": "account.totp.enrollment.create",
+        "tags": [
+          "Account API"
+        ],
+        "description": "Start an authenticator-app enrolment for the token's user: a new secret, answered once as text and as an `otpauth://` URI. Nothing is bound until the enrolment is confirmed with a first code within ten minutes; a new enrolment replaces one not yet confirmed. Needs a fresh sign-in with the account's strongest factor, or one that used a recovery code in place of a lost one, and refuses an act-chain token. An account that holds an authenticator app, an unclaimed account, and one with no address the app could show are 409 conflict.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "write",
+        "x-qauth-permission": "totp.write",
+        "x-qauth-fresh-authentication": "strongest-factor-or-recovery-code",
+        "x-qauth-act-chain": "refused",
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "secret": {
+                      "type": "string",
+                      "pattern": "^[A-Z2-7]{32}$",
+                      "description": "The shared secret, base32 without padding: 160 bits. Shown once."
+                    },
+                    "otpauthUri": {
+                      "type": "string",
+                      "minLength": 16,
+                      "maxLength": 1024,
+                      "pattern": "^otpauth:\\/\\/totp\\/[!#-;=?-~]+$",
+                      "description": "The same secret as an `otpauth://totp/` URI. Shown once."
+                    },
+                    "algorithm": {
+                      "type": "string",
+                      "enum": [
+                        "SHA1"
+                      ]
+                    },
+                    "digits": {
+                      "type": "number",
+                      "enum": [
+                        6
+                      ]
+                    },
+                    "period": {
+                      "type": "number",
+                      "enum": [
+                        30
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                      "description": "When the enrolment lapses unless confirmed."
+                    },
+                    "emailCode": {
+                      "type": "string",
+                      "enum": [
+                        "required",
+                        "not_required"
+                      ],
+                      "description": "Whether confirming also needs a mailed code. Always `not_required`: the account, not a mailbox, decides (ADR-017 Decision 8)."
+                    }
+                  },
+                  "required": [
+                    "secret",
+                    "otpauthUri",
+                    "algorithm",
+                    "digits",
+                    "period",
+                    "expiresAt",
+                    "emailCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/v1-rc.0/totp/enrollment/confirm": {
+      "post": {
+        "operationId": "account.totp.enrollment.confirm",
+        "tags": [
+          "Account API"
+        ],
+        "description": "Bind the started enrolment's secret with a first valid code. A wrong code is 400 invalid_code and binds nothing; the enrolment waits for another. The account's first second factor also issues its first set of recovery codes, answered once. The \"authenticator app added\" notice goes out. Without a started enrolment, or after it lapsed, the answer is 404. Needs a fresh sign-in as the start does, and refuses an act-chain token.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[0-9]{6}$",
+                    "description": "The first code the authenticator app shows."
+                  },
+                  "emailCode": {
+                    "type": "string",
+                    "pattern": "^[0-9]{8}$",
+                    "description": "A mailed code. No enrolment asks for one; it is ignored."
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "write",
+        "x-qauth-permission": "totp.write",
+        "x-qauth-fresh-authentication": "strongest-factor-or-recovery-code",
+        "x-qauth-act-chain": "refused",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabledAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                      "description": "When the authenticator app was bound."
+                    },
+                    "recoveryCodes": {
+                      "type": "object",
+                      "properties": {
+                        "codes": {
+                          "minItems": 10,
+                          "maxItems": 10,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^[A-Z2-7]{4}(?:-[A-Z2-7]{4}){3}$",
+                            "description": "One code. It works once."
+                          },
+                          "description": "The ten codes. Shown once: the server keeps only their hashes."
+                        },
+                        "issuedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                          "description": "When the set was issued."
+                        }
+                      },
+                      "required": [
+                        "codes",
+                        "issuedAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "enabledAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/v1-rc.0/totp": {
+      "delete": {
+        "operationId": "account.totp.delete",
+        "tags": [
+          "Account API"
+        ],
+        "description": "Remove the token's user's authenticator app. Needs a fresh sign-in with the account's strongest factor, or one that used a recovery code in place of a lost app, the first half of a rebind; an app still new (bound after a sign-in that proved only the password) is removed after a fresh sign-in with the password, and its removal ends the sessions whose sign-in bound or proved it. Refuses an act-chain token. The last second factor the realm requires is 409 second_factor_required. The owner gets the \"authenticator app removed\" notice. An account without one is 404.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "write",
+        "x-qauth-permission": "totp.write",
+        "x-qauth-fresh-authentication": "strongest-factor-or-recovery-code",
+        "x-qauth-act-chain": "refused",
+        "responses": {
+          "204": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/v1-rc.0/recovery-codes": {
+      "get": {
+        "operationId": "account.recoveryCodes.get",
+        "tags": [
+          "Account API"
+        ],
+        "description": "How many of the token's user's recovery codes are left, and when the set was issued. Never the codes.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "read",
+        "x-qauth-permission": "recoveryCodes.read",
+        "x-qauth-fresh-authentication": "none",
+        "x-qauth-act-chain": "accepted",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "remaining": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10,
+                      "description": "How many unused codes are left."
+                    },
+                    "issuedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "When the current set was issued; `null` without one."
+                    }
+                  },
+                  "required": [
+                    "remaining",
+                    "issuedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/v1-rc.0/recovery-codes/regenerate": {
+      "post": {
+        "operationId": "account.recoveryCodes.regenerate",
+        "tags": [
+          "Account API"
+        ],
+        "description": "Issue a new set of ten recovery codes for the token's user, answered once; every code of the old set stops working. Needs a fresh sign-in with the account's strongest factor and refuses an act-chain token. An account without a second factor or a passkey is 409 conflict. The \"recovery codes regenerated\" notice goes out.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "write",
+        "x-qauth-permission": "recoveryCodes.write",
+        "x-qauth-fresh-authentication": "strongest-factor",
+        "x-qauth-act-chain": "refused",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "codes": {
+                      "minItems": 10,
+                      "maxItems": 10,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[A-Z2-7]{4}(?:-[A-Z2-7]{4}){3}$",
+                        "description": "One code. It works once."
+                      },
+                      "description": "The ten codes. Shown once: the server keeps only their hashes."
+                    },
+                    "issuedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                      "description": "When the set was issued."
+                    }
+                  },
+                  "required": [
+                    "codes",
+                    "issuedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/link/wallet": {
       "post": {
         "tags": [
