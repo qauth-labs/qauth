@@ -195,6 +195,21 @@ describe('[GET /oauth/authorize] RFC 9207 §2 — iss on every authorization res
   });
 });
 
+describe('[GET /oauth/authorize] RFC 6749 §4.1.2.1 — a passkey set-up (qauth_action) a client may not ask for', () => {
+  // Only a client whose audience lists the account API may send a person to
+  // add a passkey (#1108); the seeded client lists none.
+  it('refuses qauth_action=setup_passkey with unauthorized_client, sent back with state and iss and no code (§4.1.2.1)', async () => {
+    const request = authorizationRequest({ qauth_action: 'setup_passkey' });
+
+    const url = redirectResponse(await call('GET /oauth/authorize', { query: request.params }));
+
+    expect(url.searchParams.get('error')).toBe('unauthorized_client');
+    expect(url.searchParams.get('state')).toBe(request.state);
+    expect(url.searchParams.get('iss')).toBe(baseUrl);
+    expect(url.searchParams.has('code')).toBe(false);
+  });
+});
+
 describe('[GET /oauth/authorize] OpenID Connect Prompt Create 1.0 §4.1 — a request to register', () => {
   it('refuses prompt=create without the openid scope with invalid_request, sent back with state and iss (§4.1)', async () => {
     const request = authorizationRequest({ prompt: 'create', scope: 'profile email' });
