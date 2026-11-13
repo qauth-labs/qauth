@@ -5,12 +5,15 @@ import type {
 import {
   type AuthMethod,
   type AuthMethodContext,
+  type BuildUpstreamOidcPreset,
   createAuthMethodContext,
   createUpstreamOidcPresetMethod,
   type ImportAuthMethodPlugin,
   type InstalledAuthMethodPlugin,
   loadAuthMethodPlugins,
   skippedAuthMethodPluginMessage,
+  type UpstreamAssertionClient,
+  upstreamOidcPresetAssertionClient,
   withConfigMembers,
   withoutConfigMembers,
 } from '@qauth-labs/fastify-plugin-federation';
@@ -175,6 +178,16 @@ export function authMethodPluginSecretCipher(
   });
 }
 
+/**
+ * What the runtime keeps of an upstream OpenID Connect preset the loader
+ * built a method from (#671): its type and its mapping to a provider config,
+ * as they were when the method was built.
+ */
+export type LoadedUpstreamOidcPreset = Pick<
+  Parameters<BuildUpstreamOidcPreset>[0],
+  'type' | 'upstreamConfig'
+>;
+
 /** The plugins this process loaded, by id and by type. */
 export interface AuthMethodPluginRuntime {
   /** In the order `AUTH_METHOD_PLUGINS` lists them. */
@@ -183,6 +196,25 @@ export interface AuthMethodPluginRuntime {
   find(pluginId: string): InstalledAuthMethodPlugin | undefined;
   /** The plugin whose AuthMethod `type` is `type`, or `undefined`. */
   ofType(type: string): InstalledAuthMethodPlugin | undefined;
+  /**
+   * Whose client the plugin's client assertions speak for in a realm
+   * (#1073), for `config` as the plugin's method parsed it: the client id at
+   * the provider, the assertion issuer the preset's signed client secret
+   * names, and the algorithm of its key. `undefined` for a plugin that is
+   * no upstream OpenID Connect preset, or one whose provider config
+   * authenticates with a client secret: the signer signs nothing for it.
+   *
+   * The admin API stores it beside the realm's config of the plugin, where
+   * the signer reads it (`findUpstreamClient`): the signer's process loads
+   * no plugin code, so it cannot run the preset's `upstreamConfig` itself.
+   *
+   * @throws TypeError when the preset's `upstreamConfig` throws or makes a
+   *   provider config that does not parse for a config its own schema took
+   */
+  assertionClientOf(
+    plugin: InstalledAuthMethodPlugin,
+    config: unknown
+  ): UpstreamAssertionClient | undefined;
 }
 
 declare module 'fastify' {
@@ -196,9 +228,13 @@ declare module 'fastify' {
   }
 }
 
-/** A runtime over `installed`. */
+/**
+ * A runtime over `installed`, and the presets the loader built the preset
+ * plugins' methods from, by type.
+ */
 export function authMethodPluginRuntime(
-  installed: readonly InstalledAuthMethodPlugin[]
+  installed: readonly InstalledAuthMethodPlugin[],
+  presets: ReadonlyMap<string, LoadedUpstreamOidcPreset> = new Map()
 ): AuthMethodPluginRuntime {
   const byId = new Map(installed.map((plugin) => [plugin.id, plugin]));
   const byType = new Map(installed.map((plugin) => [plugin.type, plugin]));
@@ -206,6 +242,19 @@ export function authMethodPluginRuntime(
     installed: Object.freeze([...installed]),
     find: (pluginId: string) => byId.get(pluginId),
     ofType: (type: string) => byType.get(type),
+    assertionClientOf(plugin: InstalledAuthMethodPlugin, config: unknown) {
+      // Only the installed plugin of the type, built from a preset: a plain
+      // AuthMethod's config has no shape the server knows.
+      const preset = presets.get(plugin.type);
+      if (
+        preset === undefined ||
+        plugin.kind !== 'upstream-oidc-preset' ||
+        byType.get(plugin.type) !== plugin
+      ) {
+        return undefined;
+      }
+      return upstreamOidcPresetAssertionClient(preset, config);
+    },
   });
 }
 
@@ -254,6 +303,9 @@ export async function loadDeploymentAuthMethodPlugins(
       'The AuthMethod plugin test support (an importer or a first-party list) is refused unless NODE_ENV is test'
     );
   }
+  // The presets the loader builds methods from, by type: the admin API
+  // derives each realm's assertion client from one (#1073).
+  const presets = new Map<string, LoadedUpstreamOidcPreset>();
   const loaded = await loadAuthMethodPlugins({
     packages: settings.packages,
     pluginApiEnabled: settings.pluginApiEnabled,
@@ -261,7 +313,16 @@ export async function loadDeploymentAuthMethodPlugins(
     ...(testSupport?.importPackage === undefined
       ? {}
       : { importPackage: testSupport.importPackage }),
-    buildUpstreamOidcPreset: (preset) => createUpstreamOidcPresetMethod(preset),
+    buildUpstreamOidcPreset: (preset) => {
+      const method = createUpstreamOidcPresetMethod(preset);
+      // The mapping the method was built with, not a later edit of the
+      // package's export.
+      presets.set(
+        preset.type,
+        Object.freeze({ type: preset.type, upstreamConfig: preset.upstreamConfig })
+      );
+      return method;
+    },
   });
   censorLoggedQueryParameters(loaded.installed.flatMap((plugin) => plugin.responseMembers));
   for (const skipped of loaded.skipped) {
@@ -283,7 +344,7 @@ export async function loadDeploymentAuthMethodPlugins(
       `AuthMethod plugin ${plugin.package} loaded: ${plugin.id} (${plugin.type})`
     );
   }
-  return authMethodPluginRuntime(loaded.installed);
+  return authMethodPluginRuntime(loaded.installed, presets);
 }
 
 /** What the plugin runtime reads of the server. */

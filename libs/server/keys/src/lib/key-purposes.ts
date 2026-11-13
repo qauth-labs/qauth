@@ -126,6 +126,16 @@ export interface KeyPurposeDefinition {
    * verifies with: the subscriber of a webhook. No later call returns it.
    */
   readonly secretShownOnce?: boolean;
+  /**
+   * Whether a key of the purpose may be imported (`KeyFactory.importKey`)
+   * besides being generated: a private key a party outside the deployment
+   * issued, such as the client-assertion key a provider hands the developer
+   * who registered its client (Sign in with Apple's `.p8` key, #1073). Only a
+   * signing purpose whose keys no QAuth token is verified with: a key that
+   * has been outside QAuth must never sign what a relying party trusts as
+   * QAuth's.
+   */
+  readonly importable?: boolean;
 }
 
 /**
@@ -148,7 +158,9 @@ export interface KeyPurposeDefinition {
  *   `whsec_` form; nothing returns it again.
  * - `upstream_client_assertion` keys are registered with the upstream
  *   provider, so they rotate manually. They are published so the signer can
- *   serve them to a provider that fetches a JWKS.
+ *   serve them to a provider that fetches a JWKS. A provider that issues the
+ *   key itself, such as Sign in with Apple, hands it to the developer, so the
+ *   purpose takes an imported key too (#1073).
  * - `agent_upstream_identity` is scoped: each key belongs to one upstream app
  *   identity (ADR-014 §13 `adapter_ref`). The platform holds its public half,
  *   so it is neither published nor rotated automatically.
@@ -248,6 +260,7 @@ export const KEY_PURPOSES = freezeRegistry({
     scoped: true,
     published: true,
     rotation: MANUAL,
+    importable: true,
   },
   agent_upstream_identity: {
     description: 'The private key of one upstream app identity a credential adapter mints from.',

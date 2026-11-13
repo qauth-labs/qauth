@@ -1,10 +1,12 @@
-import { randomUUID } from 'node:crypto';
+import { createPrivateKey, createPublicKey, type KeyObject, randomUUID } from 'node:crypto';
 
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 import type { JWK } from 'jose';
 
+import { usesDevelopmentKek } from './development-kek';
 import { sealKeyMaterial } from './envelope';
+import { MIN_RSA_MODULUS_BITS } from './environment-keys';
 import type { KekProvider } from './kek-provider';
 import {
   ActiveKeyConflictError,
@@ -96,6 +98,46 @@ export interface CreateKeyInput<Tx> {
   readonly tx?: Tx;
 }
 
+/** Input of {@link KeyFactory.importKey}. */
+export interface ImportKeyInput<Tx> {
+  /** A UUID. It is stored, and sealed into the key's associated data, in lowercase. */
+  readonly realmId: string;
+  /** A purpose that takes an imported key (`importable`): `upstream_client_assertion`. */
+  readonly purpose: KeyPurpose;
+  /** The owner inside the realm, for a scoped purpose: the provider the key signs for. */
+  readonly scopeId?: string | null;
+  /**
+   * The algorithm the key must be for, one of the purpose's: the one the
+   * party that will verify its signatures asks for, such as `ES256` for Sign
+   * in with Apple. A key of another algorithm is refused.
+   */
+  readonly algorithm: KeyAlgorithm;
+  /**
+   * The key's id as its issuer named it, such as the key id a provider shows
+   * beside the key it issued: printable ASCII but space, at most
+   * {@link MAX_IMPORTED_KEY_ID_LENGTH} characters. Signatures name it in
+   * their header.
+   */
+  readonly kid: string;
+  /**
+   * The private key in PEM, unencrypted: PKCS#8 (`BEGIN PRIVATE KEY`), as a
+   * provider hands one out, or a traditional EC or RSA key. A JavaScript
+   * string cannot be zeroed; the factory zeroes every buffer it makes of it.
+   */
+  readonly privateKeyPem: string;
+  /** An outer transaction to import the key in. */
+  readonly tx?: Tx;
+}
+
+/** The longest `kid` an imported key may have: `realm_keys.kid` holds 255. */
+export const MAX_IMPORTED_KEY_ID_LENGTH = 255;
+
+/** The longest PEM text an import reads: far more than an RSA-4096 key. */
+export const MAX_IMPORTED_KEY_PEM_LENGTH = 16 * 1024;
+
+/** Printable ASCII but space: a `kid` that reads the same in a header, a log line and a URL. */
+const IMPORTED_KEY_ID_PATTERN = /^[\x21-\x7e]+$/;
+
 /** Options of {@link KeyFactory.provisionRealmKeys}. */
 export interface ProvisionRealmKeysOptions<Tx> {
   /** An outer transaction to create the keys in, such as the one that creates the realm. */
@@ -175,6 +217,33 @@ export interface KeyFactory<Tx> {
    * store raise its unique-constraint error; nothing is stored then either.
    */
   createKey(input: CreateKeyInput<Tx>): Promise<readonly CreatedKey[]>;
+  /**
+   * Seal and store a private key a party outside the deployment issued, in
+   * one transaction: for an importable purpose only (`importable`), such as
+   * the client-assertion key a provider issues for QAuth's client there
+   * (#1073). The key keeps the `kid` its issuer gave it, and is published
+   * like a generated key of its purpose.
+   *
+   * It becomes the scope's `active` key when the scope holds no active key of
+   * its algorithm, and its `next` key otherwise: the active key keeps
+   * signing until {@link activateNextKey} switches to it, so importing the
+   * replacement of a key changes nothing yet.
+   *
+   * Nothing the factory returns, throws or logs carries the private key. Each
+   * buffer made of it is zeroed before the call returns.
+   *
+   * @returns the stored key, with its public JWK; never material
+   * @throws KeyCreationRefusedError as {@link createKey} does, and with
+   *   `NOT_IMPORTABLE`, `INVALID_KEY_ID`, `INVALID_KEY` (no unencrypted
+   *   private key in PEM), `KEY_ALGORITHM_MISMATCH` (a key of another
+   *   algorithm, an EC key on another curve, an RSA key shorter than
+   *   {@link MIN_RSA_MODULUS_BITS} bits) and `DEVELOPMENT_KEK`, before
+   *   anything is stored
+   * @throws KeyIdConflictError when the realm already holds a key with the `kid`
+   * @throws NextKeyConflictError when the scope already holds a `next` key of
+   *   the algorithm: switch to it first
+   */
+  importKey(input: ImportKeyInput<Tx>): Promise<CreatedKey>;
   /**
    * Create the standard keys of a realm in one transaction: `token_signing`
    * (with its ML-DSA-65 companion when hybrid signing is on),
@@ -454,6 +523,96 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
       return store.transaction((tx) => writeKeys(prepared, tx), input.tx);
     },
 
+    async importKey(input: ImportKeyInput<Tx>): Promise<CreatedKey> {
+      const request = resolveRequest({
+        realmId: input.realmId,
+        purpose: input.purpose,
+        scopeId: input.scopeId ?? null,
+        algorithm: input.algorithm,
+      });
+      const { realmId, purpose, definition, scopeId } = request;
+      if (definition.importable !== true || definition.kind !== 'signing') {
+        throw new KeyCreationRefusedError(
+          'NOT_IMPORTABLE',
+          `Key purpose '${purpose}' takes no imported key`
+        );
+      }
+      const algorithm = request.algorithms[0];
+      const { kid } = input;
+      if (
+        typeof kid !== 'string' ||
+        kid.length > MAX_IMPORTED_KEY_ID_LENGTH ||
+        !IMPORTED_KEY_ID_PATTERN.test(kid)
+      ) {
+        throw new KeyCreationRefusedError(
+          'INVALID_KEY_ID',
+          `An imported key's kid is printable ASCII but space, at most ${MAX_IMPORTED_KEY_ID_LENGTH} characters`
+        );
+      }
+      if (await usesDevelopmentKek(kekProvider)) {
+        throw new KeyCreationRefusedError(
+          'DEVELOPMENT_KEK',
+          'A key from outside the deployment is never wrapped with the published development KEK: set KEK or KEK_PATH (KEK_PROVIDER=local), or another KEK provider, first'
+        );
+      }
+
+      const { material, publicJwk } = importedKeyMaterial(algorithm, kid, input.privateKeyPem);
+      try {
+        const sealed = await sealKeyMaterial(kekProvider, material, {
+          realmId,
+          purpose,
+          scopeId,
+          kid,
+          algorithm,
+        });
+        return await store.transaction(async (tx) => {
+          // The scope's active key keeps signing: the import waits as `next`.
+          const active = await store.listByRealm(
+            realmId,
+            { purpose, scopeId, status: 'active' },
+            tx
+          );
+          const status: NewKeyStatus = active.some((key) => key.algorithm === algorithm)
+            ? 'next'
+            : 'active';
+          const at = now();
+          const activateAt = status === 'active' ? at : null;
+          const base = {
+            realmId,
+            purpose,
+            scopeId,
+            algorithm,
+            kid,
+            status,
+            pairId: null,
+            activateAt,
+            createdAt: at,
+          };
+          const row = {
+            ...base,
+            ciphertext: sealed.ciphertext,
+            iv: sealed.iv,
+            wrappedDek: sealed.wrappedDek,
+            kekRef: sealed.kekRef,
+            aadVersion: sealed.aadVersion,
+          };
+          const prepared: PreparedKey = definition.published
+            ? {
+                stored: { key: { ...row, publishAt: at }, publicJwk: { ...publicJwk } },
+                created: Object.freeze({ ...base, publishAt: at, publicJwk }),
+              }
+            : {
+                stored: { key: { ...row, publishAt: null } },
+                created: Object.freeze({ ...base, publishAt: null }),
+              };
+          const [created] = await writeKeys([prepared], tx);
+          return created;
+        }, input.tx);
+      } finally {
+        material.fill(0);
+      }
+    },
+
     async provisionRealmKeys(
       requestedRealmId: string,
       provisionOptions: ProvisionRealmKeysOptions<Tx> = {}
@@ -564,6 +723,74 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
       ]);
     },
   });
+}
+
+/** The key type each importable algorithm needs, as Node names it, with a label for refusals. */
+const IMPORTED_KEY_TYPES: Readonly<
+  Partial<
+    Record<
+      KeyAlgorithm,
+      { readonly keyType: string; readonly curve?: string; readonly label: string }
+    >
+  >
+> = Object.freeze({
+  ES256: { keyType: 'ec', curve: 'prime256v1', label: 'an EC private key on P-256' },
+  RS256: { keyType: 'rsa', label: `an RSA private key of at least ${MIN_RSA_MODULUS_BITS} bits` },
+  EdDSA: { keyType: 'ed25519', label: 'an Ed25519 private key' },
+});
+
+/**
+ * The PKCS#8 DER material and the public JWK of an imported private key,
+ * checked against `algorithm`. The refusals never quote the text.
+ */
+function importedKeyMaterial(
+  algorithm: KeyAlgorithm,
+  kid: string,
+  privateKeyPem: unknown
+): { readonly material: Buffer; readonly publicJwk: JWK } {
+  const wanted = IMPORTED_KEY_TYPES[algorithm];
+  if (wanted === undefined) {
+    throw new KeyCreationRefusedError('NOT_IMPORTABLE', `A '${algorithm}' key is never imported`);
+  }
+  if (
+    typeof privateKeyPem !== 'string' ||
+    privateKeyPem.length === 0 ||
+    privateKeyPem.length > MAX_IMPORTED_KEY_PEM_LENGTH
+  ) {
+    throw invalidKey();
+  }
+  let privateKey: KeyObject;
+  try {
+    privateKey = createPrivateKey({ key: privateKeyPem, format: 'pem' });
+  } catch {
+    // An encrypted key (no passphrase is taken), a public key, a certificate
+    // or text that is no PEM at all. The parser's message may quote the text.
+    throw invalidKey();
+  }
+  const details = privateKey.asymmetricKeyDetails;
+  if (
+    privateKey.asymmetricKeyType !== wanted.keyType ||
+    (wanted.curve !== undefined && details?.namedCurve !== wanted.curve) ||
+    (wanted.keyType === 'rsa' && (details?.modulusLength ?? 0) < MIN_RSA_MODULUS_BITS)
+  ) {
+    throw new KeyCreationRefusedError(
+      'KEY_ALGORITHM_MISMATCH',
+      `The key is not ${wanted.label}, which ${algorithm} needs`
+    );
+  }
+  const exported = createPublicKey(privateKey).export({ format: 'jwk' }) as JWK;
+  const material = Buffer.from(privateKey.export({ type: 'pkcs8', format: 'der' }));
+  return {
+    material,
+    publicJwk: Object.freeze({ ...exported, kid, alg: algorithm, use: 'sig' }),
+  };
+}
+
+function invalidKey(): KeyCreationRefusedError {
+  return new KeyCreationRefusedError(
+    'INVALID_KEY',
+    'The key is no unencrypted private key in PEM, such as PKCS#8 (BEGIN PRIVATE KEY)'
+  );
 }
 
 /** When a `next` key reached its outside party: its publication, or its creation when unpublished. */

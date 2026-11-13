@@ -1,9 +1,9 @@
 ---
 title: Keys
-description: How QAuth keeps its keys in each realm's encrypted key store behind a KEK — what the store holds, how keys are imported, replaced and added with auth-server:keys:create, the rotation windows, and the JWKS rule for relying parties.
+description: How QAuth keeps its keys in each realm's encrypted key store behind a KEK — what the store holds, how keys are imported, replaced and added with auth-server:keys:create, a provider-issued client-assertion key such as Sign in with Apple's, the rotation windows, and the JWKS rule for relying parties.
 sidebar:
   order: 2
-lastVerified: '2026-11-03'
+lastVerified: '2026-11-12'
 ---
 
 Every realm keeps its keys in its own encrypted key store in Postgres, one set
@@ -250,7 +250,10 @@ JWKS at once.
 A manual rotation will be an admin API security operation
 ([#544](https://github.com/qauth-labs/qauth/issues/544)): it needs the
 `qauth:admin:security` scope and a fresh passkey approval, and it follows the
-windows above. The admin API has no key operation in this release.
+windows above. In this release the admin API rotates one kind of key only: a
+provider plugin's client-assertion key, which the provider issued
+([below](#a-provider-issued-client-assertion-key)), and whose switch waits for
+no window, since the provider holds the key's public half already. For every other key,
 `auth-server:keys:create --status next` publishes a next key, but nothing makes
 a next key active yet.
 
@@ -401,6 +404,135 @@ A realm has one active key per purpose and algorithm, so the command cannot
 replace one: a second active key is refused, and a `next` key is published but
 never made active until rotation ships (#542). Replace a signing key through its
 variable meanwhile.
+
+## A provider-issued client-assertion key
+
+Some upstream providers issue the key a client signs with. Sign in with Apple
+is one: the developer downloads a private key (a `.p8` file, ES256) with its
+Key ID, and Apple accepts a client secret only when that key signed it. A
+provider plugin that authenticates this way (a preset with
+`clientAuthentication: { method: 'signed_client_secret' }`,
+[Write a preset plugin](/extend/preset-plugins/#what-a-preset-may-set-beyond-a-realms-provider))
+needs that key in the realm's key store, as its `upstream_client_assertion`
+key, scoped to the plugin's type. QAuth generates every other key itself; this
+is the one that comes in from outside, through two admin API operations
+([Security operations](/reference/security-operations/)):
+
+| Operation               | Request                                                               | What it does                                                                                        |
+| ----------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `plugins.keys.import`   | `POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/keys`          | Imports the key under the provider's key id. The first key signs at once; a second waits as `next`. |
+| `plugins.keys.activate` | `POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/keys/activate` | Makes the `next` key sign, and retires the one that signed until then.                              |
+
+Both are security operations (`key-custody`; the import also
+`credential-path`): each needs `qauth:admin:security` (the permission
+`plugins.security`) and an approval, and `qauth:admin:write` reaches neither.
+
+The key is handled like a generated one:
+
+- It reaches the server only sealed: `secrets.seal` encrypts it for
+  `plugins.keys.import`, the member `/privateKey` and the plugin, and the import
+  names the sealed value. The approval stores that ciphertext, never the key.
+- The signer seals it under the KEK, as it seals every stored key, in the same
+  transaction as the call's audit row. No response, approval display, audit
+  row, event or log line holds it; they name the key id, its algorithm and its
+  status.
+- It must be an unencrypted private key (PKCS#8 or SEC 1 PEM) of the algorithm
+  the realm's configuration of the plugin asks for, ES256 for Apple: a key of
+  another type, curve or size is refused with `400`. So configure the plugin
+  first; an import for a plugin whose configuration names no client assertion
+  is refused with `409`.
+- The key id is the provider's, printable ASCII without spaces, at most 255
+  characters, and unique in the realm.
+- A deployment that runs on the published development KEK refuses the import:
+  a key sealed under a KEK everyone has is not in custody.
+- The signer signs with it only for the plugin: `iss` is the assertion issuer
+  the configuration names (Apple's Team ID), or the client id, `sub` is the
+  client id (Apple's Services ID), and `kid` is the provider's key id. It is
+  never published in the realm's JWKS, which serves only token signing keys.
+
+The signer reads the client id and the assertion issuer from what the admin
+API stores beside the plugin's configuration at each `plugins.update`, and at
+each `plugins.enable` that switches the plugin on, since the signer's process
+loads no plugin code. An enable of a plugin that is already on writes
+nothing. So after upgrading a plugin whose mapping of its configuration
+changed, or a plugin enabled before this release, configure it again.
+
+The operations run on the process that holds the signer role, which holds the
+KEK: in a deployment that splits the roles, the admin API of a process without
+it answers `503`.
+
+### Sign in with Apple, step by step
+
+1. In the Apple Developer account, note the **Team ID** (ten characters), and
+   create or pick the **Services ID** that is the client id. Register the
+   realm's callback, `https://<realm host>/upstream/<type>/callback`, as its
+   return URL.
+2. Under Keys, create a key with Sign in with Apple enabled for the app, and
+   download it. Apple offers the `.p8` file once. Note its **Key ID**.
+3. Install the Apple plugin and configure it for the realm with the Services ID
+   and the Team ID (`plugins.update`, then `plugins.enable`,
+   [Installing and enabling a plugin](/extend/auth-method-contract/#installing-and-enabling-a-plugin)).
+4. Seal the `.p8` file's contents, then file an approval for the import and
+   send it:
+
+   ```http
+   POST /admin/v1-rc.0/realms/{realmId}/secrets/seal
+   { "operation": "plugins.keys.import", "member": "/privateKey",
+     "params": { "plugin": "apple" },
+     "value": "-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----\n" }
+   → 200 { "operation": "plugins.keys.import", "member": "/privateKey", "sealed": "v1.…" }
+
+   POST /admin/v1-rc.0/realms/{realmId}/plugins/apple/keys
+   QAuth-Approval: {approvalId}
+   { "kid": "ABC123DEFG", "privateKey": { "sealed": "v1.…" } }
+   → 200 { "kid": "ABC123DEFG", "algorithm": "ES256", "status": "active" }
+   ```
+
+5. Keep the downloaded `.p8` file until the import answered `200`: Apple
+   offers it once, and a refused import is sent again with the same file.
+   Then delete it from wherever it passed through.
+
+`apple` and `ABC123DEFG` stand for the plugin's name and the Key ID Apple
+showed.
+
+### Replacing the key
+
+To replace the key without a gap, create a new key at Apple while the old one
+still works, and import it as above: it becomes `next`, and the old key keeps
+signing. Switch when you are ready. The switch runs as soon as it is
+approved: unlike a rotation of a key QAuth generates, it waits for no
+pre-publication window, since Apple holds the new key's public half from the
+moment it issued it. A wrong, revoked or leaked key is replaced the same way,
+at once:
+
+```http
+POST /admin/v1-rc.0/realms/{realmId}/plugins/apple/keys/activate
+QAuth-Approval: {approvalId}
+{ "kid": "XYZ987WVUT" }
+→ 200 { "activatedKid": "XYZ987WVUT", "retiredKid": "ABC123DEFG", "activatedAt": "…" }
+```
+
+Each process signs with the new key once it reads the realm's key list again,
+within a minute. A switch for a key id that is not the plugin's `next` key is
+refused with `409`, and so is a third import while a `next` key waits. Revoke
+the old key at Apple once every process signs with the new one, a minute after
+the switch: a process that has not read the list again still signs with the
+old key, and Apple refuses what it signs. A leaked key may be revoked at once,
+at the cost of sign-ins through Apple failing on such a process for that
+minute.
+
+### Why there is no command or realm-file path
+
+The import exists only in the admin API.
+[ADR-019 Decision 11](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)
+moves configuration between realms through the realm file, and never copies a
+secret value in it: a live realm's secrets are set on the live realm. A
+private key is such a value, so a realm file never carries one, and the key is
+imported into each realm that uses the plugin. Decision 11 asks for no
+command-line import either, and `auth-server:keys:create` creates keys rather
+than taking one in: the admin API's import is approved with a passkey, audited
+and bound to the plugin and its configuration, which a command on the host
+would have to do again.
 
 ## What relying parties do with the JWKS
 

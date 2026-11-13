@@ -44,6 +44,13 @@ export interface TestSignerOptions {
   readonly hybridSigning?: boolean;
   /** How long the signer trusts a key lookup, in ms. The production default when absent. */
   readonly refreshIntervalMs?: number;
+  /**
+   * Where the signer reads each provider's client record (#1073), such as
+   * the repository store over a stubbed database: `addUpstreamClient` then
+   * only creates the provider's key, and its client id and assertion issuer
+   * go unread. The records `addUpstreamClient` keeps in memory when absent.
+   */
+  readonly upstreamClients?: Pick<SignerKeyStore, 'findUpstreamClient'>;
 }
 
 /** A realm to add to a {@link TestSigner}. */
@@ -271,6 +278,9 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
     },
     async findUpstreamClient(realmId, providerId) {
       storeReads.push('findUpstreamClient');
+      if (options.upstreamClients !== undefined) {
+        return options.upstreamClients.findUpstreamClient(realmId, providerId);
+      }
       return upstreamClients.get(`${realmId}/${providerId}`);
     },
   };

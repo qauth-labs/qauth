@@ -3,7 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 import type { JWK } from 'jose';
 
-import { LOCAL_KEK_PROVIDER } from './default-kek-provider';
+import { usesDevelopmentKek } from './development-kek';
 import { openKeyMaterial, sealKeyMaterial } from './envelope';
 import {
   type EnvironmentKey,
@@ -11,7 +11,6 @@ import {
   prepareEnvironmentKeys,
 } from './environment-keys';
 import type { KekProvider } from './kek-provider';
-import { computeKekRef, DEV_KEK_DEFAULT } from './kek-sources';
 import {
   KeyChangeRefusedError,
   KeyCreationRefusedError,
@@ -162,9 +161,6 @@ export interface RealmKeysBootResult {
   readonly generated: readonly CreatedKey[];
 }
 
-/** The `kekRef` of the published development KEK. */
-const DEVELOPMENT_KEK_REF = computeKekRef(Buffer.from(DEV_KEK_DEFAULT, 'base64'));
-
 /**
  * Run the key boot step for one realm. See the module comment for the steps
  * and the refusals.
@@ -284,12 +280,6 @@ async function refuseKeysOfAnotherRealm<Tx>(
       );
     }
   }
-}
-
-/** Whether the provider wraps with the published development KEK. */
-async function usesDevelopmentKek(provider: KekProvider): Promise<boolean> {
-  if (provider.name !== LOCAL_KEK_PROVIDER) return false;
-  return (await provider.health()).kekRef === DEVELOPMENT_KEK_REF;
 }
 
 /** A configured key to import, and the active key it replaces, if any. */

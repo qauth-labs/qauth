@@ -1,4 +1,4 @@
-import { createPrivateKey } from 'node:crypto';
+import { createPrivateKey, generateKeyPairSync } from 'node:crypto';
 
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
@@ -987,5 +987,216 @@ describe('deleteScopedKeys', () => {
       statusCode: 400,
     });
     expect(store.calls).toEqual([]);
+  });
+});
+
+describe('importKey', () => {
+  const PROVIDER = 'apple';
+  /** A key the way a provider hands one out: an unencrypted PKCS#8 PEM. */
+  function pemOf(type: 'ec' | 'rsa' | 'ed25519', curve = 'prime256v1'): string {
+    const { privateKey } =
+      type === 'ec'
+        ? generateKeyPairSync('ec', { namedCurve: curve })
+        : type === 'rsa'
+          ? generateKeyPairSync('rsa', { modulusLength: 2048 })
+          : generateKeyPairSync('ed25519');
+    return privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  }
+  const importing = (privateKeyPem: string, overrides: Record<string, unknown> = {}) => ({
+    realmId: REALM,
+    purpose: 'upstream_client_assertion' as const,
+    scopeId: PROVIDER,
+    algorithm: 'ES256' as const,
+    kid: 'ABC123DEFG',
+    privateKeyPem,
+    ...overrides,
+  });
+
+  it("stores the provider's key as the scope's active key, sealed, under the provider's kid", async () => {
+    const { factory, store, kekProvider } = setup();
+    const pem = pemOf('ec');
+
+    const key = await factory.importKey(importing(pem));
+
+    expect(key).toMatchObject({
+      realmId: REALM,
+      purpose: 'upstream_client_assertion',
+      scopeId: PROVIDER,
+      algorithm: 'ES256',
+      kid: 'ABC123DEFG',
+      status: 'active',
+      pairId: null,
+      publishAt: NOW,
+      activateAt: NOW,
+    });
+    expect(key.publicJwk).toMatchObject({
+      kty: 'EC',
+      crv: 'P-256',
+      kid: 'ABC123DEFG',
+      alg: 'ES256',
+      use: 'sig',
+    });
+    expect(key.publicJwk).not.toHaveProperty('d');
+    expect(JSON.stringify(key)).not.toContain(pem.split('\n')[1]);
+
+    expect(store.rows).toHaveLength(1);
+    const [row] = store.rows;
+    expect(row.publicJwk).not.toHaveProperty('d');
+    // The sealed material opens to the same private key.
+    const material = await openKeyMaterial(kekProvider, row.key, row.key);
+    const opened = createPrivateKey({ key: material, format: 'der', type: 'pkcs8' });
+    expect(opened.export({ format: 'jwk' })).toEqual(
+      createPrivateKey(pem).export({ format: 'jwk' })
+    );
+  });
+
+  it('imports a second key as next: the active key keeps signing until the switch', async () => {
+    const { factory, store } = setup({ prepublishMs: 0 });
+    await factory.importKey(importing(pemOf('ec')));
+
+    const second = await factory.importKey(importing(pemOf('ec'), { kid: 'NEWKEY0001' }));
+
+    expect(second).toMatchObject({ kid: 'NEWKEY0001', status: 'next', activateAt: null });
+    expect(store.rows.map((row) => [row.key.kid, row.key.status])).toEqual([
+      ['ABC123DEFG', 'active'],
+      ['NEWKEY0001', 'next'],
+    ]);
+
+    const switched = await factory.activateNextKey({
+      realmId: REALM,
+      purpose: 'upstream_client_assertion',
+      scopeId: PROVIDER,
+      algorithm: 'ES256',
+    });
+    expect(switched).toMatchObject({ activatedKid: 'NEWKEY0001', retiredKid: 'ABC123DEFG' });
+  });
+
+  it('refuses a third key while the scope holds a next one', async () => {
+    const { factory } = setup();
+    await factory.importKey(importing(pemOf('ec')));
+    await factory.importKey(importing(pemOf('ec'), { kid: 'NEWKEY0001' }));
+
+    await expect(
+      factory.importKey(importing(pemOf('ec'), { kid: 'NEWKEY0002' }))
+    ).rejects.toBeInstanceOf(NextKeyConflictError);
+  });
+
+  it('refuses a kid the realm already holds', async () => {
+    const { factory } = setup();
+    await factory.importKey(importing(pemOf('ec')));
+
+    await expect(factory.importKey(importing(pemOf('ec')))).rejects.toBeInstanceOf(
+      KeyIdConflictError
+    );
+  });
+
+  it.each([
+    ['an RSA key', () => pemOf('rsa')],
+    ['an Ed25519 key', () => pemOf('ed25519')],
+    ['an EC key on P-384', () => pemOf('ec', 'secp384r1')],
+  ])('refuses %s for ES256, quoting nothing of it', async (_label, make) => {
+    const { factory, store } = setup();
+    const pem = make();
+
+    const refusal = await factory.importKey(importing(pem)).catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(KeyCreationRefusedError);
+    expect(refusal).toMatchObject({ reason: 'KEY_ALGORITHM_MISMATCH' });
+    expect(String((refusal as Error).message)).not.toContain(pem.split('\n')[1]);
+    expect(store.rows).toEqual([]);
+  });
+
+  it('imports an RS256 or EdDSA key for those algorithms', async () => {
+    const { factory } = setup();
+    await expect(
+      factory.importKey(importing(pemOf('rsa'), { algorithm: 'RS256', kid: 'rsa-1' }))
+    ).resolves.toMatchObject({ algorithm: 'RS256', status: 'active' });
+    await expect(
+      factory.importKey(importing(pemOf('ed25519'), { algorithm: 'EdDSA', kid: 'ed-1' }))
+    ).resolves.toMatchObject({ algorithm: 'EdDSA', status: 'active' });
+  });
+
+  it.each([
+    [
+      'a public key',
+      () =>
+        generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+          .publicKey.export({ type: 'spki', format: 'pem' })
+          .toString(),
+    ],
+    [
+      'an encrypted key',
+      () =>
+        generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+          .privateKey.export({
+            type: 'pkcs8',
+            format: 'pem',
+            cipher: 'aes-256-cbc',
+            passphrase: 'pass phrase',
+          })
+          .toString(),
+    ],
+    ['text that is no PEM', () => 'not a key'],
+    ['an empty string', () => ''],
+    ['text longer than an import reads', () => 'x'.repeat(16 * 1024 + 1)],
+  ])('refuses %s as INVALID_KEY', async (_label, make) => {
+    const { factory, store } = setup();
+
+    await expect(factory.importKey(importing(make()))).rejects.toMatchObject({
+      reason: 'INVALID_KEY',
+    });
+    expect(store.rows).toEqual([]);
+  });
+
+  it.each([[''], ['has space'], ['k'.repeat(256)], ['café'], ['line\nbreak']])(
+    'refuses the kid %j',
+    async (kid) => {
+      const { factory } = setup();
+      await expect(factory.importKey(importing(pemOf('ec'), { kid }))).rejects.toMatchObject({
+        reason: 'INVALID_KEY_ID',
+      });
+    }
+  );
+
+  it('refuses a purpose that takes no imported key', async () => {
+    const { factory } = setup();
+    await expect(
+      factory.importKey(
+        importing(pemOf('ed25519'), {
+          purpose: 'agent_upstream_identity',
+          algorithm: 'EdDSA',
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'NOT_IMPORTABLE' });
+    await expect(
+      factory.importKey(
+        importing(pemOf('ed25519'), { purpose: 'token_signing', scopeId: null, algorithm: 'EdDSA' })
+      )
+    ).rejects.toMatchObject({ reason: 'NOT_IMPORTABLE' });
+  });
+
+  it('refuses an algorithm the purpose does not allow, and a missing scope', async () => {
+    const { factory } = setup();
+    await expect(
+      factory.importKey(importing(pemOf('ec'), { algorithm: 'HS256' }))
+    ).rejects.toMatchObject({ reason: 'ALGORITHM_NOT_ALLOWED' });
+    await expect(
+      factory.importKey(importing(pemOf('ec'), { scopeId: null }))
+    ).rejects.toMatchObject({ reason: 'SCOPE_REQUIRED' });
+  });
+
+  it('refuses to wrap an imported key with the published development KEK', async () => {
+    const store = createMemoryKeyStore();
+    const factory = createKeyFactory({
+      store,
+      kekProvider: localProvider({}),
+      enabledSignatureAlgorithms: ED25519_ONLY,
+      hybridSigning: false,
+    });
+
+    await expect(factory.importKey(importing(pemOf('ec')))).rejects.toMatchObject({
+      reason: 'DEVELOPMENT_KEK',
+    });
+    expect(store.rows).toEqual([]);
   });
 });

@@ -177,6 +177,12 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
  * back-channel logout metadata (`EVENT_DELIVERY_COLUMNS`), and each realm's
  * event retention
  * (`EVENT_RETENTION_REALM_COLUMNS`).
+ *
+ * The columns `signer` reads to sign an upstream provider's client
+ * assertions (#1073): whose client they speak for, the switch, and what
+ * finds them. Of a plugin's state, the assertion client the admin API stores
+ * beside it, never its config or its sealed secrets; of a generic provider,
+ * its config, whose client id and authentication method name it.
  */
 export const COLUMN_GRANTS: ColumnGrants = Object.freeze({
   oauth_clients: {
@@ -202,6 +208,17 @@ export const COLUMN_GRANTS: ColumnGrants = Object.freeze({
       'admin_event_retention_days',
     ],
   },
+  realm_auth_method_plugins: {
+    signer: [
+      'realm_id',
+      'plugin_type',
+      'enabled',
+      'assertion_client_id',
+      'assertion_issuer',
+      'assertion_algorithm',
+    ],
+  },
+  realm_upstream_providers: { signer: ['realm_id', 'type', 'enabled', 'config'] },
   ssf_stream_subjects: { delivery: ['stream_id', 'event_subject_type', 'event_subject_id'] },
 });
 

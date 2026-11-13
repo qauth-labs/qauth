@@ -253,7 +253,7 @@ export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
     class: 'security',
     resource: 'plugins',
     description:
-      'Enable, configure and disable an AuthMethod plugin in a realm: each changes which upstream credentials sign users in (#600).',
+      'Enable, configure and disable an AuthMethod plugin in a realm, and import and switch its provider-issued client-assertion key: each changes which upstream credentials sign users in (#600, #1073).',
   }),
   definePermission({
     id: 'secrets.seal',

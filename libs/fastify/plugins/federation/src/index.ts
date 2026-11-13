@@ -112,12 +112,15 @@ export {
   primaryIdentityKindOf,
   VERIFIED_OWNER_REFUSAL_REASONS,
 } from '@qauth-labs/server-federation';
-export type { UpstreamOidcConfig } from '@qauth-labs/server-upstream-oidc';
+export type { UpstreamAssertionClient, UpstreamOidcConfig } from '@qauth-labs/server-upstream-oidc';
 export {
   createUpstreamOidcMethod,
   // The loader builds a preset package's method with it (#671).
   createUpstreamOidcPresetMethod,
   openUpstreamOidcConfig,
+  // Whose client a preset's client assertions speak for (#1073), which the
+  // admin API stores for the signer when it writes a realm's preset config.
+  upstreamOidcPresetAssertionClient,
 } from '@qauth-labs/server-upstream-oidc';
 
 // Re-exported provider surface: app code (scope:app) may only depend on

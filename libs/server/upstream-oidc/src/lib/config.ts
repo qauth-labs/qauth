@@ -1,4 +1,5 @@
 import {
+  MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH,
   UPSTREAM_ASSERTION_ALGORITHMS,
   UPSTREAM_ID_TOKEN_ALGORITHMS,
   UPSTREAM_SIGNED_CLIENT_SECRET,
@@ -12,6 +13,7 @@ import { z } from 'zod';
 // a preset written against the SDK alone and the schema below describe one
 // shape (`config-shape.test.ts`).
 export {
+  MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH,
   UPSTREAM_ASSERTION_ALGORITHMS,
   UPSTREAM_ID_TOKEN_ALGORITHMS,
   UPSTREAM_SIGNED_CLIENT_SECRET,
@@ -134,6 +136,31 @@ const clientSecret = z
   .max(MAX_UPSTREAM_CLIENT_SECRET_LENGTH)
   .meta({ writeOnly: true });
 
+/**
+ * Why `value` cannot be a signed client secret's `assertionIssuer`, or
+ * `undefined` when it can: a non-empty string of at most
+ * {@link MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH} characters, no control
+ * character.
+ */
+export function upstreamAssertionIssuerProblem(value: unknown): string | undefined {
+  if (typeof value !== 'string') return 'is not a string';
+  if (value.length === 0) return 'is empty';
+  if (value.length > MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH) {
+    return `is longer than ${MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH} characters`;
+  }
+  // eslint-disable-next-line no-control-regex -- refusing control characters is the point
+  if (/[\u0000-\u001f\u007f]/u.test(value)) return 'holds a control character';
+  return undefined;
+}
+
+/** A signed client secret's `iss`, when it is not the client id (#1073). */
+const upstreamAssertionIssuerSchema = z.string().superRefine((value, context) => {
+  const problem = upstreamAssertionIssuerProblem(value);
+  if (problem !== undefined) {
+    context.addIssue({ code: 'custom', message: `the assertion issuer ${problem}` });
+  }
+});
+
 /** How the client authenticates at the token endpoint. */
 export const upstreamClientAuthenticationSchema = z.discriminatedUnion('method', [
   z.strictObject({ method: z.literal('client_secret_basic'), clientSecret }),
@@ -157,6 +184,13 @@ export const upstreamPresetClientAuthenticationSchema = z.discriminatedUnion('me
     method: z.literal(UPSTREAM_SIGNED_CLIENT_SECRET),
     /** The algorithm of the key registered with the provider. */
     signingAlgorithm: z.enum(UPSTREAM_ASSERTION_ALGORITHMS).default('ES256'),
+    /**
+     * The `iss` of the signed client secret when it is not the client id
+     * (#1073), such as Sign in with Apple's Team ID: the realm's admin sets
+     * it through the preset's config, and the signer role reads it from the
+     * realm's stored record of the provider, never from a signing request.
+     */
+    assertionIssuer: upstreamAssertionIssuerSchema.optional(),
   }),
 ]);
 

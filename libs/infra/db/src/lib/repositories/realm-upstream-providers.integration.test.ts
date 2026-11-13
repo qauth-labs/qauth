@@ -231,6 +231,33 @@ describe('realm upstream providers (real Postgres, #639)', () => {
     });
   });
 
+  it("finds the client a private_key_jwt provider's assertions are signed for, and none otherwise (#1073)", async () => {
+    const realmId = await realm('alpha');
+    const other = await realm('beta');
+    await repo.create({
+      realmId,
+      type: 'oidc_signed',
+      displayName: 'Signed',
+      config: {
+        ...CONFIG,
+        clientId: 'signed-client',
+        clientAuthentication: { method: 'private_key_jwt', signingAlgorithm: 'ES256' },
+      },
+    });
+    await repo.create({ realmId, type: 'oidc_secret', displayName: 'Secret', config: CONFIG });
+
+    expect(await repo.findAssertionClient(realmId, 'oidc_signed')).toEqual({
+      clientId: 'signed-client',
+      algorithm: 'ES256',
+    });
+    expect(await repo.findAssertionClient(realmId, 'oidc_secret')).toBeUndefined();
+    expect(await repo.findAssertionClient(realmId, 'oidc_missing')).toBeUndefined();
+    expect(await repo.findAssertionClient(other, 'oidc_signed')).toBeUndefined();
+
+    await repo.update(realmId, 'oidc_signed', { enabled: false });
+    expect(await repo.findAssertionClient(realmId, 'oidc_signed')).toBeUndefined();
+  });
+
   it('deletes the rows of a deleted realm', async () => {
     const realmId = await realm('alpha');
     await repo.create({ realmId, type: 'oidc_corp', displayName: 'Example Corp', config: CONFIG });

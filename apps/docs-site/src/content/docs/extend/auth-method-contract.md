@@ -3,7 +3,7 @@ title: The AuthMethod contract
 description: The experimental plugin API for sign-in methods — what an AuthMethod adds to CredentialProvider, the upstream step it serves, what a method is handed, where its routes mount, the test kit that checks a method against the contract, and how to write a plugin in its own repository with @qauth-labs/plugin-sdk.
 sidebar:
   order: 6
-lastVerified: '2026-11-09'
+lastVerified: '2026-11-12'
 experimental: true
 ---
 
@@ -332,7 +332,10 @@ which upstream credentials sign users in, so each is a
 the state it acts on, as its read gave it (`{ "version": 1 }` for an enable or a disable), so the
 approval binds it and the approver sees it, and a state that moved since answers 412: two approved
 configures never overwrite each other unseen, and an approved enable never turns on a config its
-approver never saw. Each may carry `If-Match` too.
+approver never saw. Each may carry `If-Match` too. A preset whose client signs with a key the
+provider issued, as Sign in with Apple's does, gets that key through `plugins.keys.import` and
+switches to a new one with `plugins.keys.activate`
+([A provider-issued client-assertion key](/operate/keys/#a-provider-issued-client-assertion-key)).
 
 **Secrets.** A plugin's secret members follow the rule of every security operation: the operation
 takes a secret only sealed ([API conventions](/reference/api-conventions/#approvals)). A secret's

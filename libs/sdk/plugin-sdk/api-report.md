@@ -87,6 +87,7 @@ id and type namespace, which no plugin may take.
 
 - `defineUpstreamOidcPreset`
 - `isUpstreamOidcPreset`
+- `MAX_UPSTREAM_ASSERTION_ISSUER_LENGTH`
 - `MAX_UPSTREAM_OIDC_PRESET_ORIGINS`
 - `MAX_UPSTREAM_RESPONSE_MEMBER_LENGTH`
 - `MAX_UPSTREAM_RESPONSE_MEMBERS`

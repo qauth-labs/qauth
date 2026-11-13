@@ -31,13 +31,29 @@ export type KeyCreationRefusalReason =
    * With hybrid signing on, the realm holds only one active key of the pair,
    * so provisioning would have to create the other half alone.
    */
-  | 'HYBRID_PAIR_INCOMPLETE';
+  | 'HYBRID_PAIR_INCOMPLETE'
+  /** An import names a purpose that takes no imported key (`importable`). */
+  | 'NOT_IMPORTABLE'
+  /** An imported key's `kid` is empty, too long or holds a character other than printable ASCII. */
+  | 'INVALID_KEY_ID'
+  /** The imported text is no unencrypted private key in PEM. */
+  | 'INVALID_KEY'
+  /** The imported key is not a key of the algorithm it is imported for. */
+  | 'KEY_ALGORITHM_MISMATCH'
+  /**
+   * The KEK is the published development KEK: a key from outside the
+   * deployment wrapped with it would be as good as plaintext.
+   */
+  | 'DEVELOPMENT_KEK';
 
 /**
  * A key the deployment does not create: a malformed realm id, an unknown or
  * operator-only purpose, an algorithm the purpose or `SIGNING_ALGORITHM_MODE`
  * does not allow, a scope id that does not fit the purpose, or one half of a
- * hybrid pair. Branch on {@link reason}.
+ * hybrid pair; for an import, also a purpose that takes no imported key, a
+ * malformed `kid`, text that is no private key or a key of another algorithm,
+ * and the development KEK. Branch on {@link reason}. A message never quotes
+ * the imported text.
  */
 export class KeyCreationRefusedError extends Error {
   readonly statusCode = 400;

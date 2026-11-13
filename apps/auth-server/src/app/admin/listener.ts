@@ -35,6 +35,7 @@ import { clientRoutes } from './clients/routes';
 import { adminHandlerRepositories } from './handler-scope';
 import { adminOpenapiOptions } from './openapi-options';
 import { AdminCallsInFlight, adminDpopService, adminPipeline } from './pipeline';
+import { pluginKeyRoutes } from './plugins/key-routes';
 import { pluginRoutes } from './plugins/routes';
 import { realmRoutes } from './realms/routes';
 import { secretRoutes } from './secrets/routes';
@@ -70,8 +71,9 @@ export const ADMIN_OPENAPI_PATH = `${API_FAMILY_PREFIXES.admin}/openapi.json`;
  * the approval routes (#512), which every registry built with
  * `createAdminOperationRegistry` holds the operations of, the seal route of a
  * security operation's secrets (#984), the realm routes that read a realm and
- * update its policies (#517), the AuthMethod plugin routes (#600), the
- * account routes (#1052) and the client routes (#632), whose operations
+ * update its policies (#517), the AuthMethod plugin routes (#600) and their
+ * client-assertion key routes (#1073), the account routes (#1052) and the
+ * client routes (#632), whose operations
  * `ADMIN_OPERATIONS` holds.
  */
 export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze([
@@ -79,6 +81,7 @@ export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze(
   secretRoutes,
   realmRoutes,
   pluginRoutes,
+  pluginKeyRoutes,
   userRoutes,
   clientRoutes,
 ]);
@@ -295,6 +298,10 @@ export async function installAdminApi(
   // The AuthMethod plugins the process loaded (#600), which the plugin
   // operations list, enable and configure.
   admin.decorate('authMethodPlugins', source.authMethodPlugins);
+  // The signer's custody of a provider plugin's client-assertion keys
+  // (#1073), `null` on a process that holds no KEK, which the plugin key
+  // operations import and switch through.
+  admin.decorate('upstreamClientKeys', source.upstreamClientKeys ?? null);
   // The realm policy store and whether a realm secret is set (#516, #529),
   // which the realm operations read and write a realm's policies through
   // (#517). The secret store's values stay with the app's mail sender.

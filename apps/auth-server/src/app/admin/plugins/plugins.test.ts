@@ -311,6 +311,9 @@ describe("a configure that changes where a plugin's own hook says its secrets go
       config,
       secrets: { clientSecret: SEALED },
       version: 1,
+      assertionClientId: null,
+      assertionIssuer: null,
+      assertionAlgorithm: null,
       createdAt: 0,
       updatedAt: 0,
     };
@@ -577,6 +580,9 @@ describe('the plugin representation (#600)', () => {
       config: { clientId: 'qauth', clientSecret: SECRET },
       secrets: {},
       version: 2,
+      assertionClientId: null,
+      assertionIssuer: null,
+      assertionAlgorithm: null,
       createdAt: 0,
       updatedAt: 0,
     });
@@ -596,6 +602,9 @@ describe('the plugin representation (#600)', () => {
       config: { issuer: 'https://idp.example', clientId: 'qauth' },
       secrets: { clientSecret: ciphertext },
       version: 3,
+      assertionClientId: null,
+      assertionIssuer: null,
+      assertionAlgorithm: null,
       createdAt: 0,
       updatedAt: 0,
     });
@@ -628,6 +637,9 @@ describe('the plugin representation (#600)', () => {
         config: { issuer: 'https://idp.example', clientId: 'qauth' },
         secrets: { clientSecret: 'v1.kid-1.aXY.Y2lwaGVydGV4dA' },
         version: 4,
+        assertionClientId: null,
+        assertionIssuer: null,
+        assertionAlgorithm: null,
         createdAt: 0,
         updatedAt: 0,
       });
@@ -661,6 +673,9 @@ describe('the plugin representation (#600)', () => {
       config: { issuer: 'https://idp.example', clientId: 'qauth' },
       secrets: { clientSecret: 'v1.kid-1.aXY.Y2lwaGVydGV4dA' },
       version: 5,
+      assertionClientId: null,
+      assertionIssuer: null,
+      assertionAlgorithm: null,
       createdAt: 0,
       updatedAt: 0,
     });

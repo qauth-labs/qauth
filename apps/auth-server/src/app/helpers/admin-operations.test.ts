@@ -388,8 +388,9 @@ describe('defineOperation: secret members (#984)', () => {
     ).toThrow(/only a security operation declares secret members/);
   });
 
-  it('declares the plugin configure and the policy patch secrets in the server registry', () => {
+  it('declares the plugin configure, the plugin key import and the policy patch secrets in the server registry', () => {
     expect(OPERATION_REGISTRY.get('plugins.update')?.secretMembers).toEqual(['/secrets/*']);
+    expect(OPERATION_REGISTRY.get('plugins.keys.import')?.secretMembers).toEqual(['/privateKey']);
     expect(OPERATION_REGISTRY.get('realms.policies.update')?.secretMembers).toEqual([
       '/mail/smtp/password',
       '/mail/resend/apiKey',
@@ -399,7 +400,7 @@ describe('defineOperation: secret members (#984)', () => {
         .filter((operation) => operation.secretMembers !== undefined)
         .map((operation) => operation.id)
         .sort()
-    ).toEqual(['plugins.update', 'realms.policies.update']);
+    ).toEqual(['plugins.keys.import', 'plugins.update', 'realms.policies.update']);
   });
 });
 
