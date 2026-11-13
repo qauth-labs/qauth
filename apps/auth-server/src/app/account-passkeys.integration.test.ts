@@ -445,10 +445,12 @@ describe('the account API’s passkeys and the passkey set-up (#1108, real conta
         expect.objectContaining({ type: 'passkey', credentialId: passkeyId }),
       ]);
 
+      // The account holds only its password now, so a fresh password sign-in
+      // reaches the handler, which finds no such passkey.
       const again = await call(
         'DELETE',
         `${PASSKEYS}/${passkeyId}`,
-        await freshPasskeyToken(userId)
+        await token(userId, { authTime: signedInAgo(5), amr: ['pwd'] })
       );
       expect(again.statusCode, again.body).toBe(404);
     });
