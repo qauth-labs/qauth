@@ -5,6 +5,7 @@ import {
   createPasswordProvider,
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
+  passwordSetAtOf,
   presentedPasswordFor,
   SELF_REPORTED_SOURCE,
 } from './password.provider';
@@ -97,21 +98,53 @@ describe('PasswordProvider (ADR-003)', () => {
 
   describe('credential_data shape ownership', () => {
     it('buildPasswordCredentialData emits the exact snake_case shape', () => {
-      expect(buildPasswordCredentialData('$argon2id$h', true, null)).toEqual({
+      expect(buildPasswordCredentialData('$argon2id$h', true, null, 1_700_000_000_000)).toEqual({
         password_hash: '$argon2id$h',
         email_verified: true,
+        password_set_at: 1_700_000_000_000,
       });
     });
 
     it('records the NFC marker of a password hashed under the policy (#634)', () => {
-      const data = buildPasswordCredentialData('$argon2id$h', false, 'nfc');
+      const data = buildPasswordCredentialData('$argon2id$h', false, 'nfc', 1_700_000_000_000);
 
       expect(data).toEqual({
         password_hash: '$argon2id$h',
         email_verified: false,
         password_normalization: 'nfc',
+        password_set_at: 1_700_000_000_000,
       });
-      expect(passwordCredentialDataSchema.parse(data)).toEqual(data);
+      // The set time is no member of the schema a sign-in reads (#1107).
+      const { password_set_at: _setAt, ...read } = data;
+      expect(passwordCredentialDataSchema.parse(data)).toEqual(read);
+    });
+
+    it('records when the password was set, now unless told (#1107)', () => {
+      const before = Date.now();
+      const data = buildPasswordCredentialData('$argon2id$h', true, 'nfc');
+
+      expect(data.password_set_at).toBeGreaterThanOrEqual(before);
+      expect(data.password_set_at).toBeLessThanOrEqual(Date.now());
+      expect(passwordSetAtOf(data)).toBe(data.password_set_at);
+    });
+
+    it('reads no set time from a credential written before #1107, or one that is no time', () => {
+      expect(passwordSetAtOf({ password_hash: '$argon2id$h', email_verified: true })).toBe(
+        undefined
+      );
+      for (const value of ['1700000000000', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 2, null]) {
+        expect(passwordSetAtOf({ password_set_at: value }), String(value)).toBe(undefined);
+      }
+      expect(passwordSetAtOf(null)).toBe(undefined);
+      expect(passwordSetAtOf('data')).toBe(undefined);
+      // A value that is no time never makes the password unreadable.
+      expect(
+        passwordCredentialDataSchema.safeParse({
+          password_hash: '$argon2id$h',
+          email_verified: true,
+          password_set_at: 'yesterday',
+        }).success
+      ).toBe(true);
     });
 
     it('reads a credential without the marker, as every credential before #634 is', () => {

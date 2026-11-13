@@ -35,9 +35,9 @@ import type {
  * {@link buildPasswordCredentialData}): `{ password_hash, email_verified }`
  * with snake_case keys — the exact shape written by the #226 backfill and read
  * by the auth routes — and, since #634, the optional normalisation marker
- * `password_normalization`. A camelCase drift here would pass every DB
- * constraint and strand every login, so nothing else may hand-roll this
- * object.
+ * `password_normalization`, and, since #1107, `password_set_at`, when the
+ * password was set. A camelCase drift here would pass every DB constraint and
+ * strand every login, so nothing else may hand-roll this object.
  */
 
 /** `user_credentials.provider_type` / registry key for this provider. */
@@ -77,6 +77,10 @@ export type PasswordVerifyInput = z.infer<typeof passwordVerifyInputSchema>;
  * says ({@link presentedPasswordFor}). A marker of another value fails this
  * schema, so a credential this release cannot verify correctly is refused as
  * unreadable rather than checked the wrong way.
+ *
+ * `password_set_at` (#1107) is no member here: it says only when the password
+ * was set, which no sign-in reads, so a value of it that is no time can never
+ * make a password unreadable. {@link passwordSetAtOf} reads it.
  */
 export const passwordCredentialDataSchema = z.object({
   password_hash: z.string().min(1),
@@ -86,9 +90,19 @@ export const passwordCredentialDataSchema = z.object({
 
 export type PasswordCredentialData = z.infer<typeof passwordCredentialDataSchema>;
 
+/** The `credential_data` of a password just set: the shape, and when it was set. */
+export type BuiltPasswordCredentialData = PasswordCredentialData & {
+  /** When the password was set, in epoch milliseconds (#1107). */
+  readonly password_set_at: number;
+};
+
 /**
  * Build the `credential_data` object for a password credential row. The only
  * sanctioned constructor of this shape (see module JSDoc).
+ *
+ * Every caller writes the hash it passes as the credential's new password, so
+ * the object records when that password was set (`password_set_at`, #1107):
+ * the account API reads it as the password's `changedAt`.
  *
  * @param passwordHash - The Argon2id hash of the password in the form
  *   `normalization` names.
@@ -98,17 +112,32 @@ export type PasswordCredentialData = z.infer<typeof passwordCredentialDataSchema
  *   for a new password, `null` for a hash of a password as typed (one carried
  *   over from elsewhere). Required, so no caller records a hash without saying
  *   which.
+ * @param setAt - When the password is set, in epoch milliseconds: now, unless
+ *   the caller has its own clock.
  */
 export function buildPasswordCredentialData(
   passwordHash: string,
   emailVerified: boolean,
-  normalization: PasswordNormalization | null
-): PasswordCredentialData {
+  normalization: PasswordNormalization | null,
+  setAt: number = Date.now()
+): BuiltPasswordCredentialData {
   return {
     password_hash: passwordHash,
     email_verified: emailVerified,
     ...(normalization === null ? {} : { password_normalization: normalization }),
+    password_set_at: setAt,
   };
+}
+
+/**
+ * When the password of a password credential was set (#1107), from its
+ * `credential_data`: `password_set_at`. `undefined` for a credential whose
+ * password was set before #1107 recorded it, or a value that is no time.
+ */
+export function passwordSetAtOf(credentialData: unknown): number | undefined {
+  if (typeof credentialData !== 'object' || credentialData === null) return undefined;
+  const value = (credentialData as Record<string, unknown>)['password_set_at'];
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 /**

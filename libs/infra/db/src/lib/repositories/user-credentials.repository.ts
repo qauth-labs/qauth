@@ -29,10 +29,12 @@ const TOTP_PROVIDER_TYPE = 'totp';
 
 /**
  * The keys of `credential_data` a password credential's password owns
- * (`passwordCredentialDataSchema` of `@qauth-labs/server-federation`): what
- * {@link UserCredentialsRepository.updatePassword} replaces.
+ * (`buildPasswordCredentialData` of `@qauth-labs/server-federation`): what
+ * {@link UserCredentialsRepository.updatePassword} replaces. A key the new
+ * data does not carry is dropped with the old password, such as the set time
+ * of a password set before #1107 recorded one.
  */
-const PASSWORD_DATA_KEYS = `{password_hash,email_verified,password_normalization}`;
+const PASSWORD_DATA_KEYS = `{password_hash,email_verified,password_normalization,password_set_at}`;
 
 /**
  * Insert one credential row, mapping a `(realm_id, provider_type,
@@ -321,7 +323,7 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
     /**
      * Replace a `password` credential's password (#642): the owner's reset.
      * One statement, so a concurrent writer of a sibling key keeps it: the
-     * three keys the password shape owns are dropped and `passwordData`
+     * keys the password shape owns are dropped and `passwordData`
      * merged in, and the disabled mark cleared with them. An expected hash
      * is compared in the same statement's `WHERE`, which Postgres checks
      * again on the row a concurrent writer left (#844).

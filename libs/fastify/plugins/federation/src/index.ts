@@ -251,6 +251,7 @@ export {
   isUpstreamPresetProvenance,
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
+  passwordSetAtOf,
   presentedPasswordFor,
   rankAttributeSource,
   readWalletBinding,
