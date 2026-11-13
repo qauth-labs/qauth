@@ -21,6 +21,39 @@
       },
       "ref": "#1081",
       "release": "v0.3.0"
+    },
+    {
+      "surface": "interaction-step-upstream-v1",
+      "change": {
+        "rule": "response-property-enum-value-added",
+        "operation": "POST /interaction-step-upstream-v1",
+        "fingerprint": "7232b649a8c2",
+        "text": "added the new `unknown_identity` enum value to the `error` response property for the response status `200`"
+      },
+      "ref": "#1106",
+      "release": "v0.3.0"
+    },
+    {
+      "surface": "interaction-step-upstream-v1",
+      "change": {
+        "rule": "response-property-enum-value-added",
+        "operation": "POST /interaction-step-upstream-v1",
+        "fingerprint": "e8930ccb135f",
+        "text": "added the new `too_many_requests` enum value to the `error` response property for the response status `200`"
+      },
+      "ref": "#1106",
+      "release": "v0.3.0"
+    },
+    {
+      "surface": "interaction-step-upstream-v1",
+      "change": {
+        "rule": "response-property-enum-value-added",
+        "operation": "POST /interaction-step-upstream-v1",
+        "fingerprint": "ac7e9a27a586",
+        "text": "added the new `service_unavailable` enum value to the `error` response property for the response status `200`"
+      },
+      "ref": "#1106",
+      "release": "v0.3.0"
     }
   ]
 }
