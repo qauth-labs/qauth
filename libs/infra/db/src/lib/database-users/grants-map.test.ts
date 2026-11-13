@@ -68,10 +68,10 @@ describe('the grants map (#498)', () => {
     });
   });
 
-  it("lets web alone take and replace an account's recovery codes, and api count them (#649, #1107)", () => {
+  it("lets web alone take and replace an account's recovery codes, and api count and delete them (#649, #1107, #1108)", () => {
     expect(TABLE_GRANTS['user_recovery_codes']).toEqual({
       web: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
-      api: ['SELECT'],
+      api: ['SELECT', 'DELETE'],
     });
   });
 
