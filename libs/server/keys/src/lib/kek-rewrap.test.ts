@@ -491,6 +491,24 @@ describe('KEK rotation: re-wrapping every stored key', () => {
     expect(report.kekRefs).toContainEqual({ kekRef: REF_B, rows: 2, current: true, opens: true });
   });
 
+  it('is not complete when `from` names no stored key while keys remain under another KEK', async () => {
+    // A mistyped `from`: the keys stay under REF_A, which this node still
+    // opens as its previous KEK. The run moves nothing and must not say the
+    // old KEK can go.
+    const w = await world(2);
+    const rewrap = createKekRewrap({ store: w.store, kekProvider: rotatingNode() });
+
+    const report = await rewrap.rewrapAll({
+      from: REF_C,
+      to: REF_B,
+      approval: approval(),
+      onAudit: w.onAudit,
+    });
+
+    expect(report).toMatchObject({ rows: 0, rewrapped: 0, moved: 0, complete: false });
+    expect(report.kekRefs).toEqual([{ kekRef: REF_A, rows: 2, current: false, opens: true }]);
+  });
+
   it('stops when the provider starts to wrap under another KEK, keeping the keys moved so far', async () => {
     const w = await world(3);
     const base = rotatingNode();

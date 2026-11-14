@@ -177,10 +177,12 @@ export interface KekRewrapReport extends KekRotationRecord {
   /** Every KEK reference the stored keys name after the run, with its count. */
   readonly kekRefs: readonly KekRefCensus[];
   /**
-   * Whether the rotation is done: no stored key is wrapped under `from`, no
-   * key failed, and this node opens every KEK reference the store names.
-   * Only then may `from`'s KEK be removed (`KEK_PREVIOUS`, for the default
-   * provider), once no signer node wraps under it any more.
+   * Whether the rotation is done: every stored key is wrapped under `to`, no
+   * key failed, and this node opens `to`. A key left under any other
+   * reference, `from` or not (a mistyped `from` moves nothing), keeps the
+   * rotation from being done. Only then may `from`'s KEK be removed
+   * (`KEK_PREVIOUS`, for the default provider), once no signer node wraps
+   * under it any more.
    */
   readonly complete: boolean;
 }
@@ -470,9 +472,12 @@ export function createKekRewrap<Tx>(options: KekRewrapOptions<Tx>): KekRewrap<Tx
     }
 
     const kekRefs = await censusWith(to);
+    // Done only when every stored key is under `to` and opens: a key left
+    // under any other reference still needs that KEK, so a `from` that named
+    // no stored key never makes an old KEK look safe to remove.
     const complete =
       failures.length === 0 &&
-      kekRefs.every((entry) => entry.kekRef !== from && entry.opens === true);
+      kekRefs.every((entry) => entry.kekRef === to && entry.opens === true);
     return Object.freeze({
       ...record,
       rewrapped,

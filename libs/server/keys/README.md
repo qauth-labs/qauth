@@ -97,7 +97,8 @@ for before it uses its approval, an `ApprovedOperation` of `kek.rotate` bound to
 `{ op, from, to, requester, nonce }` (`kekRotationOperation`, on the public entry point). One key
 moves per write, which matches only the row as it was read, so a run that stops resumes when run
 again. The report counts the keys per KEK reference and says whether the node opens each one;
-`complete` is true only when no key is left on `from`, none failed and every reference opens.
+`complete` is true only when every key is on `to`, none failed and `to` opens: a key left under
+any other reference, a mistyped `from` included, keeps it false.
 `census()` counts alone. The auth server's operator command `auth-server:keys:rewrap` runs it.
 
 ## Usage
