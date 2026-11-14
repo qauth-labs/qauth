@@ -28,7 +28,10 @@ import {
 } from './key-purposes';
 import type { NewKeyStatus, NewStoredKey, RealmKeyStore, StoredKeySummary } from './key-store';
 import { isRealmId } from './realm-id';
+import { isScopeId, MAX_SCOPE_ID_LENGTH } from './scope-id';
 import { formatWebhookSecret } from './webhook-signature';
+
+export { isScopeId, MAX_SCOPE_ID_LENGTH } from './scope-id';
 
 /**
  * Creating a realm's keys (ADR-019 Decision 9, issue #463): generate, seal
@@ -37,9 +40,6 @@ import { formatWebhookSecret } from './webhook-signature';
  * (webhook secrets, upstream client-assertion keys) also rotate and are
  * deleted here.
  */
-
-/** The longest `scope_id` that `realm_keys` holds. */
-export const MAX_SCOPE_ID_LENGTH = 255;
 
 const DAY_MS = 86_400_000;
 
@@ -885,20 +885,4 @@ function resolveScopeId(
     );
   }
   return scopeId;
-}
-
-/**
- * Whether `scopeId` can be stored as `realm_keys.scope_id`: a non-empty,
- * well-formed string of at most {@link MAX_SCOPE_ID_LENGTH} characters. A lone
- * surrogate and a NUL are refused: the associated-data encoder refuses the
- * first, and Postgres text the second.
- */
-export function isScopeId(scopeId: unknown): scopeId is string {
-  return (
-    typeof scopeId === 'string' &&
-    scopeId.length > 0 &&
-    scopeId.length <= MAX_SCOPE_ID_LENGTH &&
-    !scopeId.includes('\u0000') &&
-    Buffer.from(scopeId, 'utf8').toString('utf8') === scopeId
-  );
 }
