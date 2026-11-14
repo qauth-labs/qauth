@@ -296,6 +296,102 @@ describe('listForUser', () => {
   });
 });
 
+describe('listLiveForUser (#1110)', () => {
+  it('lists the user’s live sessions most recently used first, with their clients, and nothing that ended', async () => {
+    store.putRealm(REALM_A, { idleTimeoutSeconds: 600 });
+    const used = await signInAt();
+    const newest = await signInAt({ userAgent: 'Phone/2.0' });
+    const revoked = await signInAt();
+    const expired = await signInAt();
+    const idle = await signInAt();
+    await signInAt({ userId: BOB });
+    await service.revoke({
+      realmId: REALM_A,
+      userId: ALICE,
+      sid: revoked,
+      reason: 'admin',
+      actor: ADMIN_ACTOR,
+    });
+    store.update(expired, { expiresAt: clock.now() - 1 });
+    store.update(idle, { lastSeenAt: clock.now() - 601 * SECOND });
+    // The oldest sign-in was used last.
+    store.update(used, { lastSeenAt: clock.now() });
+    store.recordClient(used, { ...APP, firstSeenAt: clock.now() - 500 });
+
+    const page = await service.listLiveForUser({ realmId: REALM_A, userId: ALICE });
+
+    expect(page.nextCursor).toBeNull();
+    expect(page.items.map((item) => item.sid)).toEqual([used, newest]);
+    expect(page.items.every((item) => item.state === 'live')).toBe(true);
+    expect(page.items[0].clients.map((client) => client.clientId)).toEqual(['app']);
+    expect(page.items[1]).toMatchObject({ userAgent: 'Phone/2.0', clients: [] });
+  });
+
+  it('pages through the list with its own cursor, ties broken by id, and refuses another list’s', async () => {
+    const a = (await service.create(signIn())).sid;
+    const b = (await service.create(signIn())).sid;
+    clock.advance(SECOND);
+    const older = await signInAt();
+    store.update(older, { lastSeenAt: clock.now() - HOUR });
+    const expected = [[a, b].sort().reverse(), [older]].flat();
+
+    const first = await service.listLiveForUser({
+      realmId: REALM_A,
+      userId: ALICE,
+      page: { limit: 2 },
+    });
+    const second = await service.listLiveForUser({
+      realmId: REALM_A,
+      userId: ALICE,
+      page: { limit: 2, cursor: first.nextCursor ?? '' },
+    });
+
+    expect([...first.items, ...second.items].map((item) => item.sid)).toEqual(expected);
+    expect(first.nextCursor).not.toBeNull();
+    expect(second.nextCursor).toBeNull();
+    const full = (
+      await service.listForUser({ realmId: REALM_A, userId: ALICE, page: { limit: 1 } })
+    ).nextCursor;
+    for (const [input, cursor] of [
+      [{ realmId: REALM_A, userId: ALICE }, full],
+      [{ realmId: REALM_A, userId: BOB }, first.nextCursor],
+      [{ realmId: REALM_B, userId: ALICE }, first.nextCursor],
+    ] as const) {
+      await expect(
+        service.listLiveForUser({ ...input, page: { cursor: cursor ?? '' } })
+      ).rejects.toBeInstanceOf(InvalidSessionCursorError);
+    }
+    await expect(
+      service.listForUser({
+        realmId: REALM_A,
+        userId: ALICE,
+        page: { cursor: first.nextCursor ?? '' },
+      })
+    ).rejects.toBeInstanceOf(InvalidSessionCursorError);
+  });
+
+  it('never lists another realm’s sessions, refuses a limit out of range and reads nothing for a malformed id', async () => {
+    await signInAt({ realmId: REALM_B });
+    const mine = await signInAt();
+
+    expect(
+      (await service.listLiveForUser({ realmId: REALM_A, userId: ALICE })).items.map((i) => i.sid)
+    ).toEqual([mine]);
+    expect((await service.listLiveForUser({ realmId: REALM_B, userId: BOB })).items).toEqual([]);
+    for (const limit of [0, 1.5, MAX_SESSION_PAGE_LIMIT + 1]) {
+      await expect(
+        service.listLiveForUser({ realmId: REALM_A, userId: ALICE, page: { limit } })
+      ).rejects.toThrow(RangeError);
+    }
+    const reads = store.calls.reads;
+    expect(await service.listLiveForUser({ realmId: REALM_A, userId: 'nobody' })).toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    expect(store.calls.reads).toBe(reads);
+  });
+});
+
 describe('listForClient', () => {
   it('lists the realm’s sessions that served the client, newest first, each with all its clients', async () => {
     const both = await signInAt();

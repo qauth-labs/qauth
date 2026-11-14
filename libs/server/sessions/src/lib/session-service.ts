@@ -14,7 +14,13 @@ import type {
   SessionStore,
   StoredSessionList,
 } from './ports';
-import { decodeSessionCursor, encodeSessionCursor, type SessionList } from './session-cursor';
+import {
+  decodeLiveSessionCursor,
+  decodeSessionCursor,
+  encodeLiveSessionCursor,
+  encodeSessionCursor,
+  type SessionList,
+} from './session-cursor';
 import {
   type BrowserSession,
   type CachedSession,
@@ -263,7 +269,8 @@ function cachedRecordOf(session: SessionRecord): CachedSessionRecord {
  * - `endLapsed` marks the sessions past an end, which `get` already treats as
  *   absent, so their registry rows go too; `purge` deletes old ended rows.
  * - `listForUser` and `listForClient` page through sessions, newest first,
- *   with their state and clients.
+ *   with their state and clients; `listLiveForUser` through a user's live
+ *   ones, most recently used first.
  *
  * Volatile per-flow values (the CSRF values, the consent scopes) are not part
  * of a session here and never reach Postgres: the caller keeps them in a
@@ -594,6 +601,40 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
     };
   }
 
+  /** One page of `listLive`: as {@link listPage}, with the live list's own cursor. */
+  async function liveListPage(
+    realmId: string | undefined,
+    userId: string | undefined,
+    page: SessionPageRequest | undefined
+  ): Promise<SessionPage> {
+    const limit = checkedLimit(page);
+    if (realmId === undefined || userId === undefined) return EMPTY_PAGE;
+    const list = { realmId, userId };
+    const after =
+      page?.cursor === undefined ? undefined : decodeLiveSessionCursor(list, page.cursor);
+    const at = now();
+    const stored = await store.listLive(realmId, userId, {
+      limit: limit + 1,
+      now: at,
+      defaultMaxLifespanSeconds,
+      ...(after === undefined ? {} : { after }),
+    });
+    if (stored === undefined) return EMPTY_PAGE;
+    const rows = stored.sessions.slice(0, limit);
+    const last = rows[rows.length - 1]?.session;
+    return {
+      // The store judged them live at `at` already; a row it judged otherwise
+      // is still never listed as live.
+      items: rows
+        .map((row) => listedSessionOf(row, stored.lifetimes, at))
+        .filter((item) => item.state === 'live'),
+      nextCursor:
+        stored.sessions.length > limit && last !== undefined
+          ? encodeLiveSessionCursor(list, { lastSeenAt: last.lastSeenAt, sid: last.id })
+          : null,
+    };
+  }
+
   function shared(key: string, work: () => Promise<LiveSession | null>) {
     const running = inFlight.get(key);
     if (running !== undefined) return running;
@@ -851,6 +892,10 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
         userId === undefined ? undefined : { userId },
         input.page
       );
+    },
+
+    listLiveForUser(input) {
+      return liveListPage(idOf(input.realmId), idOf(input.userId), input.page);
     },
 
     listForClient(input) {

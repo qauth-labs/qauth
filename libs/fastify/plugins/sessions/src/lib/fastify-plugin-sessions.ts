@@ -162,6 +162,27 @@ export function repositorySessionStore(
         })),
       };
     },
+    async listLive(realmId, userId, page) {
+      const [realm, rows] = await Promise.all([
+        repositories.realms.findById(realmId),
+        repositories.sessions.listLiveForUser(realmId, userId, {
+          limit: page.limit,
+          now: page.now,
+          defaultMaxLifespanMs: page.defaultMaxLifespanSeconds * 1000,
+          ...(page.after === undefined
+            ? {}
+            : { after: { lastSeenAt: page.after.lastSeenAt, id: page.after.sid } }),
+        }),
+      ]);
+      if (realm === undefined) return undefined;
+      return {
+        lifetimes: lifetimesOf(realm),
+        sessions: rows.map((row) => ({
+          session: row.session,
+          clients: row.clients.map(clientOf),
+        })),
+      };
+    },
     deleteEnded: (batch) =>
       repositories.sessions.deleteEnded({
         before: batch.before,

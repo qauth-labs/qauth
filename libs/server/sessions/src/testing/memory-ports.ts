@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { sessionEnds } from '../lib/lifetimes';
+import { sessionEnds, sessionVerdict } from '../lib/lifetimes';
 import type {
   SessionCache,
   SessionCacheLookup,
@@ -294,6 +294,36 @@ export function createMemorySessionStore(clock: { now(): number }): MemorySessio
           return end(row, item.reason, item.at);
         }
       );
+    },
+
+    async listLive(realmId, userId, page) {
+      if (store.down) throw new Error('store down');
+      calls.reads += 1;
+      const lifetimes = realms.get(realmId);
+      if (lifetimes === undefined) return undefined;
+      const selected = [...rows.values()]
+        .filter(
+          (row) =>
+            row.realmId === realmId &&
+            row.userId === userId &&
+            row.revokedAt === null &&
+            sessionVerdict(
+              sessionEnds(row, lifetimes, page.defaultMaxLifespanSeconds),
+              page.now
+            ) === 'live'
+        )
+        .sort((a, b) => b.lastSeenAt - a.lastSeenAt || byId(b, a))
+        .filter(
+          (row) =>
+            page.after === undefined ||
+            row.lastSeenAt < page.after.lastSeenAt ||
+            (row.lastSeenAt === page.after.lastSeenAt && row.id < page.after.sid)
+        )
+        .slice(0, page.limit);
+      return {
+        lifetimes: { ...lifetimes },
+        sessions: selected.map((row) => ({ session: copyOf(row), clients: clientsOf(row.id) })),
+      };
     },
 
     async list(realmId, owner, page) {

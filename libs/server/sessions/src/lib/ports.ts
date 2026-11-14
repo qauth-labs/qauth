@@ -18,11 +18,23 @@ export interface SessionListPosition {
   sid: string;
 }
 
+/**
+ * The last row a page of a user's live sessions showed (#1110): the list is
+ * most recently used first, so the next page starts after its `lastSeenAt`.
+ */
+export interface SessionUsePosition {
+  lastSeenAt: number;
+  sid: string;
+}
+
 /** What {@link SessionStore.list} reads. */
 export interface StoredSessionList {
   /** The realm's current lifetimes, to judge each session's state. */
   lifetimes: RealmSessionLifetimes;
-  /** Newest first (`createdAt`, then `sid`). */
+  /**
+   * Newest first (`createdAt`, then `sid`); for {@link SessionStore.listLive},
+   * most recently used first (`lastSeenAt`, then `sid`).
+   */
   sessions: Array<{ session: SessionRecord; clients: SessionClientRecord[] }>;
 }
 
@@ -120,6 +132,24 @@ export interface SessionStore {
     realmId: string,
     owner: SessionListOwner,
     page: { limit: number; after?: SessionListPosition }
+  ): Promise<StoredSessionList | undefined>;
+  /**
+   * One page of a user's live sessions in the realm at `page.now`, most
+   * recently used first (`lastSeenAt`, then `sid`), after `page.after`: not
+   * revoked, and before both ends `sessionEnds` gives each under the realm's
+   * current lifetimes and `page.defaultMaxLifespanSeconds`.
+   *
+   * @returns `undefined` when there is no such realm
+   */
+  listLive(
+    realmId: string,
+    userId: string,
+    page: {
+      limit: number;
+      now: number;
+      defaultMaxLifespanSeconds: number;
+      after?: SessionUsePosition;
+    }
   ): Promise<StoredSessionList | undefined>;
   /**
    * Delete one batch of rows, of every realm, revoked before `batch.before`,

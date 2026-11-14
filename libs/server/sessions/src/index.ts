@@ -18,6 +18,7 @@ export type {
   SessionRevocationBatch,
   SessionStore,
   SessionStoreReadResult,
+  SessionUsePosition,
   StoredSessionList,
 } from './lib/ports';
 export {

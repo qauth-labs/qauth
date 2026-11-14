@@ -1489,6 +1489,31 @@ export interface SessionListPage {
   after?: SessionListPosition;
 }
 
+/**
+ * A page of a user's live sessions, most recently used first: the
+ * `last_seen_at` and `id` of the last row a page showed. The next page starts
+ * after it.
+ */
+export interface LiveSessionListPosition {
+  lastSeenAt: number;
+  id: string;
+}
+
+/** Which page of {@link SessionsRepository.listLiveForUser} to read. */
+export interface LiveSessionListPage {
+  /** The most rows to return. */
+  limit: number;
+  /** The time, in epoch milliseconds, the sessions must be live at. */
+  now: number;
+  /**
+   * The absolute lifespan of a session in a realm with no `sso_max_lifespan`,
+   * in milliseconds: `SESSION_COOKIE_TTL`.
+   */
+  defaultMaxLifespanMs: number;
+  /** Start after this row; from the most recently used when absent. */
+  after?: LiveSessionListPosition;
+}
+
 /** Whose session {@link SessionsRepository.revoke} may end. */
 export interface RevokeSessionFilter {
   /** End the session only when it is this user's. */
@@ -1765,6 +1790,21 @@ export interface SessionsRepository {
     realmId: string,
     userId: string,
     page: SessionListPage,
+    tx?: DbClient
+  ): Promise<ListedSession[]>;
+  /**
+   * One page of a user's live sessions in the realm at `page.now`, most
+   * recently used first (`last_seen_at`, then `id`): not revoked, before
+   * their absolute end and before their realm's idle limit, the ends
+   * {@link revokeLapsedBatch} marks. Each comes with the clients its registry
+   * holds. Empty for a user of another realm. A session used between two
+   * pages moves up the list, so a later page may leave it out: the list
+   * answers where the person is signed in now, not a fixed snapshot.
+   */
+  listLiveForUser(
+    realmId: string,
+    userId: string,
+    page: LiveSessionListPage,
     tx?: DbClient
   ): Promise<ListedSession[]>;
   /**

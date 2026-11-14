@@ -293,7 +293,7 @@ export interface SessionPageRequest {
   cursor?: string;
 }
 
-/** One page of a session list, newest first. */
+/** One page of a session list, newest first; or, for a live list, most recently used first. */
 export interface SessionPage {
   items: ListedSession[];
   /** The cursor of the next page; `null` on the last one. */
@@ -491,6 +491,16 @@ export interface SessionService {
    * `RangeError` for a limit out of range.
    */
   listForUser(input: ListUserSessionsInput): Promise<SessionPage>;
+  /**
+   * One page of a user's live sessions in the realm, most recently used
+   * first (`lastSeenAt`, then `sid`): where the person is signed in now, as
+   * the account API and the hosted account page list it (#1110). Every item
+   * is `live`, judged at the call; never another realm's. A session used
+   * between two pages moves up, so a later page may leave it out. Its cursors
+   * are its own: one of {@link listForUser} is refused. Throws as
+   * {@link listForUser}.
+   */
+  listLiveForUser(input: ListUserSessionsInput): Promise<SessionPage>;
   /**
    * One page of the realm's sessions that served a client, newest first, for
    * an admin only: each with its user id, its IP address, its user agent and
