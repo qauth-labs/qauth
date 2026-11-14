@@ -112,7 +112,7 @@ export const keyNextCreated = defineEventType({
     "The scheduled key rotation created the realm's next key for a purpose (ADR-019 Decision 9): a published key is in its JWKS from now on (the realm's, or the SSF transmitter's for an event signing key) but signs nothing yet, and the key it will replace keeps signing. Emitted in the transaction that stores the key.",
   category: 'admin',
   severity: 'info',
-  since: 'v0.3.0',
+  since: 'v0.2.5',
   data: z.strictObject({
     purpose: rotatingPurposeSchema,
     created: z
@@ -136,7 +136,7 @@ export const keyRotated = defineEventType({
     'The scheduled key rotation switched a purpose of the realm to its next key (ADR-019 Decision 9): from `activatesAt` the new keys sign and the old keys only verify or decrypt, until `retainedUntil`. Emitted in the transaction that writes the switch, which takes effect a little later so every node learns of the new keys first.',
   category: 'admin',
   severity: 'info',
-  since: 'v0.3.0',
+  since: 'v0.2.5',
   data: z.strictObject({
     purpose: rotatingPurposeSchema,
     activated: z

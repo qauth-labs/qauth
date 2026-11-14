@@ -272,8 +272,8 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:request.account_operation_refused:v1-rc.0`](#requestaccount_operation_refused-v1-rc0) | user     | info     | v0.2.0 |
 | [`urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`](#ssfstreamverification_requested-v1-rc0)  | user     | info     | v0.2.0 |
 | [`urn:qauth:event:key.emergency_retired:v1-rc.0`](#keyemergency_retired-v1-rc0)                         | admin    | critical | v0.2.0 |
-| [`urn:qauth:event:key.next_created:v1-rc.0`](#keynext_created-v1-rc0)                                   | admin    | info     | v0.3.0 |
-| [`urn:qauth:event:key.rotated:v1-rc.0`](#keyrotated-v1-rc0)                                             | admin    | info     | v0.3.0 |
+| [`urn:qauth:event:key.next_created:v1-rc.0`](#keynext_created-v1-rc0)                                   | admin    | info     | v0.2.5 |
+| [`urn:qauth:event:key.rotated:v1-rc.0`](#keyrotated-v1-rc0)                                             | admin    | info     | v0.2.5 |
 | [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                           | admin    | info     | v0.2.0 |
 
 ### user.signed_in v1-rc.0
@@ -1185,7 +1185,7 @@ An operator retired a published key of the realm that may be compromised (ADR-01
 The scheduled key rotation created the realm's next key for a purpose (ADR-019 Decision 9): a published key is in its JWKS from now on (the realm's, or the SSF transmitter's for an event signing key) but signs nothing yet, and the key it will replace keeps signing. Emitted in the transaction that stores the key.
 
 - Identifier: `urn:qauth:event:key.next_created:v1-rc.0`
-- Category: `admin` · Severity: `info` · Since: v0.3.0
+- Category: `admin` · Severity: `info` · Since: v0.2.5
 - Subject: none: the event never carries one
 - Schema: [key.next_created.v1-rc.0.json](/schemas/events/key.next_created.v1-rc.0.json)
 
@@ -1200,7 +1200,7 @@ The scheduled key rotation created the realm's next key for a purpose (ADR-019 D
 The scheduled key rotation switched a purpose of the realm to its next key (ADR-019 Decision 9): from `activatesAt` the new keys sign and the old keys only verify or decrypt, until `retainedUntil`. Emitted in the transaction that writes the switch, which takes effect a little later so every node learns of the new keys first.
 
 - Identifier: `urn:qauth:event:key.rotated:v1-rc.0`
-- Category: `admin` · Severity: `info` · Since: v0.3.0
+- Category: `admin` · Severity: `info` · Since: v0.2.5
 - Subject: none: the event never carries one
 - Schema: [key.rotated.v1-rc.0.json](/schemas/events/key.rotated.v1-rc.0.json)
 
