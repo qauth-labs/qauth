@@ -24,7 +24,7 @@ const checkResultSchema = z
 const checksSchema = z
   .record(z.string(), checkResultSchema)
   .describe(
-    'Each check the roles registered, by name: `database` on every process, `redis` on `web`, `api` and `admin`, `kek` on `signer`, `outbox` on `delivery`.'
+    'Each check the roles registered, by name: `database` and `config_digest` (the process is in the node list, so a booting node compares its configuration digest with it) on every process, `redis` on `web`, `api` and `admin`, `kek` on `signer`, `outbox` on `delivery`.'
   );
 
 /** What `GET /ready` answers when every check passed. */
@@ -61,7 +61,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'Readiness: runs the checks this process needs for its service roles (the database, Redis, the KEK, the event outbox) and answers 200 when every one passes. When one fails it answers 503 with a `service_unavailable` problem document whose extension members `roles` and `checks` carry the roles and the result of each check, as the 200 answer does. Answers on any host and carries no realm data.',
+          'Readiness: runs the checks this process needs for its service roles (the database, its place in the node list, Redis, the KEK, the event outbox) and answers 200 when every one passes. When one fails it answers 503 with a `service_unavailable` problem document whose extension members `roles` and `checks` carry the roles and the result of each check, as the 200 answer does. Answers on any host and carries no realm data.',
         tags: ['System'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [429],

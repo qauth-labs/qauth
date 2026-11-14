@@ -49,6 +49,8 @@ export const KEK_CHECK_FAILURE_REUSE_MS = 5_000;
 /** The parts of the app the role checks read. */
 export type RoleReadinessSource = Pick<FastifyInstance, 'readiness' | 'dbPool' | 'redis'> & {
   readonly checkKeyCustody?: () => Promise<void>;
+  /** The node list (#499), on a process that boots with the database steps. */
+  readonly deploymentNodes?: { assertListed(): Promise<void> } | null;
   readonly repositories: {
     readonly eventDeliveries?: { deliveryLagSeconds(now: number): Promise<number> };
   };
@@ -58,6 +60,9 @@ export type RoleReadinessSource = Pick<FastifyInstance, 'readiness' | 'dbPool' |
  * Register the checks of what `roles` need (#500):
  *
  * - `database`, on every process: Postgres answers `SELECT 1`;
+ * - `config_digest`, on every process that boots with the database steps:
+ *   this node is in the node list, seen in the last two minutes, so a booting
+ *   node compares its configuration digest with this one's (#499);
  * - `redis`, on `web`, `api` and `admin`: Redis answers `PING`;
  * - `kek`, on `signer`: the KEK provider is usable and unwraps a stored key
  *   per KEK reference in use (`checkKeyCustody` of the signer plugin);
@@ -74,6 +79,10 @@ export function registerRoleReadinessChecks(
     name: 'database',
     run: () => fastify.dbPool.query('SELECT 1'),
   });
+  const nodes = fastify.deploymentNodes;
+  if (nodes !== undefined && nodes !== null) {
+    fastify.readiness.register({ name: 'config_digest', run: () => nodes.assertListed() });
+  }
   if (roles.some((role) => REDIS_READINESS_ROLES.includes(role))) {
     fastify.readiness.register({ name: 'redis', run: () => fastify.redis.ping() });
   }

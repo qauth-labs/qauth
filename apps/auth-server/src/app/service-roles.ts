@@ -180,10 +180,15 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
 
 /**
  * The repositories every process reads: the realm resolver's and the default
- * realm boot step's, and the realms' published keys, public material with
- * which every process verifies a realm's tokens (#491).
+ * realm boot step's, the realms' published keys, public material with which
+ * every process verifies a realm's tokens (#491), and the node list, which
+ * every process registers in at boot (#499).
  */
-export const CORE_REPOSITORIES: readonly RepositoryName[] = ['realms', 'realmPublicKeys'];
+export const CORE_REPOSITORIES: readonly RepositoryName[] = [
+  'realms',
+  'realmPublicKeys',
+  'deploymentNodes',
+];
 
 /**
  * The plugins another plugin needs: the JWT plugin reads `fastify.dpop`, the
