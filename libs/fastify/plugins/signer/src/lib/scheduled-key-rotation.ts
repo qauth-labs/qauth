@@ -14,7 +14,9 @@ import {
   createKeyRotation,
   DEFAULT_SIGNER_REFRESH_INTERVAL_MS,
   type KekProvider,
+  type KeyRotationNowRecord,
   type KeyRotationReport,
+  type RotateNowInput,
 } from '@qauth-labs/server-keys/custody';
 
 import { createRepositoryKeyStore } from './repository-key-stores';
@@ -31,6 +33,11 @@ import { createRepositoryKeyStore } from './repository-key-stores';
  * auth server) gives each run its clock, the lifetimes of the tokens, cookies
  * and ciphertexts each purpose's keys make, and the hook that writes each
  * step's audit row in the step's transaction.
+ *
+ * The manual rotation of #544 ({@link ScheduledKeyRotation.rotateNow}) starts
+ * one purpose's rotation before it is due, under an approval, with the same
+ * windows: the scheduled run then switches to its key. The admin API's route
+ * and the break-glass CLI call it; neither ships yet.
  */
 
 /** One run of {@link ScheduledKeyRotation.run}. */
@@ -55,6 +62,17 @@ export interface ScheduledKeyRotation {
   readonly settings: ResolvedKeyRotationSettings;
   /** Rotate what is due in every realm. Failures are reported, not thrown. */
   run(run: ScheduledKeyRotationRun): Promise<KeyRotationReport>;
+  /**
+   * Start a rotation of one purpose of a realm now, under an approval of
+   * exactly that rotation (`keys.rotate`): the `next` key is created and
+   * published at once, and signs once the scheduled run switches to it after
+   * the pre-publication window. A `next` key that waits already is returned
+   * instead. The approval is consumed, and the audit hook called, in the
+   * transaction that creates the key; `input.approval.consume` and the hooks
+   * receive that transaction. See `KeyRotation.rotateNow` of
+   * `@qauth-labs/server-keys`.
+   */
+  rotateNow(input: RotateNowInput<DbClient>): Promise<KeyRotationNowRecord>;
 }
 
 /** What {@link createScheduledKeyRotation} is built from. */
@@ -104,5 +122,6 @@ export function createScheduledKeyRotation(
   return Object.freeze({
     settings: rotation.settings,
     run: (run: ScheduledKeyRotationRun) => rotation.rotateAll(run),
+    rotateNow: (input: RotateNowInput<DbClient>) => rotation.rotateNow(input),
   });
 }

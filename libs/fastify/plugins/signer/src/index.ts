@@ -48,3 +48,28 @@ export {
   type RotatedKey,
 } from '@qauth-labs/server-keys';
 export type { KeyRotationFailure, KeyRotationReport } from '@qauth-labs/server-keys/custody';
+// The manual rotation (#544): the approval it runs under, the canonical
+// record that approval is bound to, and what it returns, for the admin API's
+// route and the break-glass CLI, which may not import server-keys.
+export {
+  type ApprovedOperation,
+  canonicalOperationBytes,
+  isOperationNonce,
+  isSecurityOperationActor,
+  KEY_ROTATE_OPERATION,
+  type KeyRotateOperation,
+  keyRotationOperation,
+  type KeyRotationOperationInput,
+  type KeyRotationOperationRecord,
+  newOperationNonce,
+  OPERATION_NONCE_BYTES,
+  OperationApprovalError,
+  type OperationApprovalRefusal,
+  operationDigest,
+  type SecurityOperationActor,
+} from '@qauth-labs/server-keys';
+export type {
+  KeyRotationNowRecord,
+  RotatedNowKeys,
+  RotateNowInput,
+} from '@qauth-labs/server-keys/custody';

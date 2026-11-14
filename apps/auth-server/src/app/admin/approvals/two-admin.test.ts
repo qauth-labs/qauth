@@ -1,9 +1,11 @@
 import { createPasswordHardAction } from '@qauth-labs/fastify-plugin-sign-in-engine';
+import { KEY_ROTATE_OPERATION } from '@qauth-labs/fastify-plugin-signer';
 import { SECURITY_LOG_KINDS } from '@qauth-labs/shared-account-contract';
 import type { FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createTestApprovalFactor } from '../../../testing/approval-factor';
+import { RESERVED_OPERATIONS } from '../../helpers/admin-operations-reserved';
 import { SECURITY_CHANGE_EVENTS, securityChangeOfEvent } from '../../helpers/admin-security-change';
 import { emitUserEvent } from '../../helpers/user-events';
 import { REALM_OPERATION_IDS } from '../realms/operations';
@@ -449,6 +451,21 @@ describe('how many approvals a request needs (#521)', () => {
     expect(approvalsRequiredFor({ operation: keysRotate, mandatory: [] })).toBe(1);
     expect(approvalRequirementOf(2)).toEqual({ approvalsRequired: 2, twoAdmin: 'mandatory' });
     expect(approvalRequirementOf(1)).toEqual({ approvalsRequired: 1, twoAdmin: 'recommended' });
+  });
+
+  it('names the manual key rotation as the key library binds its approvals (#544)', () => {
+    // The operation id the canonical record of `rotateNow` carries is the one
+    // the registry reserves and a realm lists to make a second admin mandatory.
+    expect(KEY_ROTATE_OPERATION).toBe(keysRotate.id);
+    expect(RESERVED_OPERATIONS.find((entry) => entry.id === KEY_ROTATE_OPERATION)).toMatchObject({
+      effects: ['key-custody'],
+    });
+    expect(
+      approvalsRequiredFor({
+        operation: { id: KEY_ROTATE_OPERATION },
+        mandatory: [KEY_ROTATE_OPERATION],
+      })
+    ).toBe(2);
   });
 
   it('needs a second admin for a self-protecting operation once the set is not empty', () => {
