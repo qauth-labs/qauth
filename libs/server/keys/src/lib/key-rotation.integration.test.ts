@@ -11,6 +11,8 @@
  *
  * Requires Docker; self-skips without it, like the other container suites.
  */
+import { randomUUID } from 'node:crypto';
+
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import {
   requireDockerOrSkip,
@@ -22,8 +24,6 @@ import { compactVerify, decodeProtectedHeader, importJWK, type JWK } from 'jose'
 import { Pool, type PoolClient } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { randomUUID } from 'node:crypto';
-
 import { KEK_A, localProvider } from '../testing/keks';
 import { createPgKeyStore } from '../testing/pg-key-store';
 import { createPgSignerStore } from '../testing/pg-signer-store';
@@ -33,6 +33,7 @@ import {
   type KeyRotateOperation,
   keyRotationOperation,
   newOperationNonce,
+  OperationApprovalError,
   operationDigest,
 } from './approved-operation';
 import { createInProcessSigner } from './in-process-signer';
@@ -448,7 +449,9 @@ describe('scheduled key rotation (real Postgres, fake clock)', () => {
         requester: ADMIN,
         nonce,
         async consume(digest, tx) {
-          if (usedIn.length > 0 || !digest.equals(filed)) throw new Error('not approved');
+          if (usedIn.length > 0 || !digest.equals(filed)) {
+            throw new OperationApprovalError('refused', 'not approved');
+          }
           usedIn.push(await xactId(tx));
         },
       };
@@ -458,7 +461,8 @@ describe('scheduled key rotation (real Postgres, fake clock)', () => {
     async function rotateNow(
       w: Awaited<ReturnType<typeof world>>,
       purpose: KeyPurpose,
-      onAudit: (entry: KeyRotationNowRecord, tx: PoolClient) => Promise<void> = async () => {}
+      onAudit: (entry: KeyRotationNowRecord, tx: PoolClient) => Promise<void> = async () =>
+        undefined
     ): Promise<KeyRotationNowRecord> {
       return w.node().rotateNow({
         realmId: w.realmId,
@@ -483,7 +487,12 @@ describe('scheduled key rotation (real Postgres, fake clock)', () => {
       expect(await kidOf(await w.sign())).toBe(oldKid);
       expect(await tokenKeyRows(w.realmId)).toEqual([
         expect.objectContaining({ kid: oldKid, status: 'active' }),
-        expect.objectContaining({ kid: newKid, status: 'next', activate_at: null }),
+        // It carries the moment it was approved to sign, which the scheduled rotation reads.
+        expect.objectContaining({
+          kid: newKid,
+          status: 'next',
+          activate_at: String(T0 + 17 * DAY),
+        }),
       ]);
 
       // The scheduled rotation switches once the window has run, not on day 90.

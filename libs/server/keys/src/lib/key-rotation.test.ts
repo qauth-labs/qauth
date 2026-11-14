@@ -1,8 +1,8 @@
+import { randomUUID } from 'node:crypto';
+
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import { compactVerify, decodeProtectedHeader, importJWK, type JWK } from 'jose';
 import { describe, expect, it, vi } from 'vitest';
-
-import { randomUUID } from 'node:crypto';
 
 import { KEK_A, localProvider } from '../testing/keks';
 import {
@@ -693,8 +693,10 @@ describe('rotateNow: a manual rotation under an approval (#544)', () => {
       nonce,
       uses,
       async consume(digest, tx) {
-        if (uses.length > 0) throw new Error('used already');
-        if (!digest.equals(filed)) throw new Error('filed for another operation');
+        if (uses.length > 0) throw new OperationApprovalError('refused', 'used already');
+        if (!digest.equals(filed)) {
+          throw new OperationApprovalError('refused', 'filed for another operation');
+        }
         uses.push({ digest, tx });
       },
     };
@@ -738,7 +740,11 @@ describe('rotateNow: a manual rotation under an approval (#544)', () => {
   it('fails without a valid approval, at compile time and at run time, and changes nothing', async () => {
     const w = await world();
     const before = snapshot(w);
-    const base = { realmId: REALM, purpose: 'token_signing' as const, onAudit: async () => {} };
+    const base = {
+      realmId: REALM,
+      purpose: 'token_signing' as const,
+      onAudit: async () => undefined,
+    };
 
     // @ts-expect-error -- a manual rotation does not compile without an approval
     await expect(w.rotation.rotateNow(base)).rejects.toMatchObject({
@@ -780,10 +786,9 @@ describe('rotateNow: a manual rotation under an approval (#544)', () => {
         JSON.stringify(malformed)
       ).rejects.toMatchObject({ name: 'OperationApprovalError', reason: 'malformed' });
     }
+    const noAudit = { ...base, approval: valid, onAudit: undefined };
     // @ts-expect-error -- nor without its audit hook
-    await expect(
-      w.rotation.rotateNow({ ...base, approval: valid, onAudit: undefined })
-    ).rejects.toThrow(TypeError);
+    await expect(w.rotation.rotateNow(noAudit)).rejects.toThrow(TypeError);
     expect(valid.uses).toEqual([]);
     expect(snapshot(w)).toEqual(afterLoose);
     expect(afterLoose).toHaveLength(before.length + 1);
@@ -815,6 +820,27 @@ describe('rotateNow: a manual rotation under an approval (#544)', () => {
     expect(after.length).toBe(before.length + 1);
   });
 
+  it('passes a fault of the approval on as it is, and takes a refusal from any copy of the module', async () => {
+    const w = await world();
+    const before = snapshot(w);
+    const failing = (error: Error): TestApproval => ({
+      ...approvalOf({ realmId: REALM, purpose: 'token_signing' }),
+      consume: async () => {
+        throw error;
+      },
+    });
+    // A serialization failure is no refusal: the caller may retry it.
+    const fault = Object.assign(new Error('could not serialize access'), { code: '40001' });
+    await expect(rotateNow(w, 'token_signing', { approval: failing(fault) })).rejects.toBe(fault);
+    const foreign = Object.assign(new Error('used already'), {
+      code: 'OPERATION_APPROVAL_REFUSED',
+    });
+    await expect(
+      rotateNow(w, 'token_signing', { approval: failing(foreign) })
+    ).rejects.toMatchObject({ name: 'OperationApprovalError', reason: 'refused', cause: foreign });
+    expect(snapshot(w)).toEqual(before);
+  });
+
   it('creates the next key at once and publishes it; it signs only after the pre-publication window', async () => {
     const w = await world();
     const signer = w.signer();
@@ -835,6 +861,8 @@ describe('rotateNow: a manual rotation under an approval (#544)', () => {
       { kid: oldKid, algorithm: 'EdDSA', status: 'active' },
       { kid: newKid, algorithm: 'EdDSA', status: 'next' },
     ]);
+    // The key carries the moment it was approved to sign: the scheduled rotation reads it.
+    expect(w.keys.rows.find((row) => row.key.kid === newKid)?.key.activateAt).toBe(T0 + 17 * DAY);
     // Published at once, and signs nothing yet; no verifier accepts it before it signs (#899).
     w.clock.now += REFRESH_MS;
     expect(await jwksKids(signer)).toContain(newKid);
@@ -880,6 +908,44 @@ describe('rotateNow: a manual rotation under an approval (#544)', () => {
         activatesAt: T0 + 90 * DAY,
       },
     ]);
+  });
+
+  it('keeps a next key an operator made by hand to its own schedule: it waits for the period', async () => {
+    const w = await world();
+    w.clock.now = T0 + 10 * DAY;
+    const byHand = createKeyFactory({
+      store: w.keys,
+      kekProvider: localProvider({ KEK: KEK_A }),
+      enabledSignatureAlgorithms: ED25519_ONLY,
+      hybridSigning: false,
+      now: () => w.clock.now,
+    });
+    const [made] = await byHand.createKey({
+      realmId: REALM,
+      purpose: 'token_signing',
+      status: 'next',
+    });
+    expect(made.activateAt).toBeNull();
+    // No approval cut the period short, so its window alone does not switch it (#542).
+    w.clock.now = T0 + 17 * DAY;
+    expect(stepOf((await w.run()).steps, 'token_signing', 'rotated')).toEqual([]);
+
+    w.clock.now = T0 + 20 * DAY;
+    const kept = await rotateNow(w, 'token_signing');
+    expect(kept.next).toEqual([
+      {
+        algorithm: 'EdDSA',
+        keys: [{ kid: made.kid, algorithm: 'EdDSA' }],
+        created: false,
+        activatesAt: T0 + 90 * DAY,
+      },
+    ]);
+    w.clock.now = T0 + 90 * DAY - 1;
+    expect(stepOf((await w.run()).steps, 'token_signing', 'rotated')).toEqual([]);
+    w.clock.now = T0 + 90 * DAY;
+    expect(rotatedStep((await w.run()).steps, 'token_signing')).toMatchObject({
+      activated: [{ kid: made.kid }],
+    });
   });
 
   it('rotates both keys of a hybrid pair together', async () => {
@@ -947,7 +1013,9 @@ describe('rotateNow: a manual rotation under an approval (#544)', () => {
     expect(calls).toEqual(['step', 'audit']);
 
     // A second operation is audited once more, though it creates nothing.
-    const again = vi.fn(async (_entry: KeyRotationNowRecord, _tx: MemoryTx) => undefined);
+    const again = vi.fn<(entry: KeyRotationNowRecord, tx: MemoryTx) => Promise<void>>(
+      async () => undefined
+    );
     await rotateNow(w, 'cookie_hmac', { onAudit: again });
     expect(again).toHaveBeenCalledTimes(1);
     expect(again.mock.calls[0][0]).toMatchObject({ next: [{ created: false }] });

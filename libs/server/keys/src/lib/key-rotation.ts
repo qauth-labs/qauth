@@ -2,6 +2,7 @@ import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 
 import {
   type ApprovedOperation,
+  isOperationApprovalRefusal,
   isOperationNonce,
   isSecurityOperationActor,
   KEY_ROTATE_OPERATION,
@@ -13,7 +14,7 @@ import {
 } from './approved-operation';
 import type { KekProvider } from './kek-provider';
 import { KeyChangeRefusedError } from './key-creation-errors';
-import { createKeyFactory, type KeyFactory } from './key-factory';
+import { createRotationKeyFactory, type KeyFactory, type RotationKeyFactory } from './key-factory';
 import {
   isKeyPurpose,
   KEY_PURPOSES,
@@ -196,13 +197,19 @@ export interface KeyRotation<Tx> {
    * retention after that. A key that must go at once is retired in an
    * emergency instead (#551).
    *
+   * The new key carries the moment it may sign as its `activateAt`, which is
+   * how the scheduled rotation knows its switch was approved early: a `next`
+   * key without one (the job's own, or one an operator made by hand) waits for
+   * the active key's period as well.
+   *
    * A `next` key that waits already is the rotation's key: it is returned and
-   * no second one is created. The approval is consumed either way, and the
-   * audit hook is called once.
+   * no second one is created, and it keeps its own schedule (`activatesAt`).
+   * The approval is consumed either way, and the audit hook is called once.
    *
    * @throws OperationApprovalError before anything is read when the approval
    *   is missing, malformed or for another operation; and when
-   *   {@link ApprovedOperation.consume} refuses it, with nothing changed
+   *   {@link ApprovedOperation.consume} refuses it, with nothing changed.
+   *   Any other error of `consume` is passed on as it is, with nothing changed.
    * @throws KeyChangeRefusedError for a malformed realm id, an unknown purpose,
    *   one the scheduled rotation does not rotate (`NOT_A_ROTATING_PURPOSE`),
    *   a scope id (`SCOPE_NOT_ALLOWED`), a realm with no active key of it
@@ -349,9 +356,9 @@ export function createKeyRotation<Tx>(options: KeyRotationOptions<Tx>): KeyRotat
     }
   }
 
-  function factoryFor(now: () => number): KeyFactory<Tx> {
+  function factoryFor(now: () => number): RotationKeyFactory<Tx> {
     // Built per run so the new keys' times come from the run's clock.
-    return createKeyFactory<Tx>({
+    return createRotationKeyFactory<Tx>({
       store,
       kekProvider,
       enabledSignatureAlgorithms,
@@ -426,6 +433,10 @@ export function createKeyRotation<Tx>(options: KeyRotationOptions<Tx>): KeyRotat
       try {
         await approval.consume(Buffer.from(digest), tx);
       } catch (error) {
+        // A refusal is the approval's answer. Any other error, such as a lost
+        // connection or a serialization failure, is a fault, passed on as it
+        // is so that the caller may retry; the transaction rolls back either way.
+        if (!isOperationApprovalRefusal(error)) throw error;
         throw new OperationApprovalError(
           'refused',
           `Approval ${approval.id} does not approve this rotation`,
@@ -447,13 +458,12 @@ export function createKeyRotation<Tx>(options: KeyRotationOptions<Tx>): KeyRotat
           continue;
         }
         if (plan.action !== 'create') continue;
-        const created = await factory.createKey({
-          realmId,
-          purpose,
-          algorithm,
-          status: 'next',
-          tx,
-        });
+        // The planned moment is written on the key: the scheduled rotation
+        // switches to it once its window has run, not the active key's period.
+        const created = await factory.createPlannedNextKey(
+          { realmId, purpose, algorithm, tx },
+          plan.activatesAt
+        );
         const rotated = Object.freeze(
           created.map((key) => Object.freeze({ kid: key.kid, algorithm: key.algorithm }))
         );

@@ -306,6 +306,27 @@ export interface KeyFactory<Tx> {
   deleteScopedKeys(input: ScopedKeyInput<Tx>): Promise<readonly string[]>;
 }
 
+/**
+ * The key factory, with the one call a manual rotation (#544) makes. Not
+ * exported from the package: `createKeyFactory` returns the factory without
+ * it, so no other caller can mark a `next` key as approved to switch early.
+ */
+export interface RotationKeyFactory<Tx> extends KeyFactory<Tx> {
+  /**
+   * Create a `next` key, or hybrid pair, as {@link KeyFactory.createKey} does,
+   * that a manual rotation plans to switch to at `activatesAt` (epoch ms),
+   * written as its `activateAt`. The scheduled rotation switches to such a
+   * key once its pre-publication window has run, and to any other `next` key
+   * once the active key's period has run as well.
+   *
+   * @throws TypeError when `activatesAt` is not a whole, non-negative number
+   */
+  createPlannedNextKey(
+    input: Omit<CreateKeyInput<Tx>, 'status'>,
+    activatesAt: number
+  ): Promise<readonly CreatedKey[]>;
+}
+
 /** A validated request: what to generate for one `createKey`. */
 interface KeyRequest {
   readonly realmId: string;
@@ -331,6 +352,26 @@ interface PreparedKey {
  *   refuses that too; this keeps the factory closed on its own.
  */
 export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory<Tx> {
+  return keyFactoryParts(options).factory;
+}
+
+/**
+ * The key factory of a deployment, with the call of a manual rotation (#544).
+ * The rotation's own; see {@link RotationKeyFactory}.
+ *
+ * @throws InvalidConfigurationError as {@link createKeyFactory} does
+ */
+export function createRotationKeyFactory<Tx>(
+  options: KeyFactoryOptions<Tx>
+): RotationKeyFactory<Tx> {
+  const { factory, createPlannedNextKey } = keyFactoryParts(options);
+  return Object.freeze({ ...factory, createPlannedNextKey });
+}
+
+function keyFactoryParts<Tx>(options: KeyFactoryOptions<Tx>): {
+  readonly factory: KeyFactory<Tx>;
+  readonly createPlannedNextKey: RotationKeyFactory<Tx>['createPlannedNextKey'];
+} {
   const { store, kekProvider, enabledSignatureAlgorithms } = options;
   // Strict comparisons, so a string from an untyped configuration path such
   // as 'false' leaves both switches off.
@@ -407,13 +448,20 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
     return { realmId, purpose, definition, scopeId, algorithms, status };
   }
 
-  /** Generate and seal every key of a request. Plaintext material is zeroed here. */
-  async function prepareKeys(request: KeyRequest): Promise<PreparedKey[]> {
+  /**
+   * Generate and seal every key of a request. Plaintext material is zeroed
+   * here. A `next` key carries `plannedActivateAt` as its `activateAt`: `null`
+   * but for the key of a manual rotation.
+   */
+  async function prepareKeys(
+    request: KeyRequest,
+    plannedActivateAt: number | null = null
+  ): Promise<PreparedKey[]> {
     const { realmId, purpose, definition, scopeId, status } = request;
     const pairId = request.algorithms.length > 1 ? randomUUID() : null;
     const at = now();
     const publishAt = definition.published ? at : null;
-    const activateAt = status === 'active' ? at : null;
+    const activateAt = status === 'active' ? at : plannedActivateAt;
 
     const prepared: PreparedKey[] = [];
     for (const algorithm of request.algorithms) {
@@ -515,7 +563,18 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
     return prepared.map(({ created }) => created);
   }
 
-  return Object.freeze({
+  async function createPlannedNextKey(
+    input: Omit<CreateKeyInput<Tx>, 'status'>,
+    activatesAt: number
+  ): Promise<readonly CreatedKey[]> {
+    if (!Number.isSafeInteger(activatesAt) || activatesAt < 0) {
+      throw new TypeError('A planned activation is a whole, non-negative number of epoch ms');
+    }
+    const prepared = await prepareKeys(resolveRequest({ ...input, status: 'next' }), activatesAt);
+    return store.transaction((tx) => writeKeys(prepared, tx), input.tx);
+  }
+
+  const factory: KeyFactory<Tx> = Object.freeze({
     async createKey(input: CreateKeyInput<Tx>): Promise<readonly CreatedKey[]> {
       // Generation and sealing (a KMS call for an adapter) happen before the
       // transaction opens, so it stays short.
@@ -723,6 +782,7 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
       ]);
     },
   });
+  return { factory, createPlannedNextKey };
 }
 
 /** The key type each importable algorithm needs, as Node names it, with a label for refusals. */

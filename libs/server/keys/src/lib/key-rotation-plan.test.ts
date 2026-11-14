@@ -14,8 +14,8 @@ import {
   KEY_ACTIVATION_DELAY_MS,
   keyRotationSettingsFromDays,
   planKeyRotation,
-  planKeyRotationNow,
   type PlanKeyRotationInput,
+  planKeyRotationNow,
   resolveKeyRotationSettings,
 } from './key-rotation-plan';
 import type { StoredKeySummary } from './key-store';
@@ -149,12 +149,20 @@ describe('planKeyRotation', () => {
     });
   });
 
-  it('switches to a next key made early once its window has run, before the period has (#544)', () => {
-    // A manual rotation on day 10: the next key signs a window later, on day 17.
+  it('waits for the period even when the next key has been published long enough', () => {
+    // A next key the job made, or one an operator made by hand: no approval cut the period short.
+    const next = key({ kid: 'new', status: 'next', activateAt: null, publishAt: T0 });
+    const keys = [key({ kid: 'old' }), next];
+    expect(plan({ keys, now: T0 + 90 * DAY - 1 })).toEqual({ action: 'none' });
+    expect(plan({ keys, now: T0 + 90 * DAY }).action).toBe('activate');
+  });
+
+  it('switches to the next key of a manual rotation once its window has run, before the period has (#544)', () => {
+    // A manual rotation on day 10 writes the moment its key may sign, a window later.
     const next = key({
       kid: 'new',
       status: 'next',
-      activateAt: null,
+      activateAt: T0 + 17 * DAY,
       publishAt: T0 + 10 * DAY,
       createdAt: T0 + 10 * DAY,
     });
@@ -165,6 +173,36 @@ describe('planKeyRotation', () => {
       incoming: [next],
       outgoing: [keys[0]],
     });
+  });
+
+  it('keeps the window of a manual rotation’s key, whatever moment it carries', () => {
+    const early = key({
+      kid: 'new',
+      status: 'next',
+      activateAt: T0 + 11 * DAY,
+      publishAt: T0 + 10 * DAY,
+      createdAt: T0 + 10 * DAY,
+    });
+    const keys = [key({ kid: 'old' }), early];
+    expect(plan({ keys, now: T0 + 17 * DAY - 1 })).toEqual({ action: 'none' });
+    expect(plan({ keys, now: T0 + 17 * DAY }).action).toBe('activate');
+    // A hybrid pair switches early only when both keys carry the moment.
+    const pair = [
+      key({ kid: 'old-ed', pairId: 'p1' }),
+      key({ kid: 'old-ml', algorithm: 'ML-DSA-65', pairId: 'p1' }),
+      key({ kid: 'new-ed', status: 'next', activateAt: T0 + 7 * DAY, pairId: 'p2' }),
+      key({
+        kid: 'new-ml',
+        algorithm: 'ML-DSA-65',
+        status: 'next',
+        activateAt: null,
+        pairId: 'p2',
+      }),
+    ];
+    expect(plan({ keys: pair, hybridSigning: true, now: T0 + 89 * DAY })).toEqual({
+      action: 'none',
+    });
+    expect(plan({ keys: pair, hybridSigning: true, now: T0 + 90 * DAY }).action).toBe('activate');
   });
 
   it('does nothing while a written switch is still ahead', () => {
@@ -294,17 +332,25 @@ describe('planKeyRotationNow', () => {
   });
 
   it('keeps the next key that waits already, and names when it may sign', () => {
-    const next = key({
+    // The key of an earlier manual rotation signs at the moment it carries.
+    const manual = key({
       kid: 'new',
       status: 'next',
-      activateAt: null,
+      activateAt: T0 + 9 * DAY,
       publishAt: T0 + 2 * DAY,
       createdAt: T0 + 2 * DAY,
     });
-    expect(now({ keys: [key({ kid: 'old' }), next], now: T0 + 3 * DAY })).toEqual({
+    expect(now({ keys: [key({ kid: 'old' }), manual], now: T0 + 3 * DAY })).toEqual({
       action: 'keep',
-      keys: [next],
+      keys: [manual],
       activatesAt: T0 + 9 * DAY,
+    });
+    // One the job or an operator made keeps its own schedule: the end of the period.
+    const byHand = { ...manual, activateAt: null };
+    expect(now({ keys: [key({ kid: 'old' }), byHand], now: T0 + 3 * DAY })).toEqual({
+      action: 'keep',
+      keys: [byHand],
+      activatesAt: T0 + 90 * DAY,
     });
   });
 
@@ -324,7 +370,7 @@ describe('planKeyRotationNow', () => {
     expect(now({ keys, hybridSigning: true, now: T0 + DAY })).toEqual({
       action: 'keep',
       keys: [keys[2], keys[3]],
-      activatesAt: T0 + 7 * DAY,
+      activatesAt: T0 + 90 * DAY,
     });
   });
 

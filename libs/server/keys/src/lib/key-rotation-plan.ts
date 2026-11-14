@@ -21,14 +21,13 @@ import { DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS } from './published-keys';
  * 1. When its active key has signed for `period - prepublish`, a `next` key is
  *    created. A published `next` key is in the JWKS at once, and signs
  *    nothing: no verifier accepts it either (#899).
- * 2. When the `next` key has been published for `prepublish`, the switch is
- *    written: the `next` key becomes `active` and the old key `retired`, both
- *    as of a moment {@link KEY_ACTIVATION_DELAY_MS} ahead. The job creates the
- *    `next` key `prepublish` before the active key's period ends, so the
- *    switch comes when the period has run; a manual rotation (#544,
- *    {@link planKeyRotationNow}) creates it early, and the switch then comes
- *    one window later, before the period has run. Until that moment the old key
- *    keeps signing, while every process's key cache, which lives at most one
+ * 2. When the active key has signed for `period`, and the `next` key has been
+ *    published for `prepublish`, the switch is written: the `next` key becomes
+ *    `active` and the old key `retired`, both as of a moment
+ *    {@link KEY_ACTIVATION_DELAY_MS} ahead. A `next` key that a manual rotation
+ *    made (#544, {@link planKeyRotationNow}) carries the moment it was planned
+ *    to sign as its `activateAt`, and its switch waits for its window only,
+ *    not for the period. Until that moment the old key keeps signing, while every process's key cache, which lives at most one
  *    refresh interval, learns that the new key is `active` and so verifies its
  *    tokens. A signer picks its key by those times (`signingKeyOf`).
  * 3. The retired key stays published, or for the cookie HMAC and data at rest
@@ -291,12 +290,11 @@ export function planKeyRotation(input: PlanKeyRotationInput): KeyRotationPlan {
   const split = splitPairRefusal(input, definition, incoming);
   if (split !== null) return split;
 
-  // A next key is a rotation under way: the switch waits for its window,
-  // not for the active key's period, which a manual rotation (#544) cuts
-  // short and which the job's own next key outlasts already.
-  const notBefore = Math.max(
+  const notBefore = switchNotBefore(
+    incoming,
+    startedAt,
     previousKeyHold(purpose, ofAlgorithm),
-    windowEnd(incoming, settings.prepublishMs)
+    settings
   );
   if (now < notBefore) return { action: 'none' };
 
@@ -360,6 +358,30 @@ function windowEnd(incoming: readonly StoredKeySummary[], prepublishMs: number):
   return end;
 }
 
+/**
+ * The earliest moment of the switch to `incoming`, from an active key that
+ * started at `startedAt`, and no earlier than `hold` ({@link previousKeyHold}).
+ *
+ * Every `next` key waits for its window. A `next` key that a manual rotation
+ * made (#544) carries, as its `activateAt`, the moment it was planned to sign,
+ * and the switch to it comes then: before the active key's period has run,
+ * since the rotation was approved. Any other `next` key (the job's own, or one
+ * an operator made by hand) waits for the period as well, so that only an
+ * approved rotation cuts the period short.
+ */
+function switchNotBefore(
+  incoming: readonly StoredKeySummary[],
+  startedAt: number,
+  hold: number,
+  settings: Pick<ResolvedKeyRotationSettings, 'periodMs' | 'prepublishMs'>
+): number {
+  const window = Math.max(hold, windowEnd(incoming, settings.prepublishMs));
+  const planned = incoming.every((key) => key.activateAt !== null)
+    ? Math.max(...incoming.map((key) => key.activateAt ?? 0))
+    : startedAt + settings.periodMs;
+  return Math.max(window, planned);
+}
+
 /** What {@link planKeyRotationNow} decided for one purpose and algorithm. */
 export type KeyRotationNowPlan =
   /** The realm holds no active key of the algorithm: there is nothing to rotate. */
@@ -390,13 +412,17 @@ export type KeyRotationNowPlan =
  * - `none` — the realm holds no active key of the algorithm.
  * - `create` — no `next` key waits: create one now.
  * - `keep` — a `next` key waits already: it is the rotation's key, and no
- *   second one is created.
+ *   second one is created. It signs when the scheduled rotation switches to
+ *   it: once its window has run if a manual rotation made it, and once the
+ *   active key's period has run as well if the job or an operator did.
  * - `refuse` — two active or two `next` keys, or a waiting `next` key that
  *   would split a hybrid pair.
  *
- * The earliest moment the new key may sign is the end of its window, and no
+ * The earliest moment a new key may sign is the end of its window, and no
  * earlier than a switch to the active key still ahead or, for the cookie key,
- * the end of the previous cookie key's retention.
+ * the end of the previous cookie key's retention. The rotation writes that
+ * moment as the new key's `activateAt` (`createPlannedNextKey`), which is
+ * how the scheduled rotation knows the key's switch was approved early.
  */
 export function planKeyRotationNow(input: PlanKeyRotationInput): KeyRotationNowPlan {
   const { purpose, algorithm, keys, settings, now } = input;
@@ -420,12 +446,13 @@ export function planKeyRotationNow(input: PlanKeyRotationInput): KeyRotationNowP
     };
   }
   const [current] = active;
-  const notBefore = Math.max(
-    current.activateAt ?? current.createdAt,
-    previousKeyHold(purpose, ofAlgorithm)
-  );
+  const startedAt = current.activateAt ?? current.createdAt;
+  const hold = previousKeyHold(purpose, ofAlgorithm);
   if (next.length === 0) {
-    return { action: 'create', activatesAt: Math.max(notBefore, now + settings.prepublishMs) };
+    return {
+      action: 'create',
+      activatesAt: Math.max(startedAt, hold, now + settings.prepublishMs),
+    };
   }
   const incoming = incomingKeys(next[0], keys);
   const split = splitPairRefusal(input, definition, incoming);
@@ -433,6 +460,6 @@ export function planKeyRotationNow(input: PlanKeyRotationInput): KeyRotationNowP
   return {
     action: 'keep',
     keys: incoming,
-    activatesAt: Math.max(notBefore, windowEnd(incoming, settings.prepublishMs)),
+    activatesAt: Math.max(startedAt, switchNotBefore(incoming, startedAt, hold, settings)),
   };
 }

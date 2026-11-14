@@ -49,7 +49,11 @@ export interface NewStoredKeyRow {
   readonly aadVersion: number;
   /** Epoch ms. Set for a published purpose; `null` for one that is never published. */
   readonly publishAt: number | null;
-  /** Epoch ms. Set for an `active` key; `null` for a `next` key, which rotation activates. */
+  /**
+   * Epoch ms. Set for an `active` key. `null` for a `next` key, which rotation
+   * activates, but for the key of a manual rotation (#544): the moment it was
+   * approved to sign, which the scheduled rotation switches to it at.
+   */
   readonly activateAt: number | null;
   /** Epoch ms, from the factory's clock like the other times. */
   readonly createdAt: number;
@@ -85,7 +89,9 @@ export interface StoredKeySummary {
   readonly publishAt: number | null;
   /**
    * Epoch ms. When the key starts, or started, to sign or encrypt; `null` for
-   * a `next` key. A rotation sets it a little ahead of the switch (#542).
+   * a `next` key but the key of a manual rotation, which carries the moment it
+   * was approved to sign (#544). A rotation sets it a little ahead of the
+   * switch (#542).
    */
   readonly activateAt: number | null;
   /** Epoch ms. When the key stops, or stopped, signing; `null` until it is retired. */
