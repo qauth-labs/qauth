@@ -35,6 +35,27 @@ export const END_USER_IP_HMAC_LABEL = 'urn:qauth:key-use:end-user-ip-hmac:v1-rc.
  */
 export const EMAIL_CODE_HMAC_LABEL = 'urn:qauth:key-use:email-code-hmac:v1-rc.0';
 
+/**
+ * The realm's keys derived from its cookie key, one per label, as the signer
+ * hands them to a role that holds no cookie secret
+ * (`Signer.getCookieDerivedKey` of `@qauth-labs/server-keys`, #497): the same
+ * HKDF of the same secret, so a digest made with one equals the digest made
+ * from the secret itself.
+ */
+export interface CookieDerivedKeySource {
+  /** The realm's key for `label`: a fresh buffer, which the digest zeroes once used. */
+  derivedKey(realmId: string, label: string): Promise<Buffer>;
+}
+
+/** HMAC-SHA-256 of `message` under `key`, which is zeroed once used. */
+function keyedHmac(key: Buffer, message: string): string {
+  try {
+    return createHmac('sha256', key).update(message).digest('base64url');
+  } finally {
+    key.fill(0);
+  }
+}
+
 /** HMAC-SHA-256 of `message` under the HKDF of the realm's current cookie secret for `label`. */
 async function cookieSecretHmac(
   signer: CookieSecretSource,
@@ -45,14 +66,24 @@ async function cookieSecretHmac(
 ): Promise<string> {
   const { current, previous } = await signer.getCookieSecrets(caller, realmId);
   previous?.secret.fill(0);
-  let key: Buffer | undefined;
   try {
-    key = Buffer.from(hkdfSync('sha256', current.secret, Buffer.alloc(0), label, 32));
-    return createHmac('sha256', key).update(message).digest('base64url');
+    return keyedHmac(
+      Buffer.from(hkdfSync('sha256', current.secret, Buffer.alloc(0), label, 32)),
+      message
+    );
   } finally {
     current.secret.fill(0);
-    key?.fill(0);
   }
+}
+
+/** HMAC-SHA-256 of `message` under the realm's key derived for `label`. */
+async function derivedKeyHmac(
+  source: CookieDerivedKeySource,
+  label: string,
+  realmId: string,
+  message: string
+): Promise<string> {
+  return keyedHmac(await source.derivedKey(realmId, label), message);
 }
 
 /**
@@ -110,4 +141,30 @@ export function createCookieSecretIdentifierDigest(
 ): IdentifierDigest {
   return ({ realmId, identifier }) =>
     cookieSecretHmac(signer, caller, label, realmId, `${realmId}\u0000${identifier}`);
+}
+
+/**
+ * {@link createCookieSecretEmailCodeDigest} over keys derived from the cookie
+ * key (#497): the same digest, made by a process that holds the derived key
+ * and not the cookie secret, which would let it make a session cookie.
+ */
+export function createDerivedKeyEmailCodeDigest(source: CookieDerivedKeySource): EmailCodeDigest {
+  return ({ realmId, salt, code }) =>
+    derivedKeyHmac(source, EMAIL_CODE_HMAC_LABEL, realmId, `${realmId}\u0000${salt}\u0000${code}`);
+}
+
+/**
+ * {@link createCookieSecretIdentifierDigest} over keys derived from the
+ * cookie key (#497): the same digest, so the `api` role's login route keys
+ * the same failure ladder counters as the `web` role's pages, without the
+ * cookie secret.
+ *
+ * @param label - {@link IDENTIFIER_HMAC_LABEL}, or {@link END_USER_IP_HMAC_LABEL}
+ */
+export function createDerivedKeyIdentifierDigest(
+  source: CookieDerivedKeySource,
+  label: string = IDENTIFIER_HMAC_LABEL
+): IdentifierDigest {
+  return ({ realmId, identifier }) =>
+    derivedKeyHmac(source, label, realmId, `${realmId}\u0000${identifier}`);
 }

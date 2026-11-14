@@ -27,6 +27,8 @@ import { signInEnginePlugin } from './fastify-plugin-sign-in-engine';
 import {
   createCookieSecretEmailCodeDigest,
   createCookieSecretIdentifierDigest,
+  createDerivedKeyEmailCodeDigest,
+  createDerivedKeyIdentifierDigest,
   EMAIL_CODE_HMAC_LABEL,
   END_USER_IP_HMAC_LABEL,
   IDENTIFIER_HMAC_LABEL,
@@ -516,6 +518,59 @@ describe('the identifier HMAC', () => {
         identifier: '203.0.113.7',
       })
     );
+  });
+});
+
+describe('the digests over a derived key (#497)', () => {
+  const secret = Buffer.from('the realm cookie secret, 32 bytes');
+  const cookieSource = () => ({
+    getCookieSecrets: vi.fn(async () => ({
+      current: { kid: 'cookie-1', secret: Buffer.from(secret) },
+      previous: null,
+    })),
+  });
+  const derivedSource = () => {
+    const handed: Buffer[] = [];
+    return {
+      handed,
+      derivedKey: vi.fn(async (_realmId: string, label: string) => {
+        const key = Buffer.from(hkdfSync('sha256', secret, Buffer.alloc(0), label, 32));
+        handed.push(key);
+        return key;
+      }),
+    };
+  };
+
+  it('equal the digests made from the cookie secret itself, label for label', async () => {
+    for (const label of [IDENTIFIER_HMAC_LABEL, END_USER_IP_HMAC_LABEL]) {
+      const source = derivedSource();
+      const derived = await createDerivedKeyIdentifierDigest(
+        source,
+        label
+      )({
+        realmId: REALM,
+        identifier: IDENTIFIER,
+      });
+      expect(derived).toBe(
+        await createCookieSecretIdentifierDigest(
+          cookieSource(),
+          'local',
+          label
+        )({
+          realmId: REALM,
+          identifier: IDENTIFIER,
+        })
+      );
+      expect(source.derivedKey).toHaveBeenCalledWith(REALM, label);
+      // The key handed over is wiped once used.
+      expect(source.handed[0]?.every((byte) => byte === 0)).toBe(true);
+    }
+    const source = derivedSource();
+    const code = { realmId: REALM, salt: 's'.repeat(22), code: '012345' };
+    expect(await createDerivedKeyEmailCodeDigest(source)(code)).toBe(
+      await createCookieSecretEmailCodeDigest(cookieSource())(code)
+    );
+    expect(source.derivedKey).toHaveBeenCalledWith(REALM, EMAIL_CODE_HMAC_LABEL);
   });
 });
 
