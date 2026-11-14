@@ -8,6 +8,8 @@ import {
   KEY_DENYLIST_CACHE_TIMEOUT_MS,
   KEY_DENYLIST_SNAPSHOT_KEY,
   KEY_DENYLIST_SNAPSHOT_TTL_SECONDS,
+  KEY_DENYLIST_STORE_READ_INTERVAL_MS,
+  KEY_DENYLIST_STORE_TIMEOUT_MS,
   keyDenylistLoader,
   type KeyDenylistRedis,
   parseKeyDenylistSnapshot,
@@ -64,36 +66,79 @@ describe('parseKeyDenylistSnapshot', () => {
 });
 
 describe('keyDenylistLoader', () => {
-  it('answers from the Redis snapshot without asking the database', async () => {
-    const { store, redis } = fakeRedis();
-    store.set(KEY_DENYLIST_SNAPSHOT_KEY, JSON.stringify(DENIED));
-    const listDenied = vi.fn(async () => []);
-    await expect(keyDenylistLoader({ redis: () => redis, listDenied })()).resolves.toEqual(DENIED);
-    expect(listDenied).not.toHaveBeenCalled();
-  });
-
-  it('reads the database when no snapshot is stored, and stores its answer for a few seconds', async () => {
+  it('reads the database first, as the whole list, and stores it as the snapshot when none is', async () => {
     const { redis } = fakeRedis();
     const listDenied = vi.fn(async () => [{ ...DENIED[0], deniedAt: 1 }]);
-    await expect(keyDenylistLoader({ redis: () => redis, listDenied })()).resolves.toEqual(DENIED);
+    await expect(keyDenylistLoader({ redis: () => redis, listDenied })()).resolves.toEqual({
+      entries: DENIED,
+      complete: true,
+    });
     expect(listDenied).toHaveBeenCalledTimes(1);
     expect(redis.set).toHaveBeenCalledWith(
       KEY_DENYLIST_SNAPSHOT_KEY,
       JSON.stringify(DENIED),
       'EX',
-      KEY_DENYLIST_SNAPSHOT_TTL_SECONDS
+      KEY_DENYLIST_SNAPSHOT_TTL_SECONDS,
+      'NX'
     );
   });
 
-  it('reads the database when the snapshot cannot be read', async () => {
+  it('answers from the snapshot between database reads, as a read that only adds', async () => {
+    const clock = { now: 1_000_000 };
     const { store, redis } = fakeRedis();
-    store.set(KEY_DENYLIST_SNAPSHOT_KEY, '{"tampered":true}');
-    const listDenied = vi.fn(async () => DENIED);
-    await expect(keyDenylistLoader({ redis: () => redis, listDenied })()).resolves.toEqual(DENIED);
+    const listDenied = vi.fn(async () => []);
+    const load = keyDenylistLoader({ redis: () => redis, listDenied }, {}, () => clock.now);
+    await load();
+    store.set(KEY_DENYLIST_SNAPSHOT_KEY, JSON.stringify(DENIED));
+    clock.now += KEY_DENYLIST_STORE_READ_INTERVAL_MS - 1;
+    await expect(load()).resolves.toEqual({ entries: DENIED, complete: false });
     expect(listDenied).toHaveBeenCalledTimes(1);
   });
 
-  it('works with Redis down: a failing command, or none at all, falls back to the database', async () => {
+  it('reads the database again once the interval passed, whatever the snapshot holds', async () => {
+    const clock = { now: 1_000_000 };
+    const { store, redis } = fakeRedis();
+    const listDenied = vi.fn(async () => DENIED);
+    const load = keyDenylistLoader({ redis: () => redis, listDenied }, {}, () => clock.now);
+    await load();
+    // A snapshot that never expires, and lacks the kid.
+    store.set(KEY_DENYLIST_SNAPSHOT_KEY, '[]');
+    clock.now += KEY_DENYLIST_STORE_READ_INTERVAL_MS;
+    await expect(load()).resolves.toEqual({ entries: DENIED, complete: true });
+    expect(listDenied).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the database a third of the bound apart at most, for a shorter bound', async () => {
+    const clock = { now: 1_000_000 };
+    const { store, redis } = fakeRedis();
+    const listDenied = vi.fn(async () => DENIED);
+    const load = keyDenylistLoader(
+      { redis: () => redis, listDenied },
+      { refreshIntervalMs: 100, maxStalenessMs: 900 },
+      () => clock.now
+    );
+    await load();
+    store.set(KEY_DENYLIST_SNAPSHOT_KEY, '[]');
+    clock.now += 299;
+    await expect(load()).resolves.toMatchObject({ complete: false });
+    clock.now += 1;
+    await expect(load()).resolves.toMatchObject({ complete: true });
+  });
+
+  it('reads the database when the snapshot is missing or cannot be read', async () => {
+    const clock = { now: 1_000_000 };
+    const { store, redis } = fakeRedis();
+    const listDenied = vi.fn(async () => DENIED);
+    const load = keyDenylistLoader({ redis: () => redis, listDenied }, {}, () => clock.now);
+    await load();
+    store.set(KEY_DENYLIST_SNAPSHOT_KEY, '{"tampered":true}');
+    await expect(load()).resolves.toEqual({ entries: DENIED, complete: true });
+    store.delete(KEY_DENYLIST_SNAPSHOT_KEY);
+    await expect(load()).resolves.toEqual({ entries: DENIED, complete: true });
+    expect(listDenied).toHaveBeenCalledTimes(3);
+  });
+
+  it('works with Redis down: a failing command, or none at all, leaves the database', async () => {
     const down = fakeRedis({
       get: async () => {
         throw new Error('ECONNREFUSED');
@@ -103,25 +148,46 @@ describe('keyDenylistLoader', () => {
       },
     }).redis;
     const listDenied = vi.fn(async () => DENIED);
-    await expect(keyDenylistLoader({ redis: () => down, listDenied })()).resolves.toEqual(DENIED);
+    const read = { entries: DENIED, complete: true };
+    await expect(keyDenylistLoader({ redis: () => down, listDenied })()).resolves.toEqual(read);
     const missing = () => {
       throw new Error('fastify.redis is not decorated');
     };
-    await expect(keyDenylistLoader({ redis: missing, listDenied })()).resolves.toEqual(DENIED);
+    await expect(keyDenylistLoader({ redis: missing, listDenied })()).resolves.toEqual(read);
   });
 
   it('gives up on a Redis that does not answer, and reads the database in time', async () => {
     vi.useFakeTimers();
+    const clock = { now: 1_000_000 };
     const hung = fakeRedis({
       get: () => new Promise(() => undefined),
       set: () => new Promise(() => undefined),
     }).redis;
     const listDenied = vi.fn(async () => DENIED);
-    const loading = keyDenylistLoader({ redis: () => hung, listDenied })();
+    const load = keyDenylistLoader({ redis: () => hung, listDenied }, {}, () => clock.now);
+    const first = load();
     await vi.advanceTimersByTimeAsync(KEY_DENYLIST_CACHE_TIMEOUT_MS);
-    expect(listDenied).toHaveBeenCalledTimes(1);
+    await expect(first).resolves.toMatchObject({ complete: true });
+    const second = load();
     await vi.advanceTimersByTimeAsync(KEY_DENYLIST_CACHE_TIMEOUT_MS);
-    await expect(loading).resolves.toEqual(DENIED);
+    expect(listDenied).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(KEY_DENYLIST_CACHE_TIMEOUT_MS);
+    await expect(second).resolves.toEqual({ entries: DENIED, complete: true });
+  });
+
+  it('gives up on a database that does not answer, and answers from the snapshot if there is one', async () => {
+    vi.useFakeTimers();
+    const { store, redis } = fakeRedis();
+    const listDenied = vi.fn((): Promise<DeniedKid[]> => new Promise(() => undefined));
+    const load = keyDenylistLoader({ redis: () => redis, listDenied });
+    const bare = load();
+    const refused = expect(bare).rejects.toThrow('The key denylist table did not answer in time');
+    await vi.advanceTimersByTimeAsync(KEY_DENYLIST_STORE_TIMEOUT_MS);
+    await refused;
+    store.set(KEY_DENYLIST_SNAPSHOT_KEY, JSON.stringify(DENIED));
+    const cached = load();
+    await vi.advanceTimersByTimeAsync(KEY_DENYLIST_STORE_TIMEOUT_MS);
+    await expect(cached).resolves.toEqual({ entries: DENIED, complete: false });
   });
 
   it("rejects with the database's error when Redis has no snapshot and the database fails", async () => {
@@ -170,22 +236,51 @@ describe('createAppKeyDenylist', () => {
 });
 
 describe('invalidateKeyDenylist', () => {
-  it('denies the retired kids on the copy at once, deletes the snapshot, and reads the copy again', async () => {
+  it('denies the retired kids on the copy at once, stores the database list as the snapshot over the old one, and reads the copy again', async () => {
     const { store, redis } = fakeRedis();
     store.set(KEY_DENYLIST_SNAPSHOT_KEY, '[]');
+    const listDenied = vi.fn(async () => DENIED);
     const denylist = { add: vi.fn(), refresh: vi.fn(async () => undefined) };
-    await invalidateKeyDenylist(denylist, redis, fakeLog(), DENIED);
+    await invalidateKeyDenylist(denylist, { redis: () => redis, listDenied }, fakeLog(), DENIED);
     expect(denylist.add).toHaveBeenCalledWith(DENIED);
-    expect(store.has(KEY_DENYLIST_SNAPSHOT_KEY)).toBe(false);
+    expect(store.get(KEY_DENYLIST_SNAPSHOT_KEY)).toBe(JSON.stringify(DENIED));
+    expect(redis.set).toHaveBeenCalledWith(
+      KEY_DENYLIST_SNAPSHOT_KEY,
+      JSON.stringify(DENIED),
+      'EX',
+      KEY_DENYLIST_SNAPSHOT_TTL_SECONDS
+    );
     expect(denylist.refresh).toHaveBeenCalledTimes(1);
     expect(denylist.add.mock.invocationCallOrder[0]).toBeLessThan(
-      redis.del.mock.invocationCallOrder[0] ?? 0
+      listDenied.mock.invocationCallOrder[0] ?? 0
     );
+  });
+
+  it('keeps the retired kids in the snapshot even if the read missed them', async () => {
+    const { store, redis } = fakeRedis();
+    const listDenied = vi.fn(async () => []);
+    await invalidateKeyDenylist(null, { redis: () => redis, listDenied }, fakeLog(), DENIED);
+    expect(store.get(KEY_DENYLIST_SNAPSHOT_KEY)).toBe(JSON.stringify(DENIED));
+  });
+
+  it('deletes the snapshot when the database cannot be read', async () => {
+    const { store, redis } = fakeRedis();
+    store.set(KEY_DENYLIST_SNAPSHOT_KEY, '[]');
+    const listDenied = vi.fn(async (): Promise<DeniedKid[]> => {
+      throw new Error('database down');
+    });
+    const log = fakeLog();
+    await invalidateKeyDenylist(null, { redis: () => redis, listDenied }, log, DENIED);
+    expect(store.has(KEY_DENYLIST_SNAPSHOT_KEY)).toBe(false);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it('logs, and does not throw, when Redis or the read fails', async () => {
     const log = fakeLog();
     const { redis } = fakeRedis({
+      set: async () => {
+        throw new Error('redis down');
+      },
       del: async () => {
         throw new Error('redis down');
       },
@@ -196,15 +291,31 @@ describe('invalidateKeyDenylist', () => {
         throw new Error('database down');
       }),
     };
-    await expect(invalidateKeyDenylist(denylist, redis, log, DENIED)).resolves.toBeUndefined();
+    await expect(
+      invalidateKeyDenylist(
+        denylist,
+        { redis: () => redis, listDenied: async () => DENIED },
+        log,
+        DENIED
+      )
+    ).resolves.toBeUndefined();
     expect(denylist.add).toHaveBeenCalledWith(DENIED);
     expect(log.warn).toHaveBeenCalledTimes(2);
   });
 
-  it('only deletes the snapshot on a process that holds no copy', async () => {
-    const { store, redis } = fakeRedis();
-    store.set(KEY_DENYLIST_SNAPSHOT_KEY, '[]');
-    await invalidateKeyDenylist(null, redis, fakeLog(), DENIED);
-    expect(store.has(KEY_DENYLIST_SNAPSHOT_KEY)).toBe(false);
+  it('gives up on a read of the copy that does not end, so the session sweep runs', async () => {
+    vi.useFakeTimers();
+    const { redis } = fakeRedis();
+    const denylist = { add: vi.fn(), refresh: vi.fn(() => new Promise<void>(() => undefined)) };
+    const log = fakeLog();
+    const done = invalidateKeyDenylist(
+      denylist,
+      { redis: () => redis, listDenied: async () => DENIED },
+      log,
+      DENIED
+    );
+    await vi.advanceTimersByTimeAsync(KEY_DENYLIST_STORE_TIMEOUT_MS);
+    await expect(done).resolves.toBeUndefined();
+    expect(log.warn).toHaveBeenCalledTimes(1);
   });
 });
