@@ -177,27 +177,19 @@ describe('the server TOTPs (#653)', () => {
     expect(mailer.sendUncounted).toHaveBeenCalledTimes(2);
   });
 
-  it('names a new binding on the session its request gives, in the binding’s transaction (#1109)', async () => {
-    const nameNewCredential = vi.fn(async () => true);
-    const named = (sessionOf: () => string | undefined) => {
-      const base = fastify() as unknown as { repositories: Record<string, unknown> };
-      return createServerTotp(
-        {
-          ...base,
-          repositories: { ...base.repositories, sessions: { nameNewCredential } },
-        } as unknown as FastifyInstance,
-        {
-          mailer: mailer as unknown as EngineMailer,
-          realmOf: async () => REALM,
-          recoveryCodes: { status: recoveryStatus },
-          ladder: { resetAccount },
-          hostedPages,
-          passkeys: false,
-          requestOf: () => REQUEST,
-          newBindingSessionOf: sessionOf,
-        }
-      );
-    };
+  it('names a new binding through its caller, in the binding’s transaction (#1109)', async () => {
+    const nameNewBinding = vi.fn(async () => true);
+    const named = () =>
+      createServerTotp(fastify(), {
+        mailer: mailer as unknown as EngineMailer,
+        realmOf: async () => REALM,
+        recoveryCodes: { status: recoveryStatus },
+        ladder: { resetAccount },
+        hostedPages,
+        passkeys: false,
+        requestOf: () => REQUEST,
+        nameNewBinding,
+      });
     const binding = {
       realmId: REALM_ID,
       userId: USER_ID,
@@ -205,25 +197,25 @@ describe('the server TOTPs (#653)', () => {
       sealed: 'v1.sealed',
     };
 
-    await expect(
-      named(() => 'session-1').bind({ ...binding, step: 7, isNew: true })
-    ).resolves.toEqual({ kind: 'bound', credentialId: 'row-1' });
-    expect(nameNewCredential).toHaveBeenCalledWith(REALM_ID, 'session-1', USER_ID, 'row-1', TX);
+    await expect(named().bind({ ...binding, step: 7, isNew: true })).resolves.toEqual({
+      kind: 'bound',
+      credentialId: 'row-1',
+    });
+    expect(nameNewBinding).toHaveBeenCalledWith(
+      REQUEST,
+      { realmId: REALM_ID, userId: USER_ID, credentialId: 'row-1' },
+      TX
+    );
 
     // One no session names rolls back: the transaction throws.
-    nameNewCredential.mockResolvedValueOnce(false);
-    await expect(
-      named(() => 'session-1').bind({ ...binding, step: 8, isNew: true })
-    ).rejects.toThrow();
-    await expect(
-      named(() => undefined).bind({ ...binding, step: 9, isNew: true })
-    ).rejects.toThrow();
+    nameNewBinding.mockResolvedValueOnce(false);
+    await expect(named().bind({ ...binding, step: 8, isNew: true })).rejects.toThrow();
 
     // A binding that is not new is named nowhere, nor is one at a sign-in.
-    nameNewCredential.mockClear();
-    await named(() => 'session-1').bind({ ...binding, step: 10 });
+    nameNewBinding.mockClear();
+    await named().bind({ ...binding, step: 10 });
     await build().bind({ ...binding, step: 11, isNew: true });
-    expect(nameNewCredential).not.toHaveBeenCalled();
+    expect(nameNewBinding).not.toHaveBeenCalled();
   });
 
   it('disables at the ceiling with an unused recovery code, then mails the notice', async () => {

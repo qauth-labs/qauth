@@ -98,9 +98,16 @@ export function createAccountFactors(
     clientIdOf: (request) => request.jwtPayload?.clientId ?? null,
     // `bindingOfToken` found this session, signed in at the token's
     // `auth_time`, before a new binding was let through.
-    newBindingSessionOf: (request) => {
+    nameNewBinding: async (request, { realmId, userId, credentialId }, tx) => {
       const sid = request.jwtPayload?.sid;
-      return typeof sid === 'string' && sid.length > 0 ? sid : undefined;
+      if (typeof sid !== 'string' || sid.length === 0) return false;
+      return fastify.repositories.sessions.nameNewCredential(
+        realmId,
+        sid,
+        userId,
+        credentialId,
+        tx
+      );
     },
     hostedPages: env.INTERACTION_UI_ENABLED === true,
     passkeys: fastify.passkeySignIn === true,

@@ -147,14 +147,18 @@ export interface ServerTotpDependencies {
    */
   readonly clientIdOf?: (request: FastifyRequest) => string | null;
   /**
-   * The browser session a new binding's request names (#1064, #1109): the
-   * sign-in the account API's token came from. A binding that is new is
-   * named on it in the binding's own transaction, so the password's undo
-   * ends what that sign-in opened; one no session names rolls back. Absent,
-   * as at a sign-in, whose session is written with its new credentials once
-   * it completes, nothing is named.
+   * Name a new binding on the browser session of the sign-in its request
+   * came from (#1064, #1109): the account API's, in the binding's own
+   * transaction, so the password's undo ends what that sign-in opened.
+   * `false` (no session named it) rolls the binding back. Absent, as at a
+   * sign-in, whose session is written with its new credentials once it
+   * completes, nothing is named.
    */
-  readonly newBindingSessionOf?: (request: FastifyRequest) => string | undefined;
+  readonly nameNewBinding?: (
+    request: FastifyRequest,
+    binding: { readonly realmId: string; readonly userId: string; readonly credentialId: string },
+    tx: EventTransaction
+  ) => Promise<boolean>;
   /**
    * Whether the hosted pages are on (`INTERACTION_UI_ENABLED`): a recovery
    * code is redeemed there, so without them the hard action is never armed.
@@ -219,20 +223,12 @@ export function createServerTotp(
         if (request === undefined) {
           throw new Error('a TOTP bound outside the request that asked for it');
         }
-        if (newUntil !== undefined && deps.newBindingSessionOf !== undefined) {
-          const sessionId = deps.newBindingSessionOf(request);
-          if (
-            sessionId === undefined ||
-            !(await fastify.repositories.sessions.nameNewCredential(
-              realmId,
-              sessionId,
-              userId,
-              credentialId,
-              tx
-            ))
-          ) {
-            throw new Error('a new TOTP whose sign-in session could not name it');
-          }
+        if (
+          newUntil !== undefined &&
+          deps.nameNewBinding !== undefined &&
+          !(await deps.nameNewBinding(request, { realmId, userId, credentialId }, tx))
+        ) {
+          throw new Error('a new TOTP whose sign-in session could not name it');
         }
         await emitUserEvent(
           request,
