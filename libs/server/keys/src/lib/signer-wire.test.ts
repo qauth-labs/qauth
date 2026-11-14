@@ -20,6 +20,8 @@ import {
   encodeSignerRequest,
   encodeSignerResult,
   encodeWireBytes,
+  SIGNER_MAX_ANSWER_BYTES,
+  SIGNER_REQUEST_BODY_LIMITS,
   SIGNER_SERVICE_PATH,
   SIGNER_SERVICE_ROUTES,
   SignerWireFormatError,
@@ -35,6 +37,16 @@ describe('the signer wire format (#497)', () => {
     const routes = Object.values(SIGNER_SERVICE_ROUTES);
     expect(new Set(routes).size).toBe(routes.length);
     for (const route of routes) expect(route).toMatch(/^\/[a-z]+(?:-[a-z]+)*$/);
+  });
+
+  it('caps each request, and answers within the largest request', () => {
+    expect(Object.keys(SIGNER_REQUEST_BODY_LIMITS).sort()).toEqual([...SIGNER_OPERATIONS].sort());
+    for (const limit of Object.values(SIGNER_REQUEST_BODY_LIMITS)) {
+      // Room for a cookie key id a cookie header carries, at the least.
+      expect(limit).toBeGreaterThanOrEqual(64 * 1024);
+      // An encryption of the largest plaintext, in base64url, fits an answer.
+      expect(SIGNER_MAX_ANSWER_BYTES).toBeGreaterThan(Math.ceil((limit * 4) / 3) + 4096);
+    }
   });
 
   it('carries bytes as base64url, and reads back only well-formed ones', () => {

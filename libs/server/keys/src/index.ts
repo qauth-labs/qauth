@@ -187,6 +187,8 @@ export {
   encodeSignerResult,
   encodeWireBytes,
   isSignerOperation,
+  SIGNER_MAX_ANSWER_BYTES,
+  SIGNER_REQUEST_BODY_LIMITS,
   SIGNER_SERVICE_PATH,
   SIGNER_SERVICE_ROUTES,
   SIGNER_WIRE_ERROR_STATUS,

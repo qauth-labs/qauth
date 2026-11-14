@@ -12,7 +12,7 @@ import type {
   SignHybridRequest,
   SignJwsRequest,
 } from './signer';
-import { SignerAccessDeniedError } from './signer-errors';
+import { isSignerError, SignerAccessDeniedError, SignerRequestRefusedError } from './signer-errors';
 import {
   hasSignerGrant,
   isSignerCallAllowed,
@@ -24,6 +24,7 @@ import {
   decodeSignerError,
   decodeSignerResult,
   encodeSignerRequest,
+  SIGNER_REQUEST_BODY_LIMITS,
   SIGNER_SERVICE_PATH,
   SIGNER_SERVICE_ROUTES,
   type SignerOperationArgs,
@@ -45,7 +46,15 @@ import {
  *   this process's client certificate. The `caller` each call names is
  *   checked here first, against the same policy table, so a call the
  *   in-process signer would refuse for its caller is refused here too, with
- *   no request sent; the signer then holds the call to its own role.
+ *   no request sent; the signer then holds the call to its own role. A call
+ *   the signer still refuses for its role took this process for another
+ *   role than the call's (INTERNAL_PEER_ROLES on the signer, or a process
+ *   that holds two roles with one certificate): it ends in a 503
+ *   (`role_refused`), never in a refusal its caller would take for its own.
+ * - **Bounded requests.** A request larger than the signer service takes
+ *   (`SIGNER_REQUEST_BODY_LIMITS`) is refused here, before it is sent, as
+ *   `REQUEST_TOO_LARGE`, and so is one the service answers `413` to: neither
+ *   counts as an outage.
  * - **Fail closed.** No answer, an answer of another shape, or the signer's
  *   own trouble ends the call with a `TemporarilyUnavailableError` (503):
  *   nothing is signed with anything else, and nothing is retried past the
@@ -121,6 +130,8 @@ export type RemoteSignerEvent =
  * - `malformed_answer`: the answer is not one the signer service gives;
  * - `peer_refused`: the signer's listener refused this process, twice: its
  *   certificate maps to no role the signer service admits;
+ * - `role_refused`: the signer refused the call for the role this process's
+ *   certificate maps to, which is not the call's own;
  * - `rate_limited`: the signer refused the call for this peer's rate;
  * - `circuit_open`: calls fail at once after repeated outages.
  */
@@ -129,6 +140,7 @@ export type RemoteSignerFailure =
   | 'signer_failed'
   | 'malformed_answer'
   | 'peer_refused'
+  | 'role_refused'
   | 'rate_limited'
   | 'circuit_open';
 
@@ -216,6 +228,8 @@ type Attempt<T> =
     }
   /** The signer's listener refused the call before the service read it. */
   | { readonly kind: 'not_run'; readonly status: number }
+  /** The signer refused the call for this process's certificate's role. */
+  | { readonly kind: 'role_refused' }
   | { readonly kind: 'rate_limited' };
 
 const TEXT = new TextDecoder('utf-8', { fatal: true });
@@ -226,6 +240,14 @@ function parseJson(body: Uint8Array): unknown {
   } catch {
     return undefined;
   }
+}
+
+/** A request larger than the signer service takes for `operation`. */
+function tooLarge(operation: SignerOperation): SignerRequestRefusedError {
+  return new SignerRequestRefusedError(
+    'REQUEST_TOO_LARGE',
+    `The '${operation}' request is larger than the signer service takes`
+  );
 }
 
 /** The member `name` of `value` when it is a plain object that has it. */
@@ -356,9 +378,17 @@ export function createRemoteSigner(options: RemoteSignerOptions): Signer {
     const wire = member(json, 'error');
     if (wire !== undefined) {
       const error = decodeSignerError(wire, { operation, realmId });
-      if (error !== undefined) return { kind: 'refused', error };
-      return { kind: 'outage', reason: 'signer_failed', status: response.status };
+      if (error === undefined) {
+        return { kind: 'outage', reason: 'signer_failed', status: response.status };
+      }
+      // The call's own role passed the same table here (`authorize`): the
+      // signer refused the role this process's certificate maps to.
+      if (isSignerError(error, 'SIGNER_ACCESS_DENIED')) return { kind: 'role_refused' };
+      return { kind: 'refused', error };
     }
+    // The service's own cap on the request's size: the signer is up, and the
+    // request cannot succeed as it is.
+    if (response.status === 413) return { kind: 'refused', error: tooLarge(operation) };
     // The listener's own refusal: no peer role, a role the service does not
     // admit, a certificate that expired or files reloaded since the
     // connection was made. The service never read the call.
@@ -377,6 +407,9 @@ export function createRemoteSigner(options: RemoteSignerOptions): Signer {
     realmId: unknown
   ): Promise<SignerOperationResult<O>> {
     const body = encodeSignerRequest(operation, args);
+    if (Buffer.byteLength(body, 'utf8') > SIGNER_REQUEST_BODY_LIMITS[operation]) {
+      throw tooLarge(operation);
+    }
     const { probe } = admit(operation);
     const idempotent = IDEMPOTENT_SIGNER_OPERATIONS.includes(operation);
     let outcome = await attempt(operation, body, realmId);
@@ -394,6 +427,10 @@ export function createRemoteSigner(options: RemoteSignerOptions): Signer {
         // The signer answered: it is up, whatever it answered.
         succeeded(probe);
         throw outcome.error;
+      case 'role_refused':
+        succeeded(probe);
+        report({ type: 'call_failed', operation, reason: 'role_refused', status: 403 });
+        throw unavailable(operation, 'role_refused', openMs);
       case 'rate_limited':
         // The signer is up and asks this peer to slow down: neither an
         // outage nor a success for the circuit.

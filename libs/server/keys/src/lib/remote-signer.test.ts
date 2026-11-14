@@ -183,10 +183,46 @@ describe('the remote signer (#497)', () => {
     });
 
     it("holds the call to the role of the process's certificate, whatever the caller names", async () => {
-      const signer = remote(loopback(setup.signer, 'api'));
+      const events: RemoteSignerEvent[] = [];
+      const transport = loopback(setup.signer, 'api');
+      const signer = remote(transport, {
+        failureThreshold: 1,
+        onEvent: (event) => events.push(event),
+      });
+      // `local` may read the cookie secrets; the certificate's `api` may not.
+      // A deployment fault, not the caller's: 503, and the signer stays up.
       const refused = await caught(signer.getCookieSecrets('local', SERVICE_REALM));
-      expect(refused).toBeInstanceOf(SignerAccessDeniedError);
-      expect(refused).toMatchObject({ caller: 'api', operation: 'getCookieSecrets' });
+      expect(refused).toBeInstanceOf(TemporarilyUnavailableError);
+      expect(refused).toMatchObject({
+        statusCode: 503,
+        details: { reason: 'signer_role_refused', operation: 'getCookieSecrets' },
+      });
+      expect(transport.calls).toHaveLength(1);
+      expect(events).toEqual([
+        { type: 'call_failed', operation: 'getCookieSecrets', reason: 'role_refused', status: 403 },
+      ]);
+      expect(await signer.signJws('api', ACCESS_TOKEN)).toMatch(/^ey/);
+    });
+
+    it('refuses a request larger than the service takes, before it is sent, and a 413 alike', async () => {
+      const transport = loopback(setup.signer, 'api');
+      const signer = remote(transport, { failureThreshold: 1 });
+      const large = { ...ACCESS_TOKEN, claims: { ...CLAIMS, blob: 'x'.repeat(1024 * 1024) } };
+      const refused = await caught(signer.signJws('api', large));
+      expect(refused).toBeInstanceOf(SignerRequestRefusedError);
+      expect((refused as SignerRequestRefusedError).reason).toBe('REQUEST_TOO_LARGE');
+      expect(transport.calls).toEqual([]);
+
+      const capped = scripted(async () => answer(413, { code: 'payload_too_large' }));
+      const service = remote(capped, { failureThreshold: 1 });
+      for (let index = 0; index < 2; index += 1) {
+        expect(await caught(service.signJws('api', ACCESS_TOKEN))).toMatchObject({
+          code: 'SIGNER_REQUEST_REFUSED',
+          reason: 'REQUEST_TOO_LARGE',
+        });
+      }
+      // Neither opened the circuit.
+      expect(capped.calls).toHaveLength(2);
     });
 
     it('refuses a call the named caller may not make before anything is sent', async () => {

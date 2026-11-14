@@ -116,7 +116,13 @@ export type SignerRefusalReason =
    */
   | 'INVALID_CERTIFICATE_CHAIN'
   /** A request object's leaf certificate holds another key than the realm's active one. */
-  | 'CERTIFICATE_KEY_MISMATCH';
+  | 'CERTIFICATE_KEY_MISMATCH'
+  /**
+   * The request is larger than the signer service takes for its operation
+   * (`SIGNER_REQUEST_BODY_LIMITS`, #497): only a remote signer refuses it,
+   * before anything is sent.
+   */
+  | 'REQUEST_TOO_LARGE';
 
 /**
  * Every {@link SignerRefusalReason}, for a reader that must tell a known
@@ -144,6 +150,7 @@ export const SIGNER_REFUSAL_REASONS = Object.freeze([
   'INVALID_KID',
   'INVALID_CERTIFICATE_CHAIN',
   'CERTIFICATE_KEY_MISMATCH',
+  'REQUEST_TOO_LARGE',
 ] as const satisfies readonly SignerRefusalReason[]);
 
 // Fails to compile when the union gains a reason the list lacks.

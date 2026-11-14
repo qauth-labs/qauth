@@ -74,6 +74,40 @@ export const SIGNER_SERVICE_ROUTES: Readonly<Record<SignerOperation, string>> = 
   getUpstreamJwks: '/upstream-jwks',
 });
 
+/** The largest request body of a call that names a realm and a few ids. */
+const SMALL_REQUEST_BYTES = 64 * 1024;
+
+/** The largest request body of a call that carries claims, a body or data. */
+const LARGE_REQUEST_BYTES = 1024 * 1024;
+
+/**
+ * The largest request body, in bytes of its JSON, the signer service takes
+ * for each operation. A remote signer refuses a larger request before it is
+ * sent (`REQUEST_TOO_LARGE`), and the service answers `413` to one that
+ * arrives. The large ones are the size of the public listener's own largest
+ * request body, so a request a caller could send there fits.
+ */
+export const SIGNER_REQUEST_BODY_LIMITS: Readonly<Record<SignerOperation, number>> = Object.freeze({
+  signJws: LARGE_REQUEST_BYTES,
+  signHybrid: LARGE_REQUEST_BYTES,
+  signWebhook: LARGE_REQUEST_BYTES,
+  signClientAssertion: SMALL_REQUEST_BYTES,
+  signRequestObject: LARGE_REQUEST_BYTES,
+  getCookieSecrets: SMALL_REQUEST_BYTES,
+  encrypt: LARGE_REQUEST_BYTES,
+  decrypt: LARGE_REQUEST_BYTES,
+  getVerificationKeys: SMALL_REQUEST_BYTES,
+  getJwks: SMALL_REQUEST_BYTES,
+  getUpstreamJwks: SMALL_REQUEST_BYTES,
+});
+
+/**
+ * The largest answer a signer service gives, in bytes: an encryption of the
+ * largest plaintext, in base64url, with room to spare. A remote signer's
+ * transport reads no larger answer.
+ */
+export const SIGNER_MAX_ANSWER_BYTES = 4 * 1024 * 1024;
+
 /** Whether `value` names a {@link SignerOperation}. */
 export function isSignerOperation(value: unknown): value is SignerOperation {
   return typeof value === 'string' && (SIGNER_OPERATIONS as readonly string[]).includes(value);
