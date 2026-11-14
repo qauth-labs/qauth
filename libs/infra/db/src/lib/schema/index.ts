@@ -5,6 +5,7 @@ export * from './audit';
 export * from './auth-method-plugins';
 export * from './consents';
 export * from './core';
+export * from './deployment-nodes';
 export * from './enums';
 export * from './event-deliveries';
 export * from './events';

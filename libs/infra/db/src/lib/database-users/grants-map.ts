@@ -99,6 +99,11 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   admin_roles: { web: S, api: S, admin: S },
   // The developer API's client API keys.
   api_keys: { api: SIU },
+  // The node list (#499): every node registers its own row at boot, marks it
+  // seen every 30 seconds and deletes it when it closes, reads the others'
+  // rows to compare its configuration digest, and deletes the rows of nodes
+  // unseen for two minutes. `delivery` too: it is a node like any other.
+  deployment_nodes: { web: SIUD, api: SIUD, admin: SIUD, signer: SIUD, delivery: SIUD },
   // Read-only since #458 and read by nothing at run time.
   audit_logs: {},
   // Only the purge job, on `api`, deletes the expired rows of the four
