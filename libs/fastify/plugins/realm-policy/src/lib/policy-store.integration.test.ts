@@ -241,9 +241,10 @@ describe('policy store over the realms table (integration)', () => {
     const realm = await realms.create({ name: 'earlier' });
     await storeOn(db()).update(realm.id, { password: { minScore: 4 } }, { expectedVersion: 1 });
 
-    // The release that changes the version to 1-rc.2 and renames
+    // The release that changes the version to the next one and renames
     // password.minScore, whose seed it reads as 0: looser than stored.
-    const registry = createPolicyRegistry({ version: '1-rc.2', env: REALM_POLICY_ENV });
+    const nextVersion = `1-rc.${Number(REALM_POLICY_SCHEMA_VERSION.slice('1-rc.'.length)) + 1}`;
+    const registry = createPolicyRegistry({ version: nextVersion, env: REALM_POLICY_ENV });
     for (const [name, shape] of Object.entries(BUILT_IN_POLICY_GROUPS)) {
       registry.registerPolicyGroup(
         name,
@@ -258,7 +259,7 @@ describe('policy store over the realms table (integration)', () => {
     }
     const rename: PolicySchemaUpgrade = {
       from: REALM_POLICY_SCHEMA_VERSION,
-      to: '1-rc.2',
+      to: nextVersion,
       upgrade(document) {
         const password = document['password'] as Record<string, unknown>;
         password['minimumScore'] = password['minScore'];
@@ -275,7 +276,7 @@ describe('policy store over the realms table (integration)', () => {
 
     expect(await next.get(realm.id)).toMatchObject({
       version: 2,
-      schemaVersion: '1-rc.2',
+      schemaVersion: nextVersion,
       policies: { password: { minimumScore: 4 } },
     });
     expect((await row(realm.id)).policy_schema_version).toBe(REALM_POLICY_SCHEMA_VERSION);
@@ -284,7 +285,7 @@ describe('policy store over the realms table (integration)', () => {
       { realmId: realm.id, realmName: 'earlier', from: REALM_POLICY_SCHEMA_VERSION, paths: [] },
     ]);
     const stored = await row(realm.id);
-    expect(stored).toMatchObject({ policy_schema_version: '1-rc.2', policies_version: 3 });
+    expect(stored).toMatchObject({ policy_schema_version: nextVersion, policies_version: 3 });
     expect((stored['policies'] as Record<string, unknown>)['password']).toEqual({
       minLength: 15,
       minimumScore: 4,
@@ -298,7 +299,7 @@ describe('policy store over the realms table (integration)', () => {
     const previous = storeOn(db());
     expect(await previous.get(realm.id)).toMatchObject({
       version: 3,
-      schemaVersion: '1-rc.2',
+      schemaVersion: nextVersion,
       policies: { password: { minScore: 3 } },
     });
     await expect(previous.update(realm.id, {}, { expectedVersion: 3 })).rejects.toMatchObject({

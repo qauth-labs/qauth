@@ -293,6 +293,16 @@ export const ACCOUNT_KEYS = defineKeys([
     docs: "Temporary: the operator's word that a ceremony app serves the ceremony page `/ui/interaction/{id}` on every realm host (operate/reverse-proxy.md), required while `INTERACTION_UI_ENABLED` is on, which sends every browser sign-in there, a page the auth server does not serve, so that without a ceremony app every sign-in would end in a 404; it only lifts that refusal, the auth server goes on serving its own `/ui` pages, and it goes with the switch.",
   },
   {
+    name: 'CEREMONY_APP_ERROR_PAGE',
+    tier: 'advanced',
+    role: 'realm-seed',
+    seeds: 'ceremonyApp.errorPage',
+    owner: 'sessions',
+    default: null,
+    since: '0.2.5',
+    docs: "The path on the realm origin of the ceremony app's page for the endings that leave no interaction to show (an upstream provider's callback whose interaction is gone, the pages an RP-initiated logout ends on), which the auth server then answers `303` to instead of rendering a page of its own, such as `/ui/error`: under `/ui/`, of RFC 3986 unreserved characters, with no query or fragment, or the boot fails; it seeds `ceremonyApp.errorPage` of a new realm and of a realm whose stored policies lack it, and the first boot of 0.2.5 or later fills with it, once, the `null` a realm stored under 0.2.4, which added the policy with no key (an admin's deliberate `null` too); unset or blank, the realm keeps the auth server's own pages, and once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
+  },
+  {
     name: 'SESSION_RETENTION_DAYS',
     tier: 'advanced',
     role: 'deployment',
