@@ -167,6 +167,11 @@ never calls it.
   `403`, and each refusal is logged with the role and the operation and
   counted in `qauth_signer_refusals_total`
   ([Observability](/operate/observability/#metrics-get-internalmetrics)).
+- **A grant holds in every realm.** Every process serves every realm, so a
+  role's grant is the same in each: the signer does not narrow a peer to some
+  realms. A stolen certificate and its key can make that role's calls for
+  every realm, `web`'s the cookie keys among them: keep each role's key as
+  you keep the signer's, and rotate a certificate that may have leaked.
 - **One role per process.** A process calls as the one role its certificate
   maps to, so one that holds two roles without the signer, such as `web,api`,
   warns at boot: the signer refuses the calls of the other role, and those
