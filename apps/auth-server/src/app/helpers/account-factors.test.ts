@@ -23,7 +23,6 @@ vi.mock('./account-sign-in-methods', async (importOriginal) => ({
 }));
 
 import { REDIS_KEYS } from '../constants/redis-keys';
-import { InsufficientUserAuthenticationError } from './account-operation-errors';
 import {
   type AccountFactors,
   confirmTotpEnrolment,
@@ -32,6 +31,7 @@ import {
   startTotpEnrolment,
   TOTP_ENROLMENT_LIFETIME_MS,
 } from './account-factors';
+import { InsufficientUserAuthenticationError } from './account-operation-errors';
 
 const REALM_ID = '00000000-0000-4000-8000-0000000000aa';
 const USER_ID = '00000000-0000-4000-8000-000000000001';
