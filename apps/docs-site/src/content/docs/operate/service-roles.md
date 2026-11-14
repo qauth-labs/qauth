@@ -149,8 +149,9 @@ A process that holds `signer` while the roles are split serves the signer to
 the others on its internal listener (ADR-019 Decision 9), one `POST` route per
 operation under `/internal/signer/v1-rc.0/`: signing a JWS, a hybrid token, a
 webhook message, a client assertion or an OID4VP request object, encrypting
-and decrypting with the realm's `data_at_rest` key, the cookie keys, and the
-realm's verification keys and JWKS. Every other process calls it through its
+and decrypting with the realm's `data_at_rest` key, the cookie keys, a key
+derived from the cookie key, checking a cookie's MAC, and the realm's
+verification keys and JWKS. Every other process calls it through its
 remote signer, which has the in-process signer's interface, so the same code
 signs either way. A single process (`SERVICE_ROLES=all`) signs in-process and
 never calls it.
@@ -175,12 +176,24 @@ never calls it.
   `spiffe://example.org/qauth/signer`, or `SIGNER_URL`'s host name when it is
   unset. A `SIGNER_URL` that names an IP address needs `SIGNER_SAN`, or the
   process refuses to boot.
-- **Bounded.** A call carries at most 64 KiB of JSON, or 1 MiB for one that
+- **The cookie key stays with `web`.** Whoever holds a realm's cookie key can
+  make a session cookie, so only `web` gets it. `api` needs two things of it,
+  and gets them without it: the keys the failure ladder and the emailed
+  code's digests are made with, which the signer derives from the cookie key
+  with HKDF for one use each and which make no cookie, and, at
+  `/auth/logout`, a session cookie's MAC, which the signer checks and answers
+  only whether it holds. A process keeps the derived keys in memory and
+  reads them again every minute, so a sign-in makes no signer call.
+- **Bounded.** A call carries at most 64 KiB of JSON, or 2 MiB for one that
   carries claims, a message or data: the caller refuses a larger one before it
-  sends it, and the signer answers `413`. Each peer certificate may make 2,000
-  calls a second after a burst of 4,000 (`429` with `Retry-After`); processes
-  that share a certificate share the rate. Every answer is
-  `Cache-Control: no-store`.
+  sends it, and the signer answers `413`. Each peer certificate has 2,000
+  tokens a second after a burst of 4,000, a call costing one token and one
+  more per 16 KiB of its body, and at most 128 calls in flight (`429` with
+  `Retry-After`); the internal listener holds at most 256 connections per peer
+  certificate. A role refused for its grant is refused before its body is
+  read. Processes that share a certificate share these caps. Every answer is
+  `Cache-Control: no-store`, and the warnings of a refused peer are logged at
+  most once a minute per peer and operation.
 - **Nothing secret in an error.** An error answer and its log line name the
   operation, the role and the error's class, never a claim value, a plaintext
   or key material; a body that is not JSON is refused without being quoted.
@@ -248,21 +261,11 @@ like the discovery documents: they are not browser paths, and the pages on the
 
 ### What a process without the signer cannot do
 
-The signer hands the cookie keys to the browser-facing role only (ADR-019
-Decision 9), and decrypts a realm's mail secret for `api` only:
-
-- A process that serves `api` without the signer answers `503` to the calls
-  whose failure ladder keys the account by an HMAC under the realm's cookie
-  key: `POST /auth/login`, `POST /auth/verify`, and the account API's calls
-  that check a password or a second factor. The browser's own pages, on `web`,
-  sign in and verify as before. Serve those `api` paths from a process that
-  holds the signer too, or have the clients use the browser flow.
-  `/auth/logout` still ends the user's sessions and tokens there, and leaves
-  the request's cookie for the next page to clear.
-- A mail the `web` role sends, such as an emailed sign-in code, is not sent
-  for a realm whose transport needs a stored secret (`mail.smtp.password` or
-  `mail.resend.apiKey`): the request answers as it would otherwise, and the
-  log names the realm. The `api` role's mail goes out.
+The signer decrypts a realm's mail secret for `api` only (ADR-019 Decision 9):
+a mail the `web` role sends, such as an emailed sign-in code, is not sent for
+a realm whose transport needs a stored secret (`mail.smtp.password` or
+`mail.resend.apiKey`). The request answers as it would otherwise, and the log
+names the realm. The `api` role's mail goes out.
 
 `SESSION_COOKIE_SECRET` is optional on every process: only the key boot step,
 on a process that holds the signer, reads it, to import it into the default

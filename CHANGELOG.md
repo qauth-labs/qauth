@@ -102,10 +102,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `delivery` signs its webhooks and event tokens with no KEK and no key
   variable. The signer takes the caller's role from its certificate's SAN in
   `INTERNAL_PEER_ROLES` and holds each call to that role's grant: only `web`
-  gets the cookie keys. Each refusal is logged and counted in the new
+  gets the cookie keys, and `api` gets what it needs of them without them,
+  keys derived from the cookie key for its failure ladder and emailed-code
+  digests and a signer-side check of the session cookie at `/auth/logout`, so
+  `api` signs in, verifies and signs out with no cookie key. Each refusal is
+  logged and counted in the new
   `qauth_signer_refusals_total{role,operation,reason}`. Calls are capped at
-  64 KiB, or 1 MiB for claims, messages and data (`413`), and at 2,000 a
-  second per peer certificate after a burst of 4,000 (`429`). The caller
+  64 KiB, or 2 MiB for claims, messages and data (`413`); each peer
+  certificate at 2,000 tokens a second after a burst of 4,000, a token per
+  16 KiB of body, and 128 calls in flight (`429`); and the internal listener
+  at 256 connections per peer certificate. The caller
   gives each attempt 2 seconds, tries a read or a decryption once more, and
   answers at once for 5 seconds after 5 outages in a row, then recovers by
   itself; while the signer is down, what signs answers `503` and the JWKS,
@@ -114,10 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certificate must hold: `SIGNER_URL`'s host name when unset, required when
   that host is an IP address. A process without the signer that holds two
   roles warns at boot, since it calls as the one role its certificate maps
-  to. A process that serves `api` without the signer still answers `503` to
-  `POST /auth/login`, `POST /auth/verify` and the account API's password and
-  second-factor checks, whose failure ladder needs the cookie key:
-  [Service roles](https://docs.qauth.dev/operate/service-roles/#the-signer-service)
+  to. [Service roles](https://docs.qauth.dev/operate/service-roles/#the-signer-service)
   has the details and a deployment with every role apart.
 
 ### Removed

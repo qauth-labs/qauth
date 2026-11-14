@@ -458,8 +458,9 @@ each list as **open** — a new call site can add a value without a schema chang
   service, while the roles are split. `role` is the caller's role, from its
   certificate: `web`, `api`, `delivery` or `admin`. `operation` is the signer
   operation, such as `signJws` or `getCookieSecrets`. `reason` is
-  `not_allowed` (the role's grant does not cover the call) or `rate_limited`
-  (the peer called faster than its rate). A rise of `not_allowed` means a
+  `not_allowed` (the role's grant does not cover the call), `rate_limited`
+  (the peer called faster than its rate) or `in_flight` (the peer had as many
+  calls running as one peer may). A rise of `not_allowed` means a
   process calls as another role than it serves: check that each certificate's
   SAN maps to its process's role in `INTERNAL_PEER_ROLES`.
 
