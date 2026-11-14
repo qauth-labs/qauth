@@ -255,7 +255,8 @@ with the caller instead, so a stranger cannot add rows to another realm's chain.
 A security operation runs only with a fresh approval bound to that exact request (ADR-019
 Decision 7). The approval engine lives in `apps/auth-server/src/app/admin/approvals/`.
 
-1. The client calls the operation and gets 403 `approval_required`.
+1. The client calls the operation and gets 403 `approval_required`, or 409 `approval_unavailable`
+   where the realm requires a second admin and none is eligible (below).
 2. It files an approval: `POST /admin/v1-rc.0/realms/{realmId}/approvals` with the operation's id,
    its path parameters other than `realmId`, its query and its body, and an optional `reason`. The
    answer, 201, is the approval, `pending`, with `approvalUrl`: the approval page, on the auth
@@ -338,13 +339,26 @@ back leaves its approval usable. The rules in full are on the
 [Security operations](/reference/security-operations/#rules) page.
 
 **Who approves.** A human requester's own fresh step-up is its first approval, and only the
-requester gives it. An approval needs that one approval today. The engine already counts a
-required second approval only from a different account that holds `approvals.approve` on the
-realm; the two-admin rule (#521) will make a second admin mandatory where a realm asks for it, and
-add the rest of ADR-019's eligibility rules (the approver held the security scope before the
-request, no account or credential change in the 7 days before it, a passkey that is not the
-requester's). Service accounts (#522) have no passkey: a human admin will approve in their place.
-Until they ship, every admin API caller is a human account.
+requester gives it. Every security operation recommends a second admin's approval, and a realm
+makes it mandatory for the operations its `admin.twoAdminMandatoryOperations` policy lists; while
+that list is not empty, the self-protecting operations and every change to the list but an
+addition need a second admin too. The 201 of filing answers `twoAdmin` (`recommended` or
+`mandatory`) and `eligibleApprovers`, how many other admins could give the second approval: those
+with a grant on the realm and, for a caller of the operator realm, those with a grant on every
+realm. The second approval comes only from a different human account that held a grant giving
+`approvals.approve` on the realm before the request was filed, was not created or granted a role
+in the 7 days before it, whose credentials, identifier and contact address did not change in
+those 7 days, and that approves with a credential not registered to the requester's account. A
+change through the account API counts, and so does one through the admin API; the automatic
+password disable of ADR-017 Decision 7 does not. Where the second approval is mandatory and no
+admin is eligible, filing, and the call without an approval, answer 409 `approval_unavailable`:
+nothing is filed or run, and the detail points at the
+[runbook](/reference/security-operations/#when-no-admin-can-approve). An approval filed for one
+approval does not approve a call the realm has since made mandatory (403 `approval_required`); the
+client files again. The rules in full are on the
+[Security operations](/reference/security-operations/#two-admin-approval) page. Service accounts
+(#522) have no passkey: a human admin will approve in their place. Until they ship, every admin
+API caller is a human account.
 
 **Who reads.** Filing (`approvals.create`) and withdrawing (`approvals.cancel`) take the
 classification of the operation the approval is for: the caller needs every permission it
@@ -379,10 +393,11 @@ the request: nothing checks it.
 
 **Audit rows.** Every state change writes the admin audit log of the approval's realm: filing and
 withdrawing write the rows of `approvals.create` and `approvals.cancel`; approving and declining
-write `approvals.approve` and `approvals.deny`, the first with the credential that approved; the
-operation's own `succeeded` row lists the approvals it ran on and carries the approval's
-`op_hash` as its request digest. A factor that refuses an approver's answer writes a `denied` row
-of `approvals.approve`.
+write `approvals.approve` and `approvals.deny`, the first with the credential that approved and
+the account that made the approver an admin; the operation's own `succeeded` row lists the
+approvals it ran on, each with its credential and that account, and carries the approval's
+`op_hash` as its request digest. A factor that refuses an approver's answer, and an approver the
+two-admin rule refuses, write a `denied` row of `approvals.approve`.
 
 ### Issuing a family audience
 
