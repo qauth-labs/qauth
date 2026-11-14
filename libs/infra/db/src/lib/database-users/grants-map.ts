@@ -20,8 +20,9 @@ import type { DatabaseRole } from './roles';
  * - `realm_keys`, the private keys: only `signer` reads or writes it. Every
  *   other role verifies with `realm_public_keys`, which it may only read;
  *   only `signer` writes a published key.
- * - `events`: the roles that write events (`web`, `api`, and `admin` for the
- *   events of an admin operation, such as `user.verified`) may only insert,
+ * - `events`: the roles that write events (`web`, `api`, `admin` for the
+ *   events of an admin operation, such as `user.verified`, and `signer` for
+ *   the audit events of the key rotation job, #542) may only insert,
  *   and read what they need through the functions of migrations 0033 and
  *   0055, never the table: it holds every realm's request IPs, user agents
  *   and admin diffs (`eventsWriterGrantStatements`).
@@ -31,6 +32,9 @@ import type { DatabaseRole } from './roles';
  *   it, what that job deletes (`eventRetentionGrantStatements`). It runs no
  *   default realm boot step, so it never writes `realms`.
  * - `admin_grants`, who administers: every role that reads it only reads it.
+ *   A change of an account's credentials, identifier or contact address moves
+ *   its grants' `last_security_change_at` through the function of migration
+ *   0074 alone, which `web`, `api` and `admin` execute (#521).
  * - `audit_logs`: read-only since #458, and nothing reads it at run time, so
  *   no role holds anything on it; `roles` and `user_roles` are unused.
  * - No role holds `TRUNCATE`, `REFERENCES` or `TRIGGER`, owns a table, or can
@@ -88,7 +92,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   admin_audit_log: { admin: SI },
   admin_audit_log_checkpoints: { admin: S },
   // Who administers (#510): read on every admin request and at sign-in and
-  // token issuance, written by no role yet.
+  // token issuance, written by no role yet. A security change of an account
+  // moves its grants' last_security_change_at through migration 0074's
+  // function, never through UPDATE (#521).
   admin_grants: { web: S, api: S, admin: S },
   admin_roles: { web: S, api: S, admin: S },
   // The developer API's client API keys.
@@ -105,10 +111,11 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // a stream and reads a stream's delivery status.
   event_deliveries: { api: SI, delivery: SIU },
   event_delivery_positions: { delivery: SIUD },
-  // The event store (#457): written by `web` and `api`, and by `admin` for
-  // the events its operations record (`user.verified`, #1052); read and
+  // The event store (#457): written by `web` and `api`, by `admin` for the
+  // events its operations record (`user.verified`, #1052), and by `signer`
+  // for the steps of the key rotation job (`key.rotated`, #542); read and
   // pruned by `delivery` alone.
-  events: { web: I, api: I, admin: I, delivery: SD },
+  events: { web: I, api: I, admin: I, signer: I, delivery: SD },
   // `web` stores CIMD clients as it fetches their documents; `api` also
   // registers, updates and deletes clients, and so does `admin` for any
   // client of a realm it administers (#632). `delivery` reads columns only.
@@ -235,17 +242,23 @@ export const COLUMN_GRANTS: ColumnGrants = Object.freeze({
 export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // An admin event's chain head and the row the writer's own transaction
   // wrote (migration 0033): the event writers.
-  '"events_admin_chain_head"(uuid)': ['web', 'api', 'admin'],
-  '"events_own_row"(uuid)': ['web', 'api', 'admin'],
+  '"events_admin_chain_head"(uuid)': ['web', 'api', 'admin', 'signer'],
+  '"events_own_row"(uuid)': ['web', 'api', 'admin', 'signer'],
   // The event store's lag, which every process that builds the events
   // repository reports on its metrics: `admin` builds it too since it writes
-  // the events of its operations (#1052).
-  '"events_oldest_unread_time"()': ['web', 'api', 'admin', 'delivery'],
+  // the events of its operations (#1052), and `signer` since its key
+  // rotation job writes its steps' (#542).
+  '"events_oldest_unread_time"()': ['web', 'api', 'admin', 'signer', 'delivery'],
   // An operator's verification of an account (`users.verify`, migration
   // 0070, #1052): what the account's credentials prove, read without their
   // secrets, and the write of the verification's two columns alone.
   '"user_credential_proofs"(uuid, uuid)': ['admin'],
   '"users_record_operator_verification"(uuid, uuid, uuid, bigint)': ['admin'],
+  // A change of an account's credentials, identifier or contact address
+  // (migration 0074, #521): the two-admin rule's 7-day window moves on the
+  // account's live grants. The account API (`api`), the hosted pages and
+  // sign-in flows (`web`) and the admin API (`admin`) make such changes.
+  '"admin_grants_record_security_change"(uuid, uuid)': ['web', 'api', 'admin'],
   // Whether an event about a user can still reach an SSF stream (migration
   // 0055): the subject sweep, an `api` job.
   '"ssf_subject_events_pending"(uuid, text)': ['api'],

@@ -11,6 +11,7 @@ import {
   createRepositoryKekCanaryStore,
   createRepositorySignerKeyStore,
 } from './repository-key-stores';
+import { createScheduledKeyRotation, type ScheduledKeyRotation } from './scheduled-key-rotation';
 import { createUpstreamClientKeys, type UpstreamClientKeys } from './upstream-client-keys';
 
 declare module 'fastify' {
@@ -34,6 +35,12 @@ declare module 'fastify' {
      * process that does not hold the signer role decorates it `null`.
      */
     upstreamClientKeys: UpstreamClientKeys | null;
+    /**
+     * The scheduled rotation of the realms' keys (#542), which the key
+     * rotation job runs on the signer role. A process that does not hold the
+     * signer role decorates it `null`.
+     */
+    keyRotation: ScheduledKeyRotation | null;
   }
 }
 
@@ -53,6 +60,10 @@ declare module 'fastify' {
  * key boot step (#485) runs in an `onReady` hook, so before the server
  * listens, and a refusal rejects `ready()`. Register the plugin after the
  * default realm's boot step, whose `onReady` hook creates the realm.
+ *
+ * It also decorates the scheduled key rotation (`keyRotation`, #542) with the
+ * windows of `keyRotation`; windows it refuses, such as a period shorter than
+ * the pre-publication window, fail the registration.
  *
  * @example
  * ```typescript
@@ -109,6 +120,20 @@ export const signerPlugin = fp<SignerPluginOptions>(
         kekProvider,
         enabledSignatureAlgorithms: options.enabledSignatureAlgorithms,
         hybridSigning: options.hybridSigning,
+      })
+    );
+
+    fastify.decorate<ScheduledKeyRotation | null>(
+      'keyRotation',
+      createScheduledKeyRotation({
+        db: options.db,
+        kekProvider,
+        enabledSignatureAlgorithms: options.enabledSignatureAlgorithms,
+        hybridSigning: options.hybridSigning,
+        ...(options.keyRotation !== undefined ? { days: options.keyRotation } : {}),
+        ...(options.refreshIntervalMs !== undefined
+          ? { signerRefreshIntervalMs: options.refreshIntervalMs }
+          : {}),
       })
     );
 

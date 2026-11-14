@@ -83,6 +83,11 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // `CEREMONY_APP_ERROR_PAGE` (#1118): read by an upstream provider's
   // callback that finds no interaction left, and by the logout's endings.
   'ceremonyApp.errorPage',
+  // The two-admin rule (`admin/approvals/two-admin.ts`, #521), which no
+  // environment key seeds: the operations that need a second admin's
+  // approval, read when an approval is filed, at the approval gate and in a
+  // change preview.
+  'admin.twoAdminMandatoryOperations',
 ]);
 
 /**

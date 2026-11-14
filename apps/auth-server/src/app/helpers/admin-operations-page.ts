@@ -20,7 +20,7 @@ export const SECURITY_OPERATIONS_PAGE_PATH =
   'apps/docs-site/src/content/docs/reference/security-operations.md';
 
 /** The date the page's hand-written prose was last checked; change it with the prose. */
-export const SECURITY_OPERATIONS_PAGE_LAST_VERIFIED = '2026-11-08';
+export const SECURITY_OPERATIONS_PAGE_LAST_VERIFIED = '2026-11-14';
 
 /** Where the registry lives, as the page names it. */
 const REGISTRY_PATH = 'apps/auth-server/src/app/helpers/admin-operations.ts';
@@ -57,7 +57,8 @@ function operationRow(operation: AdminOperation): string {
     operation.secretMembers === undefined
       ? ''
       : ` Takes ${codeList(operation.secretMembers)} only sealed.`;
-  return `| ${code(operation.id)} | ${operation.class} | ${codeList(operation.effects)} | ${codeList(operation.permissions)} | ${tableCell(operation.description + decided + sealed)} |`;
+  const guards = operation.selfProtecting === true ? ' Self-protecting.' : '';
+  return `| ${code(operation.id)} | ${operation.class} | ${codeList(operation.effects)} | ${codeList(operation.permissions)} | ${tableCell(operation.description + decided + sealed + guards)} |`;
 }
 
 /** The Operations section: a table, or a sentence when none is registered. */
@@ -86,7 +87,7 @@ function reservedSection(registry: OperationRegistry): string {
         '| --- | --- | --- | --- | --- | --- |',
         ...entries.map(
           (entry: ReservedOperation) =>
-            `| ${code(entry.id)} | ${codeList(entry.effects)} | ${entry.requestDependent === true ? 'yes' : 'no'} | ${registry.get(entry.id) === undefined ? 'no' : 'yes'} | ${tableCell(entry.source)} | ${tableCell(entry.description)} |`
+            `| ${code(entry.id)} | ${codeList(entry.effects)} | ${entry.requestDependent === true ? 'yes' : 'no'} | ${registry.get(entry.id) === undefined ? 'no' : 'yes'} | ${tableCell(entry.source)} | ${tableCell(entry.description + (entry.selfProtecting === true ? ' Self-protecting.' : ''))} |`
         ),
       ].join('\n')
     );
@@ -239,6 +240,64 @@ These are not security operations:
 - Anything outside the admin API. The developer API's changes to a client the caller owns
   ([ADR-012](/reference/records/adr/012-dynamic-client-ownership/)) and the account API's changes
   to the caller's own account keep their own rules.
+
+## Two-admin approval
+
+Every security operation recommends a second admin's approval: the OpenAPI document marks each
+one \`x-qauth-two-admin: recommended\`. A realm makes the second admin mandatory for the operations its
+\`admin.twoAdminMandatoryOperations\` policy lists
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/), Decision 7).
+
+- A human requester's own fresh step-up is the first approval. Where the second is mandatory, a
+  different, eligible admin gives it.
+- The rule protects itself. While the realm's list is not empty, the operations marked
+  self-protecting below (creating an admin, granting or removing an admin role, changing what a
+  custom role gives, changing an admin's credentials, identifier or contact address, and an import
+  that can rewrite the list) need a second admin too, and so does every change to the list but an
+  addition: one admin alone can add an operation to it, never remove one, replace the list or
+  empty it. On the operator realm, whose admins administer every realm, a self-protecting
+  operation needs a second admin while any realm's list is not empty. The operations that change
+  an account's credentials refuse an admin's account, whose credentials change only through
+  \`admins.credentials.update\`. The registry refuses a reserved self-protecting operation
+  registered without the flag.
+- An approver is eligible only when all of these hold:
+  1. It is a different human account from the requester. A service account never approves.
+  2. It held a live grant that gives \`approvals.approve\` on the realm before the request was
+     filed.
+  3. In the 7 days before the request it was not created and not granted a role, and its
+     credentials, identifier and contact address did not change, whoever changed them. The 7 days
+     are a constant. The automatic password disable of
+     [ADR-017](/reference/records/adr/017-first-party-login/) Decision 7 is not such a change.
+  4. The credential it approves with is not registered to the requester's account, did not give
+     the same request an earlier approval, and is not registered to an account that did.
+- Filing an approval answers \`twoAdmin\` (\`recommended\` or \`mandatory\`) and
+  \`eligibleApprovers\`, the other admins that could give the second approval now.
+- An approval filed for one approval does not approve a call the realm has since made mandatory:
+  the call answers 403 \`approval_required\`, and the client files again.
+- Both approvals land in the admin events, each with the credential that gave it and the account
+  that made its approver an admin, the creator of its oldest grant that gives
+  \`approvals.approve\` (\`null\` for one no account granted). The rule binds accounts, not
+  people: one person who set up two admin accounts before any operation was mandatory can still
+  meet it, and that column shows it.
+
+### When no admin can approve
+
+Where the realm requires a second admin and no other admin is eligible, filing the approval, and
+the call without one, answer 409 \`approval_unavailable\`: nothing is filed and nothing runs. The
+rule fails closed. The ways out:
+
+1. Another admin of the realm, or of the operator realm with a grant on every realm, who meets the
+   rules above approves. Its \`eligibleApprovers\` count says whether one exists.
+2. An admin that changed its own credentials, identifier or contact address, or was created or
+   granted a role, approves again 7 days after the change.
+3. Whoever holds the host, the database credentials and the KEK enrols a new admin with the
+   break-glass CLI, which records the operating-system user and sends a critical security event.
+   The new admin approves 7 days after its enrolment; until then the operation still fails
+   closed. The CLI is not in this release
+   ([#602](https://github.com/qauth-labs/qauth/issues/602)).
+
+The list itself cannot be shortened by one admin, so a realm that made an operation mandatory and
+has one admin left keeps the rule until a second is eligible.
 
 ## Operations
 

@@ -47,6 +47,30 @@ describe('the test approval factor (#512)', () => {
     ).rejects.toBeInstanceOf(ApprovalFactorError);
   });
 
+  // #521: one passkey can be registered to two accounts, and the two-admin
+  // rule refuses an approval given with one the requester holds.
+  it('answers with a credential registered to the approver too, and says whose it is', async () => {
+    const { factor, answer, credentialOf, register } = createTestApprovalFactor();
+    const shared = credentialOf(alice);
+    const challenge = await factor.createChallenge(approvalA, bob);
+    // Not bob's until it is registered to bob.
+    await expect(
+      factor.verify({
+        approval: approvalA,
+        approver: bob,
+        response: answer(challenge, bob, shared),
+      })
+    ).rejects.toBeInstanceOf(ApprovalFactorError);
+    register(bob, shared);
+    const again = await factor.createChallenge(approvalA, bob);
+    await expect(
+      factor.verify({ approval: approvalA, approver: bob, response: answer(again, bob, shared) })
+    ).resolves.toBe(shared);
+    expect(await factor.isRegisteredTo(shared, alice)).toBe(true);
+    expect(await factor.isRegisteredTo(shared, bob)).toBe(true);
+    expect(await factor.isRegisteredTo(credentialOf(bob), alice)).toBe(false);
+  });
+
   it('derives each challenge afresh, and refuses a forged signature', async () => {
     const { factor, answer } = createTestApprovalFactor();
     const first = await factor.createChallenge(approvalA, alice);

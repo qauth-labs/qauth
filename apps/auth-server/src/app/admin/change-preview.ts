@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Classification } from '../helpers/admin-operations';
 import type { PermissionRegistry } from '../helpers/admin-permissions';
 import { ADMIN_SCOPE_LIST, ADMIN_SCOPES, type AdminScope } from '../helpers/admin-scopes';
-import type { TwoAdmin } from './approvals/engine';
+import type { TwoAdmin } from './approvals/two-admin';
 
 /**
  * THE PREVIEW OF A CHANGE, AS THE ADMIN API ANSWERS IT (ADR-020 §5 criterion 1,

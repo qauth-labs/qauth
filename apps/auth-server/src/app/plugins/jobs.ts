@@ -70,6 +70,9 @@ export const jobsPlugin = fp<JobsPluginOptions>(
             ...(options.sessionRetentionDays === undefined
               ? {}
               : { sessionRetentionDays: options.sessionRetentionDays }),
+            ...(options.sessionCookieTtlSeconds === undefined
+              ? {}
+              : { sessionCookieTtlSeconds: options.sessionCookieTtlSeconds }),
           },
           roles
         ),

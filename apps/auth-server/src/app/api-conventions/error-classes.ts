@@ -52,7 +52,11 @@ import {
   UnprocessableContentError,
   UnsupportedMediaTypeError,
 } from '../helpers/api-request-errors';
-import { ApprovalRequiredError, ApprovalStateError } from '../helpers/approval-required';
+import {
+  ApprovalRequiredError,
+  ApprovalStateError,
+  ApprovalUnavailableError,
+} from '../helpers/approval-required';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
 import { PluginKeyConflictError } from '../helpers/plugin-key-errors';
@@ -251,6 +255,13 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // The approval engine (#512): a move an approval cannot make from where it
   // stands.
   { errorClass: ApprovalStateError, code: 'conflict', oauthError: 'invalid_request' },
+  // The two-admin rule (#521): the operation needs another admin's approval
+  // and no other admin can give one, so nothing is filed or run.
+  {
+    errorClass: ApprovalUnavailableError,
+    code: 'approval_unavailable',
+    oauthError: 'invalid_request',
+  },
   // An operator's verification of an account that is disabled, or that an
   // operator already verified (#1052).
   {

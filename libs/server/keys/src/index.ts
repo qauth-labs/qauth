@@ -5,6 +5,11 @@
 // signer are in `@qauth-labs/server-keys/custody`, which only the signer's
 // wiring may import (.oxlintrc.json, issue #464).
 export {
+  DATA_AT_REST_CONSUMERS,
+  type DataAtRestConsumer,
+  dataAtRestLifetimeMs,
+} from './lib/data-at-rest-consumers';
+export {
   isKeyCustodyError,
   KekAccessDeniedError,
   KekUnavailableError,
@@ -39,6 +44,23 @@ export {
   type KeyRotationDefault,
   STANDARD_REALM_KEY_PURPOSES,
 } from './lib/key-purposes';
+export {
+  AUTOMATIC_ROTATION_PURPOSES,
+  DEFAULT_KEY_ROTATION_SETTINGS,
+  KEY_ACTIVATION_DELAY_MS,
+  type KeyRotationDays,
+  type KeyRotationPlan,
+  type KeyRotationSettings,
+  keyRotationSettingsFromDays,
+  type KeyRotationStep,
+  type KeysRotatedStep,
+  type NextKeyCreatedStep,
+  planKeyRotation,
+  type PlanKeyRotationInput,
+  type ResolvedKeyRotationSettings,
+  resolveKeyRotationSettings,
+  type RotatedKey,
+} from './lib/key-rotation-plan';
 export {
   createPublishedKeyReader,
   DEFAULT_PUBLISHED_KEY_CACHE_SIZE,
@@ -95,9 +117,12 @@ export {
 export {
   CLIENT_ASSERTION_TYP,
   idTokenAlgorithm,
+  isJwksPurpose,
   isJwsSigningPurpose,
   isTypAllowed,
   isVerificationKeyPurpose,
+  JWKS_PURPOSES,
+  type JwksPurpose,
   JWS_SIGNING_PURPOSES,
   JWS_TYP_BY_PURPOSE,
   JWS_TYPS,

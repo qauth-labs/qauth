@@ -8,6 +8,7 @@ import {
 } from '@qauth-labs/infra-db';
 import { createPublishedKeyReader, type PublishedKeyReader } from '@qauth-labs/server-keys';
 import type {
+  KeyRotationStore,
   RealmKeyBootStore,
   SignerKeyStore,
   StoredPublicKey,
@@ -109,9 +110,12 @@ export function createRepositoryPublishedKeyReader(
  * savepoint inside the caller's `outer` transaction, so a realm and its keys
  * can be created together, and a subscription or provider deleted with its
  * keys (`deleteScopedKeys`). `lockRealm` is the repository's advisory lock on
- * a realm's keys.
+ * a realm's keys. The key rotation job (#542) writes through it too, and
+ * pages through the realms with `listRealmIds`.
  */
-export function createRepositoryKeyStore(db: DbClient): RealmKeyBootStore<DbClient> {
+export function createRepositoryKeyStore(
+  db: DbClient
+): RealmKeyBootStore<DbClient> & KeyRotationStore<DbClient> {
   const keys = createRealmKeysRepository(db);
   return Object.freeze({
     transaction: <T>(work: (tx: DbClient) => Promise<T>, outer?: DbClient) =>
@@ -122,6 +126,8 @@ export function createRepositoryKeyStore(db: DbClient): RealmKeyBootStore<DbClie
     updateStatus: keys.updateStatus,
     deleteByScope: keys.deleteByScope,
     lockRealm: keys.lockRealm,
+    listRealmIds: (afterRealmId: string | null, limit: number) =>
+      keys.listRealmIds(afterRealmId, limit),
     getWrappedKey: (realmId: string, kid: string, tx: DbClient) =>
       keys.getWrappedForSigner(realmId, kid, tx),
     anotherRealmPublishes: (
@@ -138,5 +144,5 @@ export function createRepositoryKeyStore(db: DbClient): RealmKeyBootStore<DbClie
         publicJwk,
       }));
     },
-  } satisfies RealmKeyBootStore<DbClient>);
+  } satisfies RealmKeyBootStore<DbClient> & KeyRotationStore<DbClient>);
 }

@@ -14,6 +14,7 @@ import { type AccountOwner, isSecondFactor } from './account-credentials';
 import { InsufficientUserAuthenticationError } from './account-operation-errors';
 import { bindsNewFactor, tokenSessionOf } from './account-operation-guard';
 import { accountCredentials } from './account-sign-in-methods';
+import { recordAdminSecurityChange } from './admin-security-change';
 import type { EngineMailer } from './engine-mail';
 import { createServerFactorPorts } from './factor-ports';
 import { ACCOUNT_PAGES_ENGINE_CLIENT_ID } from './interaction-record';
@@ -504,6 +505,11 @@ export type RecoveryCodesResult =
  * `user.recovery_codes_regenerated` is recorded right after it, naming the
  * client the change came through; a record that fails is logged, and the
  * codes are still answered: the old set is gone either way.
+ *
+ * The store keeps its own transaction, so the event cannot commit with the
+ * set. The two-admin rule's record (#521) is written first, outside the
+ * logged failure: a new set stops an admin approving for 7 days, and a record
+ * that fails refuses the regeneration rather than leave the admin eligible.
  */
 export async function regenerateRecoveryCodes(
   fastify: FastifyInstance,
@@ -516,6 +522,7 @@ export async function regenerateRecoveryCodes(
     (row) => row.realmId === realmId
   );
   if (!held.some(isSecondFactor)) return { kind: 'conflict' };
+  await recordAdminSecurityChange(fastify, { realmId, accountId: userId }, 'credentials');
   const set = await ports.forRequest(request, () =>
     ports.recoveryCodes.regenerate({ realmId, userId })
   );

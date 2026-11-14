@@ -31,6 +31,7 @@ import {
 } from '@qauth-labs/shared-events';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
+import { recordAdminSecurityChange, securityChangeOfEvent } from './admin-security-change';
 import { delegationChainColumn } from './agent-audit';
 import { requestRealm } from './request-realm';
 
@@ -165,6 +166,11 @@ export function userEventFor<Type extends RegisteredEventType>(
  * rules is refused the same way (`EventValidationError`), and nothing is
  * written. With `tx` the event commits in the handler's transaction.
  *
+ * An event that records a change of the user's credentials, identifier or
+ * contact address also records it for the two-admin rule (#521,
+ * `admin-security-change.ts`), in the same transaction: an admin it happened
+ * to cannot approve for 7 days.
+ *
  * The structured log lines of `logAuthEvent` stay: they are logs, not events.
  *
  * @param request - the request that caused the event
@@ -183,9 +189,16 @@ export async function emitUserEvent<Type extends RegisteredEventType>(
   const realmId = options.realmId ?? requestRealm(request).id;
   const event = userEventFor(request, type, data, options, realmId);
   const events = fastify.repositories.events;
-  return options.tx === undefined
-    ? events.emitInOwnTransaction(event)
-    : events.emit(options.tx, event);
+  const id =
+    options.tx === undefined
+      ? await events.emitInOwnTransaction(event)
+      : await events.emit(options.tx, event);
+  const change = securityChangeOfEvent(type);
+  const userId = event.subject?.type === 'user' ? event.subject.id : undefined;
+  if (change !== undefined && userId !== undefined) {
+    await recordAdminSecurityChange(fastify, { realmId, accountId: userId }, change, options.tx);
+  }
+  return id;
 }
 
 /** The OAuth error classes whose `message` is the registered `error` code. */

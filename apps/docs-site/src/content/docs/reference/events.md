@@ -272,6 +272,8 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:request.account_operation_refused:v1-rc.0`](#requestaccount_operation_refused-v1-rc0) | user     | info     | v0.2.0 |
 | [`urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`](#ssfstreamverification_requested-v1-rc0)  | user     | info     | v0.2.0 |
 | [`urn:qauth:event:key.emergency_retired:v1-rc.0`](#keyemergency_retired-v1-rc0)                         | admin    | critical | v0.2.0 |
+| [`urn:qauth:event:key.next_created:v1-rc.0`](#keynext_created-v1-rc0)                                   | admin    | info     | v0.3.0 |
+| [`urn:qauth:event:key.rotated:v1-rc.0`](#keyrotated-v1-rc0)                                             | admin    | info     | v0.3.0 |
 | [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                           | admin    | info     | v0.2.0 |
 
 ### user.signed_in v1-rc.0
@@ -1177,6 +1179,38 @@ An operator retired a published key of the realm that may be compromised (ADR-01
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `keyId`   | string                                                                                                                                                                              | yes      | The `kid` of the retired key. Never the key itself.                                                                                                    |
 | `purpose` | one of `token_signing`, `event_signing`, `federation_entity`, `trust_anchor`, `oid4vp_request_signing`, `oid4vp_response_encryption`, `upstream_client_assertion`, or a later value | yes      | What the key was for, one of the purposes whose keys QAuth publishes, such as `token_signing` or `event_signing`. The set may grow in a minor release. |
+
+### key.next_created v1-rc.0
+
+The scheduled key rotation created the realm's next key for a purpose (ADR-019 Decision 9): a published key is in its JWKS from now on (the realm's, or the SSF transmitter's for an event signing key) but signs nothing yet, and the key it will replace keeps signing. Emitted in the transaction that stores the key.
+
+- Identifier: `urn:qauth:event:key.next_created:v1-rc.0`
+- Category: `admin` · Severity: `info` · Since: v0.3.0
+- Subject: none: the event never carries one
+- Schema: [key.next_created.v1-rc.0.json](/schemas/events/key.next_created.v1-rc.0.json)
+
+| Member        | Type                                                                                                                                 | Required | Meaning                                                                                                                                                                                                                                                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `purpose`     | one of `token_signing`, `event_signing`, `oid4vp_response_encryption`, `data_at_rest`, `cookie_hmac`, `agent_wrap`, or a later value | yes      | What the keys are for, one of the purposes the rotation replaces on a schedule, such as `token_signing` or `cookie_hmac`. The set may grow in a minor release.                                                                                                                                                             |
+| `created`     | array of object                                                                                                                      | yes      | The new keys: one key, or both keys of a hybrid pair.                                                                                                                                                                                                                                                                      |
+| `activatesAt` | time (RFC 3339, UTC)                                                                                                                 | yes      | The earliest moment the new keys may sign, as an RFC 3339 time in UTC: once the active key has served its period and the new keys have been published for the pre-publication window, and, for a cookie key, once the cookie key retired before it has left its retention. The switch itself is recorded as `key.rotated`. |
+
+### key.rotated v1-rc.0
+
+The scheduled key rotation switched a purpose of the realm to its next key (ADR-019 Decision 9): from `activatesAt` the new keys sign and the old keys only verify or decrypt, until `retainedUntil`. Emitted in the transaction that writes the switch, which takes effect a little later so every node learns of the new keys first.
+
+- Identifier: `urn:qauth:event:key.rotated:v1-rc.0`
+- Category: `admin` · Severity: `info` · Since: v0.3.0
+- Subject: none: the event never carries one
+- Schema: [key.rotated.v1-rc.0.json](/schemas/events/key.rotated.v1-rc.0.json)
+
+| Member          | Type                                                                                                                                 | Required | Meaning                                                                                                                                                                                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `purpose`       | one of `token_signing`, `event_signing`, `oid4vp_response_encryption`, `data_at_rest`, `cookie_hmac`, `agent_wrap`, or a later value | yes      | What the keys are for, one of the purposes the rotation replaces on a schedule, such as `token_signing` or `cookie_hmac`. The set may grow in a minor release.                                                                                                    |
+| `activated`     | array of object                                                                                                                      | yes      | The keys that sign from `activatesAt`: one key, or both keys of a hybrid pair.                                                                                                                                                                                    |
+| `retired`       | array of object                                                                                                                      | yes      | The keys that stop signing at `activatesAt`.                                                                                                                                                                                                                      |
+| `activatesAt`   | time (RFC 3339, UTC)                                                                                                                 | yes      | When the new keys start to sign and the old ones stop, as an RFC 3339 time in UTC.                                                                                                                                                                                |
+| `retainedUntil` | time (RFC 3339, UTC)                                                                                                                 | no       | When the retired keys leave the JWKS and the verification set, or stop verifying cookies or decrypting stored data, as an RFC 3339 time in UTC. Absent when they are kept with no end, as a data-at-rest key is while a ciphertext it sealed may still be stored. |
 
 ### admin.change_applied v1-rc.0
 

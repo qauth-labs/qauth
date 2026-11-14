@@ -415,11 +415,13 @@ describe('job runner on a real Postgres', () => {
       await app.register(metricsPlugin);
       // The server's own job list and lock: only the clock is injected. Every
       // role but `web`, whose session jobs need the session service and
-      // Redis (`session-revocation.integration.test.ts` boots those).
+      // Redis (`session-revocation.integration.test.ts` boots those), and
+      // `signer`, whose key rotation needs the signer plugin and a KEK
+      // (`database-users.integration.test.ts` runs it on a booted server).
       await app.register(jobsPlugin, {
         clock,
         random: () => 0,
-        roles: ['api', 'admin', 'signer', 'delivery'],
+        roles: ['api', 'admin', 'delivery'],
       });
       await app.ready();
       nodes.push({ app, lines });

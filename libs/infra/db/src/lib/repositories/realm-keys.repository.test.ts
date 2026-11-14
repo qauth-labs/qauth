@@ -136,6 +136,7 @@ const CALLS: Record<
   listByRealm: (repo) =>
     repo.listByRealm(REALM_ID, { purpose: 'token_signing', scopeId: null, status: 'active' }),
   listKekCanaries: (repo) => repo.listKekCanaries(8),
+  listRealmIds: (repo) => repo.listRealmIds(REALM_ID, 100),
   listPublicByRealm: (repo) => repo.listPublicByRealm(REALM_ID),
   anotherRealmPublishes: (repo) =>
     repo.anotherRealmPublishes(REALM_ID, { kty: 'OKP', crv: 'Ed25519', x: 'AAAA' }),
@@ -281,6 +282,16 @@ describe('createRealmKeysRepository — statements', () => {
       /order by "realm_keys"\."kek_ref" asc, "realm_keys"\."created_at" desc, "realm_keys"\."id" desc limit \$3/
     );
     expect(query.values).toEqual(['active', 'next', 8]);
+  });
+
+  it('listRealmIds pages through the realms that hold keys, in ascending order (#542)', async () => {
+    const [query] = await run('listRealmIds');
+    const text = query.text.toLowerCase();
+
+    expect(text).toContain('select distinct "realm_id" from "realm_keys"');
+    expect(text).toContain('"realm_keys"."realm_id" > $1');
+    expect(text).toMatch(/order by "realm_keys"\."realm_id" asc limit \$2/);
+    expect(query.values).toEqual([REALM_ID, 100]);
   });
 
   it('listPublicByRealm reads realm_public_keys of the given realm only, in a fixed order', async () => {

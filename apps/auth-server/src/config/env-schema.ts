@@ -19,6 +19,8 @@ import {
   isPublishedSessionCookieSecret,
   issuerKeysEnvSchema,
   keyAttestationEnvSchema,
+  keyRotationEnvSchema,
+  keyRotationProblems,
   observabilityEnvSchema,
   otlpExporterProblems,
   passwordEnvSchema,
@@ -103,6 +105,10 @@ export const envSchema = z
     // Event retention (#536): the days a new realm keeps its user and admin
     // events. They seed the realm row; the realm row owns them afterwards.
     ...eventRetentionEnvSchema.shape,
+    // The scheduled key rotation (#542): the period of a realm's keys, the
+    // pre-publication window of a next key and the retention of a retired
+    // one. The job runs on the signer role; the windows are checked below.
+    ...keyRotationEnvSchema.shape,
     // Wallet federation (ADR-004): WALLET_FEDERATION_ENABLED (#232, default
     // off) and OID4VP_VERIFIER_PROFILE (#299, deliberately no default). Both
     // arrive through this spread, which is why federationEnvSchema must stay a
@@ -198,6 +204,14 @@ export const envSchema = z
       .transform((v) => (v === undefined ? undefined : v.toLowerCase() === 'true')),
   })
   .superRefine((env, ctx) => {
+    // #542 — a next key is published for KEY_PREPUBLISH_DAYS before it signs,
+    // and created while the key it replaces signs: a shorter period could not
+    // hold the window. Refused on every role, as the windows are one setting
+    // of the deployment.
+    for (const message of keyRotationProblems(env)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['KEY_ROTATION_PERIOD_DAYS'], message });
+    }
+
     // F-12 — reject a published SESSION_COOKIE_SECRET in production. The
     // cookies are signed with the realm's cookie key from the signer (#493),
     // so the variable is optional; but while the key boot step still reads it,

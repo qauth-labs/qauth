@@ -342,11 +342,7 @@ Import an RS256 private key (PKCS#8 PEM) or public key (SPKI PEM). Only `signIdT
 
 #### `derivePublicKeyPemFromPrivate(privatePem): string`
 
-Derives the SPKI public key PEM from a PKCS#8 private key PEM with `node:crypto`. It works for RSA and Ed25519 keys.
-
-#### `exportPublicKeyPem(key): Promise<string>`
-
-Exports a key as SPKI PEM with `jose`. The key must be extractable, so a key from `importPrivateKey` fails. Use `derivePublicKeyPemFromPrivate` for a PEM private key.
+Derives the SPKI public key PEM from a PKCS#8 private key PEM with `node:crypto`. It works for RSA and Ed25519 keys. Do not export the public half of a key `importPrivateKey` returned instead: `jose` imports private keys as non-extractable, so that export always fails ([#359](https://github.com/qauth-labs/qauth/issues/359)).
 
 ### JWKS
 

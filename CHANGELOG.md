@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A realm can make a second admin's approval mandatory** ([#521], ADR-019
+  Decision 7, ADR-020 §4). The operations a realm lists in its
+  `admin.twoAdminMandatoryOperations` policy now need two approvals: the
+  requester's own step-up and one from another admin. While that list is not
+  empty, so do the self-protecting operations (creating an admin, granting or
+  removing an admin role, changing or deleting a custom role, changing an
+  admin's credentials, identifier or contact address, and a realm import;
+  reserved, registered by the admin console work) and every change to the
+  list but an addition: one admin can add an operation, never remove one. On
+  the operator realm a self-protecting operation needs a second admin while
+  any realm's list is not empty. The second approver must be a different
+  human account that held `approvals.approve` on the realm before the
+  request, was not created or granted a role and had no credential,
+  identifier or contact address change in the 7 days before it, whoever made
+  the change, and approves with a credential not registered to the requester.
+  The automatic password disable does not count as a change. Filing an approval answers `twoAdmin`
+  (`recommended` or `mandatory`) and `eligibleApprovers`. Where the second
+  approval is mandatory and no admin is eligible, filing and the call answer
+  `409 approval_unavailable`, a new problem code, and nothing runs; the
+  [security operations](https://docs.qauth.dev/reference/security-operations/#when-no-admin-can-approve)
+  page has the runbook. Every approval in the admin events names the account
+  that made its approver an admin. Migration 0074 adds the database function
+  that records a change; it rewrites nothing.
+
+- **Keys rotate on a schedule, with an overlap** ([#542], ADR-019 Decision 9).
+  A new `key-rotation` job on the `signer` role rotates every realm's token
+  signing, event signing, cookie, data-at-rest, OID4VP response and agent
+  wrapping keys. Once the active key has served `KEY_ROTATION_PERIOD_DAYS`
+  (90) less `KEY_PREPUBLISH_DAYS` (7), it creates and publishes the `next`
+  key; once the period has run and the `next` key has been published for the
+  whole window, it switches. A retired key stays published and verifying for
+  `KEY_RETIRED_RETENTION_DAYS` (14), or longer while a token, cookie or
+  ciphertext it made may live: a cookie key for the realm's longest browser
+  session, a data-at-rest key for good. A hybrid pair switches in one
+  transaction. The switch is written two key-cache refresh intervals ahead,
+  so every process verifies with a new key before any signs with it. A job
+  that was down creates the `next` key and waits the whole window; many nodes
+  rotate once. Each step writes a `key.next_created` or `key.rotated` admin
+  event. The three settings are advanced keys of the configuration registry,
+  and a period shorter than the pre-publication window refuses the boot. The
+  signer's database user may now write events; the grants map applies it at
+  deploy.
+
+### Removed
+
+- `@qauth-labs/server-jwt` no longer exports `exportPublicKeyPem` ([#359]).
+  It exported a key with `jose`, which fails for every private key `jose`
+  imports, since those are not extractable: the trap behind the boot failure
+  without `JWT_PUBLIC_KEY`. Nothing called it. Use
+  `derivePublicKeyPemFromPrivate` to derive a public key from a private-key
+  PEM.
+
 - **The environment seeds a realm's ceremony app error page** ([#1118],
   ADR-019 Decision 7). A realm's `ceremonyApp.errorPage` ([#1106]) could be
   set only through the admin API's policy update, after the first boot, and a

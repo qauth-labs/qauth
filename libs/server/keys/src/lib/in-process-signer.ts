@@ -33,6 +33,7 @@ import {
   DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS,
   describePurpose,
   isPublishedAt,
+  jwksPurposesOf,
   publicJwkOf,
   publicKeyIdentity,
   realmJwksOf,
@@ -425,21 +426,22 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     });
   }
 
-  /** The one active key of the purpose, scope and algorithm. */
+  /**
+   * The key of the purpose, scope and algorithm that signs or encrypts now:
+   * the active key, or, until a scheduled switch takes effect, the key it
+   * replaces (`signingKeyOf`, #542).
+   */
   async function activeKey(
     realmId: string,
     purpose: KeyPurpose,
     algorithm: string,
     scopeId: string | null = null
   ): Promise<SignerKeyRecord> {
-    const active = (await listKeys(realmId, purpose, scopeId)).filter(
-      (key) => key.status === 'active' && key.algorithm === algorithm
-    );
-    // The one-active-key index makes two impossible; refuse rather than pick.
-    if (active.length !== 1) {
+    const record = signingKeyOf(await listKeys(realmId, purpose, scopeId), algorithm, now());
+    if (record === undefined) {
       throw new SignerKeyNotFoundError(realmId, purpose, { algorithm });
     }
-    return active[0];
+    return record;
   }
 
   /** The unwrapped key named by `identity`: from memory, or read and unwrapped once. */
@@ -738,23 +740,23 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       const claims = resolveClaims(fields['claims']);
 
       const issuer = await realmIssuer(realmId);
-      const active = (await listKeys(realmId, 'token_signing', null)).filter(
-        (key) => key.status === 'active'
-      );
-      const classical = active.filter((key) => key.algorithm === 'EdDSA');
-      const pqc = active.filter((key) => key.algorithm === PQC_ALG_ML_DSA_65);
+      // Both halves of a pair switch at the same moment, so the keys that sign
+      // now are one pair, before and after a scheduled switch alike.
+      const records = await listKeys(realmId, 'token_signing', null);
+      const at = now();
+      const edRecord = signingKeyOf(records, 'EdDSA', at);
+      const mlDsaRecord = signingKeyOf(records, PQC_ALG_ML_DSA_65, at);
       if (
-        classical.length !== 1 ||
-        pqc.length !== 1 ||
-        classical[0].pairId === null ||
-        classical[0].pairId !== pqc[0].pairId
+        edRecord === undefined ||
+        mlDsaRecord === undefined ||
+        edRecord.pairId === null ||
+        edRecord.pairId !== mlDsaRecord.pairId
       ) {
         throw new SignerKeyNotFoundError(realmId, 'token_signing', {
           algorithm: `EdDSA+${PQC_ALG_ML_DSA_65}`,
           detail: 'no complete hybrid pair',
         });
       }
-      const [edRecord, mlDsaRecord] = [classical[0], pqc[0]];
 
       // Resolved before anything is signed, so a disabled backend never leaves
       // a classical-only token behind.
@@ -932,25 +934,24 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       if (wanted !== undefined && typeof wanted !== 'string') {
         throw new SignerRequestRefusedError('INVALID_KID', 'A cookie key id is a string');
       }
-      let { current, previous } = cookieKeysOf(await listKeys(realmId, 'cookie_hmac', null));
+      let { current, previous } = cookieKeysOf(await listKeys(realmId, 'cookie_hmac', null), now());
       // A cookie names a key that is neither the current nor the previous key
       // of this list: another node may sign with a key this one has not read
       // yet, or read only while it was still `next` (#493). Read the store
       // again, unless a read for a missing key already did within the last
       // second.
-      if (
-        wanted !== undefined &&
-        !current.some((key) => key.kid === wanted) &&
-        previous?.kid !== wanted
-      ) {
-        ({ current, previous } = cookieKeysOf(await listKeys(realmId, 'cookie_hmac', null, true)));
+      if (wanted !== undefined && current?.kid !== wanted && previous?.kid !== wanted) {
+        ({ current, previous } = cookieKeysOf(
+          await listKeys(realmId, 'cookie_hmac', null, true),
+          now()
+        ));
       }
-      if (current.length !== 1) {
+      if (current === undefined) {
         throw new SignerKeyNotFoundError(realmId, 'cookie_hmac', { algorithm: 'HS256' });
       }
 
       return Object.freeze({
-        current: await secretOf(realmId, current[0]),
+        current: await secretOf(realmId, current),
         previous: previous === undefined ? null : await secretOf(realmId, previous),
       });
     },
@@ -990,10 +991,13 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       const realmId = resolveRealmId(fields['realmId']);
       const envelope = parseDataEnvelope(fields['ciphertext']);
 
+      // A retired key opens what it sealed until its retention ends (#542);
+      // one retired with no end is kept for good.
+      const at = now();
       const usable = (key: SignerKeyRecord) =>
         key.kid === envelope.kid &&
         key.algorithm === 'A256GCM' &&
-        (key.status === 'active' || key.status === 'retired');
+        (key.status === 'active' || (key.status === 'retired' && isRetained(key, at)));
       // A key created since the last read is not in the cached list yet, so a
       // miss reads the list once more before it gives up.
       const record =
@@ -1021,10 +1025,15 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       return verificationKeysOf(await listPublicKeys(realmId), purpose, now());
     },
 
-    async getJwks(caller: SignerCaller, realmIdInput: string): Promise<RealmJwks> {
+    async getJwks(
+      caller: SignerCaller,
+      realmIdInput: string,
+      purpose?: string
+    ): Promise<RealmJwks> {
+      const purposes = jwksPurposesOf(purpose);
       authorize(caller, 'getJwks');
       const realmId = resolveRealmId(realmIdInput);
-      return realmJwksOf(await listPublicKeys(realmId), now());
+      return realmJwksOf(await listPublicKeys(realmId), now(), purposes);
     },
 
     async getUpstreamJwks(
@@ -1255,22 +1264,77 @@ function sameKeys(a: readonly SignerKeyRecord[], b: readonly SignerKeyRecord[]):
   return describe(a) === describe(b);
 }
 
-/** Newest retirement first; a key without a retirement time, then the newest key, last. */
 /**
- * A realm's cookie keys in a key list: every active HS256 key (one, unless the
- * store is inconsistent) and the most recently retired one, the previous key.
+ * The key of `algorithm` that signs or encrypts at `at` (#542): the one active
+ * key, once its `activateAt` has passed. A scheduled rotation writes a switch
+ * ahead of time, so that every process's key cache learns of the new key
+ * before any token it signs reaches them; until that moment, the key it
+ * replaces, retired as of the same moment, signs on. A key list with no
+ * active key, or with two, which the one-active index makes impossible, has
+ * none.
  */
-function cookieKeysOf(records: readonly SignerKeyRecord[]): {
-  current: SignerKeyRecord[];
-  previous: SignerKeyRecord | undefined;
-} {
-  const current = records.filter((key) => key.status === 'active' && key.algorithm === 'HS256');
-  const [previous] = records
-    .filter((key) => key.status === 'retired' && key.algorithm === 'HS256')
-    .sort(byMostRecentlyRetired);
-  return { current, previous };
+export function signingKeyOf(
+  records: readonly SignerKeyRecord[],
+  algorithm: string,
+  at: number
+): SignerKeyRecord | undefined {
+  const active = records.filter((key) => key.status === 'active' && key.algorithm === algorithm);
+  if (active.length !== 1) return undefined;
+  const [key] = active;
+  if (key.activateAt === null || key.activateAt <= at) return key;
+  const outgoing = records.filter(
+    (record) =>
+      record.status === 'retired' &&
+      record.algorithm === algorithm &&
+      record.retireAt !== null &&
+      record.retireAt > at
+  );
+  return outgoing.length === 1 ? outgoing[0] : key;
 }
 
+/**
+ * Whether a retired key still verifies or decrypts at `at`: its retention
+ * ends at `unpublishAt` (#542), and one retired with no end is kept for good.
+ */
+function isRetained(record: SignerKeyRecord, at: number): boolean {
+  return record.unpublishAt === null || at < record.unpublishAt;
+}
+
+/**
+ * A realm's cookie keys in a key list at `at`: the key that signs new cookies
+ * (`signingKeyOf`), and the previous key, which only verifies.
+ *
+ * - Until a scheduled switch takes effect, the old key signs and the new
+ *   active key is the previous one, so a cookie a node whose clock runs ahead
+ *   signed with it already verifies.
+ * - Otherwise the previous key is the most recently retired one, while its
+ *   retention lasts (#542). A key retired with no end, as the key boot step
+ *   retires a replaced cookie key, stays the previous key until the next
+ *   replacement.
+ */
+function cookieKeysOf(
+  records: readonly SignerKeyRecord[],
+  at: number
+): {
+  current: SignerKeyRecord | undefined;
+  previous: SignerKeyRecord | undefined;
+} {
+  const current = signingKeyOf(records, 'HS256', at);
+  if (current === undefined) return { current, previous: undefined };
+  if (current.status === 'retired') {
+    const incoming = records.find((key) => key.status === 'active' && key.algorithm === 'HS256');
+    return { current, previous: incoming };
+  }
+  const [previous] = records
+    .filter((key) => key.status === 'retired' && key.algorithm === 'HS256' && key !== current)
+    .sort(byMostRecentlyRetired);
+  return {
+    current,
+    previous: previous !== undefined && isRetained(previous, at) ? previous : undefined,
+  };
+}
+
+/** Newest retirement first; a key without a retirement time, then the newest key, last. */
 function byMostRecentlyRetired(a: SignerKeyRecord, b: SignerKeyRecord): number {
   return (b.retireAt ?? -1) - (a.retireAt ?? -1) || b.createdAt - a.createdAt;
 }
