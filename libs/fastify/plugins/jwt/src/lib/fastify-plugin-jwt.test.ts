@@ -2094,10 +2094,9 @@ describe('the kid denylist of emergency key retirement (ADR-019 Decision 9, #551
     }
   });
 
-  it('still refuses an expired token as expired: the signature check comes first', async () => {
+  it('refuses an expired token as expired only once its key passed the denylist, so a logout never reads a denied key as expired', async () => {
     const realms = await createRealms();
     const list = denylist();
-    list.state.current = false;
     const app = await buildTestApp(realms, { keyDenylist: list.check });
     try {
       const token = await signWithPem(realms.realmAKey, {
@@ -2107,6 +2106,11 @@ describe('the kid denylist of emergency key retirement (ADR-019 Decision 9, #551
       await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).rejects.toBeInstanceOf(
         JWTExpiredError
       );
+      list.state.current = false;
+      await invalid(app.jwtUtils.verifyAccessToken(realms.a, token), 'cannot be checked');
+      list.state.current = true;
+      list.denied.add(`${realms.a.id} ${String(realms.realmAKeyKid)}`);
+      await invalid(app.jwtUtils.verifyAccessToken(realms.a, token), 'was retired');
     } finally {
       await app.close();
     }
