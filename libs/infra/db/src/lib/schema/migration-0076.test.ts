@@ -130,4 +130,15 @@ describe('migration 0076 (the node list of the configuration digest)', () => {
     );
     expect(named('deployment_nodes_register')).not.toContain('"started_at"');
   });
+
+  it("takes the list's advisory lock before a heartbeat writes, as a registration does", () => {
+    const named = (name: string) =>
+      statements.find((statement) => statement.startsWith(`CREATE FUNCTION "${name}"`)) ?? '';
+    const lock = "pg_advisory_xact_lock(hashtextextended('qauth:deployment-nodes', 0))";
+    for (const name of ['deployment_nodes_register', 'deployment_nodes_heartbeat']) {
+      const body = named(name);
+      expect(body, name).toContain(lock);
+      expect(body.indexOf(lock), name).toBeLessThan(body.indexOf('INSERT INTO'));
+    }
+  });
 });

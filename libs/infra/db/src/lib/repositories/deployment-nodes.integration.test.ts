@@ -4,8 +4,9 @@
  * Exercises what a unit test cannot: the functions of migration 0076 the
  * repository calls, the database's clock deciding which nodes are live, the
  * removal of the stale ones at a registration, never of a node seen within
- * two minutes, the advisory lock that makes two registrations at once run one
- * after the other, the heartbeat that writes a removed row again, and the
+ * two minutes, the advisory lock that makes two registrations at once, or a
+ * registration and the heartbeat that writes a removed row again, run one
+ * after the other, and the
  * CHECKs that keep anything but digests, role names and a release out of a
  * row. What another role's database user may do is held by
  * `database-users/database-users.integration.test.ts`.
@@ -159,6 +160,30 @@ describe('deployment nodes repository integration (real Postgres, #499)', () => 
     await expect(repository.heartbeat(stored)).resolves.toBe('restored');
     const [restored] = await repository.listLive(WINDOW_MS);
     expect(restored).toMatchObject({ nodeId: stored.nodeId, startedAt: stored.startedAt });
+  });
+
+  it("writes a row again only once a registration holding the list's lock committed", async () => {
+    const stored = await repository.register(node(), WINDOW_MS, () => undefined);
+    await repository.remove(stored.nodeId);
+
+    const client = await pool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('qauth:deployment-nodes', 0))"
+      );
+      let settled = false;
+      const beat = repository.heartbeat(stored).finally(() => {
+        settled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(settled).toBe(false);
+      await client.query('COMMIT');
+      await expect(beat).resolves.toBe('restored');
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined);
+      client.release();
+    }
   });
 
   it('refuses a digest that is not one, key digests that are not, and roles and releases it does not know', async () => {

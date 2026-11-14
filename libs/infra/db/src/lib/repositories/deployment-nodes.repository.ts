@@ -72,7 +72,8 @@ export interface DeploymentNodesRepository {
   /**
    * Mark the node seen now. A node whose row is gone, removed as stale while
    * it could not reach the database or by hand, is written again with its
-   * registration time.
+   * registration time. The function takes the list's lock, as a
+   * registration does, waited for 5 seconds at most.
    */
   heartbeat(node: DeploymentNode, tx?: DbClient): Promise<DeploymentNodeHeartbeat>;
   /** Remove the node's row; nothing when it has none, or another database user registered it. */
@@ -160,11 +161,18 @@ export function createDeploymentNodesRepository(defaultDb: DbClient): Deployment
     },
 
     async heartbeat(node, tx) {
-      const { rows } = await (tx ?? defaultDb).execute<{ seen: string | null }>(
-        sql`select "deployment_nodes_heartbeat"(${nodeArguments(node)}, ${node.startedAt}::bigint) as "seen"`
-      );
-      const seen = rows[0]?.seen;
-      return seen === 'seen' || seen === 'restored' ? seen : 'foreign';
+      // The function waits for the list's lock: a registration that stalls
+      // holding it fails this beat after 5 seconds, and the next one tries
+      // again.
+      const beat = async (client: DbClient): Promise<DeploymentNodeHeartbeat> => {
+        await client.execute(sql`select set_config('lock_timeout', '5s', true)`);
+        const { rows } = await client.execute<{ seen: string | null }>(
+          sql`select "deployment_nodes_heartbeat"(${nodeArguments(node)}, ${node.startedAt}::bigint) as "seen"`
+        );
+        const seen = rows[0]?.seen;
+        return seen === 'seen' || seen === 'restored' ? seen : 'foreign';
+      };
+      return tx === undefined ? defaultDb.transaction(beat) : beat(tx);
     },
 
     async remove(nodeId, tx) {

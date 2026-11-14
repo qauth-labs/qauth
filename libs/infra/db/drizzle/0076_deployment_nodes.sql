@@ -17,6 +17,8 @@
 --   registered it (registered_by), so one role cannot remove another's node,
 --   nor keep it listed;
 -- - a registration removes only rows unseen for at least two minutes;
+-- - a registration and a heartbeat take the list's advisory lock, so a row
+--   written again never slips past a node that registers at that moment;
 -- - every value is checked by the table's CHECKs: known role names, a
 --   release version, hex digests, and at most 512 key digests named as
 --   configuration keys, so another node's row carries nothing a refusal or a
@@ -105,7 +107,10 @@ REVOKE ALL ON FUNCTION "deployment_nodes_register"(uuid, text[], text, text, jso
 -- Mark a node seen at the database's time: 'seen' when its row was there,
 -- 'restored' when it was gone and is written again, with its registration
 -- time but never a later one than now, and NULL when the row is another
--- database user's, which it leaves as it is.
+-- database user's, which it leaves as it is. It takes the list's advisory
+-- lock first, as a registration does, so that a row written again and a
+-- registration run one after the other: whichever comes second lists the
+-- other, and a restored node compares once it committed.
 CREATE FUNCTION "deployment_nodes_heartbeat"(
   p_node_id uuid,
   p_roles text[],
@@ -120,6 +125,7 @@ VOLATILE
 SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $$
+  SELECT pg_advisory_xact_lock(hashtextextended('qauth:deployment-nodes', 0));
   INSERT INTO public."deployment_nodes" AS n
     ("node_id", "roles", "version", "config_digest", "config_keys", "started_at", "registered_by")
   VALUES (
