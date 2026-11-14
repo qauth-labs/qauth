@@ -17,15 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leave the JWKS, their `kid`s go on the new `realm_key_denylist` table
   (migration 0075), a new key signs in place of an active one with no
   pre-publication, every refresh-token family of the realm created or used
-  since the key began to sign is revoked, a critical `key.emergency_retired`
+  since the key may have signed (its activation time less the activation
+  delay) is revoked, a critical `key.emergency_retired`
   event names each `kid` (an admin event and an SSF security event), and the
   run is recorded in the realm's admin audit log as `keys.retire` by the
   operating-system user. Then the realm's browser sessions used since then are
   ended, with back-channel logout; running the command again for a key
-  retired already ends them again, and changes nothing else. Every node keeps
-  a copy of the denylist, read every 2 seconds through a 5-second Redis
-  snapshot, and from the database when Redis has none or does not answer.
-  Every token verification checks it once the signature verified, so
+  retired already ends them again, changes no key, and is recorded and
+  announced too. Every node keeps a copy of the denylist, read every 2
+  seconds, mostly through a 5-second Redis snapshot, and from the database at
+  least every 8 seconds and whenever Redis has none or does not answer; only
+  a database read takes a `kid` off the copy. Every token verification checks
+  it once the signature verified, an expired token's included, so
   introspection answers `active: false` and userinfo `401`, and the signer and
   the JWKS drop the key, within 10 seconds on every node rather than after the
   60-second key refresh. A node that cannot read the denylist for 30 seconds

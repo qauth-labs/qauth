@@ -355,8 +355,10 @@ In one transaction:
   algorithm signs at once, with no pre-publication (with its ML-DSA-65
   companion when hybrid signing is on). A `next` or a `retired` key needs no
   replacement;
-- every refresh-token family of the realm created or used since the key began
-  to sign is revoked, Authority Trees included;
+- every refresh-token family of the realm created or used since the key may
+  have signed is revoked, Authority Trees included. That moment is the key's
+  activation time less the 2-minute activation delay, as a switch is written
+  that far ahead, and never before the key was made;
 - a critical `key.emergency_retired` event names each retired `kid`: an admin
   event in the realm's audit chain, and a security event for every
   [SSF stream](/reference/ssf-events/) of the realm that requested it;
@@ -364,28 +366,33 @@ In one transaction:
   operation by the operating-system user that ran it, with the keys before and
   after, the operation digest and the approval id.
 
-Then every browser session of the realm used since the key began to sign is
-ended, with back-channel logout to the clients it served. A session's last use
-is stored at most `SESSION_LAST_SEEN_INTERVAL` late, so a session last seen
-that long before the key began to sign ends too. The command prints the
+Then every browser session of the realm used since that moment is ended, with
+back-channel logout to the clients it served. A session's last use is stored
+at most `SESSION_LAST_SEEN_INTERVAL` late, so a session last seen that long
+before the moment ends too. The command prints the
 retired and the new `kid`s and what it revoked. No key material is ever
 printed.
 
 How fast the key stops working:
 
 - **On QAuth's own servers, within 10 seconds.** Every node keeps a copy of
-  the denylist, read every 2 seconds from a Redis snapshot that lives 5
-  seconds, or from the database when Redis has none or does not answer within
-  250 ms. Every token verification checks it once the signature verified: a
-  bearer token on any protected route, userinfo (`401`), introspection
-  (`active: false`), revocation and the end-session hint. The signer stops
-  signing with the key and the JWKS drops it in the same time, without waiting
-  for the 60-second key refresh. The command deletes the snapshot, so most
-  nodes see the change at their next read.
-- **On a node that cannot read the denylist, at once.** A node that has not
-  read it, from Redis or the database, for 30 seconds refuses every token
-  until it can again, and logs a warning. The denylist lives in the database,
-  so it survives a restart, and Redis being down only costs database reads.
+  the denylist and reads it every 2 seconds, mostly from a Redis snapshot that
+  lives 5 seconds. It reads the database instead when Redis has no snapshot or
+  does not answer within 250 ms, and at least every 8 seconds whatever Redis
+  holds. Only a database read can take a `kid` off the node's copy. Every
+  token verification checks the copy once the signature verified, an expired
+  token's included: a bearer token on any protected route, userinfo (`401`),
+  introspection (`active: false`), revocation, logout and the end-session
+  hint. The signer stops signing with the key and the JWKS drops it in the
+  same time, without waiting for the 60-second key refresh. After the commit,
+  the command stores the database's list as the snapshot, so the other nodes
+  see the change at their next read. When it cannot write to Redis, they see
+  it at their next database read.
+- **On a node that cannot read the denylist, within 30 seconds.** A node that
+  has not read it, from Redis or the database, for 30 seconds refuses every
+  token until it can again, and logs a warning. The denylist lives in the
+  database, so it survives a restart, and Redis being down only costs
+  database reads.
 - **At a relying party, when its JWKS cache expires.** That is at most 5
   minutes later if it follows [the JWKS rule](#what-relying-parties-do-with-the-jwks),
   or at once if it acts on the `key.emergency_retired` security event.
@@ -395,9 +402,11 @@ another purpose and changes nothing. For a leaked cookie secret, see
 [Replacing the cookie key](#replacing-the-cookie-key).
 
 It exits `0` once the key is retired and the sessions ended. It exits `3` when
-the key is retired but ending the sessions failed: run the same command again,
-which, for a key retired already, ends the realm's sessions used since the key
-began to sign and changes nothing else. A usage error, such as a missing
+the key is retired but ending the sessions failed: run the same command again.
+For a key retired already, it changes no key and ends the realm's sessions
+again, from the key's activation time less the delay, or from when the key was
+made if it has no activation time. That run is recorded in the admin audit
+log and announced as `key.emergency_retired` too. A usage error, such as a missing
 `--yes`, exits `2`. Any other error, such as a `kid` the realm does not hold,
 exits `1` with nothing changed.
 

@@ -465,7 +465,8 @@ verifies tokens locally follows three rules:
   own servers refuse its tokens, and drop it from the JWKS and from signing,
   within 10 seconds of its
   [emergency retirement](/operate/keys/#emergency-retirement) (each node reads
-  the `kid` denylist every 2 seconds, through a shared cache that lives 5), and
+  the `kid` denylist every 2 seconds, mostly through a shared cache that lives
+  5, and from the database at least every 8), and
   your JWKS cache adds its own lifetime before your verifier stops. A receiver
   of QAuth's security events can drop the key at once, on the
   [`key.emergency_retired`](/reference/ssf-events/) event.
