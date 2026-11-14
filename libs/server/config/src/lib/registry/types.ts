@@ -50,8 +50,9 @@ export type KeyRole = 'deployment' | 'realm-seed';
  *   Every key marked `secret` has this class.
  * - `realm-seed`: seeds a new realm's policy, which the realm row owns once
  *   the realm exists (ADR-019 Decision 10), so nodes stay consistent whatever
- *   their environment holds. Every `realm-seed` key that is not secret has
- *   this class.
+ *   their environment holds. Only a `realm-seed` key has this class, and
+ *   every one that is not secret has it, unless the server still reads its
+ *   environment value at run time: such a seed is `shared`.
  */
 export type KeyDigestClass = 'shared' | 'node' | 'secret' | 'realm-seed';
 

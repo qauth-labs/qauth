@@ -40,6 +40,10 @@ export const REGISTRATION_KEYS = defineKeys([
     name: 'REDIRECT_URI_CUSTOM_SCHEMES',
     tier: 'stable',
     role: 'realm-seed',
+    // A seed the server still reads at run time, on every request that
+    // needs it, beside the realm's own policy: compared across nodes (#499).
+    digest: 'shared',
+    digestRoles: ['web', 'api', 'admin'],
     seeds: 'registration.redirectUriCustomSchemes',
     owner: 'client-registration',
     default: '',

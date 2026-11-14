@@ -90,11 +90,12 @@ describe('the digest classes of the registry', () => {
         key('NOT_A_SEED', { digest: 'realm-seed' }),
         key('NODE_WITH_ROLES', { digest: 'node', digestRoles: ['signer'] }),
         key('NO_ROLES', { digest: 'shared', digestRoles: [] }),
+        key('SEED_READ_AT_RUN_TIME', { role: 'realm-seed', seeds: 'a.c', digest: 'shared' }),
       ])
     ).toEqual([
       'SHARED_SECRET is a secret, so its digest class is secret, not shared',
       'NOT_A_SECRET is not a secret, so its digest class cannot be secret',
-      'SEED_AS_NODE seeds a realm policy, so its digest class is realm-seed, not node',
+      'SEED_AS_NODE seeds a realm policy, so its digest class is realm-seed, or shared while the server still reads it at run time, not node',
       'NOT_A_SEED seeds no realm policy, so its digest class cannot be realm-seed',
       'NODE_WITH_ROLES names digest roles but is not shared',
       'NO_ROLES names an empty list of digest roles',
@@ -120,6 +121,14 @@ describe('the digest classes of the registry', () => {
     }
     // CIMD's switch seeds each realm's policy since #534: the realm row owns it.
     expect(registryKey('CIMD_ENABLED').digest).toBe('realm-seed');
+    // Seeds the server still reads from its environment on each request.
+    for (const name of [
+      'REDIRECT_URI_CUSTOM_SCHEMES',
+      'EMAIL_VERIFICATION_TOKEN_EXPIRY',
+      'EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND',
+    ]) {
+      expect(registryKey(name).digest, name).toBe('shared');
+    }
   });
 
   it('leaves out what may differ from node to node, and every secret', () => {
@@ -165,6 +174,24 @@ describe('the digest classes of the registry', () => {
     }
     // DPoP binds the admin tokens the token endpoint issues: every node.
     expect(registryKey('DPOP_ENABLED').digestRoles).toBeUndefined();
+  });
+
+  it('compares a key one role reads only between nodes that hold the role', () => {
+    const names = (roles: Parameters<typeof digestedKeys>[1]) =>
+      digestedKeys(AUTH_KEYS, roles).map((entry) => entry.name);
+    for (const name of ['KEY_ROTATION_PERIOD_DAYS', 'KEY_PREPUBLISH_DAYS']) {
+      expect(names(['signer']), name).toContain(name);
+      expect(names(['web', 'api', 'admin', 'delivery']), name).not.toContain(name);
+    }
+    expect(names(['delivery'])).toContain('EVENT_DELIVERY_MAX_ATTEMPTS');
+    expect(names(['web', 'api', 'admin', 'signer'])).not.toContain('EVENT_DELIVERY_MAX_ATTEMPTS');
+    // A route's own limit, between the roles that serve routes; the default
+    // limit and the switch, between every node.
+    expect(names(['api'])).toContain('TOKEN_RATE_LIMIT');
+    expect(names(['signer', 'delivery'])).not.toContain('TOKEN_RATE_LIMIT');
+    for (const name of ['RATE_LIMIT_ENABLED', 'RATE_LIMIT_MAX']) {
+      expect(names(['delivery']), name).toContain(name);
+    }
   });
 });
 

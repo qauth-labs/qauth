@@ -54,8 +54,9 @@ export class UnclassifiedConfigKeyError extends Error {
  *
  * - every key has a class from `KEY_DIGEST_CLASSES`;
  * - a secret is `secret`, and only a secret is;
- * - a `realm-seed` key that is not secret is `realm-seed`, and only such a
- *   key is;
+ * - only a `realm-seed` key is `realm-seed`, and one that is not secret is
+ *   `realm-seed`, or `shared` while the server still reads its environment
+ *   value at run time beside the realm's policy;
  * - only a `shared` key names roles, at least one, each a service role.
  */
 export function digestClassificationProblems(keys: readonly ConfigKey[]): string[] {
@@ -77,11 +78,16 @@ export function digestClassificationProblems(keys: readonly ConfigKey[]): string
           : `${name} is not a secret, so its digest class cannot be secret`
       );
     }
-    if (!key.secret && (key.role === 'realm-seed') !== (digest === 'realm-seed')) {
+    if (!key.secret && digest === 'realm-seed' && key.role !== 'realm-seed') {
+      problems.push(`${name} seeds no realm policy, so its digest class cannot be realm-seed`);
+    } else if (
+      !key.secret &&
+      key.role === 'realm-seed' &&
+      digest !== 'realm-seed' &&
+      digest !== 'shared'
+    ) {
       problems.push(
-        key.role === 'realm-seed'
-          ? `${name} seeds a realm policy, so its digest class is realm-seed, not ${digest}`
-          : `${name} seeds no realm policy, so its digest class cannot be realm-seed`
+        `${name} seeds a realm policy, so its digest class is realm-seed, or shared while the server still reads it at run time, not ${digest}`
       );
     }
     if (key.digestRoles !== undefined) {

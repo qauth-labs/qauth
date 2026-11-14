@@ -464,6 +464,10 @@ export const ACCOUNT_KEYS = defineKeys([
     name: 'EMAIL_VERIFICATION_TOKEN_EXPIRY',
     tier: 'stable',
     role: 'realm-seed',
+    // A seed the server still reads at run time, on every request that
+    // needs it, beside the realm's own policy: compared across nodes (#499).
+    digest: 'shared',
+    digestRoles: ['web', 'api', 'admin'],
     seeds: 'mail.verificationTokenExpirySeconds',
     owner: 'mail',
     default: '86400',
@@ -474,6 +478,10 @@ export const ACCOUNT_KEYS = defineKeys([
     name: 'EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND',
     tier: 'stable',
     role: 'realm-seed',
+    // A seed the server still reads at run time, on every request that
+    // needs it, beside the realm's own policy: compared across nodes (#499).
+    digest: 'shared',
+    digestRoles: ['web', 'api', 'admin'],
     seeds: 'mail.invalidateExistingTokensOnResend',
     owner: 'mail',
     default: 'true',

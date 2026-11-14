@@ -1,5 +1,33 @@
+import type { ServiceRole } from '../../schemas/service-roles';
 import type { ConfigKeyInput, KeyDigestClass } from '../types';
 import { defineKeys } from '../types';
+
+/**
+ * The roles whose processes serve the routes a route's own limit counts:
+ * the public listener's `web` and `api`, and `admin`. A `signer` or
+ * `delivery` process serves none of them, so the configuration digest
+ * (#499) compares those limits only between nodes that hold one of these.
+ */
+const ROUTE_LIMIT_ROLES: readonly ServiceRole[] = ['web', 'api', 'admin'];
+
+/**
+ * The limits every node applies whatever its roles, compared between every
+ * node: the switch, the default limit of a route with none of its own, and
+ * the ceremony app's addresses.
+ */
+const EVERY_NODE_LIMITS: ReadonlySet<string> = new Set([
+  'RATE_LIMIT_ENABLED',
+  'RATE_LIMIT_MAX',
+  'RATE_LIMIT_WINDOW',
+  'CEREMONY_APP_PEERS',
+]);
+
+/** A shared limit of the routes some roles serve, scoped to those roles. */
+function scopedToRouteRoles(key: ConfigKeyInput): ConfigKeyInput {
+  return key.digest === 'shared' && !EVERY_NODE_LIMITS.has(key.name)
+    ? { ...key, digestRoles: ROUTE_LIMIT_ROLES }
+    : key;
+}
 
 /**
  * A rate-limit pair: the most requests per window, and the window in seconds.
@@ -40,7 +68,7 @@ function rateLimit(
 }
 
 /** Rate limits: the keys of `rateLimitEnvSchema` and the limits of `authEnvSchema`. */
-export const RATE_LIMIT_KEYS = defineKeys([
+const RATE_LIMIT_ENTRIES: readonly ConfigKeyInput[] = [
   {
     name: 'RATE_LIMIT_ENABLED',
     tier: 'advanced',
@@ -216,4 +244,6 @@ export const RATE_LIMIT_KEYS = defineKeys([
     '30',
     '60'
   ),
-]);
+];
+
+export const RATE_LIMIT_KEYS = defineKeys(RATE_LIMIT_ENTRIES.map(scopedToRouteRoles));
