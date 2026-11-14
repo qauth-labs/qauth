@@ -188,6 +188,10 @@ describe('the signer service (#497)', () => {
     expect(answer.status).toBe(403);
     expect(answer.refused).toEqual({ caller: 'admin', operation: 'signJws' });
     expect((await service.call('api', 'signJws', 'not an object')).status).toBe(400);
+    // The same refusal with no body at all, for a route to answer before it reads one.
+    expect(service.precheck('admin', 'signJws')).toEqual(answer);
+    expect(service.precheck('local', 'signJws')).toMatchObject({ status: 403 });
+    expect(service.precheck('api', 'signJws')).toBeUndefined();
   });
 
   it("holds a role to its grant's token types and contexts, and counts each refusal", async () => {

@@ -58,7 +58,11 @@ import {
  * - **Fail closed.** No answer, an answer of another shape, or the signer's
  *   own trouble ends the call with a `TemporarilyUnavailableError` (503):
  *   nothing is signed with anything else, and nothing is retried past the
- *   limits below.
+ *   limits below. The signer's own trouble (`SIGNER_UNAVAILABLE`, such as a
+ *   key one realm cannot unwrap, or `SIGNER_FAULT`) is an answer, not an
+ *   outage: it fails that call and is not tried again, but the signer is up,
+ *   so it never opens the circuit for the other realms and operations. Nor
+ *   does a `400` the service gave before its signer read the request.
  * - **Short deadlines, one retry.** Each attempt has `attemptTimeoutMs`.
  *   The calls whose repeat changes nothing and answers the same
  *   ({@link IDEMPOTENT_SIGNER_OPERATIONS}) are tried once more after an
@@ -226,6 +230,12 @@ type Attempt<T> =
       readonly status?: number;
       readonly code?: string;
     }
+  /**
+   * The signer answered, but could not do the work (`SIGNER_UNAVAILABLE`,
+   * `SIGNER_FAULT`): the call fails closed, and the circuit counts the signer
+   * as up.
+   */
+  | { readonly kind: 'signer_trouble'; readonly status: number }
   /** The signer's listener refused the call before the service read it. */
   | { readonly kind: 'not_run'; readonly status: number }
   /** The signer refused the call for this process's certificate's role. */
@@ -379,6 +389,12 @@ export function createRemoteSigner(options: RemoteSignerOptions): Signer {
     if (wire !== undefined) {
       const error = decodeSignerError(wire, { operation, realmId });
       if (error === undefined) {
+        const code = member(wire, 'code');
+        // The signer answered: a key it cannot use (one realm's, maybe) or a
+        // fault of its own is no sign that it is down.
+        if (code === 'SIGNER_UNAVAILABLE' || code === 'SIGNER_FAULT') {
+          return { kind: 'signer_trouble', status: response.status };
+        }
         return { kind: 'outage', reason: 'signer_failed', status: response.status };
       }
       // The call's own role passed the same table here (`authorize`): the
@@ -389,6 +405,17 @@ export function createRemoteSigner(options: RemoteSignerOptions): Signer {
     // The service's own cap on the request's size: the signer is up, and the
     // request cannot succeed as it is.
     if (response.status === 413) return { kind: 'refused', error: tooLarge(operation) };
+    // The service's body parser refused the request before the signer read
+    // it, such as claims with an own `__proto__` key: the signer is up.
+    if (response.status === 400 || response.status === 415) {
+      return {
+        kind: 'refused',
+        error: new SignerRequestRefusedError(
+          'INVALID_CLAIMS',
+          `The signer service could not read the '${operation}' request`
+        ),
+      };
+    }
     // The listener's own refusal: no peer role, a role the service does not
     // admit, a certificate that expired or files reloaded since the
     // connection was made. The service never read the call.
@@ -427,6 +454,10 @@ export function createRemoteSigner(options: RemoteSignerOptions): Signer {
         // The signer answered: it is up, whatever it answered.
         succeeded(probe);
         throw outcome.error;
+      case 'signer_trouble':
+        succeeded(probe);
+        report({ type: 'call_failed', operation, reason: 'signer_failed', status: outcome.status });
+        throw unavailable(operation, 'signer_failed', openMs);
       case 'role_refused':
         succeeded(probe);
         report({ type: 'call_failed', operation, reason: 'role_refused', status: 403 });

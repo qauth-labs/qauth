@@ -44,8 +44,12 @@ export type PeerRateVerdict =
 
 /** The buckets of every peer. */
 export interface PeerRateLimit {
-  /** Spend one call of `peer`'s bucket, when it holds one. */
-  take(peer: string): PeerRateVerdict;
+  /**
+   * Spend `cost` tokens of `peer`'s bucket, one by default, when it holds
+   * them. A cost above the burst is charged as the burst, so a call is never
+   * refused for good.
+   */
+  take(peer: string, cost?: number): PeerRateVerdict;
 }
 
 /** The most peers kept when nothing else is asked. */
@@ -73,7 +77,8 @@ export function createPeerRateLimit(options: PeerRateLimitOptions): PeerRateLimi
   const buckets = new Map<string, Bucket>();
 
   return {
-    take(peer: string): PeerRateVerdict {
+    take(peer: string, costInput = 1): PeerRateVerdict {
+      const cost = Math.min(burst, Math.max(1, Math.ceil(costInput)));
       const at = now();
       let bucket = buckets.get(peer);
       if (bucket === undefined) {
@@ -94,11 +99,11 @@ export function createPeerRateLimit(options: PeerRateLimitOptions): PeerRateLimi
         bucket.updatedAt = at;
       }
       buckets.set(peer, bucket);
-      if (bucket.tokens >= 1) {
-        bucket.tokens -= 1;
+      if (bucket.tokens >= cost) {
+        bucket.tokens -= cost;
         return { allowed: true };
       }
-      const retryAfterMs = Math.ceil(((1 - bucket.tokens) * 1000) / ratePerSecond);
+      const retryAfterMs = Math.ceil(((cost - bucket.tokens) * 1000) / ratePerSecond);
       if (at - bucket.loggedAt < REFUSAL_LOG_INTERVAL_MS) {
         bucket.suppressed += 1;
         return { allowed: false, retryAfterMs, logSuppressed: undefined };
@@ -107,6 +112,98 @@ export function createPeerRateLimit(options: PeerRateLimitOptions): PeerRateLimi
       bucket.loggedAt = at;
       bucket.suppressed = 0;
       return { allowed: false, retryAfterMs, logSuppressed };
+    },
+  };
+}
+
+/** The calls in flight of every peer. */
+export interface PeerConcurrencyLimit {
+  /**
+   * Count one more call of `peer` in flight, or refuse it (`false`) when the
+   * peer has `max` already. Each `true` is paired with one {@link leave}.
+   */
+  enter(peer: string): boolean;
+  /** One call of `peer` ended. */
+  leave(peer: string): void;
+}
+
+/**
+ * A cap on the calls each peer has in flight at once, so that a peer that
+ * holds its calls open, such as by trickling their bodies, holds at most
+ * `max` of them, and the memory their bodies take, whatever its rate.
+ */
+export function createPeerConcurrencyLimit(max: number): PeerConcurrencyLimit {
+  if (!Number.isSafeInteger(max) || max < 1) {
+    throw new TypeError('createPeerConcurrencyLimit: the cap must be a positive integer');
+  }
+  const inFlight = new Map<string, number>();
+  return {
+    enter(peer: string): boolean {
+      const count = inFlight.get(peer) ?? 0;
+      if (count >= max) return false;
+      inFlight.set(peer, count + 1);
+      return true;
+    },
+    leave(peer: string): void {
+      const count = inFlight.get(peer) ?? 0;
+      if (count <= 1) inFlight.delete(peer);
+      else inFlight.set(peer, count - 1);
+    },
+  };
+}
+
+/** Options of {@link createLogSampler}. */
+export interface LogSamplerOptions {
+  /** The shortest time between two lines of one key, in ms; a minute by default. */
+  readonly intervalMs?: number;
+  /** The most keys kept; past it, the key seen longest ago is forgotten. */
+  readonly maxKeys?: number;
+  /** The clock, in epoch ms. */
+  readonly now?: () => number;
+}
+
+/** One log line per key per interval. */
+export interface LogSampler {
+  /**
+   * The lines of `key` not written since the last one that was, when this
+   * one is to be written; `undefined` to write none for it.
+   */
+  take(key: string): number | undefined;
+}
+
+/**
+ * Lets one line per key through per interval, and counts the others, so a
+ * peer that repeats a refused call writes one line a minute with how many it
+ * stands for, not one per call.
+ */
+export function createLogSampler(options: LogSamplerOptions = {}): LogSampler {
+  const intervalMs = options.intervalMs ?? REFUSAL_LOG_INTERVAL_MS;
+  const maxKeys = options.maxKeys ?? DEFAULT_MAX_PEERS;
+  const now = options.now ?? (() => Date.now());
+  // In order of last use: the first is the key seen longest ago.
+  const keys = new Map<string, { loggedAt: number; suppressed: number }>();
+  return {
+    take(key: string): number | undefined {
+      const at = now();
+      let entry = keys.get(key);
+      if (entry === undefined) {
+        entry = { loggedAt: Number.NEGATIVE_INFINITY, suppressed: 0 };
+        if (keys.size >= maxKeys) {
+          const [oldest] = keys.keys();
+          if (oldest !== undefined) keys.delete(oldest);
+        }
+      } else {
+        keys.delete(key);
+      }
+      keys.set(key, entry);
+      if (at - entry.loggedAt < intervalMs) {
+        entry.suppressed += 1;
+        return undefined;
+      }
+      const suppressed = entry.suppressed;
+      entry.loggedAt = at;
+      entry.suppressed = 0;
+      return suppressed;
     },
   };
 }

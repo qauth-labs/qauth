@@ -207,7 +207,7 @@ describe('the remote signer (#497)', () => {
     it('refuses a request larger than the service takes, before it is sent, and a 413 alike', async () => {
       const transport = loopback(setup.signer, 'api');
       const signer = remote(transport, { failureThreshold: 1 });
-      const large = { ...ACCESS_TOKEN, claims: { ...CLAIMS, blob: 'x'.repeat(1024 * 1024) } };
+      const large = { ...ACCESS_TOKEN, claims: { ...CLAIMS, blob: 'x'.repeat(2 * 1024 * 1024) } };
       const refused = await caught(signer.signJws('api', large));
       expect(refused).toBeInstanceOf(SignerRequestRefusedError);
       expect((refused as SignerRequestRefusedError).reason).toBe('REQUEST_TOO_LARGE');
@@ -342,11 +342,34 @@ describe('the remote signer (#497)', () => {
       expect(Date.now() - started).toBeLessThan(2_000);
     });
 
-    it('counts an error answer of the signer itself as an outage, and a refusal as an answer', async () => {
-      const failing = scripted(async () => answer(503, { error: { code: 'SIGNER_UNAVAILABLE' } }));
-      expect(await caught(remote(failing).signJws('local', ACCESS_TOKEN))).toMatchObject({
-        details: { reason: 'signer_signer_failed' },
-      });
+    it("fails closed on the signer's own trouble without opening the circuit, and counts an answer of another shape as an outage", async () => {
+      // A key one realm cannot unwrap, or a fault of the signer: it answered,
+      // so the other realms' calls keep going to it.
+      for (const code of ['SIGNER_UNAVAILABLE', 'SIGNER_FAULT']) {
+        const failing = scripted(async () =>
+          answer(code === 'SIGNER_FAULT' ? 500 : 503, { error: { code } })
+        );
+        const signer = remote(failing, { failureThreshold: 1 });
+        for (let index = 0; index < 3; index += 1) {
+          expect(await caught(signer.signJws('local', ACCESS_TOKEN))).toMatchObject({
+            statusCode: 503,
+            details: { reason: 'signer_signer_failed' },
+          });
+        }
+        expect(
+          await caught(
+            signer.decrypt('api', {
+              realmId: SERVICE_REALM,
+              ciphertext: 'x',
+              context: 'realm_secrets:mail.x',
+            })
+          )
+        ).toMatchObject({
+          details: { reason: 'signer_signer_failed' },
+        });
+        // Not tried again, and never refused at once by an open circuit.
+        expect(failing.calls).toHaveLength(4);
+      }
       const malformed = scripted(async () =>
         answer(200, { result: { keys: [{ kty: 'OKP', d: 'x' }] } })
       );
@@ -453,6 +476,19 @@ describe('the remote signer (#497)', () => {
       await vi.waitFor(() => expect(release).toBeDefined());
       release?.();
       expect(typeof (await probe)).toBe('string');
+    });
+
+    it("counts the body parser's 400 as a refusal of the request, not an outage", async () => {
+      const transport = scripted(async () =>
+        answer(400, { type: 'about:blank', title: 'Bad Request', status: 400 })
+      );
+      const signer = remote(transport, { failureThreshold: 1 });
+      for (let index = 0; index < 3; index += 1) {
+        const refused = await caught(signer.signJws('local', ACCESS_TOKEN));
+        expect(refused).toBeInstanceOf(SignerRequestRefusedError);
+        expect(refused).toMatchObject({ reason: 'INVALID_CLAIMS' });
+      }
+      expect(transport.calls).toHaveLength(3);
     });
 
     it('counts a refusal of the request as an answer: the signer is up', async () => {

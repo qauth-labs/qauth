@@ -47,19 +47,40 @@ export interface SignerService {
    * sent, parsed as JSON. Never throws: every outcome is an answer.
    */
   call(caller: unknown, operation: SignerOperation, body: unknown): Promise<SignerServiceAnswer>;
+  /**
+   * The answer to a call of `operation` that a peer of role `caller` may not
+   * make whatever its body says, `undefined` when its role has a grant for
+   * the operation: what {@link call} answers first. A route checks it before
+   * it reads the request's body, so a role with no grant for an operation
+   * gets its refusal without the signer reading what it sent.
+   */
+  precheck(caller: unknown, operation: SignerOperation): SignerServiceAnswer | undefined;
 }
 
 /** Make the signer service over `signer`, the signer role's in-process signer. */
 export function createSignerService(signer: Signer): SignerService {
+  const precheck = (callerInput: unknown, operation: SignerOperation) => {
+    const role = isSignerCaller(callerInput) && callerInput !== 'local' ? callerInput : undefined;
+    if (role === undefined || !hasSignerGrant(role, operation)) {
+      return {
+        role,
+        answer: refusal(new SignerAccessDeniedError(role, operation), role, operation),
+      };
+    }
+    return { role, answer: undefined };
+  };
   return Object.freeze({
+    precheck(callerInput: unknown, operation: SignerOperation): SignerServiceAnswer | undefined {
+      return precheck(callerInput, operation).answer;
+    },
     async call(
       callerInput: unknown,
       operation: SignerOperation,
       body: unknown
     ): Promise<SignerServiceAnswer> {
-      const role = isSignerCaller(callerInput) && callerInput !== 'local' ? callerInput : undefined;
-      if (role === undefined || !hasSignerGrant(role, operation)) {
-        return refusal(new SignerAccessDeniedError(role, operation), role, operation);
+      const { role, answer } = precheck(callerInput, operation);
+      if (answer !== undefined || role === undefined) {
+        return answer ?? refusal(new SignerAccessDeniedError(role, operation), role, operation);
       }
       try {
         const args = decodeSignerRequest(operation, body);

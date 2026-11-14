@@ -424,6 +424,24 @@ describe('the signer service over mutual TLS (#497)', () => {
     for (const text of secretTexts) expect(all).not.toContain(text);
   });
 
+  it('refuses a role with no grant for the operation before it reads the body', async () => {
+    const web = rawClient('web');
+    const path = `${SIGNER_SERVICE_PATH}${SIGNER_SERVICE_ROUTES.signJws}`;
+    const answers = await Promise.all([
+      // Not JSON: a role with the grant gets 400 for it.
+      post(web, 'signJws', '{"claims":'),
+      // Not even JSON's media type: 415 for a role with the grant.
+      web.request({ method: 'POST', path, headers: { 'content-type': 'text/plain' }, body: 'x' }),
+    ]);
+    for (const answer of answers) {
+      expect(answer.status, answer.body.toString()).toBe(403);
+      expect(JSON.parse(answer.body.toString())).toMatchObject({
+        error: { code: 'SIGNER_ACCESS_DENIED', caller: 'web', operation: 'signJws' },
+      });
+    }
+    expect((await post(rawClient('api'), 'signJws', '{"claims":')).status).toBe(400);
+  });
+
   it('answers a body larger than the operation takes with 413, before the service reads it', async () => {
     const response = await post(
       rawClient('web'),

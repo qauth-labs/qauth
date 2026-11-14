@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { createPeerRateLimit } from './peer-rate-limit';
+import {
+  createLogSampler,
+  createPeerConcurrencyLimit,
+  createPeerRateLimit,
+} from './peer-rate-limit';
 
 describe('createPeerRateLimit (#497)', () => {
   it('lets a peer spend its burst, then its rate, and tells how long to wait', () => {
@@ -54,5 +58,48 @@ describe('createPeerRateLimit (#497)', () => {
   it('refuses a rate or a burst that is not positive', () => {
     expect(() => createPeerRateLimit({ ratePerSecond: 0, burst: 1 })).toThrow(TypeError);
     expect(() => createPeerRateLimit({ ratePerSecond: 1, burst: 0 })).toThrow(TypeError);
+  });
+
+  it('charges a call its cost, never more than the burst', () => {
+    let now = 0;
+    const limit = createPeerRateLimit({ ratePerSecond: 10, burst: 10, now: () => now });
+    expect(limit.take('peer-a', 4)).toEqual({ allowed: true });
+    expect(limit.take('peer-a', 4)).toEqual({ allowed: true });
+    // Two tokens left: a call of four waits for two more, a fifth of a second.
+    expect(limit.take('peer-a', 4)).toMatchObject({ allowed: false, retryAfterMs: 200 });
+    expect(limit.take('peer-a', 2)).toEqual({ allowed: true });
+    // A cost past the burst is charged as the burst: a full bucket lets it through.
+    now += 1_000;
+    expect(limit.take('peer-a', 1_000)).toEqual({ allowed: true });
+    expect(limit.take('peer-a')).toMatchObject({ allowed: false });
+  });
+});
+
+describe('createPeerConcurrencyLimit (#497)', () => {
+  it('holds each peer to its cap of calls in flight', () => {
+    const limit = createPeerConcurrencyLimit(2);
+    expect(limit.enter('peer-a')).toBe(true);
+    expect(limit.enter('peer-a')).toBe(true);
+    expect(limit.enter('peer-a')).toBe(false);
+    expect(limit.enter('peer-b')).toBe(true);
+    limit.leave('peer-a');
+    expect(limit.enter('peer-a')).toBe(true);
+    expect(() => createPeerConcurrencyLimit(0)).toThrow(TypeError);
+  });
+});
+
+describe('createLogSampler (#497)', () => {
+  it('lets one line a minute per key through, with how many it stands for', () => {
+    let now = 0;
+    const sampler = createLogSampler({ maxKeys: 2, now: () => now });
+    expect(sampler.take('a')).toBe(0);
+    expect(sampler.take('b')).toBe(0);
+    expect(sampler.take('a')).toBeUndefined();
+    // Past its cap the key seen longest ago, b, is forgotten: it logs again at once.
+    expect(sampler.take('c')).toBe(0);
+    expect(sampler.take('b')).toBe(0);
+    expect(sampler.take('c')).toBeUndefined();
+    now += 60_000;
+    expect(sampler.take('c')).toBe(1);
   });
 });

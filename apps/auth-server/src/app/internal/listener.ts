@@ -157,6 +157,8 @@ export interface InternalServerOptions {
    * Unset, a plain-HTTP request has no role and is refused.
    */
   readonly plainHttpPeerRole?: InternalPeerRole;
+  /** The cap of one peer's connections, with `tls`; {@link INTERNAL_MAX_CONNECTIONS_PER_PEER} unless set. */
+  readonly maxConnectionsPerPeer?: number;
 }
 
 /**
@@ -360,6 +362,16 @@ export const INTERNAL_HANDSHAKE_TIMEOUT_MS = 10_000;
  */
 export const INTERNAL_MAX_CONNECTIONS = 1_024;
 
+/**
+ * The most connections one peer certificate holds open at once, a quarter of
+ * {@link INTERNAL_MAX_CONNECTIONS}; past it, a new connection of that
+ * certificate is closed once its handshake shows who it is. So one peer, a
+ * runaway or one an attacker took over, cannot take the connections of the
+ * others: eight processes that share a certificate fit, with the internal
+ * client's default pool of 32 each.
+ */
+export const INTERNAL_MAX_CONNECTIONS_PER_PEER = 256;
+
 /** The shortest time between two log lines about refused handshakes. */
 const REFUSAL_LOG_INTERVAL_MS = 60_000;
 
@@ -393,6 +405,38 @@ class LogSampler {
     entry.skipped = 0;
     return skipped;
   }
+}
+
+/**
+ * Hold each peer certificate, by its SHA-256 fingerprint, to `max` open
+ * connections: past it, a new connection is closed once its handshake ends,
+ * before its first request is read, and a line a minute is logged.
+ */
+function limitConnectionsPerPeer(tlsServer: TlsServer, max: number, log: FastifyBaseLogger): void {
+  const open = new Map<string, number>();
+  const closedLog = new LogSampler(REFUSAL_LOG_INTERVAL_MS);
+  tlsServer.on('secureConnection', (socket: TLSSocket) => {
+    const fingerprint = socket.getPeerCertificate()?.fingerprint256;
+    if (typeof fingerprint !== 'string' || fingerprint.length === 0) return;
+    const count = open.get(fingerprint) ?? 0;
+    if (count >= max) {
+      const skipped = closedLog.take('per_peer_cap', Date.now());
+      if (skipped !== undefined) {
+        log.warn(
+          { peer: `sha256:${fingerprint}`, open: count, suppressed: skipped },
+          'Closed an internal connection: its peer certificate holds the most connections one peer may'
+        );
+      }
+      socket.destroy();
+      return;
+    }
+    open.set(fingerprint, count + 1);
+    socket.once('close', () => {
+      const left = (open.get(fingerprint) ?? 1) - 1;
+      if (left <= 0) open.delete(fingerprint);
+      else open.set(fingerprint, left);
+    });
+  });
 }
 
 /**
@@ -430,7 +474,9 @@ function isCertificateRefusal(
  * - every request is checked for its peer's role before anything else, and
  *   for a certificate that expired or TLS files replaced since its connection
  *   was made; each 403 closes its connection;
- * - at most {@link INTERNAL_MAX_CONNECTIONS} connections are open at once.
+ * - at most {@link INTERNAL_MAX_CONNECTIONS} connections are open at once,
+ *   and with `tls` at most {@link INTERNAL_MAX_CONNECTIONS_PER_PEER} of one
+ *   peer certificate.
  */
 export function createInternalServer(options: InternalServerOptions): FastifyInstance {
   const { tls } = options;
@@ -489,6 +535,11 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
     // Registered after the HTTP layer's own listener, and run in the same
     // emit, so before the connection's first request is read.
     tlsServer.on('secureConnection', (socket) => generations.stamp(socket));
+    limitConnectionsPerPeer(
+      tlsServer,
+      options.maxConnectionsPerPeer ?? INTERNAL_MAX_CONNECTIONS_PER_PEER,
+      server.log
+    );
     const refusalLog = new LogSampler(REFUSAL_LOG_INTERVAL_MS);
     tlsServer.on('tlsClientError', (error, socket) => {
       const fields = {
