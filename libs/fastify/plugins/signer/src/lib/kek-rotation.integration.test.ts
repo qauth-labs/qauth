@@ -29,7 +29,7 @@ import {
 } from '@qauth-labs/shared-testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { countKeysPerKek, rotateKek } from './kek-rotation';
+import { countKeysPerKek, listRealmIdsWithKeys, rotateKek } from './kek-rotation';
 import { createRealmKey } from './realm-keys';
 
 const KEK_A = Buffer.alloc(32, 0xa1).toString('base64');
@@ -109,6 +109,12 @@ describe('rotateKek integration (real Postgres)', () => {
     });
 
     expect(report).toMatchObject({ from: REF_A, to: REF_B, rewrapped: 4, complete: true });
+    // The realms whose audit log the operator command records the run in.
+    if (!database) throw new Error('no database');
+    const { db } = database;
+    const realm = await createRealmsRepository(db).findByName(REALM);
+    await expect(listRealmIdsWithKeys(db, null, 10)).resolves.toEqual([realm?.id]);
+    await expect(listRealmIdsWithKeys(db, realm?.id ?? null, 10)).resolves.toEqual([]);
     expect(consumed).toHaveLength(1);
     expect(audited).toEqual([consumed[0].tx]);
     // A host with the new KEK alone opens every key.
