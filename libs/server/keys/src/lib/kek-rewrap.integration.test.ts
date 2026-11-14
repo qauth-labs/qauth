@@ -41,7 +41,7 @@ import { computeKekRef } from './kek-sources';
 import { createKeyFactory } from './key-factory';
 import type { Signer } from './signer';
 
-const ISSUER = 'https://kek-rotation.example.test';
+const ISSUER_DOMAIN = 'kek-rotation.example.test';
 const ED25519_ONLY: readonly SignatureAlgorithm[] = ['EdDSA'];
 const OPERATOR = { kind: 'break_glass', operatingSystemUser: 'qauth-ops' } as const;
 const KEK_C = testKek(0xc3);
@@ -110,9 +110,11 @@ describe('KEK rotation (real Postgres)', () => {
     });
     const realmIds: string[] = [];
     for (let index = 0; index < count; index += 1) {
+      // `realms.issuer` is unique: each realm has its own host.
+      const name = `realm-${randomUUID()}`;
       const { rows } = await db().query<{ id: string }>(
         'INSERT INTO realms (name, issuer) VALUES ($1, $2) RETURNING id',
-        [`realm-${randomUUID()}`, ISSUER]
+        [name, `https://${name}.${ISSUER_DOMAIN}`]
       );
       await factory.provisionRealmKeys(rows[0].id);
       realmIds.push(rows[0].id);
