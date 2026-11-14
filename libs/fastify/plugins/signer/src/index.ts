@@ -1,4 +1,5 @@
 export * from './lib/fastify-plugin-signer';
+export * from './lib/kek-rotation';
 export * from './lib/key-custody-check';
 export * from './lib/realm-keys';
 export * from './lib/repository-key-stores';
@@ -72,6 +73,29 @@ export type {
   KeyRotationNowRecord,
   RotatedNowKeys,
   RotateNowInput,
+} from '@qauth-labs/server-keys/custody';
+// The KEK rotation (#545): its approval's operation and canonical record,
+// what a run reports, and its refusals, for the operator command
+// `auth-server:keys:rewrap` and the admin API, which may not import
+// server-keys.
+export {
+  isKekRef,
+  KEK_ROTATE_OPERATION,
+  type KekRotateOperation,
+  kekRotationOperation,
+  type KekRotationOperationInput,
+  type KekRotationOperationRecord,
+  MAX_KEK_REF_LENGTH,
+  type SecurityOperationRecord,
+} from '@qauth-labs/server-keys';
+export {
+  type KekRefCensus,
+  type KekRewrapFailure,
+  type KekRewrapProgress,
+  type KekRewrapRefusalReason,
+  KekRewrapRefusedError,
+  type KekRewrapReport,
+  type KekRotationRecord,
 } from '@qauth-labs/server-keys/custody';
 // What the cookie key gives a role that does not hold it (#497): the labels
 // keys are derived for, and the signed cookie's MAC format the signer checks.
