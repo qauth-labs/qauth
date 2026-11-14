@@ -20,7 +20,10 @@ import type { NewRealmKey, RealmKeysRepository } from '../../types';
 import { realms } from '../schema';
 import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
 import { createRealmKeysRepository } from './realm-keys.repository';
-import { createRealmPublicKeysRepository } from './realm-public-keys.repository';
+import {
+  createRealmPublicKeysRepository,
+  KEY_DENYLIST_READ_STATEMENT_TIMEOUT_MS,
+} from './realm-public-keys.repository';
 
 const PUBLIC_JWK = { kty: 'OKP', crv: 'Ed25519', x: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo' };
 const PUBLISH_AT = 1_800_000_000_000;
@@ -913,6 +916,28 @@ describe('realm_keys integration (real Postgres)', () => {
       });
       const published = await keys.listPublicByRealm(realmId);
       expect(published.find((key) => key.kid === later.kid)?.unpublishAt).toBe(PUBLISH_AT + 10_000);
+    });
+
+    it('gives up a denylist read stuck behind a lock, freeing its connection (#551)', async () => {
+      const publicRepo = createRealmPublicKeysRepository(ctx!.database.db);
+      const holder = await pool().connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query('LOCK TABLE realm_key_denylist IN ACCESS EXCLUSIVE MODE');
+        const started = Date.now();
+        await expect(publicRepo.listDenied()).rejects.toThrow();
+        expect(Date.now() - started).toBeLessThan(KEY_DENYLIST_READ_STATEMENT_TIMEOUT_MS);
+      } finally {
+        await holder.query('ROLLBACK');
+        holder.release();
+      }
+      // The limits were the read's own: the connection it used has none.
+      const { rows } = await pool().query<{ lock_timeout: string; statement_timeout: string }>(
+        `SELECT current_setting('lock_timeout') AS lock_timeout,
+                current_setting('statement_timeout') AS statement_timeout`
+      );
+      expect(rows[0]).toEqual({ lock_timeout: '0', statement_timeout: '0' });
+      await expect(publicRepo.listDenied()).resolves.toBeDefined();
     });
 
     it('keeps a denied kid with no key behind it, and drops it with the realm', async () => {
