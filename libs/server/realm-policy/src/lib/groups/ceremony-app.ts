@@ -30,6 +30,15 @@ export const CEREMONY_APP_PAGE_MAX_LENGTH = 256;
  * auth server's own pages. It is a path on the realm origin, never a URL, so
  * it cannot send the browser to another origin.
  *
+ * `CEREMONY_APP_ERROR_PAGE` seeds it (#1118): a new realm's, and that of a
+ * realm whose stored policies lack it. QAuth 0.2.4 added the field with no
+ * key, so every realm it booted stored `null`; the schema upgrade to 1-rc.2
+ * (`CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE`) drops that `null`, so the first
+ * boot of 0.2.5 fills it from the key, once, an admin's deliberate `null`
+ * included. A value this field refuses stops the boot, naming the key. The
+ * seed is the only way to name the page for a deployment that runs no admin
+ * listener, which has no admin API to update the policy with.
+ *
  * Neither value is stricter, and no change of it has an effect of ADR-019
  * Decision 7's closed list: it changes which page of the realm's own
  * ceremony app, part of the realm's trusted computing base, shows an
@@ -47,7 +56,7 @@ export const CEREMONY_APP_POLICY_GROUP = {
       })
       .nullable(),
     {
-      seedEnv: null,
+      seedEnv: 'CEREMONY_APP_ERROR_PAGE',
       default: null,
       direction: 'opaque',
       securityWhen: 'never',

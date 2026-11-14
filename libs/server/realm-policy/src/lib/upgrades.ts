@@ -78,6 +78,34 @@ export const BRUTE_FORCE_BOUND_UPGRADE: PolicySchemaUpgrade = Object.freeze({
 });
 
 /**
+ * 1-rc.1 to 1-rc.2 (#1118): the one-time fill of the ceremony app's error
+ * page. QAuth 0.2.4 added `ceremonyApp.errorPage` with no seed key, so its
+ * first boot stored `null` in every realm, and `CEREMONY_APP_ERROR_PAGE`,
+ * which 0.2.5 adds, would never reach a realm that ran 0.2.4. A stored
+ * `null` is dropped here, so the field reads as missing and takes its seed:
+ * the key's value when the environment sets it, `null` again when not. The
+ * boot's `seedRealms` writes the result under 1-rc.2, once per realm; from
+ * then on the realm row owns the field, and the key reaches it no more.
+ *
+ * A realm whose `null` an admin set on purpose takes the key's value too,
+ * once, when the key is set. The field is not ordered and no change of it
+ * is a security operation, so this loosens nothing. A stored path, and a
+ * value the schema refuses, are left as they are: the path stays, and the
+ * refused value is still refused.
+ */
+export const CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE: PolicySchemaUpgrade = Object.freeze({
+  from: '1-rc.1',
+  to: '1-rc.2',
+  upgrade(document: Record<string, unknown>): Record<string, unknown> {
+    const group = document['ceremonyApp'];
+    if (isPlainObject(group) && Object.hasOwn(group, 'errorPage') && group['errorPage'] === null) {
+      delete group['errorPage'];
+    }
+    return document;
+  },
+});
+
+/**
  * The upgrades of QAuth's realm policy registry, one per version change,
  * oldest first, from {@link FIRST_REALM_POLICY_SCHEMA_VERSION}. The release
  * that changes `REALM_POLICY_SCHEMA_VERSION` appends its upgrade here, and the
@@ -85,6 +113,7 @@ export const BRUTE_FORCE_BOUND_UPGRADE: PolicySchemaUpgrade = Object.freeze({
  */
 export const REALM_POLICY_UPGRADES: readonly PolicySchemaUpgrade[] = Object.freeze([
   BRUTE_FORCE_BOUND_UPGRADE,
+  CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE,
 ]);
 
 /**
