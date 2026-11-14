@@ -64,6 +64,13 @@ export interface AppMetrics {
    * whose source is `off` checks nothing and counts nothing.
    */
   breachedPasswordChecks: Counter<'source' | 'result' | 'reason'>;
+  /**
+   * Calls the signer service refused a peer (#497), on a process that serves
+   * it: by the peer's `role`, the `operation`, and `reason` = `not_allowed`
+   * (the role's grant does not allow the call) | `rate_limited` (the peer
+   * called faster than its rate).
+   */
+  signerRefusals: Counter<'role' | 'operation' | 'reason'>;
 }
 
 declare module 'fastify' {
@@ -154,6 +161,13 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       registers: [registry],
     });
 
+    const signerRefusals = new Counter({
+      name: 'qauth_signer_refusals_total',
+      help: 'Calls the signer service refused a peer, by role, operation and reason.',
+      labelNames: ['role', 'operation', 'reason'] as const,
+      registers: [registry],
+    });
+
     // The event store's read lag (#457): how long the oldest committed event
     // has been held back from readers by an older transaction still open. It
     // is read from the database at each scrape, so it exists only when the
@@ -227,6 +241,7 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       sessionPostgresReads,
       sessionLastSeenWrites,
       breachedPasswordChecks,
+      signerRefusals,
     };
     fastify.decorate('metrics', metrics);
 

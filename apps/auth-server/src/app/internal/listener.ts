@@ -108,6 +108,13 @@ declare module 'fastify' {
      * {@link requestPeerRole}.
      */
     peerRole?: InternalPeerRole;
+    /**
+     * Which peer called, set with {@link peerRole}: its certificate's SHA-256
+     * fingerprint, or `loopback` for a plain-HTTP caller. Two processes with
+     * one certificate are one peer. Read it with {@link requestPeerIdentity},
+     * such as to bound a peer's rate (#497).
+     */
+    peerIdentity?: string;
   }
 }
 
@@ -152,6 +159,19 @@ export interface InternalServerOptions {
   readonly plainHttpPeerRole?: InternalPeerRole;
 }
 
+/**
+ * Which peer called an internal route: see `FastifyRequest.peerIdentity`.
+ *
+ * @throws Error on a request of another listener
+ */
+export function requestPeerIdentity(request: FastifyRequest): string {
+  const identity = request.peerIdentity;
+  if (identity === undefined) {
+    throw new Error('requestPeerIdentity: the request did not come through the internal listener');
+  }
+  return identity;
+}
+
 /** The parts of a connection the peer check reads: a TLS socket's, when it is one. */
 type PeerSocket = Partial<
   Pick<TLSSocket, 'authorized' | 'getPeerX509Certificate' | 'remoteAddress'>
@@ -169,6 +189,8 @@ export function isLoopbackAddress(address: string | undefined): boolean {
 
 /** What the listener knows of a connection's peer, resolved at its first request. */
 type SocketPeer = PeerRoleResolution & {
+  /** `FastifyRequest.peerIdentity`. */
+  readonly identity: string;
   readonly sans: string[];
   /** When the peer's certificate stops being valid, in ms since the epoch: never without one. */
   readonly notAfterMs: number;
@@ -187,13 +209,19 @@ function resolveSocketPeer(
 ): SocketPeer {
   const none: SocketPeer = {
     refused: 'no-certificate',
+    identity: 'none',
     sans: [],
     notAfterMs: Number.POSITIVE_INFINITY,
   };
   if (typeof socket.getPeerX509Certificate !== 'function') {
     // A plain-HTTP connection: no TLS socket, so no certificate at all.
     return plainHttpPeerRole !== undefined && isLoopbackAddress(socket.remoteAddress)
-      ? { role: plainHttpPeerRole, sans: [], notAfterMs: Number.POSITIVE_INFINITY }
+      ? {
+          role: plainHttpPeerRole,
+          identity: 'loopback',
+          sans: [],
+          notAfterMs: Number.POSITIVE_INFINITY,
+        }
       : none;
   }
   if (socket.authorized !== true) return none;
@@ -204,6 +232,7 @@ function resolveSocketPeer(
   const notAfterMs = certificate.validToDate.getTime();
   return {
     ...resolvePeerRole(sans, peerRoles),
+    identity: `sha256:${certificate.fingerprint256}`,
     sans: loggableSans(sans),
     notAfterMs: Number.isNaN(notAfterMs) ? 0 : notAfterMs,
   };
@@ -268,6 +297,7 @@ const peerRolePlugin = fp<{
   async (fastify, { peerRoles, plainHttpPeerRole, generations }) => {
     const resolved = new WeakMap<object, SocketPeer & { readonly generation: number }>();
     fastify.decorateRequest('peerRole', undefined);
+    fastify.decorateRequest('peerIdentity', undefined);
     fastify.addHook('onRequest', async (request, reply) => {
       const socket = request.raw.socket;
       let peer = resolved.get(socket);
@@ -296,6 +326,7 @@ const peerRolePlugin = fp<{
       }
       if ('role' in peer) {
         request.peerRole = peer.role;
+        request.peerIdentity = peer.identity;
         return;
       }
       request.log.warn(
