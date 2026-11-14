@@ -148,6 +148,17 @@ export type KeyChangeRefusalReason =
   | 'UNKNOWN_PURPOSE'
   /** The purpose is not scoped. Only scoped keys rotate and are deleted this way. */
   | 'UNSCOPED_PURPOSE'
+  /**
+   * A manual rotation (#544) names a purpose the scheduled rotation does not
+   * rotate (`AUTOMATIC_ROTATION_PURPOSES`): a scoped key, or one that rotates
+   * only through its own operation, such as the federation keys. It has no
+   * rotation to start early.
+   */
+  | 'NOT_A_ROTATING_PURPOSE'
+  /** An unscoped purpose was given a scope id. */
+  | 'SCOPE_NOT_ALLOWED'
+  /** A manual rotation found no active key of the purpose to replace. Provisioning creates the first. */
+  | 'NO_ACTIVE_KEY'
   /** The scope id is missing, empty, too long or not well-formed text. */
   | 'INVALID_SCOPE_ID'
   /** The purpose does not allow the algorithm. */
@@ -171,6 +182,7 @@ export type KeyChangeRefusalReason =
 
 /** The reasons that describe the stored keys rather than the request. */
 const KEY_STATE_REASONS: readonly KeyChangeRefusalReason[] = [
+  'NO_ACTIVE_KEY',
   'NO_NEXT_KEY',
   'OVERLAP_NOT_ELAPSED',
   'KEY_CHANGED',
@@ -179,8 +191,8 @@ const KEY_STATE_REASONS: readonly KeyChangeRefusalReason[] = [
 ];
 
 /**
- * A rotation step (`activateNextKey`) or a scope deletion (`deleteScopedKeys`)
- * the factory does not run. Nothing was changed. Branch on {@link reason}.
+ * A rotation step (`activateNextKey`, `rotateNow`) or a scope deletion
+ * (`deleteScopedKeys`) the factory or the rotation does not run. Nothing was changed. Branch on {@link reason}.
  */
 export class KeyChangeRefusedError extends Error {
   readonly code = 'KEY_CHANGE_REFUSED';

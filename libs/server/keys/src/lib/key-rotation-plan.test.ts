@@ -14,6 +14,7 @@ import {
   KEY_ACTIVATION_DELAY_MS,
   keyRotationSettingsFromDays,
   planKeyRotation,
+  planKeyRotationNow,
   type PlanKeyRotationInput,
   resolveKeyRotationSettings,
 } from './key-rotation-plan';
@@ -148,11 +149,22 @@ describe('planKeyRotation', () => {
     });
   });
 
-  it('waits for the period even when the next key has been published long enough', () => {
-    const next = key({ kid: 'new', status: 'next', activateAt: null, publishAt: T0 });
+  it('switches to a next key made early once its window has run, before the period has (#544)', () => {
+    // A manual rotation on day 10: the next key signs a window later, on day 17.
+    const next = key({
+      kid: 'new',
+      status: 'next',
+      activateAt: null,
+      publishAt: T0 + 10 * DAY,
+      createdAt: T0 + 10 * DAY,
+    });
     const keys = [key({ kid: 'old' }), next];
-    expect(plan({ keys, now: T0 + 90 * DAY - 1 })).toEqual({ action: 'none' });
-    expect(plan({ keys, now: T0 + 90 * DAY }).action).toBe('activate');
+    expect(plan({ keys, now: T0 + 17 * DAY - 1 })).toEqual({ action: 'none' });
+    expect(plan({ keys, now: T0 + 17 * DAY })).toEqual({
+      action: 'activate',
+      incoming: [next],
+      outgoing: [keys[0]],
+    });
   });
 
   it('does nothing while a written switch is still ahead', () => {
@@ -262,5 +274,110 @@ describe('planKeyRotation', () => {
     expect(
       plan({ purpose: 'data_at_rest', algorithm: 'A256GCM', keys: data, now: T0 + 90 * DAY }).action
     ).toBe('activate');
+  });
+});
+
+describe('planKeyRotationNow', () => {
+  function now(overrides: Partial<PlanKeyRotationInput> & { now: number }) {
+    return planKeyRotationNow({
+      purpose: 'token_signing',
+      algorithm: 'EdDSA',
+      keys: [key({ kid: 'old' })],
+      settings: SETTINGS,
+      hybridSigning: false,
+      ...overrides,
+    });
+  }
+
+  it('creates the next key at once, long before the rotation is due, to sign a window later', () => {
+    expect(now({ now: T0 + DAY })).toEqual({ action: 'create', activatesAt: T0 + 8 * DAY });
+  });
+
+  it('keeps the next key that waits already, and names when it may sign', () => {
+    const next = key({
+      kid: 'new',
+      status: 'next',
+      activateAt: null,
+      publishAt: T0 + 2 * DAY,
+      createdAt: T0 + 2 * DAY,
+    });
+    expect(now({ keys: [key({ kid: 'old' }), next], now: T0 + 3 * DAY })).toEqual({
+      action: 'keep',
+      keys: [next],
+      activatesAt: T0 + 9 * DAY,
+    });
+  });
+
+  it('keeps both keys of a waiting hybrid pair', () => {
+    const keys = [
+      key({ kid: 'old-ed', pairId: 'p1' }),
+      key({ kid: 'old-ml', algorithm: 'ML-DSA-65', pairId: 'p1' }),
+      key({ kid: 'new-ed', status: 'next', activateAt: null, pairId: 'p2' }),
+      key({
+        kid: 'new-ml',
+        algorithm: 'ML-DSA-65',
+        status: 'next',
+        activateAt: null,
+        pairId: 'p2',
+      }),
+    ];
+    expect(now({ keys, hybridSigning: true, now: T0 + DAY })).toEqual({
+      action: 'keep',
+      keys: [keys[2], keys[3]],
+      activatesAt: T0 + 7 * DAY,
+    });
+  });
+
+  it('does nothing for an algorithm the realm holds no active key of', () => {
+    expect(now({ keys: [], now: T0 })).toEqual({ action: 'none' });
+    expect(now({ algorithm: 'RS256', now: T0 })).toEqual({ action: 'none' });
+  });
+
+  it('signs no earlier than a switch still ahead, or the previous cookie key’s retention', () => {
+    const switching = [
+      key({ kid: 'older', status: 'retired', retireAt: T0 + 30 * DAY, unpublishAt: T0 + 44 * DAY }),
+      key({ kid: 'old', activateAt: T0 + 30 * DAY }),
+    ];
+    expect(now({ keys: switching, now: T0 + 25 * DAY })).toEqual({
+      action: 'create',
+      activatesAt: T0 + 32 * DAY,
+    });
+    const cookies = [
+      key({
+        kid: 'older',
+        algorithm: 'HS256',
+        status: 'retired',
+        publishAt: null,
+        retireAt: T0,
+        unpublishAt: T0 + 30 * DAY,
+      }),
+      key({ kid: 'old', algorithm: 'HS256', publishAt: null }),
+    ];
+    expect(
+      now({ purpose: 'cookie_hmac', algorithm: 'HS256', keys: cookies, now: T0 + DAY })
+    ).toEqual({ action: 'create', activatesAt: T0 + 30 * DAY });
+  });
+
+  it.each([
+    ['two active keys', [key({ kid: 'a' }), key({ kid: 'b' })], 'AMBIGUOUS_KEYS'],
+    [
+      'two next keys',
+      [
+        key({ kid: 'old' }),
+        key({ kid: 'n1', status: 'next', activateAt: null }),
+        key({ kid: 'n2', status: 'next', activateAt: null }),
+      ],
+      'AMBIGUOUS_KEYS',
+    ],
+    [
+      'a next key that would split a hybrid pair',
+      [key({ kid: 'old' }), key({ kid: 'new', status: 'next', activateAt: null })],
+      'SPLIT_HYBRID_PAIR',
+    ],
+  ])('refuses %s', (_name, keys, reason) => {
+    expect(now({ keys, hybridSigning: true, now: T0 + DAY })).toMatchObject({
+      action: 'refuse',
+      reason,
+    });
   });
 });
