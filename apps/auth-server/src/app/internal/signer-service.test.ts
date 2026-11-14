@@ -75,20 +75,32 @@ const logged: string[] = [];
 
 /**
  * A log line's fields as the server's logger writes them: Fastify's request
- * and reply objects reduced to what its serializers keep, and the rest as
- * JSON, so every field a line carries is searched.
+ * and reply objects reduced to what its serializers keep, an error with its
+ * name, message, stack and cause, as pino's error serializer writes them, and
+ * the rest as JSON, so every field a line carries is searched.
  */
 function loggable(value: unknown): string {
   if (typeof value === 'string') return value;
   if (typeof value !== 'object' || value === null) return String(value);
+  if (value instanceof Error) return JSON.stringify({ err: value }, withErrors);
   const { req, res, ...rest } = value as Record<string, unknown>;
   const request = req as { method?: string; url?: string } | undefined;
   const reply = res as { statusCode?: number } | undefined;
-  return JSON.stringify({
-    ...rest,
-    ...(request === undefined ? {} : { req: { method: request.method, url: request.url } }),
-    ...(reply === undefined ? {} : { res: { statusCode: reply.statusCode } }),
-  });
+  return JSON.stringify(
+    {
+      ...rest,
+      ...(request === undefined ? {} : { req: { method: request.method, url: request.url } }),
+      ...(reply === undefined ? {} : { res: { statusCode: reply.statusCode } }),
+    },
+    withErrors
+  );
+}
+
+/** A JSON replacer that keeps what an error's own enumerable fields leave out. */
+function withErrors(_key: string, field: unknown): unknown {
+  return field instanceof Error
+    ? { ...field, name: field.name, message: field.message, stack: field.stack, cause: field.cause }
+    : field;
 }
 
 function recordingLogger() {

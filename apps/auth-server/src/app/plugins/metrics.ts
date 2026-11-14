@@ -68,7 +68,8 @@ export interface AppMetrics {
    * Calls the signer service refused a peer (#497), on a process that serves
    * it: by the peer's `role`, the `operation`, and `reason` = `not_allowed`
    * (the role's grant does not allow the call) | `rate_limited` (the peer
-   * called faster than its rate).
+   * called faster than its rate) | `in_flight` (the peer had as many calls
+   * running as one peer may).
    */
   signerRefusals: Counter<'role' | 'operation' | 'reason'>;
 }
