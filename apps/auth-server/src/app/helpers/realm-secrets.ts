@@ -32,11 +32,14 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
  * - Encrypting runs where the signer runs: the boot's seed, in the signer's
  *   process, and the policy update while the admin API runs in that process
  *   too (a single deployment). It calls as `local`, the caller inside the
- *   signer's own process; the admin role gets a grant of its own when it
- *   moves out (#497).
- * - Decrypting is for the mail sender, which the `api` role runs; it calls as
- *   `api`. A process without the signer refuses both (503) until it can call
- *   the signer service.
+ *   signer's own process; an admin process without the signer is held to the
+ *   `admin` grant by the signer service (#497), which covers no realm secret,
+ *   so its policy update answers 503 there.
+ * - Decrypting is for the mail sender; it calls as `api`. On a process
+ *   without the signer the signer service holds the call to the role of the
+ *   process's certificate instead: an `api` process decrypts, and the mail a
+ *   `web` process sends for a realm with a stored transport secret is not
+ *   sent.
  *
  * `fastify.signer` is read on each call: the signer plugin registers after the
  * policy store that holds this cipher.

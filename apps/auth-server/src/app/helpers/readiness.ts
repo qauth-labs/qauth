@@ -10,8 +10,11 @@
  *   the single-use stores.
  * - `signer`: `kek`, the KEK unwraps a stored key.
  * - `delivery`: `outbox`, the event outbox is readable.
- * - Later issues register their own: the configuration digest (#499) and,
- *   on a process with a remote signer, the signer service (#497).
+ * - A later issue registers the configuration digest (#499). The signer
+ *   service is not a check of a process with a remote signer (#497): such a
+ *   process stays ready while the signer is down, so its JWKS, token
+ *   verification, userinfo and introspection keep serving, and what signs
+ *   answers 503.
  *
  * A check is a promise that resolves when the dependency answers and rejects
  * when it does not. Its result is `ok`, or `fail` with a reason from a closed

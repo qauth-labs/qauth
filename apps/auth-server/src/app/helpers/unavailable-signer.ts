@@ -6,8 +6,11 @@ import type { FastifyInstance } from 'fastify';
  * Decision 9, #495).
  *
  * Such a process holds no KEK and no key, so it cannot sign, encrypt or read a
- * secret itself; it is meant to call the signer service at `SIGNER_URL` over
- * mutual TLS, and that client (#497) is not built yet. Until it is, every
+ * secret itself: it calls the signer service at `SIGNER_URL` over mutual TLS
+ * through its remote signer (#497, `internal/remote-signer.ts`). This is its
+ * signer when the app is built without the signer client's TLS files
+ * (`AppOptions.remoteSigner`), which `main.ts` always reads on such a process
+ * and only a test that checks what a split process refuses leaves out. Every
  * operation that needs a key fails closed with a 503
  * `TemporarilyUnavailableError`, so a route that needs a signature answers
  * `temporarily_unavailable`, never a token or a document signed with something

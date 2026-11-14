@@ -180,9 +180,10 @@ a client assertion, and `local` would open every stored secret. The admin API se
 configure (`secrets.seal`) and opens it as `admin`, whose grant encrypts and decrypts only
 `admin-sealed-value:` contexts; it stores a plugin secret sealed again as `local`, as the realm
 secret store does, and opens a stored one as `api`. In a single deployment every role shares the
-signer's process. A deployment that runs the signer apart (#497) still needs a grant for the admin
-API's storing, since the signer service takes the role from the caller's certificate and never
-accepts `local` from a peer; until then a process without the signer refuses the call.
+signer's process. Where the signer runs apart, the signer service takes the role from the caller's
+certificate and never accepts `local` from a peer: an admin process without the signer cannot store
+a plugin secret (`503`) until the admin role gets a grant for it, and stores one where it runs with
+the signer.
 
 ## Routes
 
@@ -512,8 +513,9 @@ old accounts. The host opens the stored
 config and builds the method's context as a signer caller that may decrypt the client secret and
 sign client assertions: `api` may do both, and `web`, which serves the sign-in pages where a
 method's routes mount, may do neither. So in a single deployment the host calls as `local`, as the
-plugin runtime does ([above](#what-a-method-is-handed)); which role calls once the signer runs
-apart is #497's.
+plugin runtime does ([above](#what-a-method-is-handed)); where the signer runs apart, the signer
+service holds the call to the role of the caller's certificate, which is `api` on the process that
+runs the code exchange.
 
 **At registration.** `checkUpstreamOidcProvider(egressClient, realmName, config)` runs discovery
 and the egress client's address checks on every endpoint without calling it, and answers one
