@@ -221,8 +221,8 @@ describe('endAllAccountSessions (#1110)', () => {
     );
     // Every refresh family still: a family names no session to keep.
     expect(repositories.refreshTokens.revokeAllForUser).toHaveBeenCalledWith(USER_ID, 'logout');
-    expect(emitUserEvent.mock.calls.map((call) => call[2]).sort()).toEqual(
-      [{ sid: one }, { sid: two }].sort()
-    );
+    const recorded = emitUserEvent.mock.calls.map((call) => call[2] as { sid?: string });
+    expect(recorded.map((data) => data.sid).sort()).toEqual([one, two].sort());
+    expect(recorded.every((data) => Object.keys(data).length === 1)).toBe(true);
   });
 });
