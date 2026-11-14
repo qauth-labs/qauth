@@ -464,9 +464,18 @@ describe('the account API’s authenticator app and recovery codes (#1109, real 
     for (const code of next.codes) expect(status.body).not.toContain(code);
 
     // The codes as answered (uppercase, in groups) are the ones stored: each
-    // new one is redeemed as typed, where every old one was refused above.
+    // new one, normalized as a typed one is, matches one unused row's hash,
+    // where every old one was refused above.
+    const hashes = await query<{ code_hash: string }>(
+      'SELECT code_hash FROM user_recovery_codes WHERE user_id = $1 AND used_at IS NULL',
+      [userId]
+    );
     for (const code of next.codes) {
-      expect(await redeem(userId, code), code).toEqual({ kind: 'redeemed' });
+      const typed = code.replace(/-/g, '').toLowerCase();
+      const matches = await Promise.all(
+        hashes.map((row) => app().passwordHasher.verifyPassword(row.code_hash, typed))
+      );
+      expect(matches.filter(Boolean), code).toHaveLength(1);
     }
 
     // An account with no second factor and no passkey has no set to regenerate.
@@ -532,7 +541,7 @@ describe('the account API’s authenticator app and recovery codes (#1109, real 
     );
     policy = POLICY_REQUIRED;
     // The app is lost: the person signs in with a recovery code in its place.
-    const { bearer } = await signedIn(userId, ['pwd'], { recoveryCodeUsed: true });
+    const { bearer, sessionId } = await signedIn(userId, ['pwd'], { recoveryCodeUsed: true });
 
     const removal = await call('DELETE', '/totp', bearer);
     expect(removal.statusCode, removal.body).toBe(409);
@@ -549,6 +558,24 @@ describe('the account API’s authenticator app and recovery codes (#1109, real 
     );
     expect(after).toHaveLength(1);
     expect(after[0]?.secret).not.toBe(before?.secret);
+
+    // Rebound again under the same sign-in (into another device, say): the
+    // app keeps its id, which the session names already, and names it once.
+    const again = await startEnrolment(bearer);
+    const reboundAgain = await call('POST', '/totp/enrollment/confirm', bearer, {
+      code: codeAt(base32Decode(again.secret), Date.now()),
+    });
+    expect(reboundAgain.statusCode, reboundAgain.body).toBe(200);
+    const [app] = await query<{ id: string; secret: string }>(
+      "SELECT id, credential_data->>'secret' AS secret FROM user_credentials WHERE user_id = $1 AND provider_type = 'totp'",
+      [userId]
+    );
+    expect(app?.secret).not.toBe(after[0]?.secret);
+    const [named] = await query<{ new_credential_ids: string[] }>(
+      'SELECT new_credential_ids FROM sessions WHERE id = $1',
+      [sessionId]
+    );
+    expect(named?.new_credential_ids).toEqual([app?.id]);
   });
 
   it('refuses to remove the last second factor the policy requires with second_factor_required', async () => {
