@@ -1,5 +1,9 @@
-import type { DbClient } from '@qauth-labs/infra-db';
-import type { ApprovedOperation, KekRotateOperation } from '@qauth-labs/server-keys';
+import { createRealmKeysRepository, type DbClient, type DbTransaction } from '@qauth-labs/infra-db';
+import {
+  type ApprovedOperation,
+  type KekRotateOperation,
+  KekUnavailableError,
+} from '@qauth-labs/server-keys';
 import {
   createKekRewrap,
   type KekEnv,
@@ -45,9 +49,12 @@ export interface RotateKekInput {
    */
   readonly to?: string;
   /** The approval of exactly this rotation (`kek.rotate`). */
-  readonly approval: ApprovedOperation<KekRotateOperation, DbClient>;
-  /** The audit hook, called once in the transaction that consumes the approval. */
-  readonly onAudit: (entry: KekRotationRecord, tx: DbClient) => Promise<void>;
+  readonly approval: ApprovedOperation<KekRotateOperation, DbTransaction>;
+  /**
+   * The audit hook, called once in the transaction that consumes the
+   * approval, before any key moves: a throw stops the run with nothing moved.
+   */
+  readonly onAudit: (entry: KekRotationRecord, tx: DbTransaction) => Promise<void>;
   /** Called after each key's write. */
   readonly onKey?: (progress: KekRewrapProgress) => Promise<void> | void;
   /** Stops the run between two keys. */
@@ -60,6 +67,8 @@ export interface RotateKekInput {
  * KEK reference afterwards. See `KekRewrap.rewrapAll` of
  * `@qauth-labs/server-keys`.
  *
+ * @throws KekUnavailableError when `to` is absent and the provider reports
+ *   itself unusable
  * @throws KekRewrapRefusedError (`CURRENT_KEK_UNKNOWN`) when `to` is absent
  *   and the provider does not say which KEK it wraps under
  * @throws the errors of `loadKekProvider` and of `KekRewrap.rewrapAll`
@@ -72,7 +81,13 @@ export async function rotateKek(
   try {
     let to = input.to;
     if (to === undefined) {
-      to = (await kekProvider.health()).kekRef;
+      const health = await kekProvider.health();
+      if (!health.ok) {
+        throw new KekUnavailableError({
+          cause: new Error(`${health.provider}: ${health.reason ?? 'no reason given'}`),
+        });
+      }
+      to = health.kekRef;
       if (to === undefined) {
         throw new KekRewrapRefusedError(
           'CURRENT_KEK_UNKNOWN',
@@ -115,4 +130,17 @@ export async function countKeysPerKek(
   } finally {
     await kekProvider.close?.();
   }
+}
+
+/**
+ * The realms that hold a stored key, after `afterRealmId`, in realm id order:
+ * the realms a KEK rotation re-wraps keys of, whose admin audit log records
+ * it. Ids only; it reads no key.
+ */
+export function listRealmIdsWithKeys(
+  db: DbClient,
+  afterRealmId: string | null,
+  limit: number
+): Promise<string[]> {
+  return createRealmKeysRepository(db).listRealmIds(afterRealmId, limit, db);
 }

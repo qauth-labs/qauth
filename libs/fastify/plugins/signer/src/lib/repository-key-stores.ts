@@ -4,6 +4,7 @@ import {
   createRealmsRepository,
   createRealmUpstreamProvidersRepository,
   type DbClient,
+  type DbTransaction,
   type RealmPublicKeysRepository,
 } from '@qauth-labs/infra-db';
 import { createPublishedKeyReader, type PublishedKeyReader } from '@qauth-labs/server-keys';
@@ -155,10 +156,10 @@ export function createRepositoryKeyStore(
  * one read that returns wrapped material, and the conditional write of a
  * key's new wrap. The approval is consumed in a transaction on `db`.
  */
-export function createRepositoryKekRewrapStore(db: DbClient): KekRewrapStore<DbClient> {
+export function createRepositoryKekRewrapStore(db: DbClient): KekRewrapStore<DbTransaction> {
   const keys = createRealmKeysRepository(db);
   return Object.freeze({
-    transaction: <T>(work: (tx: DbClient) => Promise<T>) => db.transaction(work),
+    transaction: <T>(work: (tx: DbTransaction) => Promise<T>) => db.transaction(work),
     countByKekRef: () => keys.countByKekRef(),
     listByKekRef: (kekRef: string, afterId: string | null, limit: number) =>
       keys.listByKekRef(kekRef, afterId, limit),
@@ -166,5 +167,5 @@ export function createRepositoryKekRewrapStore(db: DbClient): KekRewrapStore<DbC
     async replaceWrappedDek(realmId: string, kid: string, change: WrappedDekChange) {
       return (await keys.replaceWrappedDek(realmId, kid, change)) !== undefined;
     },
-  } satisfies KekRewrapStore<DbClient>);
+  } satisfies KekRewrapStore<DbTransaction>);
 }
