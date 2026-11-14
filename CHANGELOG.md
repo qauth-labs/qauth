@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-14
+
+A patch release with no breaking change. A deployment can now seed each
+realm's ceremony app error page from `CEREMONY_APP_ERROR_PAGE`, and the first
+boot fills it once in every realm 0.2.4 left at `null`; the realm policy
+schema moves to `1-rc.2`. Keys rotate on a schedule: from the first start, the
+`signer` role's `key-rotation` job publishes each realm's next key and
+switches to it, with an overlap. A realm can make a second admin's approval
+mandatory for the operations it lists. Migration 0074 adds a database
+function, which the `web`, `api` and `admin` database users execute, and the
+signer's database user writes events; a deployment that applies its grants by
+hand applies them before the upgrade (see the upgrade notes).
+
 ### Added
 
 - **A realm can make a second admin's approval mandatory** ([#521], ADR-019
@@ -5346,7 +5359,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/qauth-labs/qauth/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/qauth-labs/qauth/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/qauth-labs/qauth/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/qauth-labs/qauth/compare/v0.2.1...v0.2.2
