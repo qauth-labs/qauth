@@ -11,10 +11,10 @@ import errorHandler from '../plugins/error-handler';
 import {
   ACCOUNT_LOOKUP_RETRY_SECONDS,
   accountOperation,
-  bindsNewFactor,
   type AccountOperationRules,
   ACT_CHAIN_RULES,
   AUTH_TIME_CLOCK_SKEW_LEEWAY_SECONDS,
+  bindsNewFactor,
   checkAccountOperation,
   FRESH_AUTHENTICATION_MAX_AGE_SECONDS,
   FRESH_AUTHENTICATION_RULES,
