@@ -5,6 +5,23 @@
 // signer are in `@qauth-labs/server-keys/custody`, which only the signer's
 // wiring may import (.oxlintrc.json, issue #464).
 export {
+  type ApprovedOperation,
+  canonicalOperationBytes,
+  isOperationNonce,
+  isSecurityOperationActor,
+  KEY_ROTATE_OPERATION,
+  type KeyRotateOperation,
+  keyRotationOperation,
+  type KeyRotationOperationInput,
+  type KeyRotationOperationRecord,
+  newOperationNonce,
+  OPERATION_NONCE_BYTES,
+  OperationApprovalError,
+  type OperationApprovalRefusal,
+  operationDigest,
+  type SecurityOperationActor,
+} from './lib/approved-operation';
+export {
   DATA_AT_REST_CONSUMERS,
   type DataAtRestConsumer,
   dataAtRestLifetimeMs,
@@ -49,6 +66,7 @@ export {
   DEFAULT_KEY_ROTATION_SETTINGS,
   KEY_ACTIVATION_DELAY_MS,
   type KeyRotationDays,
+  type KeyRotationNowPlan,
   type KeyRotationPlan,
   type KeyRotationSettings,
   keyRotationSettingsFromDays,
@@ -56,6 +74,7 @@ export {
   type KeysRotatedStep,
   type NextKeyCreatedStep,
   planKeyRotation,
+  planKeyRotationNow,
   type PlanKeyRotationInput,
   type ResolvedKeyRotationSettings,
   resolveKeyRotationSettings,

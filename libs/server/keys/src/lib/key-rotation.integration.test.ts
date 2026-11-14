@@ -22,14 +22,25 @@ import { compactVerify, decodeProtectedHeader, importJWK, type JWK } from 'jose'
 import { Pool, type PoolClient } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { randomUUID } from 'node:crypto';
+
 import { KEK_A, localProvider } from '../testing/keks';
 import { createPgKeyStore } from '../testing/pg-key-store';
 import { createPgSignerStore } from '../testing/pg-signer-store';
+import {
+  type ApprovedOperation,
+  KEY_ROTATE_OPERATION,
+  type KeyRotateOperation,
+  keyRotationOperation,
+  newOperationNonce,
+  operationDigest,
+} from './approved-operation';
 import { createInProcessSigner } from './in-process-signer';
 import { createKeyFactory } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
 import {
   createKeyRotation,
+  type KeyRotationNowRecord,
   type KeyRotationReport,
   type KeyRotationRunOptions,
 } from './key-rotation';
@@ -410,5 +421,161 @@ describe('scheduled key rotation (real Postgres, fake clock)', () => {
       [w.realmId]
     );
     expect(rows).toEqual([]);
+  });
+  describe('rotateNow, a manual rotation under an approval (#544)', () => {
+    const ADMIN = Object.freeze({
+      kind: 'human' as const,
+      realmId: '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e00',
+      accountId: '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6eaa',
+    });
+
+    /** The id of the transaction `tx` runs, as Postgres names it. */
+    async function xactId(tx: PoolClient): Promise<string> {
+      const { rows } = await tx.query<{ xid: string }>('SELECT pg_current_xact_id()::text AS xid');
+      return rows[0].xid;
+    }
+
+    /** A single-use approval of the rotation of `purpose` in `realmId`, which records the transaction it was used in. */
+    function approvalOf(realmId: string, purpose: KeyPurpose) {
+      const nonce = newOperationNonce();
+      const filed = operationDigest(
+        keyRotationOperation({ realmId, purpose, requester: ADMIN, nonce })
+      );
+      const usedIn: string[] = [];
+      const approval: ApprovedOperation<KeyRotateOperation, PoolClient> = {
+        id: randomUUID(),
+        operation: KEY_ROTATE_OPERATION,
+        requester: ADMIN,
+        nonce,
+        async consume(digest, tx) {
+          if (usedIn.length > 0 || !digest.equals(filed)) throw new Error('not approved');
+          usedIn.push(await xactId(tx));
+        },
+      };
+      return { approval, usedIn };
+    }
+
+    async function rotateNow(
+      w: Awaited<ReturnType<typeof world>>,
+      purpose: KeyPurpose,
+      onAudit: (entry: KeyRotationNowRecord, tx: PoolClient) => Promise<void> = async () => {}
+    ): Promise<KeyRotationNowRecord> {
+      return w.node().rotateNow({
+        realmId: w.realmId,
+        purpose,
+        approval: approvalOf(w.realmId, purpose).approval,
+        now: () => w.clock.now,
+        onAudit,
+      });
+    }
+
+    it('publishes the next key at once; it starts to sign only after the pre-publication window', async () => {
+      const w = await world();
+      w.clock.now = T0 + 10 * DAY;
+      const oldKid = await kidOf(await w.sign());
+
+      const record = await rotateNow(w, 'token_signing');
+      const [next] = record.next;
+      expect(next).toMatchObject({ created: true, activatesAt: T0 + 17 * DAY });
+      const newKid = next.keys[0].kid;
+      // In the JWKS at once, published from the moment it was stored; it signs nothing yet.
+      expect(await w.jwksKids()).toEqual(expect.arrayContaining([oldKid, newKid]));
+      expect(await kidOf(await w.sign())).toBe(oldKid);
+      expect(await tokenKeyRows(w.realmId)).toEqual([
+        expect.objectContaining({ kid: oldKid, status: 'active' }),
+        expect.objectContaining({ kid: newKid, status: 'next', activate_at: null }),
+      ]);
+
+      // The scheduled rotation switches once the window has run, not on day 90.
+      w.clock.now = T0 + 17 * DAY - 1;
+      expect(stepsOf((await w.run()).steps, 'token_signing', 'rotated')).toEqual([]);
+      expect(await kidOf(await w.sign())).toBe(oldKid);
+      w.clock.now = T0 + 17 * DAY;
+      const step = rotatedStep((await w.run()).steps, 'token_signing');
+      expect(step).toMatchObject({ activated: [{ kid: newKid }], retired: [{ kid: oldKid }] });
+      expect(step.switchAt).toBe(T0 + 17 * DAY + KEY_ACTIVATION_DELAY_MS);
+      w.clock.now = step.switchAt - 1;
+      expect(await kidOf(await w.sign())).toBe(oldKid);
+      w.clock.now = step.switchAt;
+      const newToken = await w.sign();
+      expect(await kidOf(newToken)).toBe(newKid);
+      expect(await w.verifies(newToken)).toBe(true);
+      // The old key stays published for the retention after the switch.
+      expect(step.retainedUntil).toBe(step.switchAt + 14 * DAY);
+      w.clock.now = step.retainedUntil! - 1;
+      expect(await w.jwksKids()).toContain(oldKid);
+    });
+
+    it('returns the same key on a second call while a next key exists', async () => {
+      const w = await world();
+      w.clock.now = T0 + DAY;
+      const first = await rotateNow(w, 'token_signing');
+      w.clock.now = T0 + 2 * DAY;
+      const second = await rotateNow(w, 'token_signing');
+      expect(second.next).toEqual([{ ...first.next[0], created: false }]);
+      const { rows } = await db().query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM realm_keys
+          WHERE realm_id = $1 AND purpose = 'token_signing' AND status = 'next'`,
+        [w.realmId]
+      );
+      expect(rows[0].n).toBe(1);
+    });
+
+    it('rotates both halves of a hybrid purpose', async () => {
+      const w = await world(true);
+      w.clock.now = T0 + DAY;
+      const record = await rotateNow(w, 'token_signing');
+      expect(record.next[0].keys.map((key) => key.algorithm).sort()).toEqual([
+        'EdDSA',
+        'ML-DSA-65',
+      ]);
+      const next = (await tokenKeyRows(w.realmId)).filter((row) => row.status === 'next');
+      expect(next.map((row) => row.algorithm)).toEqual(['EdDSA', 'ML-DSA-65']);
+      expect(next[0].pair_id).not.toBeNull();
+      expect(next[0].pair_id).toBe(next[1].pair_id);
+      expect(await w.jwksKids()).toEqual(expect.arrayContaining(next.map((row) => row.kid)));
+
+      w.clock.now = T0 + 8 * DAY;
+      const step = rotatedStep((await w.run()).steps, 'token_signing');
+      expect(step.activated.map((key) => key.kid).sort()).toEqual(
+        next.map((row) => row.kid).sort()
+      );
+      expect(step.retired.map((key) => key.algorithm).sort()).toEqual(['EdDSA', 'ML-DSA-65']);
+    });
+
+    it('consumes the approval, stores the key and calls the audit hook in one transaction', async () => {
+      const w = await world();
+      const { approval, usedIn } = approvalOf(w.realmId, 'event_signing');
+      const audited: string[] = [];
+      const record = await w.node().rotateNow({
+        realmId: w.realmId,
+        purpose: 'event_signing',
+        approval,
+        now: () => w.clock.now,
+        onAudit: async (entry, tx) => {
+          audited.push(await xactId(tx));
+          // The new key is written in this transaction, and no other
+          // connection sees it before the transaction commits.
+          const query = 'SELECT kid FROM realm_keys WHERE realm_id = $1 AND kid = $2';
+          const params = [w.realmId, entry.next[0].keys[0].kid];
+          expect((await tx.query(query, params)).rows).toHaveLength(1);
+          expect((await db().query(query, params)).rows).toEqual([]);
+        },
+      });
+      expect(record).toMatchObject({ approvalId: approval.id, actor: ADMIN });
+      expect(usedIn).toHaveLength(1);
+      expect(audited).toEqual(usedIn);
+
+      // An audit write that fails takes the key back with it.
+      const keysOf = 'SELECT kid, status FROM realm_keys WHERE realm_id = $1 ORDER BY kid';
+      const before = await db().query(keysOf, [w.realmId]);
+      await expect(
+        rotateNow(w, 'cookie_hmac', async () => {
+          throw new Error('the audit row failed');
+        })
+      ).rejects.toThrow('the audit row failed');
+      const after = await db().query(keysOf, [w.realmId]);
+      expect(after.rows).toEqual(before.rows);
+    });
   });
 });
