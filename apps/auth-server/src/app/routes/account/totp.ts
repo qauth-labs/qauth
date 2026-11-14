@@ -60,7 +60,9 @@ const totpEnrollmentSchema = z.strictObject({
     .string()
     .min(16)
     .max(1024)
-    .regex(/^otpauth:\/\/totp\/[!#-;=?-~]+$/)
+    // The contract's URI characters (printable ASCII but space, `"`, `<` and
+    // `>`), spelled out so that no range spans punctuation and digits.
+    .regex(/^otpauth:\/\/totp\/[!#$%&'()*+,\-./0-9:;=?@A-Z[\\\]^_`a-z{|}~]+$/)
     .meta({ description: 'The same secret as an `otpauth://totp/` URI. Shown once.' }),
   algorithm: z.literal('SHA1'),
   digits: z.literal(TOTP_DIGITS),

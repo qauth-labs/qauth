@@ -2508,7 +2508,7 @@
                       "type": "string",
                       "minLength": 16,
                       "maxLength": 1024,
-                      "pattern": "^otpauth:\\/\\/totp\\/[!#-;=?-~]+$",
+                      "pattern": "^otpauth:\\/\\/totp\\/[!#$%&'()*+,\\-./0-9:;=?@A-Z[\\\\\\]^_`a-z{|}~]+$",
                       "description": "The same secret as an `otpauth://totp/` URI. Shown once."
                     },
                     "algorithm": {
