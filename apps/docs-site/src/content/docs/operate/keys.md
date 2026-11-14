@@ -200,7 +200,8 @@ retention ends. A `next` key and a `compromised` key verify nothing. A hybrid
 token's ML-DSA-65 key is found the same way, by its `pqc_kid`. Every process
 reads a realm's key list again at most every 60 seconds, and refuses the
 tokens of a key [retired in an emergency](#emergency-retirement) within 10
-seconds.
+seconds, or one database read later when the retiring host cannot write to
+Redis.
 
 A token issued before the upgrade to 0.2 carries no `kid`. It still verifies,
 but only against the Ed25519 key that `JWT_PRIVATE_KEY` or `JWT_PUBLIC_KEY`
@@ -387,7 +388,9 @@ How fast the key stops working:
   same time, without waiting for the 60-second key refresh. After the commit,
   the command stores the database's list as the snapshot, so the other nodes
   see the change at their next read. When it cannot write to Redis, they see
-  it at their next database read.
+  it at their next database read, which begins within 10 seconds of the
+  commit: the bound then adds the time that read takes, which a node gives
+  up on after 5 seconds.
 - **On a node that cannot read the denylist, within 30 seconds.** A node that
   has not read it, from Redis or the database, for 30 seconds refuses every
   token until it can again, and logs a warning. The denylist lives in the
@@ -402,7 +405,10 @@ another purpose and changes nothing. For a leaked cookie secret, see
 [Replacing the cookie key](#replacing-the-cookie-key).
 
 It exits `0` once the key is retired and the sessions ended. It exits `3` when
-the key is retired but ending the sessions failed: run the same command again.
+the key is retired but ending the sessions failed, or when the run failed and
+whether the key was retired cannot be read, as when the database connection
+drops: run the same command again, for the same `kid`, once the database
+answers.
 For a key retired already, it changes no key and ends the realm's sessions
 again, from the key's activation time less the delay, or from when the key was
 made if it has no activation time. That run is recorded in the admin audit
