@@ -19,9 +19,11 @@ export {
   DATA_KEY_BYTES,
   IV_BYTES,
   openKeyMaterial,
+  rewrapDataKey,
   type SealedKeyMaterial,
   sealKeyMaterial,
   TAG_BYTES,
+  unwrapDataKey,
 } from './lib/envelope';
 export {
   describeSource,
@@ -51,6 +53,23 @@ export {
   type KekProviderContractOptions,
   runKekProviderContract,
 } from './lib/kek-provider-contract';
+export {
+  createKekRewrap,
+  type KekRefCensus,
+  type KekRefCount,
+  type KekRewrap,
+  type KekRewrapCandidate,
+  type KekRewrapFailure,
+  type KekRewrapOptions,
+  type KekRewrapProgress,
+  type KekRewrapRefusalReason,
+  KekRewrapRefusedError,
+  type KekRewrapReport,
+  type KekRewrapStore,
+  type KekRotationRecord,
+  type RewrapAllInput,
+  type WrappedDekChange,
+} from './lib/kek-rewrap';
 export { computeKekRef, DEV_KEK_DEFAULT, KEK_BYTES } from './lib/kek-sources';
 export {
   type ActivatedKey,

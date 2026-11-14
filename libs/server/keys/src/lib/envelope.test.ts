@@ -8,9 +8,11 @@ import {
   DATA_KEY_BYTES,
   IV_BYTES,
   openKeyMaterial,
+  rewrapDataKey,
   type SealedKeyMaterial,
   sealKeyMaterial,
   TAG_BYTES,
+  unwrapDataKey,
 } from './envelope';
 import { KEY_DECRYPTION_ERROR_MESSAGE, KeyDecryptionError, UnknownKekRefError } from './errors';
 import type { KekProvider } from './kek-provider';
@@ -213,5 +215,55 @@ describe('openKeyMaterial refuses', () => {
     const short: KekProvider = { ...provider, unwrap: async () => Buffer.alloc(16) };
 
     await expect(openKeyMaterial(short, sealed, REALM_A)).rejects.toThrow(KeyDecryptionError);
+  });
+});
+
+describe('re-wrapping a data key under a new KEK (#545)', () => {
+  const before = localProvider({ KEK: KEK_A });
+  const during = localProvider({ KEK: KEK_B, KEK_PREVIOUS: KEK_A });
+  const after = localProvider({ KEK: KEK_B });
+
+  it('moves the data key to the current KEK, and the material opens with that KEK alone', async () => {
+    const sealed = await sealKeyMaterial(before, MATERIAL, REALM_A);
+    const dek = await unwrapDataKey(before, sealed, REALM_A);
+
+    const next = await rewrapDataKey(during, sealed, REALM_A);
+    const moved = { ...sealed, wrappedDek: Buffer.from(next.wrapped), kekRef: next.kekRef };
+
+    expect(next.kekRef).toBe((await after.health()).kekRef);
+    expect(next.kekRef).not.toBe(sealed.kekRef);
+    expect(await openKeyMaterial(after, moved, REALM_A)).toEqual(MATERIAL);
+    // The data key is the same one, so the ciphertext needed no change.
+    expect(await unwrapDataKey(after, moved, REALM_A)).toEqual(dek);
+    await expect(openKeyMaterial(before, moved, REALM_A)).rejects.toThrow(UnknownKekRefError);
+  });
+
+  it('refuses a row read under another identity, and a KEK it does not hold', async () => {
+    const sealed = await sealKeyMaterial(before, MATERIAL, REALM_A);
+
+    await expect(rewrapDataKey(during, sealed, REALM_B)).rejects.toThrow(KeyDecryptionError);
+    await expect(rewrapDataKey(after, sealed, REALM_A)).rejects.toThrow(UnknownKekRefError);
+  });
+
+  it('refuses a new wrap that opens to another data key', async () => {
+    const sealed = await sealKeyMaterial(before, MATERIAL, REALM_A);
+    // A provider whose wrap loses the data key it was given.
+    const lossy: KekProvider = {
+      ...during,
+      wrap: async (_dek, aad) => during.wrap(Buffer.alloc(DATA_KEY_BYTES, 7), aad),
+    };
+
+    const error = await rewrapDataKey(lossy, sealed, REALM_A).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(KeyDecryptionError);
+    expect((error as KeyDecryptionError).detail).toBe('re-wrapped data key opens to another key');
+  });
+
+  it('refuses a data key of the wrong length from a provider', async () => {
+    const sealed = await sealKeyMaterial(before, MATERIAL, REALM_A);
+    const short: KekProvider = { ...during, unwrap: async () => Buffer.alloc(16) };
+
+    await expect(rewrapDataKey(short, sealed, REALM_A)).rejects.toThrow(KeyDecryptionError);
+    await expect(unwrapDataKey(short, sealed, REALM_A)).rejects.toThrow(KeyDecryptionError);
   });
 });
