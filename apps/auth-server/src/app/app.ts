@@ -869,7 +869,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // release is only warned of. The node registers once every boot step
   // succeeded (the last `onReady` hook, below the routes), marks itself
   // seen every 30 seconds and leaves the list when it closes, before the
-  // database does. It rides the default realm boot switch, as every database
+  // database does: `main.ts` closes the server after a failed start too. It rides the default realm boot switch, as every database
   // step at boot does.
   const deploymentNodes = defaultRealmBoot ? deploymentNodeList(fastify) : null;
   fastify.decorate('deploymentNodes', deploymentNodes);

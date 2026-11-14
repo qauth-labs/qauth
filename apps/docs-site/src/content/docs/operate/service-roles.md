@@ -316,8 +316,8 @@ the node list during the last two minutes (the `deployment_nodes` table).
 The node compares read-only before any other boot step writes to the database,
 and again when it joins the list, once every boot step succeeded, under a lock
 that makes two nodes booting at once compare with each other. It marks itself
-seen every 30 seconds and leaves the list when it shuts down cleanly; a node
-that stops without shutting down stops counting two minutes after it was last
+seen every 30 seconds and leaves the list when it shuts down cleanly, or when
+a listener fails to bind after it joined; a node that stops without shutting down stops counting two minutes after it was last
 seen. The readiness check `config_digest` fails while the node is not in the
 list ([Observability](/operate/observability/#health-and-readiness)). When a
 node's row was removed while it ran, as after two minutes without the

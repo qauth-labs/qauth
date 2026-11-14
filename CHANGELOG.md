@@ -33,7 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compares read-only before any other boot step writes, and again when it
   joins the list once its boot succeeded, under a lock so that two nodes
   booting at once compare with each other. It marks itself seen every 30
-  seconds and leaves the list when it shuts down cleanly; a row not seen for
+  seconds and leaves the list when it shuts down cleanly or a listener fails
+  to bind after it joined; a row not seen for
   two minutes stops counting and is removed at the next boot. Every role
   gains the readiness check `config_digest`, which fails while the node is
   not in the list, or when a row it wrote back after it was removed meets a
