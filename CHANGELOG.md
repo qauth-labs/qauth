@@ -21,16 +21,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key registry now has a digest class (`shared`, `node`, `secret` or
   `realm-seed`), and a unit test fails when one has none: only `shared` keys
   are compared, never a secret, and a key only some roles read only between
-  nodes holding one of them (`KEK_PROVIDER` on `signer`, the admin listener's
-  switch and URL on `admin`, the plugin keys on `web` and `admin`). The configuration page lists the shared keys. The node
+  nodes holding one of them (`KEK_PROVIDER` and the key rotation windows on
+  `signer`, the event delivery retries on `delivery`, the admin listener's
+  switch and URL on `admin`, the plugin keys on `web` and `admin`, a route's
+  own rate limits on `web`, `api` and `admin`). A key that seeds a realm is
+  not compared, unless the server still reads it at run time:
+  `EMAIL_VERIFICATION_TOKEN_EXPIRY`,
+  `EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND` and
+  `REDIRECT_URI_CUSTOM_SCHEMES` are. The configuration page lists the shared
+  keys. The node
   compares read-only before any other boot step writes, and again when it
   joins the list once its boot succeeded, under a lock so that two nodes
   booting at once compare with each other. It marks itself seen every 30
   seconds and leaves the list when it shuts down cleanly; a row not seen for
   two minutes stops counting and is removed at the next boot. Every role
   gains the readiness check `config_digest`, which fails while the node is
-  not in the list, and every role's database user may read and write the
-  list.
+  not in the list, or when a row it wrote back after it was removed meets a
+  node of its release whose settings differ. No role's database user reads
+  or writes the table: every role calls four `SECURITY DEFINER` functions,
+  whose times come from the database's clock, and only the database user
+  that registered a row marks it seen or removes it. A deployment that
+  applies the database grants by hand grants `EXECUTE` on them first
+  ([Upgrades](https://docs.qauth.dev/operate/upgrades/#every-node-registers-in-the-node-list)).
 - **Emergency key retirement, with a `kid` denylist** ([#551], ADR-019
   Decisions 7 and 9). The operator command `auth-server:keys:retire
   --kid=<kid> --yes` retires a token-signing key that may be compromised at

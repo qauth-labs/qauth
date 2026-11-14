@@ -1456,6 +1456,33 @@ change of the key changes no realm.
   realm a 0.2.4 node creates stores `null` under `1-rc.1`: 0.2.5 nodes read it
   as the key's page, and the next 0.2.5 boot stores it so.
 
+### Every node registers in the node list
+
+From this release on, a node compares its deployment-wide settings with every
+running node's at boot ([#499](https://github.com/qauth-labs/qauth/issues/499)):
+[Settings every node shares](/operate/service-roles/#settings-every-node-shares)
+says which keys and how. Give every node of the new release the same value of
+those keys: a node whose values differ from a running node of its release
+refuses to boot and names the keys. Nodes of the previous release write no
+row, so during the rolling upgrade the new nodes compare only with each other.
+
+Migration 0076 adds the `deployment_nodes` table and four `SECURITY DEFINER`
+functions that read and write it; no role's database user holds a grant on
+the table. `EXECUTE` on the functions is revoked from `PUBLIC`; the grants give
+it to every role. A deployment whose migration runner grants the roles'
+database users
+([above](#each-role-can-connect-as-a-database-user-of-its-own)), or whose
+roles connect as the one user that owns the tables, needs nothing. One that
+applies the grants by hand applies, for each role's user, before the new
+version starts:
+
+```sql
+GRANT EXECUTE ON FUNCTION "deployment_nodes_live"(bigint), "deployment_nodes_register"(uuid, text[], text, text, jsonb, bigint), "deployment_nodes_heartbeat"(uuid, text[], text, text, jsonb, bigint), "deployment_nodes_remove"(uuid) TO <role>;
+```
+
+Without them a node of the new release does not start: its boot fails with
+`permission denied` for the function.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]
