@@ -827,7 +827,9 @@ export function checkBaselineFiles(baselineFiles, currentFiles, journalTags, bas
 // The report
 // ---------------------------------------------------------------------------
 
-const cell = (text) => String(text).replace(/\|/g, '\\|').replace(/\s+/g, ' ');
+/** One table cell: a backslash, then a pipe, escaped, so neither ends the cell early. */
+const cell = (text) =>
+  String(text).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\s+/g, ' ');
 const shorten = (text, max = 160) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 /**

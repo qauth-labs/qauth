@@ -702,6 +702,21 @@ describe('renderSummary', () => {
     expect(summary).toContain('Frozen: no exception may be added (compared with `origin/main`).');
   });
 
+  it('escapes a backslash and a pipe, so a statement stays in its cell', () => {
+    const summary = renderSummary({
+      ...base,
+      refused: [
+        {
+          file: '0075_example.sql',
+          kind: 'delete-from',
+          line: 1,
+          statement: "DELETE FROM a WHERE b = E'\\|'",
+        },
+      ],
+    });
+    expect(summary).toContain("`DELETE FROM a WHERE b = E'\\\\\\|'` |");
+  });
+
   it('lists refused statements and errors when it fails', () => {
     const summary = renderSummary({
       ...base,
