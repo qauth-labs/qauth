@@ -11,6 +11,7 @@ import {
   isServiceRole,
   keyMaterialProblems,
   METRICS_PEER_ROLE,
+  parsePeerSan,
   SERVICE_ROLE_NAMES,
   type ServiceRole,
   ServiceRoleBootError,
@@ -330,6 +331,8 @@ export function repositoriesFor(roles: readonly ServiceRole[]): readonly Reposit
 export interface ServiceRoleSettings {
   readonly SERVICE_ROLES: readonly ServiceRole[];
   readonly SIGNER_URL?: string | undefined;
+  /** The SAN the signer service's certificate must hold; SIGNER_URL's host name when unset. */
+  readonly SIGNER_SAN?: string | undefined;
   readonly INTERNAL_TLS_CERT_PATH?: string | undefined;
   readonly INTERNAL_TLS_KEY_PATH?: string | undefined;
   readonly INTERNAL_TLS_CA_PATH?: string | undefined;
@@ -498,6 +501,52 @@ export function internalListenerPlan(
 }
 
 /**
+ * The SAN the signer service's certificate must hold, for a process that
+ * calls it at SIGNER_URL (#497): SIGNER_SAN, or else the URL's host name as a
+ * DNS name. `undefined` without SIGNER_URL, and when its host is an IP
+ * address, which no certificate is known by here, and SIGNER_SAN is unset.
+ */
+export function signerServerSan(
+  settings: Pick<ServiceRoleSettings, 'SIGNER_URL' | 'SIGNER_SAN'>
+): string | undefined {
+  if (settings.SIGNER_SAN !== undefined) return settings.SIGNER_SAN;
+  if (settings.SIGNER_URL === undefined || !URL.canParse(settings.SIGNER_URL)) return undefined;
+  const host = new URL(settings.SIGNER_URL).hostname;
+  return 'san' in parsePeerSan(host) ? host : undefined;
+}
+
+/**
+ * The internal TLS files a process without the signer calls the signer
+ * service with (#497), when it has SIGNER_URL and all three: `main.ts` reads
+ * them at boot for the app's signer client. `undefined` on a process that
+ * holds the signer, and on one whose settings {@link checkServiceRoles}
+ * refuses for a missing one.
+ */
+export function signerClientTlsFiles(settings: ServiceRoleSettings): InternalTlsFiles | undefined {
+  if (holdsSigner(settings.SERVICE_ROLES) || settings.SIGNER_URL === undefined) return undefined;
+  const { INTERNAL_TLS_CERT_PATH, INTERNAL_TLS_KEY_PATH, INTERNAL_TLS_CA_PATH } = settings;
+  if (
+    INTERNAL_TLS_CERT_PATH === undefined ||
+    INTERNAL_TLS_KEY_PATH === undefined ||
+    INTERNAL_TLS_CA_PATH === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    certPath: INTERNAL_TLS_CERT_PATH,
+    keyPath: INTERNAL_TLS_KEY_PATH,
+    caPath: INTERNAL_TLS_CA_PATH,
+  };
+}
+
+/**
+ * The roles that call the signer service as themselves: the peer roles the
+ * signer has grants for. A process calls it as the one role its certificate
+ * maps to.
+ */
+const SIGNER_PEER_ROLES: readonly ServiceRole[] = ['web', 'api', 'delivery', 'admin'];
+
+/**
  * Check a process's roles against its environment.
  *
  * A process without the `signer` role:
@@ -505,7 +554,12 @@ export function internalListenerPlan(
  * - holds no key material: each variable {@link isKeyMaterialVariable} names
  *   is a problem that names it;
  * - reaches the signer service: `SIGNER_URL` and the internal TLS files are
- *   required.
+ *   required, and a SAN to know the signer's certificate by
+ *   ({@link signerServerSan}): SIGNER_SAN, where SIGNER_URL names an IP
+ *   address;
+ * - calls the signer as the one role its certificate maps to, so holding
+ *   two of `web`, `api`, `delivery` and `admin` is warned of: the signer
+ *   refuses the calls of the other.
  *
  * It needs no public key variable: it verifies a realm's tokens with the keys
  * the realm publishes in its key store (`realm_public_keys`, #491), which its
@@ -535,11 +589,13 @@ export function checkServiceRoles(
   if (internal.serves) problems.push(...internal.problems);
 
   if (holdsSigner(roles)) {
-    if (settings.SIGNER_URL !== undefined) {
-      warnings.push({
-        variable: 'SIGNER_URL',
-        message: `SIGNER_URL is ignored: ${named} holds the signer role, so this process signs in-process`,
-      });
+    for (const variable of ['SIGNER_URL', 'SIGNER_SAN'] as const) {
+      if (settings[variable] !== undefined) {
+        warnings.push({
+          variable,
+          message: `${variable} is ignored: ${named} holds the signer role, so this process signs in-process`,
+        });
+      }
     }
     return { problems, warnings };
   }
@@ -553,6 +609,11 @@ export function checkServiceRoles(
       variable: 'SIGNER_URL',
       message: `SIGNER_URL is required: ${named} does not hold the signer role, so it reaches the signer service at SIGNER_URL over mutual TLS`,
     });
+  } else if (signerServerSan(settings) === undefined) {
+    problems.push({
+      variable: 'SIGNER_SAN',
+      message: `SIGNER_SAN is required: SIGNER_URL names the signer by an IP address, and ${named} knows the signer service's certificate by a DNS name or a URI it holds, such as spiffe://example.org/qauth/signer`,
+    });
   }
   // A file the internal listener's plan already named is not named twice.
   const planned = new Set(problems.map((problem) => problem.variable));
@@ -565,10 +626,13 @@ export function checkServiceRoles(
     }
   }
 
-  warnings.push({
-    variable: 'SERVICE_ROLES',
-    message: `${named} signs through the signer service, which this release cannot call yet: until it can, a request that needs a signature, an encryption or a cookie secret answers 503 on this process, and an event delivery waits; tokens still verify, with the realm's published keys`,
-  });
+  const callers = SIGNER_PEER_ROLES.filter((role) => roles.includes(role));
+  if (callers.length > 1) {
+    warnings.push({
+      variable: 'SERVICE_ROLES',
+      message: `${named} calls the signer service as the one role its certificate maps to in the signer's INTERNAL_PEER_ROLES, and the signer refuses the calls of its other roles (${callers.join(', ')}): those requests answer 503. Run each of them in a process of its own, with a certificate of its own`,
+    });
+  }
 
   return { problems, warnings };
 }

@@ -30,6 +30,8 @@ import {
   SERVICE_ROLE_NAMES,
   ServiceRoleBootError,
   type ServiceRoleSettings,
+  signerClientTlsFiles,
+  signerServerSan,
 } from './service-roles';
 
 /** INTERNAL_PEER_ROLES as the configuration reads it. */
@@ -390,13 +392,17 @@ describe('checkServiceRoles', () => {
     ).toEqual({ problems: [], warnings: [] });
   });
 
-  it('warns that a process with the signer ignores SIGNER_URL', () => {
+  it('warns that a process with the signer ignores SIGNER_URL and SIGNER_SAN', () => {
     const check = checkServiceRoles(
-      { ...signerSettings(['api', 'signer']), SIGNER_URL: 'https://signer.internal' },
+      {
+        ...signerSettings(['api', 'signer']),
+        SIGNER_URL: 'https://signer.internal',
+        SIGNER_SAN: 'spiffe://qauth.test/signer',
+      },
       {}
     );
     expect(check.problems).toEqual([]);
-    expect(check.warnings.map((warning) => warning.variable)).toEqual(['SIGNER_URL']);
+    expect(check.warnings.map((warning) => warning.variable)).toEqual(['SIGNER_URL', 'SIGNER_SAN']);
   });
 
   it('refuses each key variable on a process without the signer, by name', () => {
@@ -444,12 +450,63 @@ describe('checkServiceRoles', () => {
     }
   });
 
-  it('warns that a process without the signer cannot sign yet', () => {
-    const check = checkServiceRoles(splitSettings(['web']), {});
+  it('signs through the signer service without a warning, one role to a process (#497)', () => {
+    for (const roles of [['web'], ['api'], ['delivery'], ['admin']] as const) {
+      expect(checkServiceRoles(splitSettings(roles), {}), roles.join()).toEqual({
+        problems: [],
+        warnings: [],
+      });
+    }
+  });
+
+  it('warns that a process holding two calling roles calls the signer as one of them', () => {
+    const check = checkServiceRoles(splitSettings(['web', 'api']), {});
     expect(check.problems).toEqual([]);
-    expect(check.warnings.map((warning) => warning.message)).toEqual([
-      expect.stringContaining('answers 503'),
+    expect(check.warnings).toEqual([
+      {
+        variable: 'SERVICE_ROLES',
+        message: expect.stringContaining(
+          'the signer refuses the calls of its other roles (web, api)'
+        ),
+      },
     ]);
+  });
+
+  it("knows the signer's certificate by SIGNER_SAN, or by SIGNER_URL's host name", () => {
+    expect(signerServerSan({ SIGNER_URL: 'https://signer.internal:3443' })).toBe('signer.internal');
+    expect(
+      signerServerSan({
+        SIGNER_URL: 'https://signer.internal:3443',
+        SIGNER_SAN: 'spiffe://qauth.test/signer',
+      })
+    ).toBe('spiffe://qauth.test/signer');
+    expect(signerServerSan({})).toBeUndefined();
+    for (const url of ['https://10.0.0.5:3443', 'https://[fd00::5]:3443']) {
+      expect(signerServerSan({ SIGNER_URL: url }), url).toBeUndefined();
+      const check = checkServiceRoles({ ...splitSettings(['api']), SIGNER_URL: url }, {});
+      expect(check.problems.map((problem) => problem.variable)).toEqual(['SIGNER_SAN']);
+      expect(
+        checkServiceRoles(
+          { ...splitSettings(['api']), SIGNER_URL: url, SIGNER_SAN: 'signer.internal' },
+          {}
+        ).problems
+      ).toEqual([]);
+    }
+  });
+
+  it('reads the signer client its TLS files only where it calls the signer with all of them', () => {
+    expect(signerClientTlsFiles(splitSettings(['api']))).toEqual({
+      certPath: '/run/secrets/internal.crt',
+      keyPath: '/run/secrets/internal.key',
+      caPath: '/run/secrets/internal-ca.crt',
+    });
+    expect(signerClientTlsFiles(signerSettings(['api', 'signer']))).toBeUndefined();
+    expect(
+      signerClientTlsFiles({ ...splitSettings(['api']), SIGNER_URL: undefined })
+    ).toBeUndefined();
+    expect(
+      signerClientTlsFiles({ ...splitSettings(['api']), INTERNAL_TLS_CA_PATH: undefined })
+    ).toBeUndefined();
   });
 
   it('refuses the boot with every problem in one error', () => {
