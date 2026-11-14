@@ -169,6 +169,10 @@ export function requestApprovalRequirement(
  * there can approve anywhere: such an operation needs two admins while any
  * realm's set is not empty. A realm whose policies cannot be read counts as
  * one whose set is not empty.
+ *
+ * Inside an admin handler, `tx` is the handler's transaction, which every
+ * repository call there must name; the gate, which runs before it opens,
+ * passes none.
  */
 export async function operationApprovalRequirement(
   fastify: Pick<FastifyInstance, 'policyStore' | 'repositories'>,
@@ -176,7 +180,8 @@ export async function operationApprovalRequirement(
     readonly operation: ApprovalsRequiredInput['operation'];
     readonly realm: RealmRow;
     readonly body?: unknown;
-  }
+  },
+  tx?: Transaction
 ): Promise<ApprovalRequirement> {
   const own = requestApprovalRequirement(fastify, input);
   if (
@@ -186,11 +191,11 @@ export async function operationApprovalRequirement(
   ) {
     return own;
   }
-  for (const record of await fastify.repositories.realms.listPolicyRecords()) {
+  for (const record of await fastify.repositories.realms.listPolicyRecords(tx)) {
     if (record.realmId === input.realm.id) continue;
     let mandatory: readonly string[];
     try {
-      const snapshot = await fastify.policyStore.get(record.realmId);
+      const snapshot = await fastify.policyStore.get(record.realmId, tx);
       // A realm removed since the list was read administers nobody.
       if (snapshot === undefined) continue;
       mandatory = snapshot.policies.admin.twoAdminMandatoryOperations;

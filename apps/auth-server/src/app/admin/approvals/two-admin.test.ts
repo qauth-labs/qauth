@@ -418,6 +418,23 @@ describe('a self-protecting operation on the operator realm (#521)', () => {
     expect(await required(tenantOnly, grantCreate, TENANT)).toBe(1);
     expect(tenantOnly.repositories.realms.listPolicyRecords).not.toHaveBeenCalled();
   });
+
+  // An admin handler's repository calls must name its transaction.
+  it("reads every realm's policies in the handler's transaction when it is given one", async () => {
+    const server = serverOf({ [OPERATOR.id]: [], [TENANT.id]: [] });
+    const get = vi.spyOn(server.policyStore, 'get');
+    const tx = { handler: 'tx' } as unknown as Parameters<typeof operationApprovalRequirement>[2];
+    await operationApprovalRequirement(
+      server,
+      {
+        operation: grantCreate,
+        realm: OPERATOR as unknown as Parameters<typeof operationApprovalRequirement>[1]['realm'],
+      },
+      tx
+    );
+    expect(server.repositories.realms.listPolicyRecords).toHaveBeenCalledWith(tx);
+    expect(get).toHaveBeenCalledWith(TENANT.id, tx);
+  });
 });
 
 describe('how many approvals a request needs (#521)', () => {

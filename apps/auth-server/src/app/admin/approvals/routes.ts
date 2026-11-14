@@ -382,11 +382,11 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
       // second one now. Where the realm requires a second admin and no one
       // could give it, the request fails closed: nothing is filed.
       const now = Date.now();
-      const requirement = await operationApprovalRequirement(request.server, {
-        operation,
-        realm: caller.targetRealm,
-        body: filed.body,
-      });
+      const requirement = await operationApprovalRequirement(
+        request.server,
+        { operation, realm: caller.targetRealm, body: filed.body },
+        adminTransaction(request)
+      );
       const approvers = await eligibleApprovers(request.server, {
         targetRealm: caller.targetRealm,
         requester: callerAccount(caller),

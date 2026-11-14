@@ -771,6 +771,9 @@ function approvalGate(registry: OperationRegistry) {
           targetRealm: caller.targetRealm,
           requester,
           callerRealm: caller.issuerRealm,
+          // The gate runs before the operation's transaction opens: there is
+          // none to read in, and the operation's own consume re-checks the
+          // approval it was given.
           tx: undefined,
         });
         if (fromOthers > total) throw new ApprovalUnavailableError();
