@@ -485,11 +485,22 @@ unwrapped under the old KEK and wrapped again under the new one, so a store of
 hundreds of keys moves in seconds. It is a security operation (ADR-019
 Decision 9).
 
-1. **Set both KEKs on every signer node.** Make a new KEK
-   ([above](#the-kek)), set it as `KEK` (or `KEK_PATH`) and the old one as
-   `KEK_PREVIOUS` (or `KEK_PREVIOUS_PATH`), and restart the signer nodes one
-   at a time. New keys are wrapped under the new KEK from then on, and every
-   stored key still opens, so signing goes on.
+1. **Give every signer node the new KEK before any node wraps under it.**
+   Make a new KEK ([above](#the-kek)). A node wraps new keys under its `KEK`
+   and opens only its `KEK` and `KEK_PREVIOUS`, so switch in two rolling
+   passes, with no earlier rotation still in progress:
+   - Pass 1: keep the old KEK as `KEK` (or `KEK_PATH`), set the new one as
+     `KEK_PREVIOUS` (or `KEK_PREVIOUS_PATH`), and restart the signer nodes one
+     at a time. Every node now opens keys wrapped under the new KEK, and none
+     wraps under it yet.
+   - Pass 2: set the new KEK as `KEK` and the old one as `KEK_PREVIOUS`, and
+     restart the signer nodes one at a time. New keys are wrapped under the
+     new KEK from then on, and every stored key still opens on every node, so
+     signing goes on.
+
+   Go on to the next steps only once pass 2 is done on every node. A single
+   deployment, one process, can skip pass 1.
+
 2. **Find the old KEK's reference.** Each stored key names its KEK in
    `kek_ref`: for the default provider, the first 8 bytes of the KEK's
    SHA-256 in hex. On a host with both KEKs and the server's environment:
