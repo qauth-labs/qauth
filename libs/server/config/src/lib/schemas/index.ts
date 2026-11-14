@@ -75,6 +75,7 @@ export {
   MAX_REFRESH_TOKEN_LIFESPAN_SECONDS,
 } from './jwt';
 export { type KekEnv, kekEnvSchema } from './kek';
+export { type KeyRotationEnv, keyRotationEnvSchema, keyRotationProblems } from './key-rotation';
 export {
   type AttestedKeyStorageGrade,
   type AttestingIssuerMap,
