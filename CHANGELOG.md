@@ -52,15 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signer's database user may now write events; the grants map applies it at
   deploy.
 
-### Removed
-
-- `@qauth-labs/server-jwt` no longer exports `exportPublicKeyPem` ([#359]).
-  It exported a key with `jose`, which fails for every private key `jose`
-  imports, since those are not extractable: the trap behind the boot failure
-  without `JWT_PUBLIC_KEY`. Nothing called it. Use
-  `derivePublicKeyPemFromPrivate` to derive a public key from a private-key
-  PEM.
-
 - **The environment seeds a realm's ceremony app error page** ([#1118],
   ADR-019 Decision 7). A realm's `ceremonyApp.errorPage` ([#1106]) could be
   set only through the admin API's policy update, after the first boot, and a
@@ -88,6 +79,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   update through it fails) until it is replaced; a realm it creates stores
   `null` under `1-rc.1`, which a 0.2.5 node reads as the key's page and its
   next boot stores so.
+
+### Removed
+
+- `@qauth-labs/server-jwt` no longer exports `exportPublicKeyPem` ([#359]).
+  It exported a key with `jose`, which fails for every private key `jose`
+  imports, since those are not extractable: the trap behind the boot failure
+  without `JWT_PUBLIC_KEY`. Nothing called it. Use
+  `derivePublicKeyPemFromPrivate` to derive a public key from a private-key
+  PEM.
 
 ## [0.2.4] - 2026-11-14
 
