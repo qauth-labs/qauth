@@ -129,7 +129,11 @@ function server(
         lockUser: vi.fn(async () => true),
         deleteById,
       },
-      adminGrants: { listLive: vi.fn(async () => (options.admin === true ? [{}] : [])) },
+      adminGrants: {
+        listLive: vi.fn(async () => (options.admin === true ? [{}] : [])),
+        // The two-admin rule's record of a security change (#521).
+        recordSecurityChange: vi.fn(async () => (options.admin === true ? 1 : 0)),
+      },
       sessions: {
         findById: vi.fn(async () =>
           options.sessionRow === undefined
@@ -789,6 +793,11 @@ describe('regenerateRecoveryCodes (#844)', () => {
       'urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0',
       {},
       { realmId: REALM_ID, userId: USER_ID, clientId: null, actor: 'user' }
+    );
+    expect(fastify.repositories.adminGrants.recordSecurityChange).toHaveBeenCalledWith(
+      REALM_ID,
+      USER_ID,
+      undefined
     );
   });
 });
