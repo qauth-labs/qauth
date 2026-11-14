@@ -132,7 +132,9 @@ export default async function signerServiceRoutes(fastify: FastifyInstance) {
   /**
    * Before the call's body is read: spend its cost of the peer's rate, refuse
    * a role with no grant for the operation, and hold the peer to its calls in
-   * flight. A refusal answers here, so the body is never read.
+   * flight. A refusal answers here, so the body is never parsed, and closes
+   * the connection: kept alive, it would still take in the body the call
+   * declared, so a refused peer could keep sending bodies it is refused for.
    */
   const admitPeer =
     (operation: SignerOperation) =>
@@ -149,12 +151,13 @@ export default async function signerServiceRoutes(fastify: FastifyInstance) {
           );
         }
         reply.header('Retry-After', String(Math.max(1, Math.ceil(verdict.retryAfterMs / 1000))));
+        reply.header('Connection', 'close');
         throw new TooManyRequestsError('The peer called the signer service too often');
       }
       const refused = service.precheck(role, operation);
       if (refused !== undefined) {
         refusedRole(request, refused.refused?.caller ?? role, operation);
-        return reply.code(refused.status).send(refused.body);
+        return reply.code(refused.status).header('Connection', 'close').send(refused.body);
       }
       if (!inFlight.enter(identity)) {
         fastify.metrics.signerRefusals.inc({ role, operation, reason: 'in_flight' });
@@ -166,6 +169,7 @@ export default async function signerServiceRoutes(fastify: FastifyInstance) {
           );
         }
         reply.header('Retry-After', '1');
+        reply.header('Connection', 'close');
         throw new TooManyRequestsError('The peer has too many signer calls in flight');
       }
       // Once the answer is sent, or the connection closed under it.

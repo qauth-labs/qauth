@@ -438,6 +438,8 @@ describe('the signer service over mutual TLS (#497)', () => {
       expect(JSON.parse(answer.body.toString())).toMatchObject({
         error: { code: 'SIGNER_ACCESS_DENIED', caller: 'web', operation: 'signJws' },
       });
+      // Closed, so the body it declared is not read on a kept-alive connection.
+      expect(answer.headers['connection']).toBe('close');
     }
     expect((await post(rawClient('api'), 'signJws', '{"claims":')).status).toBe(400);
   });
