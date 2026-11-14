@@ -182,6 +182,11 @@ describe('the scheduled rotation, over a fake clock', () => {
     // A next key never verifies (#899).
     const verification = await signer.getVerificationKeys('local', REALM, 'token_signing');
     expect(verification.map((key) => key.kid)).not.toContain(newKid);
+    // The next SET key is in the SSF transmitter's JWKS, for receivers to fetch first.
+    const [event] = stepOf(report.steps, 'event_signing', 'next_created');
+    const eventKid = event.kind === 'next_created' ? event.keys[0].kid : '';
+    const ssf = await signer.getJwks('local', REALM, 'event_signing');
+    expect(ssf.keys.map((key) => key.kid)).toContain(eventKid);
   });
 
   it('on day 90 switches to the new key, and tokens of the old key still verify', async () => {

@@ -208,6 +208,11 @@ describe('scheduled key rotation (real Postgres, fake clock)', () => {
     const newKid = next.kind === 'next_created' ? next.keys[0].kid : '';
     expect(await w.jwksKids()).toEqual(expect.arrayContaining([oldKid, newKid]));
     expect(await kidOf(await w.sign())).toBe(oldKid);
+    // The next SET key is in the SSF transmitter's JWKS from now on.
+    const [event] = stepsOf(created.steps, 'event_signing', 'next_created');
+    const eventKid = event.kind === 'next_created' ? event.keys[0].kid : '';
+    const ssf = await w.signer().getJwks('local', w.realmId, 'event_signing');
+    expect(ssf.keys.map((key) => key.kid)).toContain(eventKid);
     expect((await tokenKeyRows(w.realmId)).map((row) => row.status)).toEqual(['active', 'next']);
 
     // Day 90: the switch, written ahead of the signers.

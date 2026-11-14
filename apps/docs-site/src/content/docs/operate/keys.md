@@ -250,8 +250,10 @@ signing, event signing, cookie, data-at-rest, OID4VP response and agent
 wrapping keys of each realm:
 
 - Once the active key has served the period less the pre-publication window
-  (day 83 by default), the job creates the `next` key and publishes it, and the
-  event `key.next_created` records it.
+  (day 83 by default), the job creates the `next` key, and the event
+  `key.next_created` records it. A token signing key is in the realm JWKS from
+  then on, an event signing key in the SSF transmitter's (`/ssf/jwks.json`); a
+  cookie or data-at-rest key is never published.
 - Once the period has run and the `next` key has been published for the whole
   window (day 90), the job switches: the `next` key becomes `active` and the
   old key `retired`, and the event `key.rotated` records both. A hybrid pair

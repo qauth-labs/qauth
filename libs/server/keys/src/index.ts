@@ -117,9 +117,12 @@ export {
 export {
   CLIENT_ASSERTION_TYP,
   idTokenAlgorithm,
+  isJwksPurpose,
   isJwsSigningPurpose,
   isTypAllowed,
   isVerificationKeyPurpose,
+  JWKS_PURPOSES,
+  type JwksPurpose,
   JWS_SIGNING_PURPOSES,
   JWS_TYP_BY_PURPOSE,
   JWS_TYPS,

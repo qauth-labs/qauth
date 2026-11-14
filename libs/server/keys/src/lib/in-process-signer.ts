@@ -33,6 +33,7 @@ import {
   DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS,
   describePurpose,
   isPublishedAt,
+  jwksPurposesOf,
   publicJwkOf,
   publicKeyIdentity,
   realmJwksOf,
@@ -1024,10 +1025,15 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       return verificationKeysOf(await listPublicKeys(realmId), purpose, now());
     },
 
-    async getJwks(caller: SignerCaller, realmIdInput: string): Promise<RealmJwks> {
+    async getJwks(
+      caller: SignerCaller,
+      realmIdInput: string,
+      purpose?: string
+    ): Promise<RealmJwks> {
+      const purposes = jwksPurposesOf(purpose);
       authorize(caller, 'getJwks');
       const realmId = resolveRealmId(realmIdInput);
-      return realmJwksOf(await listPublicKeys(realmId), now());
+      return realmJwksOf(await listPublicKeys(realmId), now(), purposes);
     },
 
     async getUpstreamJwks(

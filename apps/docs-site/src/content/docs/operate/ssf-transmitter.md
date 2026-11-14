@@ -54,7 +54,9 @@ With both on, the realm:
   from the realm's issuer, which is also the `iss` of its SETs;
 - serves its SET signing keys (the `event_signing` purpose of ADR-019 Decision 9) at
   `/ssf/jwks.json`, the `jwks_uri` of the metadata. A receiver verifies each SET with a key from
-  there. It needs no token, and is cached for at most 5 minutes, as the realm JWKS is;
+  there. It needs no token, and is cached for at most 5 minutes, as the realm JWKS is. A key the
+  [scheduled rotation](/operate/keys/#the-scheduled-rotation) switches to is there from 7 days
+  before it signs, and a replaced key until its retention ends;
 - keeps the SET keys out of the realm JWKS at `/.well-known/jwks.json`, which holds only the keys
   of its access, ID and logout tokens. A resource server that skips the `typ` check therefore cannot take
   a SET for an access token;
