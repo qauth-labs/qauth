@@ -37,6 +37,7 @@ import {
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import {
   createRepositoryPublishedKeyReader,
+  type KidDenylist,
   signerPlugin,
 } from '@qauth-labs/fastify-plugin-signer';
 import { SSF_DELIVERY_KIND, ssfPlugin } from '@qauth-labs/fastify-plugin-ssf';
@@ -70,6 +71,7 @@ import {
   type EventTelemetry,
   eventTelemetrySettings,
 } from './helpers/event-telemetry';
+import { createAppKeyDenylist, type KeyDenylistTiming } from './helpers/key-denylist';
 import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables';
 import { SYSTEM_CLIENT_AUDIENCE } from './helpers/oauth-client';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
@@ -303,6 +305,13 @@ export interface AppOptions {
    * `main.ts` never sets it.
    */
   mfaPolicy?: MfaPolicyReader;
+  /**
+   * TEST SUPPORT — shorter refresh and staleness windows of the `kid`
+   * denylist (#551), for a suite that watches a node refuse every token once
+   * it cannot read the list. Refused unless NODE_ENV is `test`; `main.ts`
+   * never sets it.
+   */
+  keyDenylistTiming?: KeyDenylistTiming;
 }
 
 declare module 'fastify' {
@@ -325,6 +334,13 @@ declare module 'fastify' {
      * OTEL_EVENTS_ENABLED is on.
      */
     eventTelemetry?: EventTelemetry;
+    /**
+     * This node's copy of the `kid` denylist of emergency key retirement
+     * (ADR-019 Decision 9, #551), which every token verification, the signer
+     * and the published-key reader check. `null` on a process that boots
+     * without the default realm's boot step, which reads no database.
+     */
+    keyDenylist: KidDenylist | null;
   }
 }
 
@@ -638,6 +654,10 @@ async function registerJwt(fastify: FastifyInstance): Promise<void> {
     // rejected everywhere it is used as a bearer credential. Resolved lazily
     // via the `fastify.redis` decorator (cache plugin registered above).
     isTokenRevoked: (jti) => isJtiRevoked(fastify, jti),
+    // ADR-019 Decision 9 (#551): a token whose signature verified is refused
+    // when its key's `kid` is on the denylist of emergency retirement, or
+    // while this node's copy of the list is not current.
+    ...(fastify.keyDenylist === null ? {} : { keyDenylist: fastify.keyDenylist }),
     // RFC 9449 §7 (#480): with DPoP on, `requireJwt` also accepts
     // `Authorization: DPoP <token>` for a DPoP-bound token, and this checks the
     // request's proof. Off, a `DPoP` header is no credential, as before. A
@@ -673,6 +693,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     remoteSigner,
     authMethodPlugins: authMethodPluginTestSupport,
     mfaPolicy: mfaPolicyTestSupport,
+    keyDenylistTiming,
   } = opts;
 
   // The service roles (ADR-019 Decision 8, #495): which routes, plugins,
@@ -865,6 +886,44 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     });
   }
 
+  // The `kid` denylist (ADR-019 Decision 9, #551), before the signer: an
+  // emergency retirement puts a compromised key's `kid` on it, and this
+  // node's copy, read every 2 s through a Redis snapshot and the database,
+  // makes every token verification refuse the key's tokens, and the signer
+  // and the published-key reader drop it, within seconds rather than when
+  // they next read the realm's keys. A node that cannot read it for 30 s
+  // refuses every token. Read once before the node serves, then on a timer.
+  if (keyDenylistTiming !== undefined && env.NODE_ENV !== 'test') {
+    throw new Error(
+      'the keyDenylistTiming option is test support: refused unless NODE_ENV is test'
+    );
+  }
+  const keyDenylist = defaultRealmBoot
+    ? createAppKeyDenylist(
+        {
+          redis: () => fastify.redis,
+          listDenied: () => fastify.repositories.realmPublicKeys.listDenied(),
+        },
+        fastify.log.child({ component: 'key-denylist' }),
+        keyDenylistTiming
+      )
+    : null;
+  fastify.decorate('keyDenylist', keyDenylist);
+  if (keyDenylist !== null) {
+    fastify.addHook('onReady', async () => {
+      try {
+        await keyDenylist.refresh();
+      } catch (error) {
+        fastify.log.warn(
+          { err: error },
+          'The key denylist cannot be read; every token is refused until it can'
+        );
+      }
+      keyDenylist.start();
+    });
+    fastify.addHook('onClose', async () => keyDenylist.stop());
+  }
+
   // The signer's wiring (ADR-019 Decision 9, #464). The plugin loads the KEK:
   // NODE_ENV=production refuses to start without one. Every token is signed
   // through it, with the keys of the request's realm (#491), so it registers
@@ -900,6 +959,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       kekEnv: process.env,
       enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
       hybridSigning: env.HYBRID_SIGNING_ENABLED,
+      ...(keyDenylist === null ? {} : { keyDenylist }),
       // The scheduled key rotation's windows (#542), which the key rotation
       // job on this role runs with.
       keyRotation: {
@@ -938,7 +998,10 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       });
     }
   } else {
-    const publishedKeys = createRepositoryPublishedKeyReader(fastify.repositories.realmPublicKeys);
+    const publishedKeys = createRepositoryPublishedKeyReader(
+      fastify.repositories.realmPublicKeys,
+      keyDenylist === null ? {} : { keyDenylist }
+    );
     const serverSan = signerServerSan(env);
     if (remoteSigner !== undefined && env.SIGNER_URL !== undefined && serverSan !== undefined) {
       const remote = createAppRemoteSigner(

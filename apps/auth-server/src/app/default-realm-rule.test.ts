@@ -11,8 +11,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * The realm-by-host guard of `.oxlintrc.json` (ADR-019 Decision 1, issue
  * #487): `getOrCreateDefaultRealm` may not come back anywhere, and
  * `DEFAULT_REALM_NAME` may be read only by the boot step (`app.ts`) and the
- * operator's key command (`keys-create.ts`). Every request takes its realm from
- * `request.realm`.
+ * operator's key commands (`keys-create.ts`, `keys-retire.ts`). Every request
+ * takes its realm from `request.realm`.
  *
  * Oxlint reads only files on disk, so the samples go to a temporary directory
  * laid out like the workspace, next to a configuration holding the guard's
@@ -64,8 +64,12 @@ const ANYWHERE = [
   'apps/auth-server/src/app/routes/oauth/sample.test.ts',
 ];
 
-/** The boot step and the operator's key command, which may read the setting. */
-const BOOT = ['apps/auth-server/src/app/app.ts', 'apps/auth-server/src/keys-create.ts'];
+/** The boot step and the operator's key commands, which may read the setting. */
+const BOOT = [
+  'apps/auth-server/src/app/app.ts',
+  'apps/auth-server/src/keys-create.ts',
+  'apps/auth-server/src/keys-retire.ts',
+];
 
 interface Sample {
   readonly kind: 'helper' | 'setting' | 'allowed';

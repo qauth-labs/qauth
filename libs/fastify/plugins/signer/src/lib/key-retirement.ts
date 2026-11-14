@@ -1,5 +1,5 @@
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
-import type { DbClient } from '@qauth-labs/infra-db';
+import { createRealmKeysRepository, type DbClient } from '@qauth-labs/infra-db';
 import {
   createKeyRotation,
   type KekEnv,
@@ -57,4 +57,25 @@ export async function retireKey(
   } finally {
     await kekProvider.close?.();
   }
+}
+
+/** When a compromised key began, or was to begin, to sign, and when it was made, in epoch ms. */
+export interface CompromisedKeyTimes {
+  readonly activateAt: number | null;
+  readonly createdAt: number;
+}
+
+/**
+ * The times of the realm's key with `kid` when it is `compromised`, else
+ * `undefined`: what the break-glass command reads to end the sessions of a
+ * key retired already again. Times only; it returns no key material.
+ */
+export async function compromisedKeyOf(
+  db: DbClient,
+  realmId: string,
+  kid: string
+): Promise<CompromisedKeyTimes | undefined> {
+  const key = await createRealmKeysRepository(db).findByKid(realmId, kid, db);
+  if (key === undefined || key.status !== 'compromised') return undefined;
+  return { activateAt: key.activateAt, createdAt: key.createdAt };
 }
