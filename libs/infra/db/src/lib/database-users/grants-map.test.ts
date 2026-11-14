@@ -111,6 +111,14 @@ describe('the grants map (#498)', () => {
     expect(privilegesOf('signer', 'realm_public_keys')).toEqual(['SELECT', 'INSERT', 'UPDATE']);
   });
 
+  it('lets every role read realm_key_denylist and only the signer add to it (#551)', () => {
+    for (const role of DATABASE_ROLES) {
+      expect(privilegesOf(role, 'realm_key_denylist'), role).toEqual(
+        role === 'signer' ? ['SELECT', 'INSERT'] : ['SELECT']
+      );
+    }
+  });
+
   it('gives audit_logs at most INSERT, to any role', () => {
     for (const role of DATABASE_ROLES) {
       expect(['INSERT']).toEqual(expect.arrayContaining([...privilegesOf(role, 'audit_logs')]));
@@ -141,6 +149,7 @@ describe('the grants map (#498)', () => {
       }
     }
     expected.set('realm_public_keys', new Set<TablePrivilege>(['SELECT']));
+    expected.set('realm_key_denylist', new Set<TablePrivilege>(['SELECT']));
     expect(tablesOf('delivery').sort()).toEqual([...expected.keys()].sort());
     for (const [table, privileges] of expected) {
       expect(new Set(privilegesOf('delivery', table)), table).toEqual(privileges);

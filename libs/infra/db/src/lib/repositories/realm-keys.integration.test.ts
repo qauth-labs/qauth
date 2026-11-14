@@ -12,6 +12,7 @@
  */
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { eq } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -19,6 +20,7 @@ import type { NewRealmKey, RealmKeysRepository } from '../../types';
 import { realms } from '../schema';
 import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
 import { createRealmKeysRepository } from './realm-keys.repository';
+import { createRealmPublicKeysRepository } from './realm-public-keys.repository';
 
 const PUBLIC_JWK = { kty: 'OKP', crv: 'Ed25519', x: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo' };
 const PUBLISH_AT = 1_800_000_000_000;
@@ -835,6 +837,96 @@ describe('realm_keys integration (real Postgres)', () => {
         keys.updateStatus(await seedRealm(), active.kid, retire)
       ).resolves.toBeUndefined();
       expect((await keys.findByKid(realmId, active.kid))?.status).toBe('active');
+    });
+
+    it('markCompromised ends a key at once, unpublishes it and denies its kid, whatever its status (#551)', async () => {
+      const realmId = await seedRealm();
+      const publicRepo = createRealmPublicKeysRepository(ctx!.database.db);
+      const active = await keys.create({
+        key: keyRow(realmId, { publishAt: PUBLISH_AT, activateAt: PUBLISH_AT }),
+        publicJwk: PUBLIC_JWK,
+      });
+      const next = await keys.create({
+        key: keyRow(realmId, { status: 'next' as const, publishAt: PUBLISH_AT }),
+        publicJwk: PUBLIC_JWK,
+      });
+      const at = PUBLISH_AT + 86_400_000;
+
+      const marked = await keys.markCompromised(realmId, active.kid, at);
+      expect(marked).toMatchObject({
+        status: 'compromised',
+        compromisedAt: at,
+        retireAt: at,
+        unpublishAt: at,
+      });
+      expect(marked).not.toHaveProperty('ciphertext');
+      await keys.markCompromised(realmId, next.kid, at);
+
+      const published = await keys.listPublicByRealm(realmId);
+      for (const kid of [active.kid, next.kid]) {
+        expect(published.find((key) => key.kid === kid)).toMatchObject({
+          status: 'compromised',
+          unpublishAt: at,
+        });
+      }
+      expect(await publicRepo.listDenied()).toEqual(
+        [active.kid, next.kid].sort().map((kid) => ({
+          realmId,
+          kid,
+          purpose: 'token_signing',
+          algorithm: 'EdDSA',
+          deniedAt: at,
+        }))
+      );
+      // A second retirement of the same key changes nothing.
+      await expect(keys.markCompromised(realmId, active.kid, at + 1)).resolves.toBeUndefined();
+      expect((await keys.findByKid(realmId, active.kid))?.compromisedAt).toBe(at);
+      await expect(keys.markCompromised(realmId, 'no-such-kid', at)).resolves.toBeUndefined();
+      expect(await publicRepo.listDenied()).toHaveLength(2);
+    });
+
+    it('markCompromised never ends a window before it opened, and keeps a retirement already past', async () => {
+      const realmId = await seedRealm();
+      const retiredAt = PUBLISH_AT + 1_000;
+      const retired = await keys.create({
+        key: keyRow(realmId, {
+          status: 'retired' as const,
+          publishAt: PUBLISH_AT,
+          activateAt: PUBLISH_AT,
+          retireAt: retiredAt,
+          unpublishAt: PUBLISH_AT + 86_400_000,
+        }),
+        publicJwk: PUBLIC_JWK,
+      });
+      const later = await keys.create({
+        key: keyRow(realmId, { status: 'next' as const, publishAt: PUBLISH_AT + 10_000 }),
+        publicJwk: PUBLIC_JWK,
+      });
+      const at = PUBLISH_AT + 5_000;
+
+      await expect(keys.markCompromised(realmId, retired.kid, at)).resolves.toMatchObject({
+        retireAt: retiredAt,
+        unpublishAt: at,
+      });
+      await expect(keys.markCompromised(realmId, later.kid, at)).resolves.toMatchObject({
+        unpublishAt: PUBLISH_AT + 10_000,
+      });
+      const published = await keys.listPublicByRealm(realmId);
+      expect(published.find((key) => key.kid === later.kid)?.unpublishAt).toBe(PUBLISH_AT + 10_000);
+    });
+
+    it('keeps a denied kid with no key behind it, and drops it with the realm', async () => {
+      const realmId = await seedRealm();
+      const publicRepo = createRealmPublicKeysRepository(ctx!.database.db);
+      const key = await keys.create({
+        key: keyRow(realmId, { purpose: 'webhook_signing', scopeId: 'sub-1' }),
+      });
+      await keys.markCompromised(realmId, key.kid, PUBLISH_AT);
+      await keys.deleteByScope(realmId, 'webhook_signing', 'sub-1');
+      expect((await publicRepo.listDenied()).map((row) => row.kid)).toEqual([key.kid]);
+
+      await ctx!.database.db.delete(realms).where(eq(realms.id, realmId));
+      expect(await publicRepo.listDenied()).toEqual([]);
     });
 
     it('deleteByScope removes one scope and its public rows, and nothing else', async () => {

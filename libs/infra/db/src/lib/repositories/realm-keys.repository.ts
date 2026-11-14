@@ -18,7 +18,7 @@ import type {
   WrappedRealmKey,
 } from '../../types';
 import { DbClient } from '../db';
-import { realmKeys, realmPublicKeys } from '../schema/keys';
+import { realmKeyDenylist, realmKeys, realmPublicKeys } from '../schema/keys';
 import { createRealmPublicKeysRepository } from './realm-public-keys.repository';
 
 /**
@@ -236,6 +236,56 @@ export function createRealmKeysRepository(defaultDb: DbClient): RealmKeysReposit
             .where(and(eq(realmPublicKeys.realmId, realmId), eq(realmPublicKeys.kid, kid)))
             .returning({ kid: realmPublicKeys.kid });
         }
+        return updated;
+      });
+    },
+
+    async markCompromised(
+      realmId: string,
+      kid: string,
+      compromisedAt: number,
+      tx?: DbClient
+    ): Promise<RealmKey | undefined> {
+      const invoker = tx ?? defaultDb;
+      const at = sql`${compromisedAt}::bigint`;
+      return invoker.transaction(async (innerTx) => {
+        // From any status but `compromised`: a key marked already matches
+        // nothing, so two retirements that race cannot both write. Its
+        // retention ends now, and so does its signing; a time already past
+        // stays.
+        const [updated] = await innerTx
+          .update(realmKeys)
+          .set({
+            status: 'compromised',
+            compromisedAt,
+            retireAt: sql`least(coalesce(${realmKeys.retireAt}, ${at}), ${at})`,
+            unpublishAt: sql`greatest(coalesce(${realmKeys.publishAt}, ${at}), ${at})`,
+          })
+          .where(
+            and(
+              eq(realmKeys.realmId, realmId),
+              eq(realmKeys.kid, kid),
+              sql`${realmKeys.status} <> 'compromised'`
+            )
+          )
+          .returning(REALM_KEY_COLUMNS);
+        if (updated === undefined) return undefined;
+        // The status reached the public row through its foreign key; its
+        // JWKS window ends now, and never before it opened.
+        await innerTx
+          .update(realmPublicKeys)
+          .set({ unpublishAt: sql`greatest(${realmPublicKeys.publishAt}, ${at})` })
+          .where(and(eq(realmPublicKeys.realmId, realmId), eq(realmPublicKeys.kid, kid)));
+        await innerTx
+          .insert(realmKeyDenylist)
+          .values({
+            realmId,
+            kid,
+            purpose: updated.purpose,
+            algorithm: updated.algorithm,
+            deniedAt: compromisedAt,
+          })
+          .onConflictDoNothing();
         return updated;
       });
     },

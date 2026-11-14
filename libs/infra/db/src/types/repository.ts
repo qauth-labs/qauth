@@ -26,7 +26,7 @@ import type {
   RealmKeyStatus,
 } from '../lib/schema/enums';
 import type { userAttributes, userCredentials } from '../lib/schema/identity';
-import type { realmKeys, realmPublicKeys } from '../lib/schema/keys';
+import type { realmKeyDenylist, realmKeys, realmPublicKeys } from '../lib/schema/keys';
 import type { oid4vpRequestStates } from '../lib/schema/oid4vp';
 import type { sessionClients, SessionRevokedReason, sessions } from '../lib/schema/sessions';
 import type {
@@ -728,6 +728,14 @@ export interface RefreshFamilyRevocation {
   readonly revokedCount: number;
 }
 
+/** What {@link RefreshTokensRepository.revokeFamiliesOfRealmActiveSince} revoked. */
+export interface RealmFamiliesRevocation {
+  /** How many families lost a token to this call. */
+  readonly families: number;
+  /** How many tokens this call revoked. */
+  readonly tokens: number;
+}
+
 /**
  * Refresh tokens repository interface
  */
@@ -858,6 +866,25 @@ export interface RefreshTokensRepository {
    * @returns Count of rows revoked by this call.
    */
   revokeAllForClient(oauthClientId: string, reason: string, tx?: DbClient): Promise<number>;
+  /**
+   * Revoke every refresh-token family of a realm's clients that was used
+   * since `since` (epoch ms): each unrevoked token, expired ones too, of each
+   * family one of whose tokens was created, or last used, at or after it.
+   * `null` revokes every family of the realm. Emergency key retirement calls
+   * it (#551): the families issued while the retired key was active go, with
+   * every Authority Tree they carry, which survives a sign-out but not this.
+   * A family from before, not used since, stays.
+   *
+   * Under the exclusive token lock of each of the realm's clients, taken in
+   * client id order, as {@link revokeAllForClient} takes one: a rotation in
+   * flight commits first, and its new token is revoked with its family.
+   */
+  revokeFamiliesOfRealmActiveSince(
+    realmId: string,
+    since: number | null,
+    reason: string,
+    tx?: DbClient
+  ): Promise<RealmFamiliesRevocation>;
   /**
    * Delete the families whose every token has expired, whole. A rotated token
    * is kept while its family has a live token, so replay detection lasts as
@@ -1262,6 +1289,8 @@ export interface Oid4vpRequestStatesRepository {
  */
 export type NewRealmKey = InferInsertModel<typeof realmKeys>;
 export type RealmPublicKey = InferSelectModel<typeof realmPublicKeys>;
+/** A `realm_key_denylist` row: a `kid` an emergency retirement denied (#551). */
+export type DeniedRealmKey = InferSelectModel<typeof realmKeyDenylist>;
 
 /**
  * The three `realm_keys` columns that hold wrapped key material. Only
@@ -1355,6 +1384,12 @@ export interface RealmPublicKeysRepository {
    * window, ordered by purpose, `publish_at` and `kid`.
    */
   listByRealm(realmId: string, tx?: DbClient): Promise<RealmPublicKey[]>;
+  /**
+   * Every `kid` an emergency retirement denied (`realm_key_denylist`, #551),
+   * in every realm, ordered by realm and `kid`: what each process's denylist
+   * reads, through its Redis copy, every few seconds.
+   */
+  listDenied(tx?: DbClient): Promise<DeniedRealmKey[]>;
 }
 
 /**
@@ -1441,6 +1476,22 @@ export interface RealmKeysRepository {
     realmId: string,
     kid: string,
     change: RealmKeyStatusChange,
+    tx?: DbClient
+  ): Promise<RealmKey | undefined>;
+  /**
+   * Retire a key in an emergency (#551): mark it `compromised` at
+   * `compromisedAt`, whatever its status, end its signing (`retire_at`) and
+   * its retention and JWKS window (`unpublish_at`, on both rows) at that
+   * moment, never before its publication, and put its `kid` on the denylist
+   * (`realm_key_denylist`). All in ONE transaction (a savepoint inside `tx`).
+   *
+   * @returns the updated key, or `undefined` when the realm holds no key with
+   *   `kid`, or holds it compromised already.
+   */
+  markCompromised(
+    realmId: string,
+    kid: string,
+    compromisedAt: number,
     tx?: DbClient
   ): Promise<RealmKey | undefined>;
   /**

@@ -147,6 +147,7 @@ const CALLS: Record<
       retireAt: 1_800_000_000_000,
       unpublishAt: 1_801_209_600_000,
     }),
+  markCompromised: (repo) => repo.markCompromised(REALM_ID, KID, 1_800_000_000_000),
   deleteByScope: (repo) => repo.deleteByScope(REALM_ID, 'webhook_signing', 'subscription-1'),
   // The lock takes the caller's transaction; the recording client stands in for it.
   lockRealm: (repo, tx) => repo.lockRealm(REALM_ID, tx),
@@ -340,6 +341,42 @@ describe('createRealmKeysRepository — statements', () => {
     expect(texts[2]).not.toContain('"status"');
     expect(queries[2].values).toEqual([1_801_209_600_000, REALM_ID, KID]);
     expect(texts[3]).toBe('commit');
+  });
+
+  it('markCompromised ends the key now, closes its public window and denies its kid in one transaction (#551)', async () => {
+    const queries = await run('markCompromised');
+    const texts = queries.map((query) => query.text.toLowerCase());
+
+    expect(texts).toHaveLength(5);
+    expect(texts[0]).toBe('begin');
+    expect(texts[1]).toContain('update "realm_keys" set "status" = $1, "retire_at" = least(');
+    expect(texts[1]).toContain('"compromised_at" = $');
+    expect(texts[1]).toContain('"unpublish_at" = greatest(');
+    // A key compromised already matches nothing: two retirements cannot both write.
+    expect(texts[1]).toContain(`"realm_keys"."status" <> 'compromised'`);
+    expect(queries[1].values).toContain('compromised');
+    expect(queries[1].values).toContain(REALM_ID);
+    expect(queries[1].values).toContain(KID);
+    expect(texts[2]).toContain('update "realm_public_keys" set "unpublish_at" = greatest(');
+    expect(texts[2]).not.toContain('"status"');
+    expect(texts[3]).toContain('insert into "realm_key_denylist"');
+    expect(texts[3]).toContain('on conflict do nothing');
+    expect(queries[3].values).toEqual(
+      expect.arrayContaining([REALM_ID, KID, STORED.purpose, STORED.algorithm])
+    );
+    expect(texts[4]).toBe('commit');
+  });
+
+  it('markCompromised writes nothing more when no key moved', async () => {
+    const { db, queries } = createRecordingDb([]);
+    await expect(
+      createRealmKeysRepository(db).markCompromised(REALM_ID, KID, 1_800_000_000_000)
+    ).resolves.toBeUndefined();
+    expect(queries.map((query) => query.text.toLowerCase())).toEqual([
+      'begin',
+      expect.stringContaining('update "realm_keys"'),
+      'commit',
+    ]);
   });
 
   it('updateStatus activates only a next key and leaves the public row to its foreign key', async () => {

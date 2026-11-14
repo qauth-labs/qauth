@@ -526,6 +526,13 @@
       "when": 1794632349751,
       "tag": "0074_admin_grants_security_change",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1794675279446,
+      "tag": "0075_key_denylist",
+      "breakpoints": true
     }
   ]
 }

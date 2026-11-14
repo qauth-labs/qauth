@@ -254,6 +254,77 @@ describe('the client token lock (#631)', () => {
   });
 });
 
+describe('the realm family sweep of emergency key retirement (#551)', () => {
+  const CLIENT_KEY = "'qauth:client-tokens:'";
+  const CLIENT_B = '0192f1c4-2222-7000-8000-000000000001';
+  const REALM_ID = '0192f1c4-4444-7000-8000-000000000004';
+
+  /** A recording client that answers the client list with two clients. */
+  function recordingDbWithClients(): { db: DbClient; queries: CapturedQuery[] } {
+    const queries: CapturedQuery[] = [];
+    const client = {
+      query: (config: { text?: string; values?: unknown[] } | string, values?: unknown[]) => {
+        const text = typeof config === 'string' ? config : (config.text ?? '');
+        const params =
+          typeof config === 'string' ? (values ?? []) : (config.values ?? values ?? []);
+        queries.push({ text, values: params });
+        const rows = /^select "id" from "oauth_clients"/i.test(text)
+          ? [[CLIENT_B], [CLIENT_ID]]
+          : [];
+        return Promise.resolve({ rows, rowCount: rows.length, fields: [], command: '', oid: 0 });
+      },
+    };
+    return { db: drizzle(client as unknown as Pool) as unknown as DbClient, queries };
+  }
+
+  it("locks each of the realm's clients, exclusive and in id order, before its one UPDATE", async () => {
+    const { db, queries } = recordingDbWithClients();
+
+    await createRefreshTokensRepository(db).revokeFamiliesOfRealmActiveSince(
+      REALM_ID,
+      1_800_000_000_000,
+      'key_retired'
+    );
+
+    const sql = texts(queries);
+    expect(sql[0]).toBe('begin');
+    expect(sql[1]).toContain('from "oauth_clients"');
+    expect(sql[1]).toContain('order by "oauth_clients"."id" asc');
+    expect(queries[1].values).toEqual([REALM_ID]);
+    expect(sql[2]).toMatch(/pg_advisory_xact_lock\(/);
+    expect(sql[2]).toContain(CLIENT_KEY);
+    expect(queries[2].values).toContain(CLIENT_B);
+    expect(sql[3]).toMatch(/pg_advisory_xact_lock\(/);
+    expect(queries[3].values).toContain(CLIENT_ID);
+    expect(sql[4].startsWith('update "refresh_tokens"')).toBe(true);
+    expect(sql[4]).toContain('"created_at" >=');
+    expect(sql[4]).toContain('"last_used_at" >=');
+    expect(sql[5]).toBe('commit');
+    expect(sql).toHaveLength(6);
+  });
+
+  it('takes every family of the realm for no moment, and locks nothing in a realm without clients', async () => {
+    const all = recordingDbWithClients();
+    await createRefreshTokensRepository(all.db).revokeFamiliesOfRealmActiveSince(
+      REALM_ID,
+      null,
+      'key_retired'
+    );
+    const update = texts(all.queries).find((t) => t.startsWith('update "refresh_tokens"'));
+    expect(update).not.toContain('"created_at" >=');
+
+    const empty = createRecordingDb();
+    await expect(
+      createRefreshTokensRepository(empty.db).revokeFamiliesOfRealmActiveSince(
+        REALM_ID,
+        null,
+        'key_retired'
+      )
+    ).resolves.toEqual({ families: 0, tokens: 0 });
+    expect(texts(empty.queries).some((t) => t.includes('pg_advisory'))).toBe(false);
+  });
+});
+
 describe('refresh-token purge', () => {
   it('deletes an expired token only when no token of its family is live', async () => {
     const { db, queries } = createRecordingDb();
