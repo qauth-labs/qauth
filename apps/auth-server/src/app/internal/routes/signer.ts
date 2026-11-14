@@ -5,7 +5,11 @@ import {
   SIGNER_SERVICE_ROUTES,
   type SignerOperation,
 } from '@qauth-labs/fastify-plugin-signer';
-import { BadRequestError, TooManyRequestsError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  TemporarilyUnavailableError,
+  TooManyRequestsError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { UnsupportedMediaTypeError } from '../../helpers/api-request-errors';
@@ -40,7 +44,9 @@ import {
  *   declares, so a peer's bytes are bounded as well as its calls; and at most
  *   {@link SIGNER_PEER_MAX_IN_FLIGHT} of its calls run at once, so a peer
  *   that trickles its bodies holds that many at most (`429` with
- *   `Retry-After` for both). Both are checked before the body is read.
+ *   `Retry-After` for both). Both are checked before the body is read. A
+ *   call holds its place until the signer's work for it settles, however
+ *   early its caller hangs up ({@link inFlightSlot}).
  * - **Nothing secret in an error or a log.** A body that is not JSON is
  *   refused without quoting it; the service answers an error with its
  *   public fields only (`encodeSignerError`), and the logs name the role,
@@ -73,6 +79,39 @@ export const SIGNER_RATE_UNIT_BYTES = 16 * 1024;
  */
 export const SIGNER_PEER_MAX_IN_FLIGHT = 128;
 
+/**
+ * A call's place among its peer's calls in flight, freed exactly once: when
+ * the signer's work for the call settles, or, for a call whose handler never
+ * ran (a body never sent in full, or refused by its parser or its limit),
+ * when its connection closes. A caller that hangs up does not free the place
+ * of a call the signer still works on: a peer that hung up on each of its
+ * calls could otherwise keep more than {@link SIGNER_PEER_MAX_IN_FLIGHT}
+ * running.
+ */
+function inFlightSlot(leave: () => void) {
+  let running = false;
+  let freed = false;
+  const free = (): void => {
+    if (freed) return;
+    freed = true;
+    leave();
+  };
+  return {
+    /** The connection closed, the answer sent or not: frees the place of a call that does not run. */
+    closed: (): void => {
+      if (!running) free();
+    },
+    /** The handler runs the call: `false` when its connection closed first, so it must not run. */
+    start: (): boolean => {
+      if (freed) return false;
+      running = true;
+      return true;
+    },
+    /** The signer's work for the call settled. */
+    settled: free,
+  };
+}
+
 /** What a call costs of its peer's rate: one token, and one more per {@link SIGNER_RATE_UNIT_BYTES} of its declared body. */
 function costOf(request: FastifyRequest, operation: SignerOperation): number {
   const limit = SIGNER_REQUEST_BODY_LIMITS[operation];
@@ -93,6 +132,8 @@ export default async function signerServiceRoutes(fastify: FastifyInstance) {
   });
   const inFlight = createPeerConcurrencyLimit(SIGNER_PEER_MAX_IN_FLIGHT);
   const refusalLogs = createLogSampler();
+  /** The place in flight each admitted call holds. */
+  const slots = new WeakMap<FastifyRequest, ReturnType<typeof inFlightSlot>>();
 
   /** Count a refusal of the peer's role, and log it once a minute per peer and operation. */
   const refusedRole = (request: FastifyRequest, caller: string, operation: SignerOperation) => {
@@ -172,8 +213,9 @@ export default async function signerServiceRoutes(fastify: FastifyInstance) {
         reply.header('Connection', 'close');
         throw new TooManyRequestsError('The peer has too many signer calls in flight');
       }
-      // Once the answer is sent, or the connection closed under it.
-      reply.raw.once('close', () => inFlight.leave(identity));
+      const slot = inFlightSlot(() => inFlight.leave(identity));
+      slots.set(request, slot);
+      reply.raw.once('close', slot.closed);
       return undefined;
     };
 
@@ -186,7 +228,16 @@ export default async function signerServiceRoutes(fastify: FastifyInstance) {
       },
       async (request, reply) => {
         const role = requestPeerRole(request);
-        const answer = await service.call(role, operation, request.body);
+        const slot = slots.get(request);
+        if (slot?.start() === false) {
+          // Its caller hung up before it ran: no one waits for the answer.
+          throw new TemporarilyUnavailableError(1, {
+            reason: 'The caller closed the connection before its signer call ran',
+          });
+        }
+        const answer = await service
+          .call(role, operation, request.body)
+          .finally(() => slot?.settled());
         if (answer.refused !== undefined) refusedRole(request, answer.refused.caller, operation);
         if (answer.fault !== undefined) {
           const unavailable =

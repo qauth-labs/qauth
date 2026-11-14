@@ -1,4 +1,5 @@
 import type { AddressInfo } from 'node:net';
+import type { Server as TlsServer, TLSSocket } from 'node:tls';
 
 import {
   SIGNER_SERVICE_PATH,
@@ -36,6 +37,7 @@ import { createInternalClient, type InternalClient } from './client';
 import { createInternalServer, installInternalApi } from './listener';
 import { type AppRemoteSigner, createAppRemoteSigner } from './remote-signer';
 import { INTERNAL_ROUTE_MODULES } from './route-manifest';
+import { SIGNER_PEER_MAX_IN_FLIGHT } from './routes/signer';
 import { readInternalTlsFiles } from './tls-files';
 
 /**
@@ -139,6 +141,11 @@ const remotes: AppRemoteSigner[] = [];
 const clients: InternalClient[] = [];
 /** The webhook calls the signer got, by caller. */
 const webhookCallers: string[] = [];
+/** The signer's internal listener, as last started. */
+let listener: FastifyInstance;
+/** While set, each decrypt waits for it before it runs, counted in {@link heldDecrypts}. */
+let decryptGate: Promise<void> | undefined;
+let heldDecrypts = 0;
 
 /** Start the signer's internal listener, on `port` once it has one. */
 async function startSigner(): Promise<void> {
@@ -160,6 +167,7 @@ async function startSigner(): Promise<void> {
   await installInternalApi(server, source, { roles: ['signer'], modules: [SIGNER_MODULE] });
   await server.listen({ host: '127.0.0.1', port: port ?? 0 });
   port = (server.server.address() as AddressInfo).port;
+  listener = server;
 }
 
 /** Stop the signer: its scope closes the listener with it. */
@@ -268,6 +276,13 @@ beforeAll(async () => {
       webhookCallers.push(caller);
       if (caller !== 'delivery') throw new Error(`signWebhook called as ${caller}`);
       return 'v1,c2lnbmF0dXJl';
+    },
+    decrypt: async (...args: Parameters<FastifyInstance['signer']['decrypt']>) => {
+      if (decryptGate !== undefined) {
+        heldDecrypts += 1;
+        await decryptGate;
+      }
+      return test.signer.decrypt(...args);
     },
   }) as FastifyInstance['signer'];
 
@@ -464,4 +479,73 @@ describe('the signer service over mutual TLS (#497)', () => {
     );
     expect(response.status).toBe(413);
   });
+
+  it("holds a call's place in flight until the signer settles it, however early its caller hangs up", async () => {
+    const context = 'totp-secret:held-call';
+    const ciphertext = await test.signer.encrypt('api', {
+      realmId,
+      plaintext: Buffer.from('held'),
+      context,
+    });
+    const issued = credentials.get('api') as IssuedCredentials;
+    const hangingUp = createInternalClient({
+      url: `https://127.0.0.1:${port}`,
+      cert: issued.cert,
+      key: issued.key,
+      ca: pki.caPem,
+      expectedServerSan: SIGNER_SAN,
+      maxSockets: SIGNER_PEER_MAX_IN_FLIGHT,
+    });
+    clients.push(hangingUp);
+    const api = rawClient('api');
+    const jwks = JSON.stringify({ realmId });
+    const opened: TLSSocket[] = [];
+    const track = (socket: TLSSocket) => opened.push(socket);
+    const tls = listener.server as unknown as TlsServer;
+    let release = (): void => undefined;
+    decryptGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    heldDecrypts = 0;
+    tls.on('secureConnection', track);
+    try {
+      // The peer fills its places in flight with calls the signer holds...
+      const aborts = Array.from({ length: SIGNER_PEER_MAX_IN_FLIGHT }, () => new AbortController());
+      const calls = aborts.map((abort) =>
+        hangingUp
+          .request({
+            method: 'POST',
+            path: `${SIGNER_SERVICE_PATH}${SIGNER_SERVICE_ROUTES.decrypt}`,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ realmId, ciphertext, context }),
+            signal: abort.signal,
+          })
+          .catch((error: unknown) => error)
+      );
+      await vi.waitFor(() => expect(heldDecrypts).toBe(SIGNER_PEER_MAX_IN_FLIGHT), {
+        timeout: 15_000,
+      });
+      // ...then hangs up on each, and the signer sees every connection close.
+      for (const abort of aborts) abort.abort();
+      await Promise.all(calls);
+      await vi.waitFor(() => expect(opened.filter((socket) => !socket.destroyed)).toEqual([]), {
+        timeout: 15_000,
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      // The calls still run there, so they still hold the peer's places.
+      const before = (await refusals())['api/getJwks/in_flight'] ?? 0;
+      const refused = await post(api, 'getJwks', jwks);
+      expect(refused.status, refused.body.toString()).toBe(429);
+      expect((await refusals())['api/getJwks/in_flight']).toBe(before + 1);
+    } finally {
+      tls.off('secureConnection', track);
+      release();
+      decryptGate = undefined;
+    }
+    // Settled, they free their places.
+    await vi.waitFor(async () => expect((await post(api, 'getJwks', jwks)).status).toBe(200), {
+      timeout: 15_000,
+    });
+  }, 60_000);
 });
