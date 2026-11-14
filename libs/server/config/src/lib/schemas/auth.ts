@@ -376,6 +376,25 @@ export const authEnvSchema = z.object({
   CEREMONY_APP_DEPLOYED: strictBoolean(false),
 
   /**
+   * Seeds a new realm's `ceremonyApp.errorPage` (#1118, ADR-019 Decision 7):
+   * the path on the realm origin, under `/ui/`, of the ceremony app's page
+   * for the endings that leave no interaction to show. The auth server reads
+   * each realm's own policy from the realm row. Unset and blank mean none
+   * (`null`), which keeps the auth server's own pages; blank because
+   * `docker-compose.yml` forwards it as `${CEREMONY_APP_ERROR_PAGE:-}`.
+   *
+   * Taken as written, never trimmed: the policy's own rule
+   * (`CEREMONY_APP_PAGE_PATTERN` of `@qauth-labs/server-realm-policy`, which
+   * this library cannot import) judges it when the boot reads the realm
+   * policy seeds, and a value it refuses stops the boot, naming this key.
+   * The rule is not copied here, where it could drift from the policy's.
+   */
+  CEREMONY_APP_ERROR_PAGE: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.string().optional()
+  ),
+
+  /**
    * How long, in days, a browser session row is kept once it has ended or
    * expired (ADR-019 Decision 3, issue #550). The session purge job deletes
    * a row whose revocation or absolute end is older than this; until then

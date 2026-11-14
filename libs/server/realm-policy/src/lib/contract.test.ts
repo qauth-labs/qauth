@@ -71,7 +71,8 @@ const TABLE: Readonly<Record<string, readonly [string | null, string, string]>> 
   'passkeys.offerAfterSignIn': ['PASSKEY_OFFER_AFTER_SIGN_IN', 'true-is-stricter', 'never'],
   // #1106: which page of the realm's own ceremony app shows an ending with
   // no interaction: no effect of the closed list, and neither way is stricter.
-  'ceremonyApp.errorPage': [null, 'opaque', 'never'],
+  // Seeded by CEREMONY_APP_ERROR_PAGE since #1118.
+  'ceremonyApp.errorPage': ['CEREMONY_APP_ERROR_PAGE', 'opaque', 'never'],
   'registration.dynamicRegistrationAllowedScopes': [
     'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
     'subset-is-stricter',

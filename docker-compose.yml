@@ -159,6 +159,9 @@ services:
       ALLOW_SIGN_UP: ${ALLOW_SIGN_UP:-false}
       # Seeds accounts.newFactorWindowDays of a new realm (#1064).
       NEW_FACTOR_WINDOW_DAYS: ${NEW_FACTOR_WINDOW_DAYS:-7}
+      # Seeds ceremonyApp.errorPage of a new realm (#1118); blank is unset,
+      # which keeps the auth server's own pages.
+      CEREMONY_APP_ERROR_PAGE: ${CEREMONY_APP_ERROR_PAGE:-}
       REGISTRATION_RATE_LIMIT: ${REGISTRATION_RATE_LIMIT:-3}
       REGISTRATION_RATE_WINDOW: ${REGISTRATION_RATE_WINDOW:-3600}
       LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-5}
