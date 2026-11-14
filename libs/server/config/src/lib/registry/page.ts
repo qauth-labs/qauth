@@ -122,7 +122,7 @@ function sharedSettingsSection(registry: readonly ConfigKey[]): string[] {
   return [
     '## Settings every node shares',
     '',
-    `At boot, each auth server node compares a digest of the keys below with the nodes that ran in the last two minutes ([ADR-019 Decision 8](${ADR_019})). A node whose value of one of them differs from a running node of the same release refuses to start, and the refusal names the keys, never their values. Beside a node of another release, as during a rolling upgrade, it starts with a warning. For a planned change of one of these keys, set \`CONFIG_DIGEST_ROLLOUT=true\` on the nodes that start with the new value, and remove it once every node runs it. Every other key may differ from node to node: a secret never enters the digest, and a realm-seed key only seeds a realm, whose row owns its policies.`,
+    `At boot, each auth server node compares a digest of the keys below with the nodes that ran in the last two minutes ([ADR-019 Decision 8](${ADR_019})). A node whose value of one of them differs from a running node of the same release refuses to start, and the refusal names the keys, never their values. Beside a node of another release, as during a rolling upgrade, it starts with a warning. For a planned change of one of these keys, set \`CONFIG_DIGEST_ROLLOUT=true\` on the nodes that start with the new value, and remove it once every node runs it. A key read only by some roles is compared only between nodes that hold one of them, as the list says. Every other key may differ from node to node: a secret never enters the digest, and a realm-seed key only seeds a realm, whose row owns its policies.`,
     '',
     shared
       .map((key) =>

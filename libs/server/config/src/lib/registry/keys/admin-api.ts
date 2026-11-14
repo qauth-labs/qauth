@@ -11,6 +11,8 @@ export const ADMIN_API_KEYS = defineKeys([
     tier: 'stable',
     role: 'deployment',
     digest: 'shared',
+    // Read only where the admin listener runs.
+    digestRoles: ['admin'],
     owner: 'server',
     default: null,
     since: '0.2.0',
@@ -21,6 +23,7 @@ export const ADMIN_API_KEYS = defineKeys([
     tier: 'stable',
     role: 'deployment',
     digest: 'shared',
+    digestRoles: ['admin'],
     owner: 'server',
     default: 'false',
     since: '0.2.0',

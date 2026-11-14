@@ -296,8 +296,11 @@ the node list during the last two minutes (the `deployment_nodes` table).
 - `CONFIG_DIGEST_ROLLOUT=true` turns the refusal into a warning, for the window
   of a planned change of one of those keys: set it on the nodes that start
   with the new value, and remove it once every node runs the new value.
-- `KEK_PROVIDER` is compared only between nodes that hold `signer`, since no
-  other node may name a KEK provider. Each node's own settings, such as
+- A key that only some roles read is compared only between nodes that hold
+  one of them: `KEK_PROVIDER` between nodes holding `signer`,
+  `ADMIN_API_ENABLED` and `ADMIN_API_BASE_URL` between nodes holding `admin`,
+  and `AUTH_METHOD_PLUGINS` and `PLUGIN_API_ENABLED` between nodes holding
+  `web` or `admin`, where plugins load. Each node's own settings, such as
   `SERVICE_ROLES`, `PORT`, its TLS files and its pool sizes, may differ, and so
   may a secret or a key that seeds a realm, whose row owns its policies.
 

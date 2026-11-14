@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning for the window of a planned change. Each key of the configuration
   key registry now has a digest class (`shared`, `node`, `secret` or
   `realm-seed`), and a unit test fails when one has none: only `shared` keys
-  are compared, never a secret, and `KEK_PROVIDER` only between nodes that
-  hold `signer`. The configuration page lists the shared keys. The node
+  are compared, never a secret, and a key only some roles read only between
+  nodes holding one of them (`KEK_PROVIDER` on `signer`, the admin listener's
+  switch and URL on `admin`, the plugin keys on `web` and `admin`). The configuration page lists the shared keys. The node
   compares read-only before any other boot step writes, and again when it
   joins the list once its boot succeeded, under a lock so that two nodes
   booting at once compare with each other. It marks itself seen every 30

@@ -148,6 +148,24 @@ describe('the digest classes of the registry', () => {
     expect(names(['web', 'api'])).not.toContain('KEK_PROVIDER');
     expect(names(['web', 'api'])).toContain('JWT_ISSUER');
   });
+
+  it('compares the admin listener keys between admin nodes, and the plugin keys where plugins load', () => {
+    const names = (roles: Parameters<typeof digestedKeys>[1]) =>
+      digestedKeys(AUTH_KEYS, roles).map((entry) => entry.name);
+    for (const name of ['ADMIN_API_ENABLED', 'ADMIN_API_BASE_URL']) {
+      expect(registryKey(name).digestRoles, name).toEqual(['admin']);
+      expect(names(['admin']), name).toContain(name);
+      expect(names(['web', 'api', 'signer', 'delivery']), name).not.toContain(name);
+    }
+    for (const name of ['AUTH_METHOD_PLUGINS', 'PLUGIN_API_ENABLED']) {
+      expect(registryKey(name).digestRoles, name).toEqual(['web', 'admin']);
+      expect(names(['web']), name).toContain(name);
+      expect(names(['admin']), name).toContain(name);
+      expect(names(['api', 'signer', 'delivery']), name).not.toContain(name);
+    }
+    // DPoP binds the admin tokens the token endpoint issues: every node.
+    expect(registryKey('DPOP_ENABLED').digestRoles).toBeUndefined();
+  });
 });
 
 describe('configurationDigest', () => {
