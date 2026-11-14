@@ -198,7 +198,7 @@ describe('the account API’s authenticator app and recovery codes (#1109, real 
   /** An account API token, as the code exchange mints it for the account console. */
   function token(
     userId: string,
-    claims: { authTime?: number; amr?: readonly string[]; act?: { sub: string } }
+    claims: { authTime?: number; amr?: readonly string[]; sid?: string; act?: { sub: string } }
   ): Promise<string> {
     return app().jwtUtils.signAccessToken(
       { id: realmId },
@@ -212,9 +212,34 @@ describe('the account API’s authenticator app and recovery codes (#1109, real 
     );
   }
 
-  /** A fresh sign-in with the password alone. */
-  function passwordToken(userId: string): Promise<string> {
-    return token(userId, { authTime: signedInAgo(5), amr: ['pwd'] });
+  /**
+   * The browser session a sign-in `authTime` started, as the hosted pages
+   * record it, and the account API token its code exchange mints, naming it
+   * in `sid`: a factor bound new under it is named on it (#1064).
+   */
+  async function signedIn(
+    userId: string,
+    amr: readonly string[],
+    options: { recoveryCodeUsed?: boolean } = {}
+  ): Promise<{ bearer: string; sessionId: string }> {
+    const authTime = signedInAgo(5);
+    const session = await app().repositories.sessions.create({
+      realmId,
+      userId,
+      authTime: authTime + 250,
+      amr: [...amr],
+      ...(options.recoveryCodeUsed === true ? { recoveryCodeUsed: true } : {}),
+      expiresAt: Date.now() + 3_600_000,
+    });
+    return {
+      bearer: await token(userId, { authTime, amr, sid: session.id }),
+      sessionId: session.id,
+    };
+  }
+
+  /** A fresh sign-in with the password alone, from the code exchange (`sid`). */
+  async function passwordToken(userId: string): Promise<string> {
+    return (await signedIn(userId, ['pwd'])).bearer;
   }
 
   /** A fresh sign-in with the password and the authenticator app. */
@@ -432,6 +457,16 @@ describe('the account API’s authenticator app and recovery codes (#1109, real 
         userId,
       ])
     ).toHaveLength(10);
+    // The codes as answered (uppercase, in groups) are the ones stored: each
+    // new one's lookup digest finds its unused row, and no old one's does.
+    const { recoveryCodeLookupDigest } = await import('./helpers/recovery-codes');
+    const stored = async (code: string) =>
+      query(
+        'SELECT 1 FROM user_recovery_codes WHERE user_id = $1 AND lookup_digest = $2 AND used_at IS NULL',
+        [userId, await recoveryCodeLookupDigest(realmId, code.replace(/-/g, '').toLowerCase())]
+      );
+    for (const code of next.codes) expect(await stored(code), code).toHaveLength(1);
+    expect(await stored(first.codes[0] as string)).toEqual([]);
 
     // Never answered again: the read says how many are left, never which.
     const status = await call('GET', '/recovery-codes', bearer);
@@ -443,6 +478,81 @@ describe('the account API’s authenticator app and recovery codes (#1109, real 
     const refused = await call('POST', '/recovery-codes/regenerate', await passwordToken(plain));
     expect(refused.statusCode, refused.body).toBe(409);
     expect(refused.json()).toMatchObject({ code: 'conflict' });
+  });
+
+  it('names a new app on the sign-in’s session, whose password undo ends it (#1064)', async () => {
+    const userId = await account();
+    const { bearer, sessionId } = await signedIn(userId, ['pwd']);
+    const enrolment = await startEnrolment(bearer);
+    const bound = await call('POST', '/totp/enrollment/confirm', bearer, {
+      code: codeAt(base32Decode(enrolment.secret), Date.now()),
+    });
+    expect(bound.statusCode, bound.body).toBe(200);
+    const [app] = await query<{ id: string; new_until: string | null }>(
+      "SELECT id, new_until FROM user_credentials WHERE user_id = $1 AND provider_type = 'totp'",
+      [userId]
+    );
+    // New: bound after a sign-in that proved the password alone.
+    expect(app?.new_until).not.toBeNull();
+    const [named] = await query<{ new_credential_ids: string[] }>(
+      'SELECT new_credential_ids FROM sessions WHERE id = $1',
+      [sessionId]
+    );
+    expect(named?.new_credential_ids).toEqual([app?.id]);
+
+    // The password alone removes it, and ends the session that bound it.
+    const undone = await call('DELETE', '/totp', await passwordToken(userId));
+    expect(undone.statusCode, undone.body).toBe(204);
+    const [ended] = await query<{ revoked_at: string | null }>(
+      'SELECT revoked_at FROM sessions WHERE id = $1',
+      [sessionId]
+    );
+    // Ended: revoked, or gone.
+    expect(ended === undefined || ended.revoked_at !== null).toBe(true);
+  });
+
+  it('challenges a new binding whose token names no sign-in session, such as a refreshed one', async () => {
+    const userId = await account();
+    const refreshed = await token(userId, { authTime: signedInAgo(5), amr: ['pwd'] });
+    const refused = await call('POST', '/totp/enrollment', refreshed);
+    expect(refused.statusCode, refused.body).toBe(401);
+    expect(refused.headers['www-authenticate']).toBe(
+      'Bearer error="insufficient_user_authentication", max_age="0"'
+    );
+    expect(await totpRows(userId)).toEqual([]);
+  });
+
+  it('lets a recovery-code sign-in rebind a lost app where the policy refuses its removal', async () => {
+    const userId = await account();
+    await enrol(userId);
+    // Past its window: a full factor, the account's strongest.
+    await query(
+      "UPDATE user_credentials SET new_until = NULL WHERE user_id = $1 AND provider_type = 'totp'",
+      [userId]
+    );
+    const [before] = await query<{ secret: string }>(
+      "SELECT credential_data->>'secret' AS secret FROM user_credentials WHERE user_id = $1 AND provider_type = 'totp'",
+      [userId]
+    );
+    policy = POLICY_REQUIRED;
+    // The app is lost: the person signs in with a recovery code in its place.
+    const { bearer } = await signedIn(userId, ['pwd'], { recoveryCodeUsed: true });
+
+    const removal = await call('DELETE', '/totp', bearer);
+    expect(removal.statusCode, removal.body).toBe(409);
+    expect(removal.json()).toMatchObject({ code: 'second_factor_required' });
+
+    const enrolment = await startEnrolment(bearer);
+    const rebound = await call('POST', '/totp/enrollment/confirm', bearer, {
+      code: codeAt(base32Decode(enrolment.secret), Date.now()),
+    });
+    expect(rebound.statusCode, rebound.body).toBe(200);
+    const after = await query<{ secret: string }>(
+      "SELECT credential_data->>'secret' AS secret FROM user_credentials WHERE user_id = $1 AND provider_type = 'totp'",
+      [userId]
+    );
+    expect(after).toHaveLength(1);
+    expect(after[0]?.secret).not.toBe(before?.secret);
   });
 
   it('refuses to remove the last second factor the policy requires with second_factor_required', async () => {
