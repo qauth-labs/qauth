@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-11-13'
+lastVerified: '2026-11-14'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -1085,6 +1085,47 @@ removal also ends the sessions, codes and refresh tokens its sign-in opened and 
 account's recovery codes. The account's last way to sign in is `409` `last_credential`, and the
 last second factor the realm requires of the account `409` `second_factor_required`. The owner gets
 the "passkey removed" notice. **`204 No Content`**. Errors: `400`, `401`, `403`, `404`, `409`.
+
+### `POST /account/v1-rc.0/totp/enrollment`
+
+Start an authenticator-app enrolment (#1109): a new 160-bit secret, answered once as `secret`
+(base32) and `otpauthUri`, with `algorithm` `SHA1`, `digits` `6`, `period` `30` and `expiresAt`, ten
+minutes ahead. Nothing is bound until it is confirmed; a new start replaces an unconfirmed
+enrolment. `emailCode` is always `not_required`. Needs a fresh sign-in with the account's strongest
+factor, or one that used a recovery code in place of a lost one, and refuses an act-chain token. An
+account that has an authenticator app, an unclaimed account and one with no address are `409`
+`conflict`. **`201 Created`**. Errors: `400`, `401`, `403`, `409`, `503`.
+
+### `POST /account/v1-rc.0/totp/enrollment/confirm`
+
+Bind the started enrolment with the first code the app shows, `{"code":"492039"}`. A wrong code is
+`400` `invalid_code` and leaves the enrolment for another; none started, lapsed or already confirmed
+is `404`. Answers `enabledAt`, and `recoveryCodes` (ten codes and `issuedAt`, shown once) when the
+app is the account's first second factor. An app bound after a sign-in that proved only the password
+is new for the realm's window (ADR-017 Decision 8). The owner gets the "authenticator app added"
+notice. Same fresh sign-in and act-chain rule as the start. Errors: `400`, `401`, `403`, `404`, `503`.
+
+### `DELETE /account/v1-rc.0/totp`
+
+Remove the user's authenticator app, on the hosted account page's logic. Needs a fresh sign-in with
+the account's strongest factor, or one that used a recovery code in place of a lost app, and refuses
+an act-chain token; an app still new is removed after a fresh sign-in with the password alone, which
+also ends what its sign-in opened. The last second factor the realm requires is `409`
+`second_factor_required`. The owner gets the "authenticator app removed" notice. **`204 No
+Content`**. Errors: `400`, `401`, `403`, `404`, `409`, `503`.
+
+### `GET /account/v1-rc.0/recovery-codes`
+
+How many of the user's recovery codes are left (`remaining`) and when the set was issued
+(`issuedAt`, `null` without one). Never the codes. Takes an act-chain token. Errors: `400`, `401`,
+`403`.
+
+### `POST /account/v1-rc.0/recovery-codes/regenerate`
+
+Issue a new set of ten recovery codes, answered once as `codes` and `issuedAt`; every code of the old
+set stops working. Needs a fresh sign-in with the account's strongest factor and refuses an act-chain
+token. An account with no second factor or passkey is `409` `conflict`. The owner gets the "recovery
+codes regenerated" notice. Errors: `400`, `401`, `403`, `409`.
 
 ---
 

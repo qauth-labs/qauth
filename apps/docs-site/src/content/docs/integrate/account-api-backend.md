@@ -3,7 +3,7 @@ title: Account API from a backend
 description: How a backend for frontend, such as the account console's, calls the account API — the token it holds, the fresh-authentication challenge it answers, and the refusals it must not retry.
 sidebar:
   order: 8
-lastVerified: '2026-11-13'
+lastVerified: '2026-11-14'
 ---
 
 The [account API](/reference/account-api/) is called by backends that hold a person's access
@@ -126,6 +126,43 @@ sign-in, since a name is no credential, but refuses an act-chain token. Removing
 (`account.passkeys.delete`) needs a fresh sign-in with the strongest factor or a recovery code, and
 answers 409 `last_credential` for the account's last way to sign in and 409
 `second_factor_required` for the last second factor the realm requires of the account.
+
+## Adding an authenticator app
+
+An authenticator app needs no browser ceremony on the realm's host, so the account API binds one
+itself, in two calls with a fresh token (the strongest factor, or a recovery code in place of a
+lost one):
+
+1. `POST /account/v1-rc.0/totp/enrollment` draws a new secret and answers it once, `201`, as
+   `secret` (base32, for typing by hand) and `otpauthUri` (for the QR code), with `expiresAt`, ten
+   minutes ahead. Show both to the person and keep neither: QAuth keeps only a ciphertext of the
+   secret until the enrolment is confirmed or lapses, never sends it again, and answers it with
+   `Cache-Control: no-store`. A new start replaces an enrolment not yet confirmed. `emailCode` is
+   always `not_required`: no code is mailed, since a verified account binds its first second factor
+   after the fresh sign-in alone (ADR-017 Decision 8).
+2. `POST /account/v1-rc.0/totp/enrollment/confirm` with `{"code":"492039"}`, the first code the
+   app shows, binds the secret: `200` with `enabledAt`. A wrong code is `400` `invalid_code` and
+   binds nothing; the enrolment waits for another code. Without a started enrolment, after it
+   lapsed or once it was confirmed, the answer is `404` `not_found`.
+
+- The start answers `409` `conflict` when the account already has an authenticator app (remove it
+  first, the first half of a rebind), when its address was never verified (an unclaimed account
+  binds no factor), and when it has no address the app could show beside the code.
+- When the app is the account's first second factor, the confirmation also answers
+  `recoveryCodes`: the account's first set of ten codes, shown once. QAuth marks the set as saved
+  as it answers it, so show the codes then; a later sign-in does not show them again.
+- An app bound with a token whose sign-in proved only the password is new for the realm's window
+  (ADR-017 Decision 8), and the browser session that sign-in started names it: until the window
+  ends, a fresh sign-in with the password alone may remove it (`DELETE /account/v1-rc.0/totp`),
+  which ends that session.
+- Removing the app needs the same fresh sign-in as the start, and answers `409`
+  `second_factor_required` for the last second factor the realm requires of the account.
+
+`GET /account/v1-rc.0/recovery-codes` reads how many recovery codes are left and when the set was
+issued, never the codes; it takes an act-chain token. `POST /account/v1-rc.0/recovery-codes/regenerate`
+answers a new set of ten once and stops every code of the old one. It needs a fresh sign-in with the
+strongest factor itself (a recovery code does not do), and answers `409` `conflict` for an account
+with no second factor or passkey.
 
 ## Refusals a step-up cannot lift
 

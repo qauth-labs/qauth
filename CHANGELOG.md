@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The account API manages the authenticator app and the recovery codes**
+  ([#1109], ADR-017 Decision 8, ADR-020 §3, ADR-019 Decision 7). A backend
+  that draws its own account pages can now call
+  `POST /account/v1-rc.0/totp/enrollment` (a new secret, answered once as
+  text and as an `otpauth://` URI), `POST /account/v1-rc.0/totp/enrollment/confirm`
+  (binds it only after a valid first code, else `invalid_code`, and answers
+  the account's first recovery codes once), `DELETE /account/v1-rc.0/totp`,
+  `GET /account/v1-rc.0/recovery-codes` (how many are left, never the codes)
+  and `POST /account/v1-rc.0/recovery-codes/regenerate` (a new set, answered
+  once, which stops the old one), as the account contract states them, on
+  the sign-in engine's and the hosted account page's logic. The changes need
+  a fresh sign-in and refuse an act-chain token; a verified account binds its
+  first second factor with no mailed code, an unclaimed one binds none, an
+  app bound after a password-only sign-in is new for the realm's window, and
+  removing the last second factor the realm requires answers
+  `second_factor_required`. No secret, code or URI is logged, and every
+  answer carries `Cache-Control: no-store`. The contract's `emailCode` is now
+  always `not_required`. The `api` role's database user gets `INSERT` and
+  `UPDATE` on `user_recovery_codes` (see the upgrade notes).
 - **The account API manages passkeys, and an authorization request can add
   one** ([#1108], ADR-020 §1 and §3, ADR-017 Decision 8, ADR-019 Decision 7).
   A backend that draws its own account pages can now call
@@ -4342,6 +4361,7 @@ It adds migrations 0068 and 0069.
 [#1106]: https://github.com/qauth-labs/qauth/issues/1106
 [#1107]: https://github.com/qauth-labs/qauth/issues/1107
 [#1108]: https://github.com/qauth-labs/qauth/issues/1108
+[#1109]: https://github.com/qauth-labs/qauth/issues/1109
 
 ### Deprecated
 

@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — the upgrade from 0.1 to 0.2 with its hosts, keys, sessions and roles, and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-11-13'
+lastVerified: '2026-11-14'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -1349,6 +1349,28 @@ GRANT DELETE ON TABLE "user_recovery_codes" TO <api_role>;
 
 Nothing checks the grants at boot. Without them a removal answers `500`, with
 `permission denied` for the table in the log, and changes nothing.
+
+### The account API manages the authenticator app and the recovery codes
+
+The account API enrols and removes an account's authenticator app and reads
+and regenerates its recovery codes
+([#1109](https://github.com/qauth-labs/qauth/issues/1109)) on the `api` role.
+A regeneration, and the first set an enrolment issues, write a new set and
+mark it confirmed, so the `api` role's database user now needs `INSERT` and
+`UPDATE` on `user_recovery_codes` beside the `SELECT` and `DELETE` it had. A
+deployment whose migration runner grants the roles' database users
+([above](#each-role-can-connect-as-a-database-user-of-its-own)), or whose roles
+connect as the one user that owns the tables, needs nothing. One that applies
+the grants by hand applies the statements of `databaseUserGrantStatements`
+from `@qauth-labs/infra-db` again, or this, before the new version starts:
+
+```sql
+GRANT INSERT, UPDATE ON TABLE "user_recovery_codes" TO <api_role>;
+```
+
+Nothing checks the grant at boot. Without it a regeneration, or an enrolment's
+first set, answers `500` or binds the app without a set, with
+`permission denied` for the table in the log.
 
 ## Upgrading within 1.x
 
