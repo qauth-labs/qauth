@@ -56,6 +56,9 @@ function memoryList(initial: readonly DeploymentNode[] = []) {
       calls.push(`listLive:${windowMs}`);
       return [...rows];
     },
+    async isLive(nodeId) {
+      return rows.some((row) => row.nodeId === nodeId);
+    },
     async register(node, windowMs, check) {
       calls.push(`register:${windowMs}`);
       check([...rows]);
@@ -86,11 +89,15 @@ function memoryList(initial: readonly DeploymentNode[] = []) {
 
 function recordingLog() {
   const warnings: { details: Record<string, unknown>; message: string }[] = [];
+  const errors: { details: Record<string, unknown>; message: string }[] = [];
   const infos: string[] = [];
   return {
     warnings,
+    errors,
     infos,
     log: {
+      error: (details: Record<string, unknown>, message: string) =>
+        errors.push({ details, message }),
       warn: (details: Record<string, unknown>, message: string) =>
         warnings.push({ details, message }),
       info: (_details: Record<string, unknown>, message: string) => infos.push(message),
@@ -286,6 +293,56 @@ describe('the node list of a booting node', () => {
     down = false;
     await vi.advanceTimersByTimeAsync(DEPLOYMENT_NODE_HEARTBEAT_MS);
     expect(infos).toContain('This node marks itself seen in the node list again');
+    await list.stop();
+  });
+
+  it('compares once more when its row is written again, and is unready beside a node of the release that differs', async () => {
+    vi.useFakeTimers();
+    const memory = memoryList();
+    const { log, errors } = recordingLog();
+    const list = createDeploymentNodeList({
+      repository: memory.repository,
+      log,
+      node: SELF,
+      rollout: false,
+    });
+    await list.register();
+
+    // Its row went as stale while it could not reach the database, and a
+    // node of the release with another HYBRID_SIGNING_ENABLED registered.
+    const newcomer = peer({ configKeys: { HYBRID_SIGNING_ENABLED: 'h2', JWT_ISSUER: 'i1' } });
+    memory.set([newcomer]);
+    await vi.advanceTimersByTimeAsync(DEPLOYMENT_NODE_HEARTBEAT_MS);
+    expect(memory.rows().map((row) => row.nodeId)).toEqual([newcomer.nodeId, SELF.nodeId]);
+    expect(errors).toEqual([
+      {
+        details: expect.objectContaining({
+          keys: ['HYBRID_SIGNING_ENABLED'],
+          nodes: [newcomer.nodeId],
+        }),
+        message: expect.stringMatching(/differs from running nodes .* in HYBRID_SIGNING_ENABLED/),
+      },
+    ]);
+    await expect(list.assertListed()).rejects.toThrow(
+      'differs from a running node of its release in HYBRID_SIGNING_ENABLED'
+    );
+    await list.stop();
+  });
+
+  it('warns when another database user holds its id, as when it cannot mark itself seen', async () => {
+    vi.useFakeTimers();
+    const memory = memoryList();
+    const { log, warnings } = recordingLog();
+    const list = createDeploymentNodeList({
+      repository: { ...memory.repository, heartbeat: async () => 'foreign' },
+      log,
+      node: SELF,
+      rollout: false,
+    });
+    await list.register();
+    await vi.advanceTimersByTimeAsync(DEPLOYMENT_NODE_HEARTBEAT_MS * 2);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toMatch(/cannot mark itself seen/);
     await list.stop();
   });
 

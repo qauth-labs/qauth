@@ -24,17 +24,21 @@ import { differingKeys } from '@qauth-labs/server-config';
  *
  * The comparison runs twice. Once read-only, before any other boot step
  * writes to the database: a node with another `DEFAULT_REALM_NAME` must not
- * create a realm before it refuses. And once more when the node registers,
- * after every boot step succeeded, in one transaction under the list's lock
- * that also inserts the row: two nodes that boot at once register one after
- * the other, so the second compares with the first, and a node whose boot
- * fails later leaves no row behind to block the next attempt.
+ * create a realm before it refuses a running node. And once more when the
+ * node registers, after every boot step succeeded, in one transaction under
+ * the list's lock that also inserts the row: two nodes that boot at once
+ * register one after the other, so the second compares with the first and
+ * refuses then, though its boot steps have already run; and a node whose
+ * boot steps fail leaves no row behind to block the next attempt.
  *
- * Once registered, the node marks itself seen every 30 seconds, writing its
- * row again if it is gone, and removes it when it closes. A node that stops
- * without closing leaves a row that stops counting two minutes later; the
- * next registration removes it. The list is the readiness check
- * `config_digest`, and the admin console's role health will read it.
+ * Once registered, the node marks itself seen every 30 seconds, and removes
+ * its row when it closes. A row that is gone, removed as stale while the
+ * node could not reach the database, is written again and compared once
+ * more: when a node of the release that registered meanwhile differs, the
+ * node logs an error and stays unready (`config_digest`) until it restarts.
+ * A node that stops without closing leaves a row that stops counting two
+ * minutes later; the next registration removes it. The list is the readiness
+ * check `config_digest`, and the admin console's role health will read it.
  */
 
 /** How often a node marks itself seen. */
@@ -117,6 +121,7 @@ export class ConfigDigestMismatchError extends Error {
 
 /** Where the node list logs: the app's logger. */
 export interface DeploymentNodeLog {
+  error(details: Record<string, unknown>, message: string): void;
   warn(details: Record<string, unknown>, message: string): void;
   info(details: Record<string, unknown>, message: string): void;
 }
@@ -156,8 +161,9 @@ export interface DeploymentNodeList {
   list(): Promise<readonly DeploymentNode[]>;
   /**
    * Resolve while this node is in the list, so that a booting node compares
-   * its settings with this one's; reject when it is not. The readiness check
-   * `config_digest`.
+   * its settings with this one's; reject when it is not, or when it was
+   * listed again beside a node of its release whose settings differ. The
+   * readiness check `config_digest`.
    */
   assertListed(): Promise<void>;
   /** Stop marking this node seen and remove its row. Never rejects. */
@@ -179,6 +185,8 @@ export function createDeploymentNodeList(options: DeploymentNodeListOptions): De
   let beating: Promise<void> | undefined;
   let failing = false;
   let stopped = false;
+  /** The keys a node of the release differs in, found when the row was written again. */
+  let conflict: readonly string[] | undefined;
 
   /**
    * Refuse a mismatch with a node of this release, or with the rollout
@@ -215,15 +223,45 @@ export function createDeploymentNodeList(options: DeploymentNodeListOptions): De
     }
   }
 
+  /**
+   * Compare once more with the running nodes, once the row was written again
+   * after it was removed as stale: a node of the release may have registered
+   * meanwhile with other settings, without this one to compare with.
+   */
+  async function recheck(): Promise<void> {
+    const comparison = compareWithLiveNodes(
+      node,
+      await repository.listLive(DEPLOYMENT_NODE_LIVE_WINDOW_MS)
+    );
+    if (comparison.mismatched.length === 0 || rollout) {
+      conflict = undefined;
+      return;
+    }
+    conflict = keysOf(comparison.mismatched);
+    log.error(
+      {
+        nodeId: node.nodeId,
+        keys: conflict,
+        nodes: comparison.mismatched.map((peer) => peer.nodeId),
+        version: node.version,
+      },
+      `This node is listed again after it could not mark itself seen, and its configuration differs from running nodes of release ${node.version} that registered meanwhile in ${conflict.join(', ')}: the config_digest readiness check fails until it restarts with the same values`
+    );
+  }
+
   async function heartbeat(): Promise<void> {
     if (stored === undefined || stopped) return;
     try {
       const result = await repository.heartbeat(stored);
+      if (result === 'foreign') {
+        throw new Error("Another database user's node holds this node's id in the node list");
+      }
       if (result === 'restored') {
         log.warn(
           { nodeId: node.nodeId },
           'This node was missing from the node list, removed while it could not mark itself seen, and is listed again'
         );
+        await recheck();
       } else if (failing) {
         log.info({ nodeId: node.nodeId }, 'This node marks itself seen in the node list again');
       }
@@ -285,8 +323,12 @@ export function createDeploymentNodeList(options: DeploymentNodeListOptions): De
     },
 
     async assertListed(): Promise<void> {
-      const live = await repository.listLive(DEPLOYMENT_NODE_LIVE_WINDOW_MS);
-      if (!live.some((entry) => entry.nodeId === node.nodeId)) {
+      if (conflict !== undefined) {
+        throw new Error(
+          `This node's configuration differs from a running node of its release in ${conflict.join(', ')}`
+        );
+      }
+      if (!(await repository.isLive(node.nodeId, DEPLOYMENT_NODE_LIVE_WINDOW_MS))) {
         throw new Error('This node is not in the node list');
       }
     },

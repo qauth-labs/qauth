@@ -862,9 +862,10 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // registry's `shared` keys, compared with every node of the list seen in
   // the last two minutes. Read-only first, in an `onReady` hook registered
   // before every other boot step's, so a node of this release whose settings
-  // differ refuses before anything writes (a node with another
-  // DEFAULT_REALM_NAME would create a realm); it names the keys, never a
-  // value. CONFIG_DIGEST_ROLLOUT makes that a warning; a node of another
+  // differ from a running node's refuses before anything writes (a node with
+  // another DEFAULT_REALM_NAME would create a realm); two that boot at once
+  // compare when they register, under the list's lock, once their boot steps
+  // ran. It names the keys, never a value. CONFIG_DIGEST_ROLLOUT makes that a warning; a node of another
   // release is only warned of. The node registers once every boot step
   // succeeded (the last `onReady` hook, below the routes), marks itself
   // seen every 30 seconds and leaves the list when it closes, before the
