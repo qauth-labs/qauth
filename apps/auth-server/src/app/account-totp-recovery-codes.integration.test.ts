@@ -457,21 +457,17 @@ describe('the account API’s authenticator app and recovery codes (#1109, real 
         userId,
       ])
     ).toHaveLength(10);
-    // The codes as answered (uppercase, in groups) are the ones stored: each
-    // new one's lookup digest finds its unused row, and no old one's does.
-    const { recoveryCodeLookupDigest } = await import('./helpers/recovery-codes');
-    const stored = async (code: string) =>
-      query(
-        'SELECT 1 FROM user_recovery_codes WHERE user_id = $1 AND lookup_digest = $2 AND used_at IS NULL',
-        [userId, await recoveryCodeLookupDigest(realmId, code.replace(/-/g, '').toLowerCase())]
-      );
-    for (const code of next.codes) expect(await stored(code), code).toHaveLength(1);
-    expect(await stored(first.codes[0] as string)).toEqual([]);
 
     // Never answered again: the read says how many are left, never which.
     const status = await call('GET', '/recovery-codes', bearer);
     expect(status.json()).toEqual({ remaining: 10, issuedAt: next.issuedAt });
     for (const code of next.codes) expect(status.body).not.toContain(code);
+
+    // The codes as answered (uppercase, in groups) are the ones stored: each
+    // new one is redeemed as typed, where every old one was refused above.
+    for (const code of next.codes) {
+      expect(await redeem(userId, code), code).toEqual({ kind: 'redeemed' });
+    }
 
     // An account with no second factor and no passkey has no set to regenerate.
     const plain = await account();
