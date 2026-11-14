@@ -15,10 +15,14 @@
  * {@link KID_DENYLIST_MAX_STALENESS_MS}, or never was, is not current, and a
  * verify site refuses every token while it is not.
  *
- * The copy only grows: a `kid` once denied stays denied on the node, as the
- * table never removes one (a realm's deletion takes its rows, and its keys,
- * with it). So a read of the shared cache that lacks a `kid` the node knows,
- * whether stale or tampered with, never lets that key back in.
+ * Only the database is the truth. A read of the shared cache only adds to
+ * the copy: a snapshot that lacks a `kid` the node knows, stale or tampered
+ * with, never lets that key back in. A read of the database (`complete`)
+ * replaces it, keeping only the `kid`s the node learned after that read
+ * began, which the read may have missed: so a `kid` that only the cache
+ * named, and the table never held, is dropped by the next database read
+ * that began after the node learned it. The table never removes a `kid` (a
+ * realm's deletion takes its rows, and its keys, with it).
  *
  * The key readers (the in-process signer, the published-key reader) watch the
  * copy's {@link KidDenylistView.revision}: when it changes, they drop the key
@@ -70,7 +74,8 @@ export interface KidDenylist extends KidDenylistView {
   /**
    * Deny `entries` on this copy now, without a read: the node that retired
    * the keys knows their `kid`s once its transaction committed, before any
-   * read could return them.
+   * read could return them. A database read that began before the call does
+   * not drop them.
    */
   add(entries: readonly DeniedKid[]): void;
   /** Read the list every refresh interval, on a timer that keeps no process alive. */
@@ -79,13 +84,25 @@ export interface KidDenylist extends KidDenylistView {
   stop(): void;
 }
 
+/** One read of the denylist. */
+export interface KidDenylistRead {
+  readonly entries: readonly DeniedKid[];
+  /**
+   * Whether the read is the whole list, from the database: it then replaces
+   * the copy. A read of the shared cache is not, and only adds to it.
+   */
+  readonly complete: boolean;
+}
+
 /** Options of {@link createKidDenylist}. */
 export interface KidDenylistOptions {
   /**
    * Read the whole denylist. The wiring reads the shared cache's snapshot,
-   * and the database when the cache misses or fails.
+   * and the database when the cache misses or fails, and at least every few
+   * seconds. It should settle: a read still running after the staleness
+   * bound no longer holds the timer back, and the next tick reads again.
    */
-  readonly load: () => Promise<readonly DeniedKid[]>;
+  readonly load: () => Promise<KidDenylistRead>;
   /** {@link DEFAULT_KID_DENYLIST_REFRESH_INTERVAL_MS} by default. */
   readonly refreshIntervalMs?: number;
   /** {@link KID_DENYLIST_MAX_STALENESS_MS} by default. */
@@ -128,50 +145,105 @@ export function createKidDenylist(options: KidDenylistOptions): KidDenylist {
     throw new TypeError('The denylist is read more often than it goes stale');
   }
 
-  let denied: ReadonlySet<string> = new Set();
+  /** Each denied entry, with when the copy learned it. */
+  let denied: ReadonlyMap<string, number> = new Map();
   let currentRevision = 0;
   /** When the read the copy came from began; `null` until one succeeds. */
   let readAt: number | null = null;
-  let inFlight: Promise<void> | undefined;
+  /** When the complete read the copy last took began. */
+  let completeReadAt = -Infinity;
+  /** The read that runs, if one does: what a later caller waits on, and when it began. */
+  let inFlight: { settled: Promise<void>; readonly since: number } | undefined;
   let queued: Promise<void> | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
 
+  /** Take `next` as the copy, raising the revision when the set of entries changed. */
+  function replace(next: ReadonlyMap<string, number>): void {
+    const changed =
+      next.size !== denied.size || [...next.keys()].some((entry) => !denied.has(entry));
+    denied = next;
+    if (changed) currentRevision += 1;
+  }
+
+  function isRead(value: unknown): value is KidDenylistRead {
+    if (typeof value !== 'object' || value === null) return false;
+    const { entries, complete } = value as Record<string, unknown>;
+    return typeof complete === 'boolean' && Array.isArray(entries) && entries.every(isDeniedKid);
+  }
+
   function read(): Promise<void> {
     const startedAt = now();
+    const slot: { settled: Promise<void>; readonly since: number } = {
+      settled: Promise.resolve(),
+      since: startedAt,
+    };
+    inFlight = slot;
     const running = (async () => {
-      const rows = await load();
-      if (!Array.isArray(rows) || !rows.every(isDeniedKid)) {
-        throw new TypeError('The denylist read is not a list of denied keys');
+      try {
+        take(await load(), startedAt);
+      } finally {
+        // Cleared before the caller resumes: a refresh right after one
+        // resolved reads at once.
+        if (inFlight === slot) inFlight = undefined;
       }
-      const next = new Set(denied);
-      for (const row of rows) next.add(entryOf(row.realmId, row.kid));
-      if (next.size !== denied.size) {
-        denied = next;
-        currentRevision += 1;
-      }
-      // A read that began before an earlier one succeeded never moves the time back.
-      if (readAt === null || startedAt > readAt) readAt = startedAt;
     })();
     // What a later caller waits on: it settles with the read and never
     // rejects, so a failed read no one else awaits raises no unhandled
     // rejection.
-    const settled = running.then(
+    slot.settled = running.then(
       () => undefined,
       () => undefined
     );
-    inFlight = settled;
-    void settled.then(() => {
-      if (inFlight === settled) inFlight = undefined;
-    });
     return running;
   }
 
+  /** Apply one read that began at `startedAt` to the copy. */
+  function take(result: unknown, startedAt: number): void {
+    if (!isRead(result)) {
+      throw new TypeError('The denylist read is not a list of denied keys');
+    }
+    if (result.complete) {
+      // A complete read older than one the copy took already is ignored.
+      if (startedAt < completeReadAt) return;
+      completeReadAt = startedAt;
+      const next = new Map<string, number>();
+      for (const row of result.entries) {
+        const entry = entryOf(row.realmId, row.kid);
+        next.set(entry, denied.get(entry) ?? startedAt);
+      }
+      // What the copy learned once the read had begun, the read may lack.
+      for (const [entry, learnedAt] of denied) {
+        if (learnedAt >= startedAt && !next.has(entry)) next.set(entry, learnedAt);
+      }
+      replace(next);
+    } else {
+      const next = new Map(denied);
+      for (const row of result.entries) {
+        const entry = entryOf(row.realmId, row.kid);
+        if (!next.has(entry)) next.set(entry, startedAt);
+      }
+      replace(next);
+    }
+    // A read that began before an earlier one succeeded never moves the time back.
+    if (readAt === null || startedAt > readAt) readAt = startedAt;
+  }
+
+  /** Whether a read runs, and began within the staleness bound: a later one waits for it. */
+  function readRunning(): boolean {
+    return inFlight !== undefined && now() - inFlight.since <= maxStalenessMs;
+  }
+
   function refresh(): Promise<void> {
+    const running = inFlight?.settled;
+    if (running === undefined || !readRunning()) {
+      // None runs, or one hangs past the bound: read now.
+      queued = undefined;
+      return read();
+    }
     if (queued !== undefined) return queued;
-    if (inFlight === undefined) return read();
     // A read is running, and may have begun before the caller's change: one
     // more read follows it, shared by everyone who asks meanwhile.
-    const after = inFlight.then(() => {
+    const after = running.then(() => {
       queued = undefined;
       return read();
     });
@@ -194,18 +266,20 @@ export function createKidDenylist(options: KidDenylistOptions): KidDenylist {
       if (!Array.isArray(entries) || !entries.every(isDeniedKid)) {
         throw new TypeError('A denied key names its realm and kid');
       }
-      const next = new Set(denied);
-      for (const entry of entries) next.add(entryOf(entry.realmId, entry.kid));
-      if (next.size !== denied.size) {
-        denied = next;
-        currentRevision += 1;
+      const learnedAt = now();
+      const next = new Map(denied);
+      for (const row of entries) {
+        const entry = entryOf(row.realmId, row.kid);
+        if (!next.has(entry)) next.set(entry, learnedAt);
       }
+      replace(next);
     },
     start(): void {
       if (timer !== undefined) return;
       timer = setInterval(() => {
-        // A slow read is not stacked on: the next tick asks again.
-        if (inFlight !== undefined) return;
+        // A slow read is not stacked on: the next tick asks again. One that
+        // hangs past the staleness bound no longer holds the reads back.
+        if (readRunning()) return;
         read().catch((error: unknown) => onError?.(error));
       }, refreshIntervalMs);
       timer.unref?.();

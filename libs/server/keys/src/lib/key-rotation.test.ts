@@ -1275,11 +1275,13 @@ describe('retireNow: an emergency retirement under an approval (#551)', () => {
     const w = await world();
     w.clock.now = T0 + 10 * DAY;
     const denylist = createKidDenylist({
-      load: async () =>
-        w.keys.denied.map((entry) => {
+      load: async () => ({
+        entries: w.keys.denied.map((entry) => {
           const [realmId, kid] = entry.split(' ');
           return { realmId, kid };
         }),
+        complete: true,
+      }),
       now: () => w.clock.now,
     });
     await denylist.refresh();

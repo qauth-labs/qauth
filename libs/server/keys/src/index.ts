@@ -115,6 +115,7 @@ export {
   KID_DENYLIST_MAX_STALENESS_MS,
   type KidDenylist,
   type KidDenylistOptions,
+  type KidDenylistRead,
   type KidDenylistView,
 } from './lib/kid-denylist';
 export {

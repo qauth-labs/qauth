@@ -106,6 +106,7 @@ export {
   KID_DENYLIST_MAX_STALENESS_MS,
   type KidDenylist,
   type KidDenylistOptions,
+  type KidDenylistRead,
   type KidDenylistView,
   MAX_KID_LENGTH,
 } from '@qauth-labs/server-keys';
