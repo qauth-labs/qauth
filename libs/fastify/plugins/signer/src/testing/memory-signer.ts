@@ -127,7 +127,12 @@ export interface TestUpstreamClient {
 interface MemoryRow {
   key: Omit<NewStoredKeyRow, 'status'> & { status: StoredKeyStatus };
   publicJwk?: Record<string, unknown>;
-  /** Epoch ms. When a retired key leaves its JWKS; a retired key with `null` is out at once. */
+  /** Epoch ms. When the key stops signing; `null` until a rotation retires it. */
+  retireAt: number | null;
+  /**
+   * Epoch ms. When a retired key's retention ends; a retired published key
+   * with `null` is out of its JWKS at once, a retired unpublished one kept.
+   */
   unpublishAt: number | null;
 }
 
@@ -180,18 +185,19 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
       rows.find((row) => row.key.realmId === realmId && row.key.kid === kid)?.key,
     listByRealm: async (realmId, filter) =>
       rows
-        .map((row) => row.key)
         .filter(
-          (key) =>
+          ({ key }) =>
             key.realmId === realmId &&
             (filter.purpose === undefined || key.purpose === filter.purpose) &&
             (filter.scopeId === undefined || key.scopeId === filter.scopeId) &&
             (filter.status === undefined || key.status === filter.status)
-        ),
+        )
+        .map(({ key, retireAt, unpublishAt }) => ({ ...key, retireAt, unpublishAt })),
     create: async (input) => {
       rows.push({
         key: { ...input.key },
         ...(input.publicJwk ? { publicJwk: input.publicJwk } : {}),
+        retireAt: null,
         unpublishAt: null,
       });
       return input.key;
@@ -207,6 +213,7 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
         row.key = { ...row.key, status: 'active', activateAt: change.activateAt };
       } else {
         row.key = { ...row.key, status: 'retired' };
+        row.retireAt = change.retireAt;
         row.unpublishAt = change.unpublishAt;
       }
       return row.key;
@@ -245,12 +252,15 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
             key.purpose === filter.purpose &&
             key.scopeId === filter.scopeId
         )
-        .map(({ key }, index) => ({
+        .map(({ key, retireAt, unpublishAt }, index) => ({
           kid: key.kid,
           algorithm: key.algorithm,
           status: key.status,
           pairId: key.pairId,
-          retireAt: key.status === 'retired' ? key.createdAt : null,
+          activateAt: key.activateAt,
+          // A key `setKeyStatus` retired has no time of its own.
+          retireAt: retireAt ?? (key.status === 'retired' ? key.createdAt : null),
+          unpublishAt,
           createdAt: key.createdAt + index,
         }));
     },

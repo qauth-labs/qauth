@@ -1,5 +1,6 @@
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import type { DbClient } from '@qauth-labs/infra-db';
+import type { KeyRotationDays } from '@qauth-labs/server-keys';
 import type { KekEnv } from '@qauth-labs/server-keys/custody';
 import type { FastifyPluginOptions } from 'fastify';
 
@@ -36,4 +37,10 @@ export interface SignerPluginOptions extends FastifyPluginOptions {
    * database.
    */
   realmKeysBoot?: RealmKeysBootSettings;
+  /**
+   * The windows of the scheduled key rotation (#542), in days:
+   * `KEY_ROTATION_PERIOD_DAYS`, `KEY_PREPUBLISH_DAYS` and
+   * `KEY_RETIRED_RETENTION_DAYS`. Defaults to 90, 7 and 14.
+   */
+  keyRotation?: KeyRotationDays;
 }
