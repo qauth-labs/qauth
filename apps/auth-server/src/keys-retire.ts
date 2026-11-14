@@ -23,13 +23,11 @@ import { userInfo } from 'node:os';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { sessionServicePlugin } from '@qauth-labs/fastify-plugin-sessions';
-import { compromisedKeyOf, retireKey } from '@qauth-labs/fastify-plugin-signer';
 import Fastify from 'fastify';
 
-import { invalidateKeyDenylist } from './app/helpers/key-denylist';
-import { retireKeyNow } from './app/helpers/key-retirement';
 import {
   describeKeysRetireError,
+  keysRetireDependencies,
   KeysRetireUsageError,
   parseKeysRetireArguments,
   runKeysRetire,
@@ -81,38 +79,18 @@ async function main(): Promise<number> {
       },
     });
     await server.ready();
-    const { realms, refreshTokens, events, adminAuditLog } = server.repositories;
-    const retireDeps = {
-      db: server.db,
-      kekEnv: process.env,
-      warn: ({ variable, message }: { variable: string; message: string }) =>
-        server.log.warn({ variable }, message),
-      enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
-      hybridSigning: env.HYBRID_SIGNING_ENABLED,
-    };
-    return await runKeysRetire(argv, env.DEFAULT_REALM_NAME, {
-      realmIdOf: async (name) => (await realms.findByName(name))?.id,
-      retireKeyNow: (input) =>
-        retireKeyNow(
-          {
-            retire: (retireInput) => retireKey(retireDeps, retireInput),
-            refreshTokens,
-            events,
-            adminAuditLog,
-            sessions: server.sessionService,
-            // This process holds no copy of the denylist: deleting the
-            // snapshot makes every node read the database at its next refresh.
-            invalidateDenylist: (retired) =>
-              invalidateKeyDenylist(null, server.redis, server.log, retired),
-          },
-          input
-        ),
-      findCompromisedKey: (realmId, kid) => compromisedKeyOf(server.db, realmId, kid),
-      sessions: server.sessionService,
-      operatingSystemUser,
-      out: (line) => process.stdout.write(`${line}\n`),
-      err: (line) => process.stderr.write(`${line}\n`),
-    });
+    return await runKeysRetire(
+      argv,
+      env.DEFAULT_REALM_NAME,
+      keysRetireDependencies(server, {
+        kekEnv: process.env,
+        enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
+        hybridSigning: env.HYBRID_SIGNING_ENABLED,
+        operatingSystemUser,
+        out: (line) => process.stdout.write(`${line}\n`),
+        err: (line) => process.stderr.write(`${line}\n`),
+      })
+    );
   } finally {
     await server.close();
   }

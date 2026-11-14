@@ -429,6 +429,12 @@ export interface BootAuthServerOptions {
    */
   readonly mfaPolicy?: AppOptions['mfaPolicy'];
   /**
+   * Shorter refresh and staleness windows of the `kid` denylist (#551), for
+   * a suite that watches a node refuse every token once it cannot read the
+   * list. The app refuses it outside NODE_ENV=test.
+   */
+  readonly keyDenylistTiming?: AppOptions['keyDenylistTiming'];
+  /**
    * The OID4VP request key the default realm's key store holds from an
    * earlier boot (#546), as a PEM: the leaf key of the configured chain. The
    * harness boots once with `OID4VP_VERIFIER_SIGNING_KEY` set to it, which
@@ -676,6 +682,9 @@ export async function bootAuthServer(
       ? {}
       : { authMethodPlugins: options.authMethodPlugins }),
     ...(options.mfaPolicy === undefined ? {} : { mfaPolicy: options.mfaPolicy }),
+    ...(options.keyDenylistTiming === undefined
+      ? {}
+      : { keyDenylistTiming: options.keyDenylistTiming }),
   });
   const { routes } = options;
   if (routes !== undefined) {

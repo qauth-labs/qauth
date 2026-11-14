@@ -2,15 +2,20 @@ import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 
 import {
+  compromisedKeyOf,
   isKid,
   KEY_RETIRE_OPERATION,
   KeyChangeRefusedError,
   newOperationNonce,
   OperationApprovalError,
+  retireKey,
 } from '@qauth-labs/fastify-plugin-signer';
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 
+import { invalidateKeyDenylist } from './key-denylist';
 import {
   type KeyRetirementOutcome,
+  retireKeyNow,
   type RetireKeyNowInput,
   revokeSessionsOfRetiredKey,
 } from './key-retirement';
@@ -21,8 +26,9 @@ import {
  * holds the database credentials and the KEK, when the key may be
  * compromised.
  *
- * Everything but the database, Redis and the KEK provider is here, so a unit
- * test runs the command with them faked.
+ * Everything but the plugins' registration is here: a unit test runs the
+ * command with its dependencies faked, and an integration test runs it with
+ * {@link keysRetireDependencies} over a booted server's.
  */
 
 export const KEYS_RETIRE_USAGE = `Usage: keys:retire --kid <kid> [--realm <name>] --yes
@@ -159,6 +165,73 @@ export interface KeysRetireDependencies {
   readonly out: (line: string) => void;
   /** Writes one line of an error. */
   readonly err: (line: string) => void;
+}
+
+/** The decorators of the process the command reads: its database, cache and session plugins'. */
+export interface KeysRetireHost {
+  readonly db: FastifyInstance['db'];
+  readonly redis: FastifyInstance['redis'];
+  readonly log: FastifyBaseLogger;
+  readonly repositories: Pick<
+    FastifyInstance['repositories'],
+    'realms' | 'refreshTokens' | 'events' | 'adminAuditLog'
+  >;
+  readonly sessionService: FastifyInstance['sessionService'];
+}
+
+/** The settings the command reads from the environment, and where it writes. */
+export interface KeysRetireSettings {
+  /** The KEK provider's settings: the process environment. */
+  readonly kekEnv: Parameters<typeof retireKey>[0]['kekEnv'];
+  readonly enabledSignatureAlgorithms: Parameters<
+    typeof retireKey
+  >[0]['enabledSignatureAlgorithms'];
+  readonly hybridSigning: boolean;
+  readonly operatingSystemUser: () => string;
+  readonly out: (line: string) => void;
+  readonly err: (line: string) => void;
+}
+
+/**
+ * The command's dependencies over a process's plugins: the retirement runs
+ * with this host's KEK provider and database, and, as the process holds no
+ * copy of the denylist, deletes the Redis snapshot after the commit, so every
+ * node reads the database at its next refresh.
+ */
+export function keysRetireDependencies(
+  host: KeysRetireHost,
+  settings: KeysRetireSettings
+): KeysRetireDependencies {
+  const { realms, refreshTokens, events, adminAuditLog } = host.repositories;
+  const retireDeps = {
+    db: host.db,
+    kekEnv: settings.kekEnv,
+    warn: ({ variable, message }: { variable: string; message: string }) =>
+      host.log.warn({ variable }, message),
+    enabledSignatureAlgorithms: settings.enabledSignatureAlgorithms,
+    hybridSigning: settings.hybridSigning,
+  };
+  return {
+    realmIdOf: async (name) => (await realms.findByName(name))?.id,
+    retireKeyNow: (input) =>
+      retireKeyNow(
+        {
+          retire: (retireInput) => retireKey(retireDeps, retireInput),
+          refreshTokens,
+          events,
+          adminAuditLog,
+          sessions: host.sessionService,
+          invalidateDenylist: (retired) =>
+            invalidateKeyDenylist(null, host.redis, host.log, retired),
+        },
+        input
+      ),
+    findCompromisedKey: (realmId, kid) => compromisedKeyOf(host.db, realmId, kid),
+    sessions: host.sessionService,
+    operatingSystemUser: settings.operatingSystemUser,
+    out: settings.out,
+    err: settings.err,
+  };
 }
 
 /** The exit code of a run that retired the key but did not end all its sessions. */
