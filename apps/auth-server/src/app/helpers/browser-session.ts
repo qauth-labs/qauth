@@ -1,5 +1,6 @@
 import type {
   BrowserSession,
+  RevokeSessionResult,
   SessionActor,
   SessionAssuranceLevel,
   SessionRevokedReason,
@@ -250,6 +251,22 @@ export async function endBrowserSession(
   actor: SessionActor,
   userId?: string
 ): Promise<'ended' | 'already_ended' | 'not_found'> {
+  return (await revokeBrowserSession(fastify, realmId, sid, reason, actor, userId)).outcome;
+}
+
+/**
+ * {@link endBrowserSession}, answering what the service did with the session
+ * as it ended: for a caller that ends what the session's sign-in opened too
+ * (its `authTime`), as the account's session end does (#1110).
+ */
+export async function revokeBrowserSession(
+  fastify: FastifyInstance,
+  realmId: string,
+  sid: string,
+  reason: SessionRevokedReason,
+  actor: SessionActor,
+  userId?: string
+): Promise<RevokeSessionResult> {
   const result = await fastify.sessionService.revoke({
     realmId,
     sid,
@@ -257,9 +274,9 @@ export async function endBrowserSession(
     actor,
     ...(userId === undefined ? {} : { userId }),
   });
-  if (userId !== undefined && result.outcome === 'not_found') return result.outcome;
+  if (userId !== undefined && result.outcome === 'not_found') return result;
   await deleteSessionSideRecord(fastify, realmId, sid);
-  return result.outcome;
+  return result;
 }
 
 /**

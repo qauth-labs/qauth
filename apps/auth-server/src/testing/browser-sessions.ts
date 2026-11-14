@@ -58,6 +58,7 @@ export interface FakeSessionService extends SessionService {
   endLapsed: Mock<SessionService['endLapsed']>;
   purge: Mock<SessionService['purge']>;
   listForUser: Mock<SessionService['listForUser']>;
+  listLiveForUser: Mock<SessionService['listLiveForUser']>;
   listForClient: Mock<SessionService['listForClient']>;
   onSessionsEnded: Mock<SessionService['onSessionsEnded']>;
   /** The live sessions, by `sid`. */
@@ -216,6 +217,13 @@ export function createFakeSessionService(): FakeSessionService {
       items: [...sessions.values()]
         .filter((session) => session.realmId === realmId && session.userId === userId)
         .sort((a, b) => b.createdAt - a.createdAt)
+        .map(listed),
+      nextCursor: null,
+    })),
+    listLiveForUser: vi.fn<SessionService['listLiveForUser']>(async ({ realmId, userId }) => ({
+      items: [...sessions.values()]
+        .filter((session) => session.realmId === realmId && session.userId === userId)
+        .sort((a, b) => b.lastSeenAt - a.lastSeenAt || (a.sid < b.sid ? 1 : -1))
         .map(listed),
       nextCursor: null,
     })),

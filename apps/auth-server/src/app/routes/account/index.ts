@@ -7,6 +7,7 @@ import { registerAccountConsentRoutes } from './consents';
 import { registerAccountLinkedAccountRoutes } from './linked-accounts';
 import { registerAccountPasskeyRoutes } from './passkeys';
 import { registerAccountRecoveryCodeRoutes } from './recovery-codes';
+import { registerAccountSessionRoutes } from './sessions';
 import { registerAccountSignInMethodRoutes } from './sign-in-methods';
 import { registerAccountTotpRoutes } from './totp';
 
@@ -20,7 +21,8 @@ import { registerAccountTotpRoutes } from './totp';
  * removal (#670); then the sign-in methods' read and the password change
  * (#1107); then the passkeys, their rename and their removal (#1108); then
  * the authenticator app's enrolment and removal, and the recovery codes'
- * status and regeneration (#1109).
+ * status and regeneration (#1109); then the sessions, ending one, and
+ * signing out everywhere (#1110).
  *
  * Every route is guarded by `requireFamilyToken('account')` (#509): a token
  * whose only audience is `urn:qauth:aud:account:v1-rc.0`, as the account
@@ -32,8 +34,9 @@ import { registerAccountTotpRoutes } from './totp';
  * (`accountOperation`) checks it with the operation's own rules. The account
  * family accepts a delegated token (RFC 8693 `act`); a route that changes a
  * credential, an identifier, the contact address or a linked account, or
- * deletes the account, will refuse one itself. Revoking a consent is none of
- * these. The routes follow the API conventions (`reference/api-conventions.md`).
+ * deletes the account, will refuse one itself. Revoking a consent and ending
+ * a session are none of these. The routes follow the API conventions
+ * (`reference/api-conventions.md`).
  *
  * Every answer carries `Cache-Control: no-store`, as the account contract
  * states: each is the user's own, errors included (#1107).
@@ -64,4 +67,5 @@ export default async function (fastify: FastifyInstance) {
   const factors = createAccountFactors(fastify, mailer);
   registerAccountTotpRoutes(fastify, factors, mailer);
   registerAccountRecoveryCodeRoutes(fastify, factors);
+  registerAccountSessionRoutes(fastify);
 }

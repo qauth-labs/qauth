@@ -150,6 +150,10 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   'DELETE /account/v1-rc.0/totp',
   'GET /account/v1-rc.0/recovery-codes',
   'POST /account/v1-rc.0/recovery-codes/regenerate',
+  // The account API's sessions and sign-out everywhere (#1110).
+  'GET /account/v1-rc.0/sessions',
+  'DELETE /account/v1-rc.0/sessions/:sessionId',
+  'POST /account/v1-rc.0/sessions/end-all',
 ];
 
 /** The routes removed since: the metrics moved to the internal listener (#500). */
