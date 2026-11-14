@@ -100,8 +100,8 @@ export const jwtEnvSchema = z
 
     /**
      * EdDSA public key in SPKI PEM (optional). When unset, the key boot step
-     * derives it from the private key with `node:crypto` (#359); when set, the
-     * boot stops unless it is the private key's public half.
+     * derives it from the private key with `node:crypto` (#359); when set
+     * with JWT_PRIVATE_KEY, the boot stops unless it is that key's public half.
      */
     JWT_PUBLIC_KEY: z.string().optional(),
 

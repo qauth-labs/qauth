@@ -139,9 +139,10 @@ function parseFlagSurface(argv: readonly string[]): FlagSurface {
 const MIN_EXPECTED_PATHS = 20;
 
 /**
- * Generate a fresh Ed25519 private key, PKCS#8 PEM. Only the private half is
- * set, as `.env.example` configures a deployment: `JWT_PUBLIC_KEY` is derived
- * from it when unset (#359).
+ * Generate a fresh Ed25519 private key, PKCS#8 PEM. No `JWT_PUBLIC_KEY` is set:
+ * the key boot step, which would derive it (#359), is off in this export
+ * (`defaultRealmBoot: false`), so the key variables only have to pass the
+ * configuration's parsing, and nothing reads a public key.
  */
 function generateEd25519PrivateKeyPem(): string {
   const { privateKey } = generateKeyPairSync('ed25519', {
