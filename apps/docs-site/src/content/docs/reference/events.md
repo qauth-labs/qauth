@@ -223,7 +223,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.recovery_codes_failed:v1-rc.0`](#userrecovery_codes_failed-v1-rc0)               | user     | critical | v0.2.0 |
 | [`urn:qauth:event:user.disabled:v1-rc.0`](#userdisabled-v1-rc0)                                         | admin    | warning  | v0.2.0 |
 | [`urn:qauth:event:user.enabled:v1-rc.0`](#userenabled-v1-rc0)                                           | admin    | info     | v0.2.0 |
-| [`urn:qauth:event:user.session_revoked:v1-rc.0`](#usersession_revoked-v1-rc0)                           | admin    | info     | v0.3.0 |
+| [`urn:qauth:event:user.session_revoked:v1-rc.0`](#usersession_revoked-v1-rc0)                           | admin    | info     | v0.2.4 |
 | [`urn:qauth:event:user.upstream_linked:v1-rc.0`](#userupstream_linked-v1-rc0)                           | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.upstream_unlinked:v1-rc.0`](#userupstream_unlinked-v1-rc0)                       | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.upstream_link_failed:v1-rc.0`](#userupstream_link_failed-v1-rc0)                 | user     | warning  | v0.2.0 |
@@ -233,7 +233,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.passkey_renamed:v1-rc.0`](#userpasskey_renamed-v1-rc0)                           | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0`](#userrecovery_codes_regenerated-v1-rc0)     | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.agent_ownership_refused:v1-rc.0`](#useragent_ownership_refused-v1-rc0)           | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.verified:v1-rc.0`](#userverified-v1-rc0)                                         | admin    | warning  | v0.3.0 |
+| [`urn:qauth:event:user.verified:v1-rc.0`](#userverified-v1-rc0)                                         | admin    | warning  | v0.2.3 |
 | [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0 |
 | [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                           | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                   | user     | info     | v0.2.0 |
@@ -468,7 +468,7 @@ An operator enabled a disabled account again. The person signs in again: what wa
 An operator's or an admin's action on an account ended one of its browser sessions, not the person's own sign-out: the operator tool disabled the account, and ended each session it held. One event per session ended, in the transaction that ended it.
 
 - Identifier: `urn:qauth:event:user.session_revoked:v1-rc.0`
-- Category: `admin` · Severity: `info` · Since: v0.3.0
+- Category: `admin` · Severity: `info` · Since: v0.2.4
 - Subject: `user`, when known
 - Schema: [user.session_revoked.v1-rc.0.json](/schemas/events/user.session_revoked.v1-rc.0.json)
 - Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/session-revoked` ([SSF events](/reference/ssf-events/))
@@ -613,7 +613,7 @@ QAuth refused to make an account the owner of an agent, because the account is n
 An operator verified an account: from now on it counts as verified for the realm’s verified-account sign-in gate and for owning an agent, whatever its primary identity proves, and an unclaimed account is claimed, so a later mailbox proof by someone else no longer ends it. It attests the account, not an address: the account’s `email_verified` is unchanged, and no token says more about its address than before.
 
 - Identifier: `urn:qauth:event:user.verified:v1-rc.0`
-- Category: `admin` · Severity: `warning` · Since: v0.3.0
+- Category: `admin` · Severity: `warning` · Since: v0.2.3
 - Subject: `user`, when known
 - Schema: [user.verified.v1-rc.0.json](/schemas/events/user.verified.v1-rc.0.json)
 - Security type · SSF: none ([SSF events](/reference/ssf-events/))

@@ -419,7 +419,7 @@ describe('PQC delivery settings that the server does not honour stop the boot (#
     });
 
     const boot = import('./env');
-    await expect(boot).rejects.toThrow('PQC_SELF_CONTAINED_ACK was removed in 0.3.0 and is set.');
+    await expect(boot).rejects.toThrow('PQC_SELF_CONTAINED_ACK was removed in 0.2.4 and is set.');
     await expect(boot).rejects.toThrow('PQC_TOKEN_DELIVERY=reference');
   });
 

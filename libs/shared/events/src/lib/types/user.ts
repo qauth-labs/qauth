@@ -324,7 +324,7 @@ export const userSessionRevoked = defineEventType({
     "An operator's or an admin's action on an account ended one of its browser sessions, not the person's own sign-out: the operator tool disabled the account, and ended each session it held. One event per session ended, in the transaction that ended it.",
   category: 'admin',
   severity: 'info',
-  since: 'v0.3.0',
+  since: 'v0.2.4',
   subject: 'user',
   data: z.strictObject({
     sid: recordId('The session that ended: the `sid` its ID tokens carry (#549).'),
@@ -652,7 +652,7 @@ export const userVerified = defineEventType({
     'An operator verified an account: from now on it counts as verified for the realm’s verified-account sign-in gate and for owning an agent, whatever its primary identity proves, and an unclaimed account is claimed, so a later mailbox proof by someone else no longer ends it. It attests the account, not an address: the account’s `email_verified` is unchanged, and no token says more about its address than before.',
   category: 'admin',
   severity: 'warning',
-  since: 'v0.3.0',
+  since: 'v0.2.3',
   subject: 'user',
   data: z.strictObject({
     method: extensibleEnum(ACCOUNT_VERIFICATION_METHODS).describe(
