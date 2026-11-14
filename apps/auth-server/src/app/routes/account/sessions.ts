@@ -58,7 +58,8 @@ const sessionSchema = z.object({
 
 /**
  * "Sign out everywhere", as the contract's `EndAllSessionsRequest` states
- * it. The body is optional: none ends every session.
+ * it. The body is optional: none ends every session. The route takes it
+ * nullish, since Fastify validates a request with no body as `null`.
  */
 const endAllSessionsRequestSchema = z
   .strictObject({
@@ -178,7 +179,7 @@ export function registerAccountSessionRoutes(fastify: FastifyInstance): void {
     },
   });
 
-  fastify.post<{ Body: z.input<typeof endAllSessionsRequestSchema> | undefined }>(
+  fastify.post<{ Body: z.input<typeof endAllSessionsRequestSchema> | null | undefined }>(
     '/sessions/end-all',
     {
       preValidation: endAll.guard,
@@ -190,7 +191,7 @@ export function registerAccountSessionRoutes(fastify: FastifyInstance): void {
         'x-qauth-stability': 'stable',
         ...endAll.schema,
         'x-qauth-errors': [400, 401, 403],
-        body: endAllSessionsRequestSchema.optional(),
+        body: endAllSessionsRequestSchema.nullish(),
         response: { 204: z.null() },
       },
       config: { surface: 'api' },
