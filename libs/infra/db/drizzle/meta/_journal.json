@@ -519,6 +519,13 @@
       "when": 1794510868955,
       "tag": "0073_auth_method_plugin_assertion_client",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1794632349751,
+      "tag": "0074_admin_grants_security_change",
+      "breakpoints": true
     }
   ]
 }

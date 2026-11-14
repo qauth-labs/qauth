@@ -24,6 +24,8 @@ export const APPROVAL_HEADER = 'qauth-approval';
  * - `request-mismatch`: the approval was filed for another request: another
  *   operation, method, path parameter, query, body, realm or requester, or
  *   against another version of the state the operation reads.
+ * - `requirement-raised`: it holds fewer approvals than the request needs
+ *   now: the realm made a second admin mandatory after it was filed (#521).
  * - `pending`: it still lacks an approval.
  * - `used-meanwhile`: it was approved when the gate read it, and used or
  *   withdrawn before the operation's transaction could consume it.
@@ -33,6 +35,7 @@ export type ApprovalRefusal =
   | 'uncanonical-request'
   | 'not-found'
   | 'request-mismatch'
+  | 'requirement-raised'
   | 'expired'
   | 'pending'
   | 'denied'
@@ -50,24 +53,31 @@ export function approvalIdOf(header: string | string[] | undefined): string | nu
 }
 
 /** What the gate reads of a stored approval. */
-export type GatedApprovalRecord = Pick<AdminApproval, 'opHash' | 'nonce' | 'status' | 'expiresAt'>;
+export type GatedApprovalRecord = Pick<
+  AdminApproval,
+  'opHash' | 'nonce' | 'status' | 'expiresAt' | 'approvalsRequired'
+>;
 
 /**
  * Why `approval` does not approve the call whose canonical request is
  * `request` at `now`, or `null` when it does: it exists in the realm, is open,
  * the call's `op_hash` with the approval's nonce is the stored one (exactly
- * this request, by this requester), it has not expired, and it is `approved`.
+ * this request, by this requester), it was filed for at least the
+ * `approvalsRequired` approvals the request needs now (the two-admin rule,
+ * #521), it has not expired, and it is `approved`.
  */
 export function approvalRefusal(
   approval: GatedApprovalRecord | undefined,
   request: CanonicalRequest,
-  now: number
+  now: number,
+  approvalsRequired: number
 ): ApprovalRefusal | null {
   if (approval === undefined) return 'not-found';
   // A closed approval's nonce is not the one its op_hash was computed with:
   // every call would be a mismatch, so its status is the reason.
   if (approval.status !== 'pending' && approval.status !== 'approved') return approval.status;
   if (!sameDigest(opHashOf(request, approval.nonce), approval.opHash)) return 'request-mismatch';
+  if (approval.approvalsRequired < approvalsRequired) return 'requirement-raised';
   if (now >= approval.expiresAt) return 'expired';
   if (approval.status !== 'approved') return approval.status;
   return null;

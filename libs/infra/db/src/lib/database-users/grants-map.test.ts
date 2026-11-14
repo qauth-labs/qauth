@@ -118,8 +118,9 @@ describe('the grants map (#498)', () => {
   });
 
   it('lets the event writers insert events and read none', () => {
-    // `admin` writes the events of its operations (`user.verified`, #1052).
-    for (const role of ['web', 'api', 'admin'] as const) {
+    // `admin` writes the events of its operations (`user.verified`, #1052),
+    // and `signer` the steps of the key rotation job (#542).
+    for (const role of ['web', 'api', 'admin', 'signer'] as const) {
       for (const [table, privileges] of Object.entries(EVENTS_WRITER_GRANTS)) {
         expect(privilegesOf(role, table), `${role}: ${table}`).toEqual(privileges);
       }
@@ -127,7 +128,7 @@ describe('the grants map (#498)', () => {
         expect(FUNCTION_GRANTS[signature], signature).toContain(role);
       }
     }
-    expect(privilegesOf('signer', 'events')).toEqual([]);
+    expect(privilegesOf('delivery', 'events')).not.toContain('INSERT');
   });
 
   it("gives delivery its outbox and the retention job's tables, and nothing beyond them", () => {
@@ -204,6 +205,14 @@ describe('the grants map (#498)', () => {
       'DELETE',
     ]);
     expect(privilegesOf('admin', 'refresh_tokens')).toEqual(['SELECT', 'UPDATE']);
+  });
+
+  it("lets web, api and admin move an account's security-change time through one function alone (#521)", () => {
+    expect(FUNCTION_GRANTS['"admin_grants_record_security_change"(uuid, uuid)']).toEqual([
+      'web',
+      'api',
+      'admin',
+    ]);
   });
 
   it('lets no role write who administers, nor delete a realm or a user', () => {

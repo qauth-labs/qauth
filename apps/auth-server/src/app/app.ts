@@ -880,6 +880,13 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       kekEnv: process.env,
       enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
       hybridSigning: env.HYBRID_SIGNING_ENABLED,
+      // The scheduled key rotation's windows (#542), which the key rotation
+      // job on this role runs with.
+      keyRotation: {
+        periodDays: env.KEY_ROTATION_PERIOD_DAYS,
+        prepublishDays: env.KEY_PREPUBLISH_DAYS,
+        retiredRetentionDays: env.KEY_RETIRED_RETENTION_DAYS,
+      },
       ...(defaultRealmBoot
         ? {
             realmKeysBoot: {
@@ -921,6 +928,8 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     // No KEK here, so no provider key can be sealed: the admin API's
     // provider key operations answer 503 on this process (#1073).
     fastify.decorate('upstreamClientKeys', null);
+    // Nor any key created: the key rotation job runs on the signer role (#542).
+    fastify.decorate('keyRotation', null);
   }
 
   // Request-id propagation (#128), ahead of the realm resolver below: both
@@ -1187,7 +1196,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // SESSION_RETENTION_DAYS, and event retention (#536) on
   // `delivery`, which reads the delivery routes' enabled
   // destinations and falls back to the retention seeds for a realm whose row
-  // is gone. A process builds and runs only the jobs of its roles (#495).
+  // is gone, and the key rotation (#542) on `signer`, which runs through the
+  // signer plugin's `keyRotation` above. A process builds and runs only the
+  // jobs of its roles (#495).
   // With the SSF transmitter off no node serves `ssf`, so an SSF position or
   // delivery left from when it was on holds no event back. The runner starts
   // on `onReady` and stops on `onClose`, so it needs the database and metrics
@@ -1202,6 +1213,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,
     },
     sessionRetentionDays: env.SESSION_RETENTION_DAYS,
+    sessionCookieTtlSeconds: env.SESSION_COOKIE_TTL,
   });
 
   // The delivery role (ADR-019 Decision 8, #460), in-process like the signer:

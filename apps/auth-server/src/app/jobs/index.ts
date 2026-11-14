@@ -23,6 +23,12 @@ import {
 } from './interaction-expiry';
 import { type JobDefinition, SERVICE_ROLES, type ServiceRole } from './job-runner';
 import {
+  createKeyRotationJob,
+  KEY_ROTATION_JOB_NAME,
+  KEY_ROTATION_REPOSITORIES,
+  KEY_ROTATION_ROLE,
+} from './key-rotation';
+import {
   createPurgeExpiredJob,
   PURGE_EXPIRED_JOB_NAME,
   PURGE_EXPIRED_REPOSITORIES,
@@ -50,6 +56,7 @@ export * from './approval-expiry';
 export * from './event-retention';
 export * from './interaction-expiry';
 export * from './job-runner';
+export * from './key-rotation';
 export * from './purge-expired';
 export * from './session-expiry';
 export * from './session-purge';
@@ -74,15 +81,19 @@ export interface ServerJobSettings {
    * ended session's row. Defaults to 30.
    */
   readonly sessionRetentionDays?: number;
+  /**
+   * `SESSION_COOKIE_TTL` (#542): the key rotation keeps a retired cookie key
+   * at least as long as a browser session of a realm without its own
+   * lifespan. Defaults to a day, the variable's default.
+   */
+  readonly sessionCookieTtlSeconds?: number;
 }
 
 /**
  * Where one of the server's jobs runs (ADR-019 Decision 8, #495): its role,
  * the repositories it reads and writes, and how to build it. A process builds
  * only the jobs of its roles, so it never builds a job over a repository it
- * does not load.
- *
- * The key jobs (rotation, #542) go on `signer` when they land.
+ * does not load. The key rotation (#542) runs on `signer`, which holds the KEK.
  */
 export interface ServerJobPlacement {
   readonly name: string;
@@ -144,6 +155,22 @@ export const SERVER_JOBS: readonly ServerJobPlacement[] = [
     create: (fastify) => createSessionExpiryJob({ sessions: fastify.sessionService }),
   },
   {
+    // The realms' keys on schedule (#542): a next key when one is due, and
+    // the switch to it once its window has run, through the signer's
+    // scheduled rotation; each step writes its audit event.
+    name: KEY_ROTATION_JOB_NAME,
+    role: KEY_ROTATION_ROLE,
+    repositories: KEY_ROTATION_REPOSITORIES,
+    create: (fastify, settings) =>
+      createKeyRotationJob({
+        rotation: fastify.keyRotation,
+        events: fastify.repositories.events,
+        realms: fastify.repositories.realms,
+        sessionCookieTtlSeconds:
+          settings.sessionCookieTtlSeconds ?? DEFAULT_SESSION_COOKIE_TTL_SECONDS,
+      }),
+  },
+  {
     // Deletes the rows of sessions ended long ago (#550), the same way.
     name: SESSION_PURGE_JOB_NAME,
     role: SESSION_PURGE_ROLE,
@@ -155,6 +182,9 @@ export const SERVER_JOBS: readonly ServerJobPlacement[] = [
       }),
   },
 ];
+
+/** `SESSION_COOKIE_TTL`'s default, in seconds: a day. */
+const DEFAULT_SESSION_COOKIE_TTL_SECONDS = 86_400;
 
 /**
  * The jobs of `roles`, built. The job runner starts those whose role this node

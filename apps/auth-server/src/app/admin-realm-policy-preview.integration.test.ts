@@ -20,6 +20,7 @@ import {
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { ageAdminAccount } from '../testing/two-admin';
 import { API_FAMILY_AUDIENCES } from './api-conventions/families';
 import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
 
@@ -340,8 +341,8 @@ describe('the preview of a realm policy change (#589, real containers)', () => {
       permissions: ['realms.policies.security', 'realms.read'],
       scopes: ['qauth:admin:read', 'qauth:admin:security'],
       approvalRequired: true,
-      // A second admin is recommended for every security change until the
-      // two-admin rule is built (#521).
+      // A second admin is recommended for every security change the realm
+      // does not make mandatory (#521).
       twoAdmin: 'recommended',
       // No admin but the requester holds approvals.approve on the realm.
       eligibleApprovers: 0,
@@ -656,16 +657,27 @@ describe('the preview of a realm policy change (#589, real containers)', () => {
     const count = async () =>
       (await previewed(realm.id, requester.token, loosening)).eligibleApprovers;
 
+    // An admin that approves another's request was made at least 7 days
+    // before it (the two-admin rule, #521).
+    const aged = async (realmId: string, role: 'viewer' | 'editor' | 'security-admin') => {
+      const made = await adminWith(realmId, role);
+      await ageAdminAccount(app().dbPool, made.userId);
+      return made;
+    };
+
     expect(await count()).toBe(0);
-    await adminWith(realm.id, 'security-admin');
+    await aged(realm.id, 'security-admin');
     expect(await count()).toBe(1);
     // Neither an editor nor a viewer holds approvals.approve, and an admin of
     // another realm approves nothing here.
-    await adminWith(realm.id, 'editor');
-    await adminWith(realm.id, 'viewer');
-    await adminWith((await tenant('beta')).id, 'security-admin');
+    await aged(realm.id, 'editor');
+    await aged(realm.id, 'viewer');
+    await aged((await tenant('beta')).id, 'security-admin');
     expect(await count()).toBe(1);
+    // An admin made just now is not one yet.
     await adminWith(realm.id, 'security-admin');
+    expect(await count()).toBe(1);
+    await aged(realm.id, 'security-admin');
     expect(await count()).toBe(2);
     // A grant on every realm, which the requester's realm, the operator
     // realm, sees (#489).
@@ -679,6 +691,7 @@ describe('the preview of a realm policy change (#589, real containers)', () => {
       targetRealmId: null,
       createdBy: null,
     });
+    await ageAdminAccount(app().dbPool, globalAdmin.id);
     expect(await count()).toBe(3);
   });
 

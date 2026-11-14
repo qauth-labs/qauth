@@ -80,7 +80,8 @@ export const MAX_REFRESH_TOKEN_LIFESPAN_SECONDS = 90 * 86_400;
  *
  * Supports both environment variables and file paths:
  * - JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH (both optional)
- * - JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_PATH (both optional)
+ * - JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_PATH (both optional; the key boot step
+ *   derives the public key from the private key)
  */
 export const jwtEnvSchema = z
   .object({
@@ -98,14 +99,15 @@ export const jwtEnvSchema = z
     JWT_PRIVATE_KEY_PATH: z.string().optional(),
 
     /**
-     * EdDSA public key in PEM format (optional)
-     * If not provided, can be derived from private key
+     * EdDSA public key in SPKI PEM (optional). When unset, the key boot step
+     * derives it from the private key with `node:crypto` (#359); when set
+     * with JWT_PRIVATE_KEY, the boot stops unless it is that key's public half.
      */
     JWT_PUBLIC_KEY: z.string().optional(),
 
     /**
-     * Path to EdDSA public key file in PEM format (optional)
-     * If not provided, can be derived from private key
+     * Path to EdDSA public key file in SPKI PEM (optional). Takes precedence
+     * over JWT_PUBLIC_KEY; when neither is set, the key is derived.
      */
     JWT_PUBLIC_KEY_PATH: z.string().optional(),
 

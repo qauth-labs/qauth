@@ -1,4 +1,9 @@
 import {
+  DEFAULT_KEY_PREPUBLISH_DAYS,
+  DEFAULT_KEY_RETIRED_RETENTION_DAYS,
+  DEFAULT_KEY_ROTATION_PERIOD_DAYS,
+} from '@qauth-labs/fastify-plugin-signer';
+import {
   AUTH_SERVER_KEYS,
   CONFIG_KEY_REGISTRY,
   cryptoEnvSchema,
@@ -351,5 +356,43 @@ describe('CEREMONY_APP_PEERS and CEREMONY_APP_PEER_RATE_LIMIT', () => {
       expect(issues.map((issue) => issue.path.join('.'))).toEqual(['CEREMONY_APP_PEERS']);
       expect(issues[0].message).toContain('CEREMONY_APP_PEERS and CEREMONY_APP_PEER_RATE_LIMIT');
     }
+  });
+});
+
+describe('the key rotation windows (#542)', () => {
+  const parse = (extra: Record<string, string>) =>
+    envSchema.safeParse({
+      DATABASE_URL: 'postgresql://qauth@127.0.0.1:5432/qauth',
+      JWT_ISSUER: 'https://auth.example.com',
+      EMAIL_FROM_ADDRESS: 'no-reply@auth.example.com',
+      EMAIL_BASE_URL: 'https://auth.example.com',
+      ...extra,
+    });
+
+  it('refuses at boot a period smaller than the pre-publication window', () => {
+    const result = parse({ KEY_ROTATION_PERIOD_DAYS: '5', KEY_PREPUBLISH_DAYS: '7' });
+    expect(result.success).toBe(false);
+    const issue = result.error?.issues.find(
+      (candidate) => candidate.path.join('.') === 'KEY_ROTATION_PERIOD_DAYS'
+    );
+    expect(issue?.message).toContain('shorter than KEY_PREPUBLISH_DAYS');
+  });
+
+  it('boots with a period as long as the window, or with the defaults', () => {
+    const equal = parse({ KEY_ROTATION_PERIOD_DAYS: '7', KEY_PREPUBLISH_DAYS: '7' });
+    expect(equal.error?.issues.map((issue) => issue.path.join('.')) ?? []).not.toContain(
+      'KEY_ROTATION_PERIOD_DAYS'
+    );
+    const defaults = parse({});
+    expect(defaults.success).toBe(true);
+  });
+
+  it("defaults to the key library's windows", () => {
+    const { data } = parse({});
+    expect(data).toMatchObject({
+      KEY_ROTATION_PERIOD_DAYS: DEFAULT_KEY_ROTATION_PERIOD_DAYS,
+      KEY_PREPUBLISH_DAYS: DEFAULT_KEY_PREPUBLISH_DAYS,
+      KEY_RETIRED_RETENTION_DAYS: DEFAULT_KEY_RETIRED_RETENTION_DAYS,
+    });
   });
 });

@@ -20,6 +20,7 @@ import type { MemoryKeyStore } from './memory-key-store';
 /** The lifecycle columns a test can change on a stored key. */
 export interface KeyLifecycle {
   readonly status?: StoredKeyStatus;
+  readonly activateAt?: number | null;
   readonly retireAt?: number | null;
   readonly publishAt?: number;
   readonly unpublishAt?: number | null;
@@ -85,7 +86,9 @@ export function createMemorySignerStore(
             algorithm: row.key.algorithm,
             status: changes.status ?? row.key.status,
             pairId: row.key.pairId,
+            activateAt: changes.activateAt === undefined ? row.key.activateAt : changes.activateAt,
             retireAt: changes.retireAt ?? row.key.retireAt ?? null,
+            unpublishAt: changes.unpublishAt ?? row.key.unpublishAt ?? null,
             createdAt: index,
           };
         });

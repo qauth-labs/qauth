@@ -156,7 +156,8 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
   },
   signer: {
     // The in-process signer and its key boot step are registered for this role
-    // (`holdsSigner`); the key jobs (#542) go here when they land. The boot
+    // (`holdsSigner`), and so is the key rotation job (#542), which writes
+    // its steps' audit events through the events repository. The boot
     // seeds the default realm's secrets from the environment where it can
     // encrypt them (#529), so this role builds the realm secret store.
     summary: 'the KEK, the private keys and the signer',

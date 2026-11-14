@@ -104,8 +104,8 @@ export function idTokenAlgorithm(activeAlgorithms: Iterable<string>): 'RS256' | 
  * the keys that verify the realm's access tokens, ID tokens and logout tokens
  * (Back-Channel Logout 1.0 §2.6, #624). The
  * `event_signing` keys are published apart, at the SSF transmitter's own JWKS
- * (`getVerificationKeys`, d-1026-09), so a token of one purpose never verifies
- * against the key set of the other. The other published purposes appear
+ * (`getJwks` for `event_signing`, d-1026-09), so a token of one purpose never
+ * verifies against the key set of the other. The other published purposes appear
  * elsewhere too: the federation keys in the entity configuration, the OID4VP
  * keys in the request object and its certificate, and an upstream
  * client-assertion key in the JWKS served to that provider
@@ -114,6 +114,23 @@ export function idTokenAlgorithm(activeAlgorithms: Iterable<string>): 'RS256' | 
 export const REALM_JWKS_PURPOSES: readonly JwsSigningPurpose[] = Object.freeze([
   'token_signing',
 ] as const);
+
+/**
+ * The purposes `getJwks` serves a key set for, each its own: `token_signing`,
+ * the realm JWKS ({@link REALM_JWKS_PURPOSES}), and `event_signing`, the SSF
+ * transmitter's JWKS. Each lists its `next` keys before they sign, so a
+ * scheduled rotation's new key reaches relying parties and SSF receivers alike
+ * for the whole pre-publication window (#542).
+ */
+export const JWKS_PURPOSES = Object.freeze(['token_signing', 'event_signing'] as const);
+
+/** A purpose `getJwks` serves a key set for. See {@link JWKS_PURPOSES}. */
+export type JwksPurpose = (typeof JWKS_PURPOSES)[number];
+
+/** Whether `purpose` is one `getJwks` serves a key set for. */
+export function isJwksPurpose(purpose: unknown): purpose is JwksPurpose {
+  return (JWKS_PURPOSES as readonly unknown[]).includes(purpose);
+}
 
 /**
  * The `typ` of a client assertion: a client authentication JWT, explicitly

@@ -41,18 +41,19 @@ const NONCE = newApprovalNonce();
 type Status = 'pending' | 'approved' | 'denied' | 'cancelled' | 'consumed' | 'expired';
 
 /** The stored approval of `FILED`, in `status`, expiring five minutes after `NOW`. */
-function storedApproval(status: Status, nonce = NONCE) {
+function storedApproval(status: Status, nonce = NONCE, approvalsRequired = 1) {
   return {
     opHash: opHashOf(canonicalRequest(FILED), NONCE),
     nonce,
     status,
     expiresAt: NOW + 5 * 60_000,
+    approvalsRequired,
   };
 }
 
 /** The gate's answer for the call `call`, at `now`, against the approval of `FILED` in `status`. */
 function decide(call: CanonicalRequestInput, status: Status = 'approved', now = NOW + 1_000) {
-  return approvalRefusal(storedApproval(status), canonicalRequest(call), now);
+  return approvalRefusal(storedApproval(status), canonicalRequest(call), now, 1);
 }
 
 describe('the approval gate (#512)', () => {
@@ -135,19 +136,38 @@ describe('the approval gate (#512)', () => {
     expect(decide(FILED, 'pending')).toBe('pending');
     expect(decide(FILED, 'denied')).toBe('denied');
     expect(decide(FILED, 'expired')).toBe('expired');
-    expect(approvalRefusal(undefined, canonicalRequest(FILED), NOW)).toBe('not-found');
+    expect(approvalRefusal(undefined, canonicalRequest(FILED), NOW, 1)).toBe('not-found');
+  });
+
+  // #521: a realm that made a second admin mandatory after the approval was
+  // filed for one is not approved by it; one filed for two still is.
+  it('refuses an approval filed for fewer approvals than the request needs now', () => {
+    const one = storedApproval('approved', NONCE, 1);
+    expect(approvalRefusal(one, canonicalRequest(FILED), NOW + 1_000, 2)).toBe(
+      'requirement-raised'
+    );
+    const two = storedApproval('approved', NONCE, 2);
+    expect(approvalRefusal(two, canonicalRequest(FILED), NOW + 1_000, 2)).toBeNull();
+    expect(approvalRefusal(two, canonicalRequest(FILED), NOW + 1_000, 1)).toBeNull();
+    // Another request is refused for what it is first.
+    expect(approvalRefusal(one, canonicalRequest({ ...FILED, body: null }), NOW + 1_000, 2)).toBe(
+      'request-mismatch'
+    );
   });
 
   // #901: the hash binds the request only through the nonce stored with it.
   it('matches no call once the nonce is not the one op_hash was computed with', () => {
     const retired = storedApproval('approved', newApprovalNonce());
-    expect(approvalRefusal(retired, canonicalRequest(FILED), NOW + 1_000)).toBe('request-mismatch');
+    expect(approvalRefusal(retired, canonicalRequest(FILED), NOW + 1_000, 1)).toBe(
+      'request-mismatch'
+    );
     // A closed approval is refused for what it is, its nonce retired or not.
     expect(
       approvalRefusal(
         storedApproval('consumed', newApprovalNonce()),
         canonicalRequest(FILED),
-        NOW + 1_000
+        NOW + 1_000,
+        1
       )
     ).toBe('consumed');
   });
@@ -204,11 +224,12 @@ describe('the canonical request (#512)', () => {
       nonce: NONCE,
       status: 'approved' as const,
       expiresAt: NOW + 5 * 60_000,
+      approvalsRequired: 1,
     };
-    expect(approvalRefusal(approval, canonicalRequest(filed), NOW + 1_000)).toBeNull();
+    expect(approvalRefusal(approval, canonicalRequest(filed), NOW + 1_000, 1)).toBeNull();
     for (const stateVersion of ['8', undefined, null]) {
       expect(
-        approvalRefusal(approval, canonicalRequest({ ...FILED, stateVersion }), NOW + 1_000),
+        approvalRefusal(approval, canonicalRequest({ ...FILED, stateVersion }), NOW + 1_000, 1),
         String(stateVersion)
       ).toBe('request-mismatch');
     }

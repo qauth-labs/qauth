@@ -2,6 +2,7 @@ export * from './lib/fastify-plugin-signer';
 export * from './lib/key-custody-check';
 export * from './lib/realm-keys';
 export * from './lib/repository-key-stores';
+export * from './lib/scheduled-key-rotation';
 export * from './lib/upstream-client-keys';
 export type * from './types';
 // The context prefix the auth server builds an AuthMethod plugin secret's
@@ -27,3 +28,23 @@ export {
   KeyIdConflictError,
   NextKeyConflictError,
 } from '@qauth-labs/server-keys';
+// The scheduled key rotation's facts (#542), which the auth server's job and
+// its settings use: the rotating purposes, the default windows the config
+// registry's defaults are held to, the step a job writes an audit row for,
+// and how long a data-at-rest ciphertext lives.
+export {
+  AUTOMATIC_ROTATION_PURPOSES,
+  dataAtRestLifetimeMs,
+  DEFAULT_KEY_PREPUBLISH_DAYS,
+  DEFAULT_KEY_RETIRED_RETENTION_DAYS,
+  DEFAULT_KEY_ROTATION_PERIOD_DAYS,
+  KEY_ACTIVATION_DELAY_MS,
+  type KeyPurpose,
+  type KeyRotationDays,
+  type KeyRotationStep,
+  type KeysRotatedStep,
+  type NextKeyCreatedStep,
+  type ResolvedKeyRotationSettings,
+  type RotatedKey,
+} from '@qauth-labs/server-keys';
+export type { KeyRotationFailure, KeyRotationReport } from '@qauth-labs/server-keys/custody';

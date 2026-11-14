@@ -69,6 +69,7 @@
               "not_found",
               "method_not_allowed",
               "conflict",
+              "approval_unavailable",
               "already_exists",
               "email_already_verified",
               "verification_token_used",
@@ -11278,7 +11279,7 @@
         "tags": [
           "Shared Signals"
         ],
-        "description": "The JSON Web Key Set (RFC 7517) that verifies the realm’s Security Event Tokens: its active and retired `event_signing` keys. The `jwks_uri` of the transmitter metadata. Unauthenticated, cacheable for five minutes. The realm JWKS at `/.well-known/jwks.json` holds no SET key.",
+        "description": "The JSON Web Key Set (RFC 7517) that verifies the realm’s Security Event Tokens: its published `event_signing` keys, a next key from before it signs, the active key and the retired keys until their retention ends. The `jwks_uri` of the transmitter metadata. Unauthenticated, cacheable for five minutes. The realm JWKS at `/.well-known/jwks.json` holds no SET key.",
         "x-qauth-stability": "experimental",
         "responses": {
           "200": {

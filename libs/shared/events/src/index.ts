@@ -13,4 +13,5 @@ export * from './lib/registry';
 export * from './lib/ssf-docs-page';
 export * from './lib/ssf-mapping';
 export * from './lib/types/admin';
+export { ROTATING_KEY_ALGORITHMS, ROTATING_KEY_PURPOSES } from './lib/types/key';
 export * from './lib/types/ssf';

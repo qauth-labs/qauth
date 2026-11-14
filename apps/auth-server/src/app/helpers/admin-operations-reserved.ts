@@ -18,7 +18,8 @@ import type { SecurityEffect } from '@qauth-labs/shared-validation';
  * marked `requestDependent` (a policy patch, a client update, an import) may
  * `classify`: such an operation declares every effect and lets `classify`
  * pick per request. Every other reserved operation needs its declaration on
- * every request.
+ * every request. An entry marked `selfProtecting` guards the two-admin rule
+ * (#521) and must register with the same flag.
  *
  * A request-dependent entry lists security cases (`vectors`): a request and
  * the state it meets, with the effects the request needs at least. The
@@ -60,6 +61,13 @@ export interface ReservedOperation {
    * write). Absent: every request needs the declaration.
    */
   readonly requestDependent?: true;
+  /**
+   * `true` when the operation guards the two-admin rule itself (ADR-019
+   * Decision 7, #521): it must register with `selfProtecting`, and needs a
+   * second admin wherever the realm makes any operation mandatory. Absent
+   * otherwise.
+   */
+  readonly selfProtecting?: true;
   /**
    * With `requestDependent`, the security cases its `classify` must meet;
    * one or more. Absent otherwise.
@@ -117,13 +125,28 @@ const reserveRequestDependent = (
   effects: readonly SecurityEffect[],
   source: string,
   description: string,
-  vectors: readonly ReservedVector[]
+  vectors: readonly ReservedVector[],
+  options: { readonly selfProtecting?: true } = {}
 ): ReservedOperation =>
   Object.freeze({
     ...reserve(id, effects, source, description),
     requestDependent: true as const,
     vectors: frozen([...vectors]),
+    ...(options.selfProtecting === true ? { selfProtecting: true as const } : {}),
   });
+
+/**
+ * An entry that guards the two-admin rule (#521): it must register as
+ * self-protecting, so a realm that makes any operation mandatory needs a
+ * second admin for it too.
+ */
+const reserveSelfProtecting = (
+  id: string,
+  effects: readonly SecurityEffect[],
+  source: string,
+  description: string
+): ReservedOperation =>
+  Object.freeze({ ...reserve(id, effects, source, description), selfProtecting: true as const });
 
 /** A merge patch of the resource at `params`, as `classify` sees it. */
 const patch = (params: Record<string, string>, body: Record<string, unknown>) => ({
@@ -253,6 +276,15 @@ const importCase = (name: string, file: Record<string, unknown>): ReservedVector
 const ADR_019 = 'ADR-019 Decision 7';
 const ADR_020 = 'ADR-020 §3';
 
+/**
+ * The two-admin rule protects itself (#521, ADR-019 Decision 7): an admin's
+ * credentials, identifier and contact address change only through
+ * `admins.credentials.update`, which is self-protecting. The `users.*`
+ * operations that would change them say so, and must refuse an admin.
+ */
+const NOT_AN_ADMIN =
+  " It refuses an account that holds a live admin grant: an admin's credentials change through `admins.credentials.update` (#521).";
+
 /** The table, grouped by the effect each entry exists for. */
 export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
   // credential-path: which credentials, links or addresses can authenticate or
@@ -261,31 +293,31 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'users.links.copy',
     ['credential-path'],
     `${ADR_019}, ${ADR_020}`,
-    'Copy a one-time set-up or reset link, returned once to the admin who copies it.'
+    `Copy a one-time set-up or reset link, returned once to the admin who copies it.${NOT_AN_ADMIN}`
   ),
   reserve(
     'users.identifiers.update',
     ['credential-path'],
     `${ADR_019}, ${ADR_020}`,
-    "Change an account's identifier or contact address."
+    `Change an account's identifier or contact address.${NOT_AN_ADMIN}`
   ),
   reserve(
     'users.password.set',
     ['credential-path'],
     `${ADR_019}, ${ADR_020}`,
-    "Set an account's password."
+    `Set an account's password.${NOT_AN_ADMIN}`
   ),
   reserve(
     'users.passkeys.create',
     ['credential-path'],
     `${ADR_019}, ${ADR_020}`,
-    'Add a passkey to an account.'
+    `Add a passkey to an account.${NOT_AN_ADMIN}`
   ),
   reserve(
     'users.credentials.create',
     ['credential-path'],
     `${ADR_019}, ${ADR_020}`,
-    'Add any other credential to an account, such as a TOTP secret or an upstream identity.'
+    `Add any other credential to an account, such as a TOTP secret or an upstream identity.${NOT_AN_ADMIN}`
   ),
   reserve(
     'users.passkeys.delete',
@@ -315,7 +347,7 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'users.idJagSubjects.create',
     ['credential-path'],
     `${ADR_019}, ADR-011 gate 14`,
-    'Link an enterprise ID-JAG subject to an account, the one link an admin may make.'
+    `Link an enterprise ID-JAG subject to an account, the one link an admin may make.${NOT_AN_ADMIN}`
   ),
   reserve(
     'users.verify',
@@ -739,19 +771,31 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'Issue an act-chain token to an admin who acts for an account.'
   ),
 
-  // administration: who administers.
-  reserve('admins.create', ['administration'], `${ADR_019}, #679`, 'Create an admin account.'),
+  // administration: who administers. The self-protecting entries guard the
+  // two-admin rule (#521).
+  reserveSelfProtecting(
+    'admins.create',
+    ['administration'],
+    `${ADR_019}, #679, #521`,
+    'Create an admin account.'
+  ),
   reserve('admins.delete', ['administration'], `${ADR_019}, #679`, 'Remove an admin account.'),
-  reserve(
+  reserveSelfProtecting(
+    'admins.credentials.update',
+    ['administration', 'credential-path'],
+    `${ADR_019}, #521`,
+    "Change an admin account's credentials, identifier or contact address."
+  ),
+  reserveSelfProtecting(
     'adminGrants.create',
     ['administration'],
-    `${ADR_019}, #679`,
+    `${ADR_019}, #679, #521`,
     'Grant an admin role to an account in a realm.'
   ),
-  reserve(
+  reserveSelfProtecting(
     'adminGrants.delete',
     ['administration'],
-    `${ADR_019}, #679`,
+    `${ADR_019}, #679, #521`,
     'Remove an admin role from an account.'
   ),
   reserve(
@@ -760,16 +804,16 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     `${ADR_019}, #679`,
     'Create a custom admin role.'
   ),
-  reserve(
+  reserveSelfProtecting(
     'adminRoles.update',
     ['administration'],
-    `${ADR_019}, #679`,
+    `${ADR_019}, #679, #521`,
     'Change the permissions of a custom admin role.'
   ),
-  reserve(
+  reserveSelfProtecting(
     'adminRoles.delete',
     ['administration'],
-    `${ADR_019}, #679`,
+    `${ADR_019}, #679, #521`,
     'Delete a custom admin role.'
   ),
   reserve(
@@ -803,8 +847,8 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
   reserveRequestDependent(
     'realms.imports.apply',
     ['import'],
-    'ADR-019 Decisions 7 and 11, #531, #555',
-    'Apply a realm-file import or a sandbox promotion.',
+    'ADR-019 Decisions 7 and 11, #531, #555, #521',
+    "Apply a realm-file import or a sandbox promotion, which can rewrite the realm's mandatory two-admin set.",
     [
       importCase('lowers the password policy', { passwordPolicy: { minLength: 6 } }),
       importCase('adds a redirect URI to a client', {
@@ -815,7 +859,8 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
           },
         ],
       }),
-    ]
+    ],
+    { selfProtecting: true }
   ),
 
   // federation-operator.

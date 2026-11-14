@@ -1,3 +1,4 @@
+import type { KeyRotationStore } from '../lib/key-rotation';
 import type {
   NewStoredKey,
   NewStoredKeyRow,
@@ -37,7 +38,7 @@ export interface MemoryKeyRow {
   readonly publicJwk?: Record<string, unknown>;
 }
 
-export interface MemoryKeyStore extends RealmKeyBootStore<MemoryTx> {
+export interface MemoryKeyStore extends RealmKeyBootStore<MemoryTx>, KeyRotationStore<MemoryTx> {
   /** The committed rows, oldest first. */
   readonly rows: MemoryKeyRow[];
   /** Every call, in order, with the transaction it ran in. */
@@ -98,7 +99,20 @@ export function createMemoryKeyStore(options: MemoryKeyStoreOptions = {}): Memor
             (filter.purpose === undefined || key.purpose === filter.purpose) &&
             (filter.scopeId === undefined || key.scopeId === filter.scopeId) &&
             (filter.status === undefined || key.status === filter.status)
-        );
+        )
+        .map((key) => ({
+          ...key,
+          retireAt: key.retireAt ?? null,
+          unpublishAt: key.unpublishAt ?? null,
+        }));
+    },
+
+    async listRealmIds(afterRealmId: string | null, limit: number): Promise<readonly string[]> {
+      calls.push({ method: 'listRealmIds' });
+      return [...new Set(rows.map((row) => row.key.realmId))]
+        .filter((realmId) => afterRealmId === null || realmId > afterRealmId)
+        .sort()
+        .slice(0, limit);
     },
 
     async getWrappedKey(

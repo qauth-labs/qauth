@@ -49,10 +49,16 @@ import { bytea, EPOCH_MS_NOW } from './sql-helpers';
  * of them (emergency retirement). The time columns record the schedule and
  * the facts, all epoch ms:
  *
- * - `publish_at` / `unpublish_at` — the JWKS window. NULL for symmetric
- *   purposes (cookie HMAC, data at rest, webhook secrets), which are never
- *   published.
- * - `activate_at` — when the key starts to sign or encrypt.
+ * - `publish_at` / `unpublish_at` — the JWKS window. `publish_at` is NULL for
+ *   symmetric purposes (cookie HMAC, data at rest, webhook secrets), which
+ *   are never published. On such a key, a retirement's `unpublish_at` is the
+ *   end of its retention instead: the scheduled rotation (#542) sets when a
+ *   retired cookie key stops verifying, or a data-at-rest key decrypting.
+ *   NULL there keeps the retired key with no end.
+ * - `activate_at` — when the key starts to sign or encrypt. The scheduled
+ *   rotation writes a switch a little ahead (#542): `activate_at` of the new
+ *   key and `retire_at` of the old one name the same moment, which may still
+ *   be ahead, and the old key signs until then.
  * - `retire_at` — when it stops; it still verifies or decrypts after.
  * - `compromised_at` — set exactly when `status = 'compromised'` (a CHECK).
  *

@@ -2,11 +2,9 @@ import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import {
   decodeJwt as joseDecodeJwt,
   decodeProtectedHeader as joseDecodeProtectedHeader,
-  exportSPKI as joseExportSPKI,
 } from 'jose';
 
 import type { ActClaim } from '../types/jwt-service';
-import type { KeyLike } from '../types/key-management';
 
 /** Whether a decoded `cnf` claim names a DPoP key thumbprint (RFC 9449 §6.1). */
 function isConfirmationClaim(value: unknown): value is { jkt: string } {
@@ -98,22 +96,4 @@ export function decodeProtectedHeaderUnsafe(token: string): Record<string, unkno
   } catch {
     throw new JWTInvalidError('Invalid JWT token format');
   }
-}
-
-/**
- * Export a public key to SPKI PEM format
- * Used to derive public key from private key for verification
- *
- * @param key - Key to export (typically a private key from which to extract public key)
- * @returns PEM-encoded SPKI public key string
- *
- * @example
- * ```typescript
- * const privateKey = await importPrivateKey(pemString);
- * const publicKeyPem = await exportPublicKeyPem(privateKey);
- * const publicKey = await importPublicKey(publicKeyPem);
- * ```
- */
-export async function exportPublicKeyPem(key: KeyLike): Promise<string> {
-  return joseExportSPKI(key);
 }

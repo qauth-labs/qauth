@@ -157,11 +157,13 @@ describe('approval requests (real Postgres)', () => {
 
     const done = await approvals.addApproval(realm.id, approval.id, {
       expectedCount: 1,
-      entry: entry(second.id, realm.id),
+      entry: { ...entry(second.id, realm.id), approverCreatedBy: requester.id },
       now: NOW + 1_000,
     });
     expect(done?.status).toBe('approved');
     expect(done?.approvals.map((given) => given.approverId)).toEqual([requester.id, second.id]);
+    // Who created each approver, as the two-admin rule read it (#521): none named is null.
+    expect(done?.approvals.map((given) => given.approverCreatedBy)).toEqual([null, requester.id]);
   });
 
   it('takes no approval, denial or cancellation once expired', async () => {

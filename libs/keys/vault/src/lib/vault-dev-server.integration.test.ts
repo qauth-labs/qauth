@@ -381,7 +381,9 @@ describe('vault against a Vault dev server', () => {
                   algorithm: 'EdDSA',
                   status: 'active',
                   pairId: null,
+                  activateAt: null,
                   retireAt: null,
+                  unpublishAt: null,
                   createdAt: 0,
                 },
               ]

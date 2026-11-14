@@ -33,6 +33,10 @@ import type { FastifyPluginAsync } from 'fastify';
  * module's `autoPrefix`, as the autoload gave it), and that every module under
  * `routes/` is listed. The process builds its repository list and its plugin
  * set from the entries of its roles (`service-roles.ts`).
+ *
+ * Every module that records a user event reaches `adminGrants`: an event of a
+ * changed credential, identifier or contact address records the change for
+ * the two-admin rule too (#521, `helpers/admin-security-change.ts`).
  */
 
 /**
@@ -102,6 +106,7 @@ const EVERY_ROLE: readonly ServiceRole[] = SERVICE_ROLE_NAMES;
 
 /** The signed-in user's wallet linking and wallet sign-in. */
 const WALLET_FLOW_REPOSITORIES: readonly RepositoryName[] = [
+  'adminGrants',
   'events',
   'oid4vpRequestStates',
   'realms',
@@ -272,7 +277,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/auth',
     roles: ['api'],
     plugins: ['egress', 'failureLadder', 'federation', 'jwt', 'password'],
-    repositories: ['events', 'oauthClients', 'refreshTokens', 'userCredentials', 'users'],
+    repositories: [
+      'adminGrants',
+      'events',
+      'oauthClients',
+      'refreshTokens',
+      'userCredentials',
+      'users',
+    ],
     load: () => import('./routes/auth/login'),
   },
   {
@@ -280,7 +292,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/auth',
     roles: ['api'],
     plugins: ['jwt', 'sessions'],
-    repositories: ['authorizationCodes', 'events', 'oauthClients', 'refreshTokens', 'users'],
+    repositories: [
+      'adminGrants',
+      'authorizationCodes',
+      'events',
+      'oauthClients',
+      'refreshTokens',
+      'users',
+    ],
     load: () => import('./routes/auth/logout'),
   },
   {
@@ -288,7 +307,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/auth',
     roles: ['web'],
     plugins: ['sessions'],
-    repositories: ['events', 'realms', 'userCredentials', 'users'],
+    repositories: ['adminGrants', 'events', 'realms', 'userCredentials', 'users'],
     load: () => import('./routes/auth/mail-pass'),
   },
   {
@@ -297,6 +316,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['breachedPasswords', 'email', 'federation', 'password'],
     repositories: [
+      'adminGrants',
       'emailVerificationTokens',
       'events',
       'userAttributes',
@@ -334,7 +354,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/api/clients',
     roles: ['api'],
     plugins: ['jwt', 'password'],
-    repositories: ['apiKeys', 'events', 'oauthClients', 'realms', 'users'],
+    repositories: ['adminGrants', 'apiKeys', 'events', 'oauthClients', 'realms', 'users'],
     load: () => import('./routes/clients'),
   },
   {
@@ -342,7 +362,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/consents',
     roles: ['web'],
     plugins: ['sessions'],
-    repositories: ['authorizationCodes', 'events', 'oauthConsents', 'refreshTokens', 'users'],
+    repositories: [
+      'adminGrants',
+      'authorizationCodes',
+      'events',
+      'oauthConsents',
+      'refreshTokens',
+      'users',
+    ],
     load: () => import('./routes/consents'),
   },
   {
@@ -351,6 +378,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['jwt'],
     repositories: [
+      'adminGrants',
       'authorizationCodes',
       'events',
       'oauthClients',
@@ -366,6 +394,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['jwt', 'password'],
     repositories: [
+      'adminGrants',
       'apiKeys',
       'authorizationCodes',
       'events',
@@ -409,7 +438,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/oauth',
     roles: ['web'],
     plugins: ['egress', 'jwt', 'sessions'],
-    repositories: ['events', 'oauthClients', 'realms', 'userCredentials', 'users'],
+    repositories: ['adminGrants', 'events', 'oauthClients', 'realms', 'userCredentials', 'users'],
     load: () => import('./routes/oauth/end-session'),
   },
   {
@@ -417,7 +446,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/oauth',
     roles: ['api'],
     plugins: ['egress', 'jwt', 'password'],
-    repositories: ['events', 'oauthClients', 'users'],
+    repositories: ['adminGrants', 'events', 'oauthClients', 'users'],
     load: () => import('./routes/oauth/introspect'),
   },
   {
@@ -426,6 +455,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['egress', 'jwt', 'password'],
     repositories: [
+      'adminGrants',
       'events',
       'oauthClients',
       'realmAuthMethodPlugins',
@@ -441,7 +471,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/oauth',
     roles: ['api'],
     plugins: ['egress', 'jwt', 'password'],
-    repositories: ['events', 'oauthClients', 'refreshTokens', 'users'],
+    repositories: ['adminGrants', 'events', 'oauthClients', 'refreshTokens', 'users'],
     load: () => import('./routes/oauth/revoke'),
   },
   {
@@ -468,7 +498,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/oauth',
     roles: ['api'],
     plugins: ['jwt'],
-    repositories: ['events', 'oauthClients', 'realms', 'userAttributes', 'users'],
+    repositories: ['adminGrants', 'events', 'oauthClients', 'realms', 'userAttributes', 'users'],
     load: () => import('./routes/oauth/userinfo'),
   },
   {
@@ -484,7 +514,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/oid4vp',
     roles: ['api'],
     plugins: [],
-    repositories: ['events', 'oid4vpRequestStates'],
+    repositories: ['adminGrants', 'events', 'oid4vpRequestStates'],
     load: () => import('./routes/oid4vp/response'),
   },
   {
@@ -492,7 +522,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/ssf',
     roles: ['api'],
     plugins: ['jwt', 'ssf'],
-    repositories: ['events', 'oauthClients', 'realms', 'ssfStreams'],
+    repositories: ['adminGrants', 'events', 'oauthClients', 'realms', 'ssfStreams'],
     load: () => import('./routes/ssf'),
   },
   {
@@ -535,6 +565,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: ['dpop', 'egress', 'password', 'sessions'],
     repositories: [
+      'adminGrants',
       'authorizationCodes',
       'events',
       'oauthClients',
@@ -550,6 +581,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: ['egress', 'failureLadder', 'federation', 'password', 'sessions'],
     repositories: [
+      'adminGrants',
       'events',
       'realmAuthMethodPlugins',
       'realmUpstreamProviders',
@@ -563,7 +595,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/ui',
     roles: ['web'],
     plugins: ['sessions'],
-    repositories: ['events', 'realms', 'userCredentials', 'users'],
+    repositories: ['adminGrants', 'events', 'realms', 'userCredentials', 'users'],
     load: () => import('./routes/ui/passkey'),
   },
   {
@@ -571,7 +603,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/ui',
     roles: ['web'],
     plugins: ['sessions'],
-    repositories: ['events', 'realms', 'userCredentials', 'users'],
+    repositories: ['adminGrants', 'events', 'realms', 'userCredentials', 'users'],
     load: () => import('./routes/ui/recovery-codes'),
   },
   {
@@ -587,7 +619,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/ui',
     roles: ['web'],
     plugins: ['sessions'],
-    repositories: ['events', 'realms', 'userCredentials', 'users'],
+    repositories: ['adminGrants', 'events', 'realms', 'userCredentials', 'users'],
     load: () => import('./routes/ui/totp'),
   },
   {

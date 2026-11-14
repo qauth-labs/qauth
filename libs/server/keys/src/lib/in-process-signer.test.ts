@@ -1548,6 +1548,33 @@ describe('getVerificationKeys and getJwks', () => {
     expect(await signer.getVerificationKeys('local', REALM_A, 'event_signing')).toEqual([]);
   });
 
+  it("serve the SSF transmitter's JWKS of the event keys, a next key before it signs (#542)", async () => {
+    const { signer, keys, factory } = await setup();
+    const [next] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'event_signing',
+      status: 'next',
+    });
+
+    const events = await signer.getJwks('local', REALM_A, 'event_signing');
+
+    expect(events.keys.map((key) => key.kid).sort()).toEqual(
+      [activeKid(keys, REALM_A, 'event_signing'), next.kid].sort()
+    );
+    // Neither set holds the other's keys.
+    expect((await signer.getJwks('local', REALM_A)).keys.map((key) => key.kid)).not.toContain(
+      next.kid
+    );
+    expect(await signer.getJwks('local', REALM_A, 'token_signing')).toEqual(
+      await signer.getJwks('local', REALM_A)
+    );
+    for (const purpose of ['cookie_hmac', 'data_at_rest', 'oid4vp_request_signing', 'nope']) {
+      expect(await refusal(signer.getJwks('local', REALM_A, purpose as 'event_signing'))).toBe(
+        'PURPOSE_NOT_ALLOWED'
+      );
+    }
+  });
+
   it('return frozen copies', async () => {
     const { signer } = await setup();
 

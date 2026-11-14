@@ -43,3 +43,31 @@ export class ApprovalStateError extends Error {
     this.name = 'ApprovalStateError';
   }
 }
+
+/**
+ * Where an operator reads what to do when no admin can give a second
+ * approval a realm requires: the break-glass runbook of the security
+ * operations page.
+ */
+export const APPROVAL_UNAVAILABLE_RUNBOOK =
+  'https://docs.qauth.dev/reference/security-operations/#when-no-admin-can-approve';
+
+/**
+ * The refusal of a security operation that needs another admin's approval
+ * (a second admin's, where the realm makes it mandatory), when no admin could
+ * give it now (ADR-019 Decision 7, #521): `409`, the `approval_unavailable`
+ * problem document. The rule fails
+ * closed: the approval is not filed and the operation does not run. Its
+ * detail points at the break-glass runbook ({@link APPROVAL_UNAVAILABLE_RUNBOOK}).
+ */
+export class ApprovalUnavailableError extends Error {
+  readonly statusCode = 409;
+  readonly code = 'APPROVAL_UNAVAILABLE';
+
+  constructor(
+    message = `This operation needs another admin's approval, and no other admin can give one now: nothing was filed or run. See ${APPROVAL_UNAVAILABLE_RUNBOOK}`
+  ) {
+    super(message);
+    this.name = 'ApprovalUnavailableError';
+  }
+}

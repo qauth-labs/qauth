@@ -7,7 +7,12 @@ import type { RealmJwks, Signer, VerificationKey } from './signer';
 import { SignerAccessDeniedError, SignerRequestRefusedError } from './signer-errors';
 import type { PublicKeyRecord, SignerKeyStore } from './signer-key-store';
 import { isSignerCallAllowed, isSignerCaller } from './signer-policy';
-import { isVerificationKeyPurpose, REALM_JWKS_PURPOSES } from './signer-typ';
+import {
+  isJwksPurpose,
+  isVerificationKeyPurpose,
+  type JwksPurpose,
+  REALM_JWKS_PURPOSES,
+} from './signer-typ';
 
 /**
  * A realm's published keys (`realm_public_keys`), read without a KEK
@@ -111,19 +116,44 @@ export function verificationKeysOf(
 
 /**
  * The realm's JWKS at `at`: its published token keys inside their window, none
- * compromised. The window is {@link isPublishedAt}'s, as for the verification
- * set, so a retired key leaves both together.
+ * compromised, `next` keys included. The window is {@link isPublishedAt}'s, as
+ * for the verification set, so a retired key leaves both together.
+ *
+ * @param purposes - the purposes of the set: the realm JWKS's by default,
+ *   or one of `JWKS_PURPOSES` ({@link jwksPurposesOf})
  */
-export function realmJwksOf(records: readonly PublicKeyRecord[], at: number): RealmJwks {
+export function realmJwksOf(
+  records: readonly PublicKeyRecord[],
+  at: number,
+  purposes: readonly string[] = REALM_JWKS_PURPOSES
+): RealmJwks {
   const keys = sortForPublication(records)
     .filter(
       (record) =>
-        (REALM_JWKS_PURPOSES as readonly string[]).includes(record.purpose) &&
+        purposes.includes(record.purpose) &&
         record.status !== 'compromised' &&
         isPublishedAt(record, at)
     )
     .map(publicJwkOf);
   return Object.freeze({ keys: Object.freeze(keys) });
+}
+
+/**
+ * The purposes of the JWKS `getJwks` serves for `purpose`: the realm JWKS's
+ * when none is given, else that purpose alone.
+ *
+ * @throws SignerRequestRefusedError (`PURPOSE_NOT_ALLOWED`) for a purpose no
+ *   JWKS is served for
+ */
+export function jwksPurposesOf(purpose: unknown): readonly JwksPurpose[] {
+  if (purpose === undefined) return REALM_JWKS_PURPOSES as readonly JwksPurpose[];
+  if (!isJwksPurpose(purpose)) {
+    throw new SignerRequestRefusedError(
+      'PURPOSE_NOT_ALLOWED',
+      `${describePurpose(purpose)} has no JWKS`
+    );
+  }
+  return [purpose];
 }
 
 /** A purpose for a refusal, never echoing one that is not a key purpose. */
@@ -242,10 +272,11 @@ export function createPublishedKeyReader(
       const realmId = resolveRealmId(realmIdInput);
       return verificationKeysOf(await listPublicKeys(realmId), purpose, now());
     },
-    async getJwks(caller, realmIdInput) {
+    async getJwks(caller, realmIdInput, purpose) {
+      const purposes = jwksPurposesOf(purpose);
       authorize(caller, 'getJwks');
       const realmId = resolveRealmId(realmIdInput);
-      return realmJwksOf(await listPublicKeys(realmId), now());
+      return realmJwksOf(await listPublicKeys(realmId), now(), purposes);
     },
   } satisfies PublishedKeyReader);
 }

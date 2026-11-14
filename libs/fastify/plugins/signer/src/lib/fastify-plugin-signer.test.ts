@@ -1,5 +1,5 @@
 import type { DbClient } from '@qauth-labs/infra-db';
-import { SIGNER_OPERATIONS } from '@qauth-labs/server-keys';
+import { KEY_ACTIVATION_DELAY_MS, SIGNER_OPERATIONS } from '@qauth-labs/server-keys';
 import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -69,6 +69,43 @@ describe('signerPlugin', () => {
     await app.ready();
 
     expect(warn).toHaveBeenCalledWith({ variable: 'KEK' }, expect.any(String));
+    await app.close();
+  });
+
+  it('decorates the scheduled key rotation with the windows it is given (#542)', async () => {
+    const app = Fastify({ logger: false });
+    await app.register(
+      signerPlugin,
+      options({ keyRotation: { periodDays: 30, prepublishDays: 3, retiredRetentionDays: 5 } })
+    );
+    await app.ready();
+
+    expect(app.keyRotation?.settings).toEqual({
+      periodMs: 30 * 86_400_000,
+      prepublishMs: 3 * 86_400_000,
+      retiredRetentionMs: 5 * 86_400_000,
+      activationDelayMs: KEY_ACTIVATION_DELAY_MS,
+    });
+    await app.close();
+  });
+
+  it('puts a switch two signer refresh intervals ahead when the interval is longer', async () => {
+    const app = Fastify({ logger: false });
+    await app.register(signerPlugin, options({ refreshIntervalMs: 5 * 60_000 }));
+    await app.ready();
+
+    expect(app.keyRotation?.settings.activationDelayMs).toBe(10 * 60_000);
+    await app.close();
+  });
+
+  it('refuses a rotation period shorter than the pre-publication window', async () => {
+    const app = Fastify({ logger: false });
+    app.register(
+      signerPlugin,
+      options({ keyRotation: { periodDays: 5, prepublishDays: 7, retiredRetentionDays: 14 } })
+    );
+
+    await expect(app.ready()).rejects.toMatchObject({ name: 'InvalidConfigurationError' });
     await app.close();
   });
 

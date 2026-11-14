@@ -20,6 +20,7 @@ import {
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { ageAdminAccount } from '../testing/two-admin';
 import { API_FAMILY_AUDIENCES } from './api-conventions/families';
 import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
 
@@ -707,12 +708,13 @@ describe('approvals for security operations (#512, real containers)', () => {
     const realmId = await tenant('alpha');
     const requester = await adminWith(realmId, 'security-admin');
     const filed = await file(realmId, requester.token);
-    // The two-admin rule (#521) sets this; the engine already honours it.
+    // As the two-admin rule (#521) files it where the realm requires it.
     await app().dbPool.query('UPDATE admin_approvals SET approvals_required = 2 WHERE id = $1', [
       filed.id,
     ]);
     const second = await adminWith(realmId, 'security-admin');
     const editor = await adminWith(realmId, 'editor');
+    await ageAdminAccount(app().dbPool, editor.userId);
 
     expect((await approve(realmId, filed.id, requester.approver)).status).toBe('pending');
     // The requester cannot give the second one, an admin without
@@ -725,6 +727,12 @@ describe('approvals for security operations (#512, real containers)', () => {
     });
     // A security admin who may approve now reads it.
     expect((await get(approvals(realmId, `/${filed.id}`), second.token)).statusCode).toBe(200);
+    // Made just now, it cannot give it yet (the 7-day window, #521).
+    await expect(approve(realmId, filed.id, second.approver)).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining('7 days'),
+    });
+    await ageAdminAccount(app().dbPool, second.userId);
     const done = await approve(realmId, filed.id, second.approver);
     expect(done.status).toBe('approved');
     expect(done.approvals.map((given) => given.approverId)).toEqual([

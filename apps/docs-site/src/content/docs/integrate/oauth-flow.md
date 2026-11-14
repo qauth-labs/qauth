@@ -473,11 +473,11 @@ fetches.
 
 A rotation through QAuth's key store then changes nothing for users or relying
 parties: the new key is in the JWKS before it signs, and the old one stays in it, and keeps verifying at
-QAuth's own endpoints, until its retention ends ([Keys](/operate/keys/)). That
-holds only once rotation through the key store ships (#542 and #544). Until
-then a signing key is replaced through its variable, which is not a rotation:
-the new key is published only as it starts signing, and the old key leaves the
-JWKS at once, so the tokens it signed stop verifying
+QAuth's own endpoints, until its retention ends
+([The scheduled rotation](/operate/keys/#the-scheduled-rotation)). A signing key
+replaced through its variable is not rotated: the new key is published only as
+it starts signing, and the old key leaves the JWKS at once, so the tokens it
+signed stop verifying
 ([Replacing a signing key](/operate/keys/#replacing-a-signing-key)).
 
 ---
