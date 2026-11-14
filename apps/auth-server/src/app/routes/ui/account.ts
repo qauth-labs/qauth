@@ -648,7 +648,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          "Sign one of the account's sessions out (#844; `account.sessions.delete`): its cookie stops working, and every app it signed in to with a back-channel logout URI is sent a logout token. A session of another account is `404`, untouched.",
+          "Sign one of the account's sessions out (#844; `account.sessions.delete`): its cookie stops working, the refresh-token families its sign-in opened end (#1110), and every app it signed in to with a back-channel logout URI is sent a logout token. A session of another account is `404`, untouched.",
         tags,
         'x-qauth-stability': 'experimental',
         'x-qauth-errors': [403, 404],

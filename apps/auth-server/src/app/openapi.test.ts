@@ -212,12 +212,16 @@ describe('request bodies in the OpenAPI document (#1110)', () => {
     app.post('/required', { schema: { ...schema, body } }, async (_request, reply) =>
       reply.code(204).send(null)
     );
-    app.post('/optional', { schema: { ...schema, body: body.nullish() } }, (_request, reply) =>
-      reply.code(204).send(null)
+    app.post(
+      '/optional',
+      { schema: { ...schema, body: body.nullish() } },
+      async (_request, reply) => reply.code(204).send(null)
     );
     // Fastify validates a missing body as `null`, which `.optional()` refuses.
-    app.post('/undefined-only', { schema: { ...schema, body: body.optional() } }, (_r, reply) =>
-      reply.code(204).send(null)
+    app.post(
+      '/undefined-only',
+      { schema: { ...schema, body: body.optional() } },
+      async (_r, reply) => reply.code(204).send(null)
     );
     await app.ready();
 

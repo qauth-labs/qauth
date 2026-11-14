@@ -74,6 +74,9 @@ const sessionParamsSchema = z.object({ sessionId: z.uuid() });
 
 type SessionParams = z.infer<typeof sessionParamsSchema>;
 
+/** The end-all body as the handler sees it: none arrives as `null`. */
+type EndAllSessionsBody = z.input<typeof endAllSessionsRequestSchema> | null | undefined;
+
 /** The token's user, and the client and act chain the call came through. */
 function ownerOf(request: FastifyRequest): AccountSessionOwner {
   const act = request.jwtPayload?.act;
@@ -179,33 +182,30 @@ export function registerAccountSessionRoutes(fastify: FastifyInstance): void {
     },
   });
 
-  fastify.post<{ Body: z.input<typeof endAllSessionsRequestSchema> | null | undefined }>(
-    '/sessions/end-all',
-    {
-      preValidation: endAll.guard,
-      schema: {
-        description:
-          "Sign out everywhere: every session of the token's user ends, each app a session signed in to with a back-channel logout URI is sent a logout token, and every unredeemed code and refresh-token family of the user is revoked. The session the token came through stays only when `keepCurrent` is true. Needs no fresh sign-in and takes an act-chain token.",
-        tags,
-        security: [{ bearerAuth: [] }],
-        'x-qauth-stability': 'stable',
-        ...endAll.schema,
-        'x-qauth-errors': [400, 401, 403],
-        body: endAllSessionsRequestSchema.nullish(),
-        response: { 204: z.null() },
-      },
-      config: { surface: 'api' },
-      handler: async (request, reply) => {
-        const keepSid = request.body?.keepCurrent === true ? tokenSessionIdOf(request) : undefined;
-        await endAllAccountSessions(
-          fastify,
-          request,
-          ownerOf(request),
-          keepSid === undefined ? {} : { keepSid }
-        );
-        reply.code(204);
-        return reply.send(null);
-      },
-    }
-  );
+  fastify.post<{ Body: EndAllSessionsBody }>('/sessions/end-all', {
+    preValidation: endAll.guard,
+    schema: {
+      description:
+        "Sign out everywhere: every session of the token's user ends, each app a session signed in to with a back-channel logout URI is sent a logout token, and every unredeemed code and refresh-token family of the user is revoked. The session the token came through stays only when `keepCurrent` is true. Needs no fresh sign-in and takes an act-chain token.",
+      tags,
+      security: [{ bearerAuth: [] }],
+      'x-qauth-stability': 'stable',
+      ...endAll.schema,
+      'x-qauth-errors': [400, 401, 403],
+      body: endAllSessionsRequestSchema.nullish(),
+      response: { 204: z.null() },
+    },
+    config: { surface: 'api' },
+    handler: async (request, reply) => {
+      const keepSid = request.body?.keepCurrent === true ? tokenSessionIdOf(request) : undefined;
+      await endAllAccountSessions(
+        fastify,
+        request,
+        ownerOf(request),
+        keepSid === undefined ? {} : { keepSid }
+      );
+      reply.code(204);
+      return reply.send(null);
+    },
+  });
 }
