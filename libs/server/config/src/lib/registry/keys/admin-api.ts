@@ -5,7 +5,7 @@ import { defineKeys } from '../types';
  * and #520): the keys of `adminApiEnvSchema`. Deployment wiring, like `HOST`
  * and `PORT`.
  */
-export const ADMIN_API_KEYS = defineKeys([
+export const ADMIN_LISTENER_KEYS = defineKeys([
   {
     name: 'ADMIN_API_BASE_URL',
     tier: 'stable',

@@ -16,7 +16,7 @@ import {
 import { AUTH_SERVER_KEYS, CONFIG_KEY_REGISTRY, SERVER_CONFIG_KEYS } from './keys';
 import { type ConfigKey, type ConfigKeyInput, defineKeys, KEY_DIGEST_CLASSES } from './types';
 
-const AUTH_KEYS: readonly ConfigKey[] = [...SERVER_CONFIG_KEYS, ...AUTH_SERVER_KEYS];
+const SERVER_PROCESS_KEYS: readonly ConfigKey[] = [...SERVER_CONFIG_KEYS, ...AUTH_SERVER_KEYS];
 
 const key = (name: string, extra: Partial<ConfigKeyInput> = {}): ConfigKey =>
   defineKeys([
@@ -151,7 +151,7 @@ describe('the digest classes of the registry', () => {
   it('compares KEK_PROVIDER only between nodes that hold the signer', () => {
     expect(registryKey('KEK_PROVIDER').digestRoles).toEqual(['signer']);
     const names = (roles: Parameters<typeof digestedKeys>[1]) =>
-      digestedKeys(AUTH_KEYS, roles).map((entry) => entry.name);
+      digestedKeys(SERVER_PROCESS_KEYS, roles).map((entry) => entry.name);
     expect(names(['signer'])).toContain('KEK_PROVIDER');
     expect(names(SERVICE_ROLE_NAMES)).toContain('KEK_PROVIDER');
     expect(names(['web', 'api'])).not.toContain('KEK_PROVIDER');
@@ -160,7 +160,7 @@ describe('the digest classes of the registry', () => {
 
   it('compares the admin listener keys between admin nodes, and the plugin keys where plugins load', () => {
     const names = (roles: Parameters<typeof digestedKeys>[1]) =>
-      digestedKeys(AUTH_KEYS, roles).map((entry) => entry.name);
+      digestedKeys(SERVER_PROCESS_KEYS, roles).map((entry) => entry.name);
     for (const name of ['ADMIN_API_ENABLED', 'ADMIN_API_BASE_URL']) {
       expect(registryKey(name).digestRoles, name).toEqual(['admin']);
       expect(names(['admin']), name).toContain(name);
@@ -178,7 +178,7 @@ describe('the digest classes of the registry', () => {
 
   it('compares a key one role reads only between nodes that hold the role', () => {
     const names = (roles: Parameters<typeof digestedKeys>[1]) =>
-      digestedKeys(AUTH_KEYS, roles).map((entry) => entry.name);
+      digestedKeys(SERVER_PROCESS_KEYS, roles).map((entry) => entry.name);
     for (const name of ['KEY_ROTATION_PERIOD_DAYS', 'KEY_PREPUBLISH_DAYS']) {
       expect(names(['signer']), name).toContain(name);
       expect(names(['web', 'api', 'admin', 'delivery']), name).not.toContain(name);
@@ -196,13 +196,13 @@ describe('the digest classes of the registry', () => {
 });
 
 describe('configurationDigest', () => {
-  const values = defaultValues(AUTH_KEYS);
+  const values = defaultValues(SERVER_PROCESS_KEYS);
   values['JWT_ISSUER'] = 'https://auth.example.com';
 
   it('is the same whatever the order of the keys and of the values', () => {
-    const forward = configurationDigest(AUTH_KEYS, values, SERVICE_ROLE_NAMES);
+    const forward = configurationDigest(SERVER_PROCESS_KEYS, values, SERVICE_ROLE_NAMES);
     const reversedValues = Object.fromEntries(Object.entries(values).reverse());
-    const backward = configurationDigest([...AUTH_KEYS].reverse(), reversedValues, [
+    const backward = configurationDigest([...SERVER_PROCESS_KEYS].reverse(), reversedValues, [
       ...SERVICE_ROLE_NAMES,
     ]);
     expect(backward).toEqual(forward);
@@ -226,9 +226,9 @@ describe('configurationDigest', () => {
   });
 
   it('changes when a deployment-wide value changes, and names that key alone', () => {
-    const before = configurationDigest(AUTH_KEYS, values, SERVICE_ROLE_NAMES);
+    const before = configurationDigest(SERVER_PROCESS_KEYS, values, SERVICE_ROLE_NAMES);
     const after = configurationDigest(
-      AUTH_KEYS,
+      SERVER_PROCESS_KEYS,
       { ...values, HYBRID_SIGNING_ENABLED: true },
       SERVICE_ROLE_NAMES
     );
@@ -237,9 +237,9 @@ describe('configurationDigest', () => {
   });
 
   it('does not change with a setting of the node, or with a secret', () => {
-    const before = configurationDigest(AUTH_KEYS, values, SERVICE_ROLE_NAMES);
+    const before = configurationDigest(SERVER_PROCESS_KEYS, values, SERVICE_ROLE_NAMES);
     const after = configurationDigest(
-      AUTH_KEYS,
+      SERVER_PROCESS_KEYS,
       {
         ...values,
         PORT: '4000',
