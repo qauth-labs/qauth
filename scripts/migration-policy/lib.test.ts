@@ -190,6 +190,27 @@ CALL rewrite();`;
     expect(reviewsOf(sql)).toEqual([]);
   });
 
+  it('follows a routine called from the body of one that runs now', () => {
+    const sql = `CREATE FUNCTION inner_cleanup() RETURNS void LANGUAGE sql AS $$ DELETE FROM "sessions" $$;
+CREATE FUNCTION outer_cleanup() RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM inner_cleanup(); END $$;
+SELECT outer_cleanup();`;
+    expect(kindsOf(sql)).toEqual(['delete-from']);
+    // Uncalled, neither body runs now.
+    expect(kindsOf(sql.replace('SELECT outer_cleanup();', ''))).toEqual([]);
+  });
+
+  it('refuses a DROP whose first target alone is temporary', () => {
+    expect(
+      kindsOf(
+        'CREATE TEMP TABLE scratch (id int);\nDROP TABLE pg_temp.scratch, public.users CASCADE;'
+      )
+    ).toEqual(['drop-table']);
+    expect(kindsOf('DROP TABLE IF EXISTS pg_temp.scratch_a, users;')).toEqual(['drop-table']);
+    expect(kindsOf('DROP FUNCTION pg_temp.f(int, text), public.g() CASCADE;')).toEqual([
+      'drop-cascade',
+    ]);
+  });
+
   it('does not read a trigger function, which runs on a later write', () => {
     const sql = `CREATE FUNCTION "refuse_update"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -309,6 +330,12 @@ describe('scanMigration: statements for review', () => {
 
   it('does not print the drop of a pg_temp helper', () => {
     expect(reviewsOf('DROP FUNCTION pg_temp.qauth_ip(text);')).toEqual([]);
+    expect(reviewsOf('DROP FUNCTION IF EXISTS pg_temp.f(int, text), pg_temp.g() CASCADE;')).toEqual(
+      []
+    );
+    expect(kindsOf('DROP FUNCTION IF EXISTS pg_temp.f(int, text), pg_temp.g() CASCADE;')).toEqual(
+      []
+    );
   });
 
   it('prints a CALL of a procedure the migration does not define', () => {

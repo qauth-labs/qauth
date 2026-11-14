@@ -359,6 +359,25 @@ function droppedTables(text) {
 }
 
 /**
+ * Whether a DROP names only pg_temp objects: `DROP FUNCTION pg_temp.f(int),
+ * pg_temp.g()`, but not `DROP FUNCTION pg_temp.f(), public.g()`.
+ */
+function onlyTemporaryTargets(code) {
+  const match = /^DROP [A-Z ]+? (?:IF EXISTS )?(PG_TEMP\..*)$/.exec(code);
+  if (!match) return false;
+  let targets = match[1];
+  // Argument lists hold commas of their own.
+  for (let before = ''; before !== targets;) {
+    before = targets;
+    targets = targets.replace(/\([^()]*\)/g, '');
+  }
+  return targets
+    .replace(/ (?:CASCADE|RESTRICT)$/, '')
+    .split(',')
+    .every((target) => target.trim().startsWith('PG_TEMP.'));
+}
+
+/**
  * Classify one statement. Returns the refused kinds, each with the statement,
  * and the notes for review.
  *
@@ -383,14 +402,13 @@ export function classifyStatement(statement, context = {}) {
   if (!NOT_A_COMMAND.test(code)) {
     const dropsTable = /\bDROP TABLE\b/.test(code);
     // A temporary table, and a migration's own pg_temp helpers, end with the
-    // session: dropping them touches nothing the old release uses.
-    const temporary =
-      /^DROP [A-Z ]+? (?:IF EXISTS )?PG_TEMP\./.test(code) ||
-      (dropsTable &&
-        droppedTables(text).length > 0 &&
-        droppedTables(text).every(
-          (name) => name.startsWith('pg_temp.') || temporaryTables.has(name)
-        ));
+    // session: dropping them touches nothing the old release uses. Every
+    // target must be one: `DROP TABLE pg_temp.a, users` drops a table.
+    const tables = dropsTable ? droppedTables(text) : [];
+    const temporary = dropsTable
+      ? tables.length > 0 &&
+        tables.every((name) => name.startsWith('pg_temp.') || temporaryTables.has(name))
+      : onlyTemporaryTargets(code);
     if (dropsTable && !temporary) kinds.add('drop-table');
     if (/\bDROP SCHEMA\b/.test(code)) kinds.add('drop-table');
     if (/\bTRUNCATE\b(?! *(?:ON\b|OR\b|,|\)))/.test(code)) kinds.add('truncate');
@@ -478,14 +496,18 @@ export function scanMigration(file, sql) {
   }
 
   // The routines this migration runs itself: its pg_temp helpers, which live
-  // only for this session, and any routine another statement calls by name.
-  const defined = new Set(
-    statements.filter((s) => ROUTINE.test(s.code)).map((s) => routineName(s.text))
-  );
-  defined.delete(null);
-  const calls = statements
-    .filter((s) => !NOT_A_CALL.test(s.code))
-    .map((s) => s.text.replace(/"/g, '').toLowerCase());
+  // only for this session, and any routine another statement calls by name,
+  // followed to a fixed point: a body that runs now may call another routine
+  // of the migration, whose body then runs now too.
+  const routines = new Map();
+  for (const s of statements.filter((s) => ROUTINE.test(s.code))) {
+    const name = routineName(s.text);
+    if (name !== null) routines.set(name, [...(routines.get(name) ?? []), s]);
+  }
+  const defined = new Set(routines.keys());
+  const callsIn = (list) =>
+    list.filter((s) => !NOT_A_CALL.test(s.code)).map((s) => s.text.replace(/"/g, '').toLowerCase());
+  const calls = callsIn(statements);
   const bare = (name) => name.slice(name.lastIndexOf('.') + 1);
   const called = (name) => {
     const pattern = new RegExp(
@@ -493,7 +515,21 @@ export function scanMigration(file, sql) {
     );
     return calls.some((text) => pattern.test(text));
   };
-  const runsNow = (name) => name.startsWith('pg_temp.') || (name !== '' && called(name));
+  const running = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [name, definitions] of routines) {
+      if (running.has(name) || !(name.startsWith('pg_temp.') || called(name))) continue;
+      running.add(name);
+      grew = true;
+      for (const definition of definitions) {
+        for (const body of [...definition.bodies, ...(definition.strings ?? [])]) {
+          calls.push(...callsIn(splitStatements(body.text, body.line)));
+        }
+      }
+    }
+  }
+  const runsNow = (name) => name.startsWith('pg_temp.') || running.has(name);
   const temporaryTables = new Set(
     statements
       .map((s) =>
