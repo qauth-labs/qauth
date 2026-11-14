@@ -13,10 +13,10 @@ signer, the one component that uses them
 
 ## Entry points
 
-| Import                            | Holds                                                                                                                                               | Who may import it                                                          |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `@qauth-labs/server-keys`         | The `Signer` interface, the caller roles and their policy, the `typ` table, the key purposes, and the typed errors.                                 | Any project.                                                               |
-| `@qauth-labs/server-keys/custody` | The KEK provider, envelope encryption, key generation, the key factory, the in-process signer and the storage ports. Everything that touches a KEK. | This library, the signer's wiring and the KEK adapter packages, no others. |
+| Import                            | Holds                                                                                                                                                | Who may import it                                                          |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `@qauth-labs/server-keys`         | The `Signer` interface, the caller roles and their policy, the `typ` table, the key purposes, the approval of a key operation, and the typed errors. | Any project.                                                               |
+| `@qauth-labs/server-keys/custody` | The KEK provider, envelope encryption, key generation, the key factory, the in-process signer and the storage ports. Everything that touches a KEK.  | This library, the signer's wiring and the KEK adapter packages, no others. |
 
 ADR-019 provisions the KEK to the signer role alone, so a rule in `.oxlintrc.json` fails
 `nx lint` for an import of `@qauth-labs/server-keys/custody`, or of a deep path into the package,
@@ -255,13 +255,56 @@ A rotation follows the overlap rules of the automatic rotation (ADR-019, #542):
   `DEFAULT_KEY_PREPUBLISH_DAYS`).
 - A retired client-assertion key stays in the provider's JWKS for `retiredRetentionMs` (default 14
   days, `DEFAULT_KEY_RETIRED_RETENTION_DAYS`). A retired webhook secret signs nothing more.
-- `activateNextKey` takes scoped purposes only; the rotation job of #542 is to rotate the others.
-  That job, and the rotation settings that set both windows, are not built yet.
+- `activateNextKey` takes scoped purposes only; the scheduled rotation (`createKeyRotation`, #542)
+  rotates the others.
 
 `deleteScopedKeys` deletes every key of one scope, whatever its status, with their public rows. It is
 the hook the deletion of a subscription or a provider calls, in the same transaction (`tx`), so the
 owner and its keys go together. A signer that holds one of the keys in memory drops it at its next
 key-list read, within one refresh interval.
+
+### Manual rotation
+
+`createKeyRotation(...).rotateNow` starts the rotation of one purpose of a realm before it is due
+(ADR-019 Decision 9, #544). It takes the purposes the scheduled rotation rotates
+(`AUTOMATIC_ROTATION_PURPOSES`) and no scope id; scoped keys rotate through their owners' operations
+above, and the federation keys through their own.
+
+```ts
+const record = await rotation.rotateNow({
+  realmId,
+  purpose: 'token_signing',
+  approval, // ApprovedOperation<'keys.rotate', Tx>: required, consumed in the rotation's transaction
+  onAudit: async (entry, tx) => {
+    /* write the audit row: entry.actor, entry.approvalId */
+  },
+  onStep: async (step, tx) => {
+    /* one `next_created` step per new key or hybrid pair */
+  },
+});
+```
+
+- It is a security operation (ADR-019 Decision 7), so it runs only under an `ApprovedOperation`: the
+  approval of exactly this rotation. The type is required, so a call without one, or with the
+  approval of another operation, does not compile; at run time a missing or malformed approval is
+  refused with an `OperationApprovalError` before anything is read. The admin API's approvals (#512)
+  implement it, and the break-glass CLI may on a key-holding host.
+- The binding: `rotateNow` builds the canonical record `{ op: 'keys.rotate', realm, purpose, scope,
+  requester, nonce }` from its own arguments, the approval's requester and its nonce
+  (`keyRotationOperation`), and hands the SHA-256 of its RFC 8785 form (`operationDigest`) to
+  `approval.consume(digest, tx)`. The approval is filed for that digest, and the approver's passkey
+  challenge is derived from it, so it approves this realm, purpose, scope and requester only. A
+  golden test pins the record's bytes.
+- For each algorithm the realm holds an active key of, it creates the `next` key at once (both keys
+  of a hybrid pair together), which is published at once and signs nothing. The windows hold: the
+  scheduled rotation switches to it once it has been published for `prepublishMs`, however much of
+  the active key's period is left, and keeps the old key for the retention after that. A key that
+  must go at once is retired in an emergency instead (#551).
+- A `next` key that waits already is the rotation's key: it is returned (`created: false`) and no
+  second one is made. The approval is consumed either way, and `onAudit` is called once per
+  operation, with the actor and the approval id, after the keys changed. Everything runs in one
+  transaction under the realm's key lock: a refusal of `consume`, or a throw of either hook, leaves
+  the keys as they were.
 
 ### What is stored
 
