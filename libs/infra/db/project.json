@@ -5,6 +5,31 @@
   "projectType": "library",
   "tags": ["scope:infra", "type:db"],
   "targets": {
+    "typecheck": {
+      "dependsOn": ["migration-policy"],
+      "inputs": [
+        "default",
+        "^default",
+        { "externalDependencies": ["@typescript/native-preview"] },
+        "{workspaceRoot}/scripts/migration-policy/**/*",
+        "{workspaceRoot}/scripts/stable-surface/lib.mjs"
+      ]
+    },
+    "migration-policy": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/scripts/migration-policy/**/*",
+        "{workspaceRoot}/scripts/stable-surface/lib.mjs"
+      ],
+      "options": {
+        "command": "node scripts/migration-policy/check.mjs --base-ref \"${NX_BASE:-}\""
+      },
+      "metadata": {
+        "description": "Check the migrations against the latest release tag (ADR-018 §5, #473): a released migration never changes, moves or goes, the journal only grows, and a migration added since holds no destructive statement unless libs/infra/db/drizzle/policy-exceptions.json lists it with a reason and an issue. Once that list is frozen it may not grow; NX_BASE, which CI sets to the pull request's base, is what it is compared with, or the release tag. Prints the report and appends it to the job summary. Never cached: its inputs are git tags and refs. typecheck depends on it and names the script among its inputs, so the affected typecheck leg runs it whenever a file of this project or the script changes. Exits 0 when the policy holds, 1 when it does not and 2 on an input error, such as a checkout without tags, but Nx reports every failure as 1."
+      }
+    },
     "test-integration": {
       "executor": "nx:run-commands",
       "options": {
