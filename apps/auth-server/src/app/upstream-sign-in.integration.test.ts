@@ -12,6 +12,7 @@ import {
   sealUpstreamOidcConfig,
   type UpstreamOidcConfigInput,
 } from '@qauth-labs/fastify-plugin-federation/src/testing/upstream-oidc-fixtures';
+import { REALM_POLICY_SCHEMA_VERSION } from '@qauth-labs/fastify-plugin-realm-policy';
 import {
   CEREMONY_PAGE_PREFIX,
   INTERACTION_API_PREFIX,
@@ -127,6 +128,7 @@ const BLOCK_VARIABLES = [
   'ALLOW_SIGN_UP',
   'AUTHORIZE_RATE_LIMIT',
   'AUTHORIZE_RATE_LIMIT_LENIENT',
+  'CEREMONY_APP_ERROR_PAGE',
 ];
 
 /** The callback URL the provider of `type` sends the browser back to. */
@@ -483,6 +485,26 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
     const answer = provider.authorize(started.providerRequest, person);
     expect(answer['error']).toBeUndefined();
     return callbackAt(app, jar, type, answer);
+  }
+
+  /**
+   * Start the provider and sign the person in there, end the interaction of
+   * the realm `realmId` meanwhile (as its expiry does), and come back to the
+   * callback (#1106).
+   */
+  async function callbackAfterExpiry(
+    app: FastifyInstance,
+    realmId: string
+  ): Promise<LightMyRequestResponse> {
+    const jar = new CookieJar();
+    const started = await startProvider(app, jar);
+    const answer = provider.authorize(started.providerRequest, PERSON);
+    const idHash = createHash('sha256').update(started.interactionId).digest('hex');
+    await app.redis.del(
+      `interaction:${realmId}:${idHash}`,
+      `interaction-turn:${realmId}:${idHash}`
+    );
+    return callbackAt(app, jar, TYPE, answer);
   }
 
   /**
@@ -1178,28 +1200,12 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
     });
 
     describe('a callback with no interaction left (#1106)', () => {
-      /**
-       * Start the provider and sign the person in there, end the interaction
-       * meanwhile (as its expiry does), and come back to the callback.
-       */
-      async function callbackAfterExpiry(app: FastifyInstance): Promise<LightMyRequestResponse> {
-        const jar = new CookieJar();
-        const started = await startProvider(app, jar);
-        const answer = provider.authorize(started.providerRequest, PERSON);
-        const idHash = createHash('sha256').update(started.interactionId).digest('hex');
-        await app.redis.del(
-          `interaction:${server.realmId()}:${idHash}`,
-          `interaction-turn:${server.realmId()}:${idHash}`
-        );
-        return callbackAt(app, jar, TYPE, answer);
-      }
-
       it("answers 303 to the realm's error page with interaction_expired and the trace id, and no page", async () => {
         const app = server.app();
         await realmPolicies(app, { ceremonyApp: { errorPage: '/ui/error' } });
         const usersBefore = await users(app);
 
-        const response = await callbackAfterExpiry(app);
+        const response = await callbackAfterExpiry(app, server.realmId());
 
         expect(response.statusCode, withServerLog(response.body)).toBe(303);
         expect(response.body).toBe('');
@@ -1218,7 +1224,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
       it("shows the auth server's own error page when the realm names none", async () => {
         const app = server.app();
 
-        const response = await callbackAfterExpiry(app);
+        const response = await callbackAfterExpiry(app, server.realmId());
 
         expectErrorPage(response);
         expect(response.body).toContain(
@@ -1279,6 +1285,193 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         expect(await refusals(app)).toEqual([...refusalsBefore, 'transaction_expired']);
         expect(refusalLogIds()).toEqual([]);
       });
+    });
+  });
+
+  /**
+   * The ceremony app's error page seeded from the environment (#1118): a
+   * deployment that runs no admin listener names it with
+   * `CEREMONY_APP_ERROR_PAGE`. The key seeds a new realm, and fills once the
+   * `null` a realm stored under 0.2.4, at the first boot of this release; from
+   * then on the realm row owns the policy.
+   */
+  describe('with the error page seeded by CEREMONY_APP_ERROR_PAGE=/ui/error (#1118)', () => {
+    const ENVIRONMENT = {
+      INTERACTION_UI_ENABLED: 'true',
+      ALLOW_SIGN_UP: 'true',
+      CEREMONY_APP_ERROR_PAGE: '/ui/error',
+    };
+    // From `info` up: a refusal's log line names the request its trace id is.
+    const server = bootForBlock(ENVIRONMENT, 'info');
+
+    /** The error page the stored policies of the realm `realmId` name, as `app` reads them. */
+    async function errorPageOf(app: FastifyInstance, realmId: string) {
+      return (await app.policyStore.get(realmId))?.policies.ceremonyApp.errorPage;
+    }
+
+    /** A realm on a host of its own, created by `app`, so seeded from that node's environment. */
+    async function createRealm(app: FastifyInstance, name: string): Promise<string> {
+      const { realm } = await app.repositories.realms.createWithPrimaryHost(
+        { name, issuer: `https://${name}.example.com`, enabled: true },
+        `${name}.example.com`
+      );
+      return realm.id;
+    }
+
+    it("gives a new realm the key's page, which a callback with no interaction left answers 303 to", async () => {
+      const app = server.app();
+      // The default realm, which the reset put back as a new realm, and one
+      // created after the boot.
+      expect(await errorPageOf(app, server.realmId())).toBe('/ui/error');
+      expect(await errorPageOf(app, await createRealm(app, 'beta'))).toBe('/ui/error');
+      const usersBefore = await users(app);
+
+      const response = await callbackAfterExpiry(app, server.realmId());
+
+      expect(response.statusCode, withServerLog(response.body)).toBe(303);
+      expect(response.body).toBe('');
+      expect(response.headers['cache-control']).toBe('no-store');
+      const location = new URL(String(response.headers['location']));
+      expect(`${location.origin}${location.pathname}`).toBe(`${ORIGIN}/ui/error`);
+      expect([...location.searchParams]).toEqual([
+        ['code', 'interaction_expired'],
+        ['trace_id', refusalLogIds()[0] ?? 'no refusal logged'],
+      ]);
+      expect(await users(app)).toBe(usersBefore);
+      expect(await codes(app)).toBe(0);
+      expect(await refusals(app)).toEqual(['interaction_expired']);
+    });
+
+    /** Another node of the deployment, on the same databases, booted with `page` as its key; its log goes to `log`. */
+    function bootNode(page: string, log: string[]): Promise<BootedAuthServer> {
+      if (infra === undefined || jwt === undefined) throw new Error('infrastructure not started');
+      return bootAuthServer(
+        {
+          ...baseEnvironment(infra, jwt),
+          AUTHORIZE_RATE_LIMIT: '10000',
+          AUTHORIZE_RATE_LIMIT_LENIENT: '10000',
+          ...ENVIRONMENT,
+          CEREMONY_APP_ERROR_PAGE: page,
+        },
+        {
+          egressClientFactory: createTestEgressClient,
+          logStream: { write: (line: string) => void log.push(line) },
+        }
+      );
+    }
+
+    /**
+     * Store the realm's policies as QAuth 0.2.4 left them: under its schema
+     * version, `1-rc.1`, with the error page `page`.
+     */
+    async function storeAsPreviousRelease(
+      app: FastifyInstance,
+      realmId: string,
+      page: string | null
+    ): Promise<void> {
+      await app.dbPool.query(
+        `UPDATE realms
+            SET policies = jsonb_set(policies, '{ceremonyApp}', $2::jsonb),
+                policy_schema_version = '1-rc.1'
+          WHERE id = $1`,
+        [realmId, JSON.stringify({ errorPage: page })]
+      );
+    }
+
+    /** The realm's row as stored: its schema version and its `ceremonyApp` group. */
+    async function storedRow(app: FastifyInstance, realmId: string) {
+      const { rows } = await app.dbPool.query<{
+        policy_schema_version: string | null;
+        ceremony_app: unknown;
+      }>(
+        `SELECT policy_schema_version, policies->'ceremonyApp' AS ceremony_app
+           FROM realms WHERE id = $1`,
+        [realmId]
+      );
+      return {
+        schemaVersion: rows[0]?.policy_schema_version,
+        ceremonyApp: rows[0]?.ceremony_app,
+      };
+    }
+
+    /** The answer to an ending with no interaction left: a 303 to `page` on the realm origin. */
+    function expectErrorPageAnswer(
+      response: LightMyRequestResponse,
+      page: string,
+      log: readonly string[]
+    ): void {
+      expect(response.statusCode, `${response.body}\n${log.join('')}`).toBe(303);
+      const location = new URL(String(response.headers['location']));
+      expect(`${location.origin}${location.pathname}`).toBe(`${ORIGIN}${page}`);
+      expect(location.searchParams.get('code')).toBe('interaction_expired');
+    }
+
+    const DIFFERS = 'CEREMONY_APP_ERROR_PAGE differs from the stored ceremonyApp.errorPage';
+
+    it('fills the null a realm stored under 0.2.4 once, at the first boot, and a later boot with another value keeps it', async () => {
+      const app = server.app();
+      const realmId = server.realmId();
+      await storeAsPreviousRelease(app, realmId, null);
+
+      // The first boot of this release, with the key set: the upgrade to
+      // this schema version fills the stored null from the key, and the
+      // boot names no ignored key for it, since it used it.
+      const firstLog: string[] = [];
+      const first = await bootNode('/ui/error', firstLog);
+      try {
+        expect(await storedRow(app, realmId)).toEqual({
+          schemaVersion: REALM_POLICY_SCHEMA_VERSION,
+          ceremonyApp: { errorPage: '/ui/error' },
+        });
+        expect(await errorPageOf(first.app, realmId)).toBe('/ui/error');
+        expect(firstLog.join('')).not.toContain(DIFFERS);
+        expectErrorPageAnswer(await callbackAfterExpiry(first.app, realmId), '/ui/error', firstLog);
+      } finally {
+        await first.close();
+      }
+
+      // A later boot, with another page: the realm row owns the field now.
+      const laterLog: string[] = [];
+      const later = await bootNode('/ui/another-error', laterLog);
+      try {
+        expect(await storedRow(app, realmId)).toEqual({
+          schemaVersion: REALM_POLICY_SCHEMA_VERSION,
+          ceremonyApp: { errorPage: '/ui/error' },
+        });
+        expect(await errorPageOf(later.app, realmId)).toBe('/ui/error');
+        // Its boot says the key differs from what the realm stores, which applies.
+        expect(laterLog.join('')).toContain(DIFFERS);
+        expectErrorPageAnswer(await callbackAfterExpiry(later.app, realmId), '/ui/error', laterLog);
+        // A realm that node creates gets that node's page.
+        expect(await errorPageOf(later.app, await createRealm(later.app, 'gamma'))).toBe(
+          '/ui/another-error'
+        );
+      } finally {
+        await later.close();
+      }
+
+      // The block's own node reads the stored page too.
+      expect(await errorPageOf(app, realmId)).toBe('/ui/error');
+    }, 120_000);
+
+    it('keeps a page a realm stored under 0.2.4, whatever the key says', async () => {
+      const app = server.app();
+      const realmId = server.realmId();
+      await storeAsPreviousRelease(app, realmId, '/ui/kept');
+
+      const log: string[] = [];
+      const node = await bootNode('/ui/error', log);
+      try {
+        expect(await storedRow(app, realmId)).toEqual({
+          schemaVersion: REALM_POLICY_SCHEMA_VERSION,
+          ceremonyApp: { errorPage: '/ui/kept' },
+        });
+        expect(await errorPageOf(node.app, realmId)).toBe('/ui/kept');
+        expect(log.join('')).toContain(DIFFERS);
+        expectErrorPageAnswer(await callbackAfterExpiry(node.app, realmId), '/ui/kept', log);
+      } finally {
+        await node.close();
+      }
     });
   });
 

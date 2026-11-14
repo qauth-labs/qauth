@@ -3,7 +3,7 @@ title: Hosted UI
 description: The server-rendered login, consent, and resume screens an integrator's users see during authorization_code + PKCE.
 sidebar:
   order: 3
-lastVerified: '2026-11-13'
+lastVerified: '2026-11-14'
 ---
 
 `authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
@@ -321,7 +321,14 @@ realm may name a page of its ceremony app for them, in its
 (#1106). The value is a path on the realm's own origin under `/ui/`, which the
 ceremony app serves as it serves `/ui/interaction/{id}`, such as `/ui/error`;
 the policy refuses anything else, a URL of another origin included, so the
-setting can never send the browser off the realm. Set it with the admin API's
+setting can never send the browser off the realm. The environment key
+[`CEREMONY_APP_ERROR_PAGE`](/operate/configuration/) seeds it for a new realm
+(#1118), the only way to name the page for a deployment that runs no admin
+listener; a value the policy refuses stops the boot. The first boot of 0.2.5
+also fills, once, the `null` a realm stored under 0.2.4
+([Upgrades](/operate/upgrades/#the-ceremony-apps-error-page-fills-once-from-ceremony_app_error_page)).
+Once the realm has the
+policy, the key no longer changes it: set it with the admin API's
 `PATCH /admin/v1-rc.0/realms/{realmId}/policies`, a JSON merge patch such as
 `{"ceremonyApp": {"errorPage": "/ui/error"}}` with the realm's `ETag` in
 `If-Match`; a change needs `qauth:admin:write`. `null`, the default, keeps the

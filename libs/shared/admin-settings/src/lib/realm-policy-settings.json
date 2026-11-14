@@ -1,5 +1,5 @@
 {
-  "policySchemaVersion": "1-rc.1",
+  "policySchemaVersion": "1-rc.2",
   "description": "The realm policy settings, generated from the realm policy schema (libs/server/realm-policy): what the admin console shows beside each setting. Never edited by hand.",
   "settings": [
     {

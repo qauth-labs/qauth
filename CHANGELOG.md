@@ -52,6 +52,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signer's database user may now write events; the grants map applies it at
   deploy.
 
+- **The environment seeds a realm's ceremony app error page** ([#1118],
+  ADR-019 Decision 7). A realm's `ceremonyApp.errorPage` ([#1106]) could be
+  set only through the admin API's policy update, after the first boot, and a
+  deployment that runs no admin listener could not set it at all, since no
+  first admin can be enrolled yet ([#602]). The new `CEREMONY_APP_ERROR_PAGE`
+  seeds it for a new realm, and for a realm whose stored policies lack it, as
+  `PASSKEY_OFFER_AFTER_SIGN_IN` seeds its policy. 0.2.4 stored `null` in
+  every realm it booted, so the first boot of this release fills that `null`
+  from the key, once; after that the realm row owns the policy, and a later
+  change of the key changes no realm (for the default realm, the boot warns
+  that the key differs from the stored value). Unset or blank seeds `null`,
+  which keeps the auth server's own pages. A value the policy refuses,
+  anything but a path under `/ui/` of unreserved characters with no query or
+  fragment, stops the boot, naming the key. The realm policy schema version
+  is now `1-rc.2`. The configuration, realm policies, hosted UI and upgrades
+  pages say so. **Upgrading:** the first boot of this release stores every
+  realm's policies upgraded to `1-rc.2`, and a realm whose
+  `ceremonyApp.errorPage` is `null` takes `CEREMONY_APP_ERROR_PAGE` when the
+  key is set. That includes a realm whose `null` an admin set on purpose
+  through the admin API: if you meant it, leave the key unset for that boot,
+  or set the policy back to `null` afterwards. A stored path is kept. Give
+  every node the same value for that boot; the first node to boot writes it.
+  During a rolling upgrade a 0.2.4 node reads the filled page, as it reads any
+  document of a later version, and refuses to write the policies (a policy
+  update through it fails) until it is replaced; a realm it creates stores
+  `null` under `1-rc.1`, which a 0.2.5 node reads as the key's page and its
+  next boot stores so.
+
 - **The docs list QAuth's Apple plugin** ([#1076]). `@qauth-labs/plugin-apple`
   `0.1.0`, a preset plugin in its own repository, is in the provider plugins
   table of the published images page, with its redirect URI. It needs QAuth
@@ -4373,6 +4401,7 @@ It adds migrations 0068 and 0069.
 [#599]: https://github.com/qauth-labs/qauth/issues/599
 [#600]: https://github.com/qauth-labs/qauth/issues/600
 [#601]: https://github.com/qauth-labs/qauth/issues/601
+[#602]: https://github.com/qauth-labs/qauth/issues/602
 [#614]: https://github.com/qauth-labs/qauth/issues/614
 [#615]: https://github.com/qauth-labs/qauth/issues/615
 [#616]: https://github.com/qauth-labs/qauth/issues/616
@@ -4456,6 +4485,7 @@ It adds migrations 0068 and 0069.
 [#1108]: https://github.com/qauth-labs/qauth/issues/1108
 [#1109]: https://github.com/qauth-labs/qauth/issues/1109
 [#1110]: https://github.com/qauth-labs/qauth/issues/1110
+[#1118]: https://github.com/qauth-labs/qauth/issues/1118
 
 ### Deprecated
 

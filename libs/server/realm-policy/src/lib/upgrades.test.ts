@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { PolicyDefinitionError } from './field';
 import { createPolicyStore, type RealmPolicyStorage } from './policy-store';
 import { defaultsFromEnv } from './realm-policies';
-import { type PolicySchemaUpgrade, REALM_POLICY_UPGRADES, upgradePathsTo } from './upgrades';
+import {
+  CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE,
+  type PolicySchemaUpgrade,
+  REALM_POLICY_UPGRADES,
+  upgradePathsTo,
+} from './upgrades';
 import {
   compareSchemaVersions,
   FIRST_REALM_POLICY_SCHEMA_VERSION,
@@ -114,5 +119,44 @@ describe('REALM_POLICY_UPGRADES (contract, #908)', () => {
 
     expect(() => createPolicyStore({ storage, seeds: defaultsFromEnv({}) })).not.toThrow();
     expect(Object.isFrozen(REALM_POLICY_UPGRADES)).toBe(true);
+  });
+});
+
+/**
+ * 1-rc.1 to 1-rc.2 (#1118): a stored `null` error page is dropped, so the
+ * boot fills it once from `CEREMONY_APP_ERROR_PAGE`; anything else stays.
+ */
+describe('the one-time error page fill (1-rc.1 to 1-rc.2, #1118)', () => {
+  const { upgrade } = CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE;
+  /** A 1-rc.1 document with `ceremonyApp`, and a group the step does not touch. */
+  const documentWith = (ceremonyApp?: unknown): Record<string, unknown> => ({
+    tokens: { accessTokenLifespanSeconds: 900 },
+    ...(ceremonyApp === undefined ? {} : { ceremonyApp }),
+  });
+
+  it('goes from 1-rc.1 to 1-rc.2, the last step of the list', () => {
+    expect(CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE).toMatchObject({ from: '1-rc.1', to: '1-rc.2' });
+    expect(REALM_POLICY_UPGRADES.at(-1)).toBe(CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE);
+  });
+
+  it('drops a stored null, leaving the rest of the document', () => {
+    expect(upgrade(documentWith({ errorPage: null }))).toEqual(documentWith({}));
+  });
+
+  it('keeps a stored path', () => {
+    expect(upgrade(documentWith({ errorPage: '/ui/kept' }))).toEqual(
+      documentWith({ errorPage: '/ui/kept' })
+    );
+  });
+
+  it('leaves a document without the field, or without the group, unchanged', () => {
+    expect(upgrade(documentWith({}))).toEqual(documentWith({}));
+    expect(upgrade(documentWith())).toEqual(documentWith());
+  });
+
+  it('leaves a value the schema refuses as it is, so it is still refused', () => {
+    for (const ceremonyApp of [{ errorPage: 'https://example.com/x' }, { errorPage: 0 }, 'x']) {
+      expect(upgrade(documentWith(ceremonyApp))).toEqual(documentWith(ceremonyApp));
+    }
   });
 });
