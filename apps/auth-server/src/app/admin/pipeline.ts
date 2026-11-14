@@ -57,7 +57,7 @@ import {
 } from './approvals/gate';
 import { isApprovalEngineOperation } from './approvals/operations';
 import { callerAccount } from './approvals/standing';
-import { approvalsFromOthers, requestApprovalRequirement } from './approvals/two-admin';
+import { approvalsFromOthers, operationApprovalRequirement } from './approvals/two-admin';
 import { runInAdminHandler } from './handler-scope';
 import { adminRealmRouteProblem } from './route-placement';
 import { secretMemberSchemaProblem } from './secrets/secret-members';
@@ -754,26 +754,26 @@ function approvalGate(registry: OperationRegistry) {
     // #521): an approval filed for fewer approvals does not approve it.
     const operation = registry.get(operationId);
     if (operation === undefined) throw new Error(`${operationId} is not a registered operation`);
-    const { approvalsRequired } = requestApprovalRequirement(request.server, {
+    const { approvalsRequired } = await operationApprovalRequirement(request.server, {
       operation,
       realm: caller.targetRealm,
       body: request.body,
     });
     const header = request.headers[APPROVAL_HEADER];
     if (header === undefined) {
-      // Where the realm requires a second admin and none could give the
-      // approval, the call fails closed with what it is waiting for.
-      if (approvalsRequired > 1) {
-        const requester = callerAccount(caller);
+      // Where the request needs another admin's approval and none could
+      // give it, the call fails closed with what it is waiting for: the
+      // same check as the filing's.
+      const requester = callerAccount(caller);
+      const fromOthers = approvalsFromOthers(approvalsRequired, requester.kind);
+      if (fromOthers > 0) {
         const { total } = await eligibleApprovers(request.server, {
           targetRealm: caller.targetRealm,
           requester,
           callerRealm: caller.issuerRealm,
           tx: undefined,
         });
-        if (approvalsFromOthers(approvalsRequired, requester.kind) > total) {
-          throw new ApprovalUnavailableError();
-        }
+        if (fromOthers > total) throw new ApprovalUnavailableError();
       }
       throw new ApprovalRequiredError();
     }

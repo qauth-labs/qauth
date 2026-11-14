@@ -42,7 +42,7 @@ import {
 } from './engine';
 import { APPROVAL_OPERATION_IDS, isApprovalEngineOperation } from './operations';
 import { approvalStanding, approvalVersion, callerAccount, parseApprovalVersion } from './standing';
-import { approvalsFromOthers, requestApprovalRequirement } from './two-admin';
+import { approvalsFromOthers, operationApprovalRequirement } from './two-admin';
 
 /**
  * THE APPROVAL ROUTES OF THE ADMIN API (ADR-019 Decision 7, issue #512).
@@ -382,7 +382,7 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
       // second one now. Where the realm requires a second admin and no one
       // could give it, the request fails closed: nothing is filed.
       const now = Date.now();
-      const requirement = requestApprovalRequirement(request.server, {
+      const requirement = await operationApprovalRequirement(request.server, {
         operation,
         realm: caller.targetRealm,
         body: filed.body,

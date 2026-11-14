@@ -255,8 +255,8 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // The approval engine (#512): a move an approval cannot make from where it
   // stands.
   { errorClass: ApprovalStateError, code: 'conflict', oauthError: 'invalid_request' },
-  // The two-admin rule (#521): a realm requires a second admin's approval and
-  // no other admin can give one, so nothing is filed or run.
+  // The two-admin rule (#521): the operation needs another admin's approval
+  // and no other admin can give one, so nothing is filed or run.
   {
     errorClass: ApprovalUnavailableError,
     code: 'approval_unavailable',

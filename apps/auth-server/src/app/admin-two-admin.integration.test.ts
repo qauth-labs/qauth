@@ -398,6 +398,22 @@ describe('the two-admin rule (#521, real containers)', () => {
       })
     ).rejects.toMatchObject({ statusCode: 403 });
 
+    // An admin made today may not approve: its answer is refused, and audited.
+    const fresh = await securityAdmin(realmId);
+    const denied = async () =>
+      (await auditRows(realmId)).filter(
+        (row) => row.operation_id === 'approvals.approve' && row.outcome === 'denied'
+      ).length;
+    const deniedBefore = await denied();
+    await expect(
+      engine.completeApproval(app(), test.factor, {
+        ...decision,
+        approver: fresh.approver,
+        response: {},
+      })
+    ).rejects.toMatchObject({ statusCode: 403, message: expect.stringContaining('7 days') });
+    expect(await denied()).toBe(deniedBefore + 1);
+
     // The second admin's own passkey gives it.
     expect((await approve(realmId, approval.id, second)).status).toBe('approved');
     const ran = await patch(realmId, requester.token, loosening, etag, approval.id);

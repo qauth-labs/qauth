@@ -16,6 +16,8 @@ import {
   type ApproverRecord,
   approverRefusal,
   isEligibleApprover,
+  operationApprovalRequirement,
+  sharedWithAnEarlierApprover,
   TWO_ADMIN_WINDOW_MS,
 } from './two-admin';
 
@@ -111,6 +113,40 @@ describe('who may approve (#521)', () => {
     expect(refusalOf(approver({ credential: { registeredToRequester: false } }))).toBeNull();
     // Before the factor named the credential, rules 1 to 3 alone are judged.
     expect(refusalOf(approver({ credential: null }))).toBeNull();
+  });
+
+  // Where every approval comes from another admin (a service account's
+  // request), one passkey on two approver accounts is still one person.
+  it('refuses a credential an earlier approval of the request was given with, or whose account gave one', async () => {
+    const test = createTestApprovalFactor();
+    const first = { realmId: REALM.id, accountId: '00000000-0000-4000-8000-0000000000f1' };
+    const second = { realmId: REALM.id, accountId: APPROVER_ID };
+    const given = [
+      {
+        approverRealmId: first.realmId,
+        approverId: first.accountId,
+        credentialId: test.credentialOf(first),
+      },
+    ];
+    expect(await sharedWithAnEarlierApprover(test.factor, test.credentialOf(second), given)).toBe(
+      false
+    );
+    // The same credential id, and a passkey the first approver holds too.
+    expect(await sharedWithAnEarlierApprover(test.factor, test.credentialOf(first), given)).toBe(
+      true
+    );
+    const shared = 'shared-passkey';
+    test.register(first, shared);
+    test.register(second, shared);
+    expect(await sharedWithAnEarlierApprover(test.factor, shared, given)).toBe(true);
+    expect(await sharedWithAnEarlierApprover(test.factor, shared, [])).toBe(false);
+    expect(
+      refusalOf(
+        approver({
+          credential: { registeredToRequester: false, sharedWithAnEarlierApprover: true },
+        })
+      )
+    ).toBe('approver-credential');
   });
 
   // Acceptance criterion: created 6 days before the request is refused, 7
@@ -320,6 +356,67 @@ describe('what moves the window (#521)', () => {
     expect(grants[0]?.lastSecurityChangeAt).toBe(FILED - 30 * DAY);
     vi.setSystemTime(FILED + 60_000);
     expect(approverRefusal(approver({ grants }), REQUEST, REALM, Date.now())).toBeNull();
+  });
+});
+
+describe('a self-protecting operation on the operator realm (#521)', () => {
+  const OPERATOR = { id: '0199fa20-0000-7000-8000-00000000cccc', isOperator: true };
+  const TENANT = { id: REALM.id, isOperator: false };
+  const grantCreate = { id: 'adminGrants.create', selfProtecting: true as const };
+
+  /** A server whose realms hold `sets`; a set of `'unreadable'` fails to parse. */
+  function serverOf(sets: Record<string, readonly string[] | 'unreadable'>) {
+    const snapshot = (id: string) => {
+      const set = sets[id];
+      if (set === 'unreadable') throw new Error('PolicyValidationError');
+      return { policies: { admin: { twoAdminMandatoryOperations: set ?? [] } } };
+    };
+    return {
+      policyStore: {
+        ofRealm: (row: { id: string }) => snapshot(row.id),
+        get: async (id: string) => (id in sets ? snapshot(id) : undefined),
+      },
+      repositories: {
+        realms: {
+          listPolicyRecords: vi.fn(async () => Object.keys(sets).map((realmId) => ({ realmId }))),
+        },
+      },
+    } as unknown as Parameters<typeof operationApprovalRequirement>[0];
+  }
+  const required = async (
+    server: Parameters<typeof operationApprovalRequirement>[0],
+    operation: { readonly id: string; readonly selfProtecting?: true },
+    realm: { readonly id: string; readonly isOperator: boolean }
+  ) =>
+    (
+      await operationApprovalRequirement(server, {
+        operation,
+        realm: realm as unknown as Parameters<typeof operationApprovalRequirement>[1]['realm'],
+      })
+    ).approvalsRequired;
+
+  it("needs two admins while any realm's set is not empty, since its admins administer every realm", async () => {
+    const tightened = serverOf({ [OPERATOR.id]: [], [TENANT.id]: ['keys.rotate'] });
+    expect(await required(tightened, grantCreate, OPERATOR)).toBe(2);
+    expect(
+      await required(serverOf({ [OPERATOR.id]: [], [TENANT.id]: [] }), grantCreate, OPERATOR)
+    ).toBe(1);
+    // A realm whose policies cannot be read counts as one that is tightened.
+    expect(
+      await required(
+        serverOf({ [OPERATOR.id]: [], [TENANT.id]: 'unreadable' }),
+        grantCreate,
+        OPERATOR
+      )
+    ).toBe(2);
+  });
+
+  it("reads only the target realm's set for any other operation or realm", async () => {
+    const server = serverOf({ [OPERATOR.id]: [], [TENANT.id]: ['keys.rotate'] });
+    expect(await required(server, { id: 'keys.retire' }, OPERATOR)).toBe(1);
+    const tenantOnly = serverOf({ [OPERATOR.id]: ['keys.rotate'], [TENANT.id]: [] });
+    expect(await required(tenantOnly, grantCreate, TENANT)).toBe(1);
+    expect(tenantOnly.repositories.realms.listPolicyRecords).not.toHaveBeenCalled();
   });
 });
 

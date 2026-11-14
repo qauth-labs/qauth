@@ -15,7 +15,12 @@ import {
   type Approver,
 } from './factor';
 import { approvalStanding, shownStatus } from './standing';
-import { type ApproverRefusal, approverRefusal, loadApprover } from './two-admin';
+import {
+  type ApproverRefusal,
+  approverRefusal,
+  loadApprover,
+  sharedWithAnEarlierApprover,
+} from './two-admin';
 
 /**
  * THE APPROVAL ENGINE (ADR-019 Decision 7, ADR-014 §14, issue #512).
@@ -312,7 +317,8 @@ export async function approverAuthority(
 async function approvalTheApproverMayDecide(
   fastify: FastifyInstance,
   decision: ApprovalDecision,
-  now: number
+  now: number,
+  options: { readonly auditRefusal?: boolean } = {}
 ): Promise<{ readonly approval: AdminApproval; readonly approver: Approver }> {
   const notFound = () => new NotFoundError('Approval', decision.approvalId);
   const approval = await fastify.repositories.adminApprovals.findById(
@@ -347,6 +353,11 @@ async function approvalTheApproverMayDecide(
         { approvalId: approval.id, reason: refusal },
         'The two-admin rule refused an approver'
       );
+      // An answer the rule refuses is audited as the factor's refusal is;
+      // the page asking for a challenge is not an answer.
+      if (options.auditRefusal === true) {
+        await auditRefusedApproval(fastify, approval, { ...decision, approver });
+      }
       throw new ForbiddenError(NOT_ELIGIBLE);
     }
   }
@@ -377,6 +388,8 @@ async function secondApprovalRefusal(
   now: number
 ): Promise<ApproverRefusal | null> {
   const realm = await approvalRealm(fastify, approval);
+  // Every admin account is a person's until service accounts exist (#522):
+  // rule 1 must then read the account's kind.
   const loaded = await loadApprover(
     fastify,
     { ...approver, kind: 'human' },
@@ -385,6 +398,31 @@ async function secondApprovalRefusal(
   );
   if (loaded === undefined) return 'no-approval-right';
   return approverRefusal(loaded.record, requestRecordOf(approval), realm, now);
+}
+
+/**
+ * Write the `denied` row of an approval the factor or the two-admin rule
+ * refused. A row that cannot be written is logged: the refusal stands.
+ */
+async function auditRefusedApproval(
+  fastify: FastifyInstance,
+  approval: AdminApproval,
+  decided: ApprovalDecision
+): Promise<void> {
+  try {
+    await fastify.db.transaction((tx) =>
+      appendAudit(
+        fastify,
+        tx,
+        decisionEntry(approval, decided, 'approvals.approve', 'denied', null, null)
+      )
+    );
+  } catch (auditError) {
+    fastify.log.error(
+      { err: auditError, approvalId: approval.id },
+      'The audit row of a refused approval could not be written'
+    );
+  }
 }
 
 /** The request `approval` is for, as the two-admin rule reads it. */
@@ -445,7 +483,9 @@ export async function completeApproval(
   options: ApprovalEngineOptions = {}
 ): Promise<AdminApproval> {
   const clock = options.now ?? Date.now;
-  const { approval, approver } = await approvalTheApproverMayDecide(fastify, decision, clock());
+  const { approval, approver } = await approvalTheApproverMayDecide(fastify, decision, clock(), {
+    auditRefusal: true,
+  });
   const decided = { ...decision, approver };
 
   let credentialId: string;
@@ -461,20 +501,7 @@ export async function completeApproval(
       { err: error, approvalId: approval.id, factor: factor.name },
       'An approval factor refused an answer: nothing was approved'
     );
-    try {
-      await fastify.db.transaction((tx) =>
-        appendAudit(
-          fastify,
-          tx,
-          decisionEntry(approval, decided, 'approvals.approve', 'denied', null, null)
-        )
-      );
-    } catch (auditError) {
-      fastify.log.error(
-        { err: auditError, approvalId: approval.id },
-        'The audit row of a refused approval could not be written'
-      );
-    }
+    await auditRefusedApproval(fastify, approval, decided);
     throw new ForbiddenError('The approval was not given: the factor did not verify the answer');
   }
   if (typeof credentialId !== 'string' || credentialId === '') {
@@ -490,8 +517,9 @@ export async function completeApproval(
     approval.requesterId === approver.accountId;
   const realm = await approvalRealm(fastify, approval);
   // Rule 4 of the two-admin rule (#521): a second approval never comes from a
-  // credential registered to the requester's account. The rules before it
-  // are judged again, at this moment.
+  // credential registered to the requester's account, nor from one an
+  // earlier approval of the request was given with or whose account gave
+  // one. The rules before it are judged again, at this moment.
   const credential = isRequester
     ? null
     : {
@@ -499,6 +527,11 @@ export async function completeApproval(
           realmId: approval.requesterRealmId,
           accountId: approval.requesterId,
         }),
+        sharedWithAnEarlierApprover: await sharedWithAnEarlierApprover(
+          factor,
+          credentialId,
+          approval.approvals
+        ),
       };
   const loaded = await loadApprover(
     fastify,
@@ -516,24 +549,13 @@ export async function completeApproval(
       { approvalId: approval.id, reason: refusal, factor: factor.name },
       'The two-admin rule refused an approval: nothing was approved'
     );
-    try {
-      await fastify.db.transaction((tx) =>
-        appendAudit(
-          fastify,
-          tx,
-          decisionEntry(approval, decided, 'approvals.approve', 'denied', null, null)
-        )
-      );
-    } catch (auditError) {
-      fastify.log.error(
-        { err: auditError, approvalId: approval.id },
-        'The audit row of a refused approval could not be written'
-      );
-    }
+    await auditRefusedApproval(fastify, approval, decided);
     throw new ForbiddenError(
       refusal === 'requester-credential'
         ? "The approval was not given: its credential is registered to the requester's account"
-        : NOT_ELIGIBLE
+        : refusal === 'approver-credential'
+          ? 'The approval was not given: its credential gave this request an approval already, or is registered to an account that did'
+          : NOT_ELIGIBLE
     );
   }
 

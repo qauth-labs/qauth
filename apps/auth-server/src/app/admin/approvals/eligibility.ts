@@ -128,6 +128,8 @@ export async function eligibleApprovers(
       account: {
         realmId: account.realmId,
         accountId: live.grant.userId,
+        // Every admin account is a person's until service accounts exist
+        // (#522); rule 1 must then read the account's kind here.
         kind: 'human' as const,
         createdAt: account.createdAt,
       },

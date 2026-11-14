@@ -36,10 +36,12 @@ import type { ApprovalAccount } from './standing';
  *    contact address did not change, whoever changed them. A change moves
  *    `admin_grants.last_security_change_at` of its live grants
  *    (`recordAdminSecurityChange`); a change of what a grant's custom role
- *    gives moves it too. The automatic password disable of ADR-017
+ *    gives must move it too, once roles can change (`adminRoles.update`,
+ *    #679, is self-protecting). The automatic password disable of ADR-017
  *    Decision 7 moves nothing.
  * 4. The credential it approves with is not registered to the requester's
- *    account.
+ *    account, did not give the same request an earlier approval and is not
+ *    registered to an account that did.
  *
  * A human requester's own fresh step-up is the first approval and none of
  * this applies to it. Where a service account files the request, every
@@ -160,6 +162,47 @@ export function requestApprovalRequirement(
 }
 
 /**
+ * What one request of `operation` on `realm` needs, as the gate and the
+ * filing judge it: {@link requestApprovalRequirement}, and for a
+ * `selfProtecting` operation on the operator realm, every realm's set. The
+ * operator realm's admins administer every realm, so an admin made or granted
+ * there can approve anywhere: such an operation needs two admins while any
+ * realm's set is not empty. A realm whose policies cannot be read counts as
+ * one whose set is not empty.
+ */
+export async function operationApprovalRequirement(
+  fastify: Pick<FastifyInstance, 'policyStore' | 'repositories'>,
+  input: {
+    readonly operation: ApprovalsRequiredInput['operation'];
+    readonly realm: RealmRow;
+    readonly body?: unknown;
+  }
+): Promise<ApprovalRequirement> {
+  const own = requestApprovalRequirement(fastify, input);
+  if (
+    own.approvalsRequired > 1 ||
+    input.operation.selfProtecting !== true ||
+    !input.realm.isOperator
+  ) {
+    return own;
+  }
+  for (const record of await fastify.repositories.realms.listPolicyRecords()) {
+    if (record.realmId === input.realm.id) continue;
+    let mandatory: readonly string[];
+    try {
+      const snapshot = await fastify.policyStore.get(record.realmId);
+      // A realm removed since the list was read administers nobody.
+      if (snapshot === undefined) continue;
+      mandatory = snapshot.policies.admin.twoAdminMandatoryOperations;
+    } catch {
+      return approvalRequirementOf(2);
+    }
+    if (mandatory.length > 0) return approvalRequirementOf(2);
+  }
+  return own;
+}
+
+/**
  * How many approvals must come from accounts other than the requester: all
  * of them for a service account, all but its own step-up for a human.
  */
@@ -188,10 +231,16 @@ export interface ApproverRecord extends ApprovalAccount {
   readonly grants: readonly ApproverGrantRecord[];
   /**
    * The credential the approval is given with, once the factor named it:
-   * whether it is registered to the requester's account (rule 4). `null`
-   * before then, when only rules 1 to 3 can be judged.
+   * whether it is registered to the requester's account (rule 4), and
+   * whether an earlier approval of the same request was given with it, or by
+   * an account it is registered to. `null` before then, when only rules 1 to
+   * 3 can be judged.
    */
-  readonly credential: { readonly registeredToRequester: boolean } | null;
+  readonly credential: {
+    readonly registeredToRequester: boolean;
+    /** Absent when no other admin approved yet. */
+    readonly sharedWithAnEarlierApprover?: boolean;
+  } | null;
 }
 
 /** What the rule knows of the request an approval is for. */
@@ -212,7 +261,8 @@ export type ApproverRefusal =
   | 'new-account'
   | 'new-grant'
   | 'security-change'
-  | 'requester-credential';
+  | 'requester-credential'
+  | 'approver-credential';
 
 /**
  * Why `approver` may not give an approval of `request` on `realm` at `now`,
@@ -252,7 +302,38 @@ export function approverRefusal(
   }
   // Rule 4.
   if (approver.credential?.registeredToRequester === true) return 'requester-credential';
+  // Rule 4, kept for every approval a request gathers: one passkey on two
+  // approver accounts is one person, whichever of them files.
+  if (approver.credential?.sharedWithAnEarlierApprover === true) return 'approver-credential';
   return null;
+}
+
+/**
+ * Whether `credentialId` gave one of `approvals` already, or is registered to
+ * an account that gave one: rule 4 for every approval after the first
+ * ({@link ApproverRecord}'s `credential`). `factor` answers whether a
+ * credential is registered to an account.
+ */
+export async function sharedWithAnEarlierApprover(
+  factor: {
+    isRegisteredTo(
+      credentialId: string,
+      account: { readonly realmId: string; readonly accountId: string }
+    ): Promise<boolean>;
+  },
+  credentialId: string,
+  approvals: readonly {
+    readonly approverRealmId: string;
+    readonly approverId: string;
+    readonly credentialId: string;
+  }[]
+): Promise<boolean> {
+  for (const given of approvals) {
+    if (given.credentialId === credentialId) return true;
+    const account = { realmId: given.approverRealmId, accountId: given.approverId };
+    if (await factor.isRegisteredTo(credentialId, account)) return true;
+  }
+  return false;
 }
 
 /** Whether `approver` may give a second admin's approval of `request` ({@link approverRefusal}). */

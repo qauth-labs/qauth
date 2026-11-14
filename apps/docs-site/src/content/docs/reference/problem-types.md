@@ -221,7 +221,7 @@ The request conflicts with the current state of the resource.
 
 **Code** `approval_unavailable` · **Status** 409 · **Title** Approval unavailable
 
-The realm requires a second admin's approval of this security operation, and no other admin can give one now: none is eligible (ADR-019 Decision 7). Nothing was filed and the operation did not run. The detail points at the break-glass runbook.
+The security operation needs another admin's approval, a second admin's where the realm makes it mandatory, and no other admin can give one now: none is eligible (ADR-019 Decision 7). Nothing was filed and the operation did not run. The detail points at the break-glass runbook.
 
 ## `already-exists`
 

@@ -396,7 +396,7 @@ withdrawing write the rows of `approvals.create` and `approvals.cancel`; approvi
 write `approvals.approve` and `approvals.deny`, the first with the credential that approved and
 the account that made the approver an admin; the operation's own `succeeded` row lists the
 approvals it ran on, each with its credential and that account, and carries the approval's
-`op_hash` as its request digest. A factor that refuses an approver's answer, and an approver the
+`op_hash` as its request digest. A factor that refuses an approver's answer, and an answer the
 two-admin rule refuses, write a `denied` row of `approvals.approve`.
 
 ### Issuing a family audience
