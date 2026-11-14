@@ -162,8 +162,10 @@ scopes a dynamically registered client may hold, whether and from which hosts th
 Client ID Metadata Document, the mail transport and sender, whether the hosted sign-in offers a
 passkey after a password sign-in, and the ceremony app's error page. The rest are still read from
 the environment, for every realm: the verification link's lifetime and resend rule. Nothing
-reads the \`admin\` group yet. Once a policy lives on the realm row, the environment only seeds a
-new realm's value, and the realm row owns it from then on.
+reads the \`admin\` group yet. Once a policy lives on the realm row, the environment only seeds
+the fields that row lacks: a new realm takes every seed, and an existing realm takes the seed of
+each field its stored policies lack at boot, as after a schema upgrade that drops a stored value.
+The realm row owns each stored value from then on.
 
 A secret field, such as the SMTP password, is never in the policies: the realm keeps its value in
 its secret store, encrypted with the realm's data-at-rest key, and the representation shows only
@@ -201,7 +203,9 @@ needs what its strictest change needs.
 ## Defaults and seeding
 
 - The Default column is the value of a realm whose environment does not set the key in Seeded
-  from. The environment only seeds: changing a key later changes no existing realm.
+  from. The environment only seeds: changing a key later changes no value a realm has stored. A
+  field the stored policies lack takes the key's value at the next boot, as a field does that a
+  schema upgrade drops (1-rc.2 drops a stored \`null\` of \`ceremonyApp.errorPage\`, once).
 - A field added within a schema version always has a default, so a stored document that predates
   it still parses.
 - **Secret** fields, such as the SMTP password, are write-only. Their value is never stored in the
