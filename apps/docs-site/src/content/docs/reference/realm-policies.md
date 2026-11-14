@@ -3,7 +3,7 @@ title: Realm policies
 description: Every realm policy field with its default, the environment key that seeds it, which way is stricter and when a change is a security operation, generated from the schema in libs/server/realm-policy.
 sidebar:
   order: 8
-lastVerified: '2026-11-13'
+lastVerified: '2026-11-14'
 ---
 
 <!-- Generated from libs/server/realm-policy by its tests. Do not edit by hand: change the schema and run `pnpm nx test docs-checks -- -u`. -->
@@ -19,11 +19,12 @@ Most of them already live on the realm row: the access, development access and r
 lifetimes, the verified-account, password and brute-force policy, the environment ceiling, the
 scopes a dynamically registered client may hold, whether and from which hosts the realm accepts a
 Client ID Metadata Document, the mail transport and sender, whether the hosted sign-in offers a
-passkey after a password sign-in, and the ceremony app's error page, which no environment key
-seeds. The rest are still read from the environment, for every realm:
-the verification link's lifetime and resend rule. Nothing reads the `admin` group yet. Once a
-policy lives on the realm row, the environment only seeds a new realm's value, and the realm row
-owns it from then on.
+passkey after a password sign-in, and the ceremony app's error page. The rest are still read from
+the environment, for every realm: the verification link's lifetime and resend rule. Nothing
+reads the `admin` group yet. Once a policy lives on the realm row, the environment only seeds
+the fields that row lacks: a new realm takes every seed, and an existing realm takes the seed of
+each field its stored policies lack at boot, as after a schema upgrade that drops a stored value.
+The realm row owns each stored value from then on.
 
 A secret field, such as the SMTP password, is never in the policies: the realm keeps its value in
 its secret store, encrypted with the realm's data-at-rest key, and the representation shows only
@@ -34,7 +35,7 @@ is refused, and so is one that selects `smtp` or changes its host, port or TLS m
 the password again, or that names `localhost`, a non-public IP address or a cloud metadata address as
 its SMTP host when the operator's `SMTP_ALLOWED_HOSTS` does not list it (a metadata address never).
 
-Schema version: `1-rc.1`.
+Schema version: `1-rc.2`.
 
 ## How a change is classified
 
@@ -61,7 +62,9 @@ needs what its strictest change needs.
 ## Defaults and seeding
 
 - The Default column is the value of a realm whose environment does not set the key in Seeded
-  from. The environment only seeds: changing a key later changes no existing realm.
+  from. The environment only seeds: changing a key later changes no value a realm has stored. A
+  field the stored policies lack takes the key's value at the next boot, as a field does that a
+  schema upgrade drops (1-rc.2 drops a stored `null` of `ceremonyApp.errorPage`, once).
 - A field added within a schema version always has a default, so a stored document that predates
   it still parses.
 - **Secret** fields, such as the SMTP password, are write-only. Their value is never stored in the
@@ -125,9 +128,9 @@ needs what its strictest change needs.
 
 ### `ceremonyApp`
 
-| Field                   | Default | Seeded from | Stricter when | Class   | Description                                                                                                                                                                                                                                  |
-| ----------------------- | ------- | ----------- | ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ceremonyApp.errorPage` | none    | none        | not ordered   | `write` | The path on the realm origin, under `/ui/`, of the ceremony app’s page for the endings that leave no interaction to show (a provider callback whose sign-in has ended, the logout’s own pages), or null to keep the auth server’s own pages. |
+| Field                   | Default | Seeded from               | Stricter when | Class   | Description                                                                                                                                                                                                                                  |
+| ----------------------- | ------- | ------------------------- | ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ceremonyApp.errorPage` | none    | `CEREMONY_APP_ERROR_PAGE` | not ordered   | `write` | The path on the realm origin, under `/ui/`, of the ceremony app’s page for the endings that leave no interaction to show (a provider callback whose sign-in has ended, the logout’s own pages), or null to keep the auth server’s own pages. |
 
 ### `registration`
 

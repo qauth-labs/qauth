@@ -1372,6 +1372,29 @@ Nothing checks the grant at boot. Without it a regeneration, or an enrolment's
 first set, answers `500` or binds the app without a set, with
 `permission denied` for the table in the log.
 
+### The ceremony app's error page fills once from `CEREMONY_APP_ERROR_PAGE`
+
+0.2.4 added the realm policy `ceremonyApp.errorPage` with no environment key,
+so every realm it booted stores `null`. 0.2.5 adds the key
+`CEREMONY_APP_ERROR_PAGE` ([#1118](https://github.com/qauth-labs/qauth/issues/1118))
+and steps the realm policy schema version to `1-rc.2`. The first boot of 0.2.5
+stores every realm's policies under `1-rc.2`, and a realm whose error page is
+`null` takes the key's value when the key is set, once; a stored path is kept.
+From then on the realm row owns the policy, as every other one, and a later
+change of the key changes no realm.
+
+- **A deliberate `null` is filled too.** A realm whose `null` an admin set
+  through the admin API takes the key's value like any other. If that realm
+  should keep the auth server's own pages, leave the key unset for the first
+  boot, or set the policy back to `null` afterwards.
+- **Give every node the same value for the first boot.** Of nodes that start
+  together, the first to boot writes the realm; the others find it done.
+- **During a rolling upgrade**, a 0.2.4 node reads the filled page, as it
+  reads any document of a later schema version, and refuses to write the
+  policies, so a policy update it serves fails until the node is replaced. A
+  realm a 0.2.4 node creates stores `null` under `1-rc.1`: 0.2.5 nodes read it
+  as the key's page, and the next 0.2.5 boot stores it so.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

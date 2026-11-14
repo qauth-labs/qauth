@@ -1870,11 +1870,13 @@ describe('createPolicyStore — the brute-force bounds of 1-rc.1 (#517)', () => 
     });
 
     const report = await store.seedRealms();
+    // Through 1-rc.1 to this release's version: 1-rc.2 fills the stored
+    // `null` error page from the seeds (#1118).
     expect(report.upgraded).toEqual([
-      { realmId: 'realm-a', realmName: 'master', from: '1-rc.0', paths: [] },
+      { realmId: 'realm-a', realmName: 'master', from: '1-rc.0', paths: ['ceremonyApp.errorPage'] },
     ]);
     const row = rows.get('realm-a');
-    expect(row?.schemaVersion).toBe('1-rc.1');
+    expect(row?.schemaVersion).toBe(REALM_POLICY_SCHEMA_VERSION);
     expect(row?.document['bruteForce']).toMatchObject({
       lockoutSeconds: 86_400,
       windowSeconds: 86_400,
@@ -1904,6 +1906,78 @@ describe('createPolicyStore — the brute-force bounds of 1-rc.1 (#517)', () => 
       'bruteForce.lockoutSeconds',
     ]);
     expect(writes).toHaveLength(0);
+  });
+});
+
+describe('createPolicyStore — the one-time error page fill of 1-rc.2 (#1118)', () => {
+  /** The seeds of a node whose environment sets `CEREMONY_APP_ERROR_PAGE` to `page`. */
+  const seedsWith = (page?: string) =>
+    defaultsFromEnv(page === undefined ? {} : { CEREMONY_APP_ERROR_PAGE: page });
+
+  /** A realm whose 1-rc.1 policies hold `errorPage`, or lack the field when it is `undefined`. */
+  function realmOfRc1(errorPage: string | null | undefined): MemoryRealm {
+    const document = structuredClone(SEEDS) as unknown as Record<string, unknown>;
+    document['ceremonyApp'] = errorPage === undefined ? {} : { errorPage };
+    return realmWithPolicies({ schemaVersion: '1-rc.1', document });
+  }
+
+  function storeWith(realm: MemoryRealm, page?: string) {
+    const memory = memoryStorage([realm]);
+    const store = createPolicyStore({ storage: memory.storage, seeds: seedsWith(page) });
+    return { ...memory, store };
+  }
+
+  it("fills a stored null from the key, once, and then keeps the row's value", async () => {
+    const { store, rows } = storeWith(realmOfRc1(null), '/ui/error');
+
+    expect((await store.get('realm-a'))?.policies.ceremonyApp.errorPage).toBe('/ui/error');
+    expect((await store.seedRealms()).upgraded).toEqual([
+      { realmId: 'realm-a', realmName: 'master', from: '1-rc.1', paths: ['ceremonyApp.errorPage'] },
+    ]);
+    const row = rows.get('realm-a');
+    expect(row?.schemaVersion).toBe(REALM_POLICY_SCHEMA_VERSION);
+    expect(row?.document['ceremonyApp']).toEqual({ errorPage: '/ui/error' });
+
+    // A later boot, with another value, finds the realm complete at this
+    // release's version, and leaves it as it is.
+    const later = createPolicyStore({
+      storage: memoryStorage([row as MemoryRealm]).storage,
+      seeds: seedsWith('/ui/another-error'),
+    });
+    expect(await later.seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      upgraded: [],
+      skipped: [],
+    });
+    expect((await later.get('realm-a'))?.policies.ceremonyApp.errorPage).toBe('/ui/error');
+  });
+
+  it('stores null again when the key is unset', async () => {
+    const { store, rows } = storeWith(realmOfRc1(null));
+
+    await store.seedRealms();
+
+    expect(rows.get('realm-a')?.document['ceremonyApp']).toEqual({ errorPage: null });
+    expect(rows.get('realm-a')?.schemaVersion).toBe(REALM_POLICY_SCHEMA_VERSION);
+  });
+
+  it('keeps a stored path, whatever the key says', async () => {
+    const { store, rows } = storeWith(realmOfRc1('/ui/kept'), '/ui/error');
+
+    expect((await store.get('realm-a'))?.policies.ceremonyApp.errorPage).toBe('/ui/kept');
+    expect((await store.seedRealms()).upgraded).toEqual([
+      { realmId: 'realm-a', realmName: 'master', from: '1-rc.1', paths: [] },
+    ]);
+    expect(rows.get('realm-a')?.document['ceremonyApp']).toEqual({ errorPage: '/ui/kept' });
+  });
+
+  it('fills a document that lacks the field, as any field a later release added', async () => {
+    const { store, rows } = storeWith(realmOfRc1(undefined), '/ui/error');
+
+    await store.seedRealms();
+
+    expect(rows.get('realm-a')?.document['ceremonyApp']).toEqual({ errorPage: '/ui/error' });
   });
 });
 
