@@ -45,35 +45,43 @@ major release.
 The check reads the SQL of every migration added since the baseline (below): the statements
 drizzle-kit generates and the custom SQL written beside them. It refuses these statement kinds:
 
-| Statement kind        | Statements                                                                        | Why                                                                    |
-| --------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `drop-table`          | `DROP TABLE`, `DROP SCHEMA`                                                       | Drops a table and every row in it                                      |
-| `drop-column`         | `ALTER TABLE … DROP [COLUMN]`                                                     | Drops a column and its data                                            |
-| `drop-constraint`     | `ALTER TABLE … DROP CONSTRAINT`                                                   | Drops a constraint the previous release relies on                      |
-| `alter-column-type`   | `ALTER TABLE … ALTER [COLUMN] … [SET DATA] TYPE`                                  | Can narrow the column, or rewrite the table                            |
-| `rename`              | Any `ALTER … RENAME`                                                              | The previous release still uses the old name                           |
-| `truncate`            | `TRUNCATE`                                                                        | Deletes every row of a table                                           |
-| `delete-from`         | `DELETE FROM`, `MERGE … THEN DELETE`                                              | Deletes rows                                                           |
-| `set-not-null`        | `ALTER TABLE … ALTER [COLUMN] … SET NOT NULL`                                     | Fails on existing NULLs, and refuses the previous release's writes     |
-| `add-column-not-null` | `ADD [COLUMN] … NOT NULL` (or `PRIMARY KEY`) with no `DEFAULT` and no `GENERATED` | Fails on a table with rows, and refuses the previous release's inserts |
-| `raise-exception`     | `RAISE` at level `EXCEPTION` (the default level), or `ASSERT`, in a `DO` block    | A precondition that stops the upgrade until someone acts by hand       |
+| Statement kind        | Statements                                                                           | Why                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| `drop-table`          | `DROP TABLE`, `DROP SCHEMA`                                                          | Drops a table and every row in it                                      |
+| `drop-column`         | `ALTER TABLE … DROP [COLUMN]`                                                        | Drops a column and its data                                            |
+| `drop-constraint`     | `ALTER TABLE … DROP CONSTRAINT`                                                      | Drops a constraint the previous release relies on                      |
+| `alter-column-type`   | `ALTER TABLE … ALTER [COLUMN] … [SET DATA] TYPE`                                     | Can narrow the column, or rewrite the table                            |
+| `rename`              | Any `ALTER … RENAME`                                                                 | The previous release still uses the old name                           |
+| `truncate`            | `TRUNCATE`                                                                           | Deletes every row of a table                                           |
+| `delete-from`         | `DELETE FROM`, `MERGE … THEN DELETE`                                                 | Deletes rows                                                           |
+| `set-not-null`        | `ALTER TABLE … ALTER [COLUMN] … SET NOT NULL`, `ADD [CONSTRAINT …] NOT NULL …`       | Fails on existing NULLs, and refuses the previous release's writes     |
+| `add-column-not-null` | `ADD [COLUMN] … NOT NULL` (or `PRIMARY KEY`) with no `DEFAULT` and no `GENERATED`    | Fails on a table with rows, and refuses the previous release's inserts |
+| `raise-exception`     | `RAISE` at level `EXCEPTION` (the default level), or `ASSERT`, in code that runs now | A precondition that stops the upgrade until someone acts by hand       |
+| `drop-cascade`        | `DROP … CASCADE` of anything but a table or schema                                   | Also drops what depends on it: `DROP TYPE … CASCADE` drops its columns |
+| `dynamic-sql`         | `EXECUTE` in code that runs now                                                      | Runs SQL the check cannot read                                         |
 
 `raise-exception` is the manual-step risk. Migration 0011 aborted unless the operator had run a
 backfill first, which made its upgrade a two-hop runbook (see
 [the history of migration 0011](/operate/upgrades/#history-the-migration-0011-runbook-adr-002)).
 
-The check reads what runs at migration time. The body of a `DO` block runs then, so it is read
-like any other SQL. The body of `CREATE FUNCTION` or `CREATE PROCEDURE` runs only when something
-calls it later, so it is not: a trigger function that raises to refuse a write is a guard, not a
+The check reads what runs at migration time, which is the code that "runs now" above. The body of
+a `DO` block runs then, and so does the body of a routine the migration runs itself: a `pg_temp`
+helper, or a function or procedure another of its statements calls. Those are read like any
+other SQL. Any other `CREATE FUNCTION` or `CREATE PROCEDURE` body runs only when something calls
+it later, so it is not read: a trigger function that raises to refuse a write is a guard, not a
 migration step. Words inside string literals, quoted identifiers and comments match nothing.
+Dropping a temporary table or a `pg_temp` helper the migration made is not refused either.
+
+The file is read the way the migration runner splits it: drizzle cuts it at every
+`--> statement-breakpoint`, even one inside a comment, so the check cuts it there too.
 
 Some statements it prints for review without refusing them:
 
 - an `ALTER` form, or an `ALTER TABLE` action, it does not know;
-- a `DROP` of anything but a table: an index, a function, a trigger or a type. Dropping one loses
-  no rows, but the previous release may still use it, for example a unique index its
-  `ON CONFLICT` names. With `CASCADE`, the drop also takes every object that depends on it;
-- dynamic SQL (`EXECUTE`) in a `DO` block, which the check cannot read.
+- a `DROP` of anything but a table, without `CASCADE`: an index, a function, a trigger or a type.
+  Dropping one loses no rows, but the previous release may still use it, for example a unique
+  index its `ON CONFLICT` names;
+- a `CALL` of a procedure the migration does not define, whose body the check cannot read.
 
 ## Released migrations never change
 
@@ -123,8 +131,9 @@ Entries stay after their migration is released, as the record of what 0.x allowe
 started empty.
 
 **The freeze.** The issue that cuts the 1.0 release candidate sets `"frozen": true`. From then on
-the list may not grow: an entry that the list at the pull request's base does not hold fails, and
-`frozen` cannot go back to `false`. Every 1.x migration then passes the policy with no exception.
+the list may not grow: an entry that the list at the pull request's base does not hold fails, a
+migration an entry covers may not change, and `frozen` cannot go back to `false`. Every 1.x
+migration then passes the policy with no exception.
 
 ## Running it
 

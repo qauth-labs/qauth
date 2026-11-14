@@ -55,8 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A migration policy check** ([#473], ADR-018 §5). CI now refuses a
   migration added since the last release tag that drops a table, column or
   constraint, changes a column's type, renames, truncates or deletes rows,
-  sets or adds a `NOT NULL` column with no default, or raises an exception in
-  a `DO` block, the precondition that made migration 0011 a manual step. It
+  sets or adds a `NOT NULL` column with no default, drops with `CASCADE`, runs
+  SQL it cannot read, or raises an exception at migration time, the
+  precondition that made migration 0011 a manual step. It
   also refuses any change to a migration a release has shipped, and a journal
   that does not only grow, with each new entry dated after the one before.
   Until 1.0 a refused statement passes when
