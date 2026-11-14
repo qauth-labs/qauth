@@ -7,12 +7,14 @@ import {
   INTERACTION_API_PREFIX,
   stepUrn,
 } from '@qauth-labs/shared-interaction-contract';
+import { redirectTarget } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
 import type { EndSessionParams, LogoutRequest } from '../schemas/end-session';
 import { isOperatorProvisionedClient } from './authorization-error';
 import { endBrowserSession, liveBrowserSession, resolveBrowserSession } from './browser-session';
+import { ceremonyErrorPageOf, sendToCeremonyErrorPage } from './ceremony-error-page';
 import { clientDisplay } from './client-display';
 import { resolveClient, type ResolvedClient } from './client-resolution';
 import { isClientUsable } from './client-status';
@@ -260,8 +262,15 @@ export async function logoutReturnLocation(
  * the browser gets a page instead: signed out, and the host it would go to,
  * with a link the person may follow. After the confirm step the person has
  * seen QAuth's page naming the app, and the answer redirects as for any client.
+ *
+ * A realm that names its ceremony app's error page (#1106) gets `303` to it
+ * instead of that page, with `logout_finished`, `signed_out=true` and the
+ * host of a web app as text: the page shows them, and builds no link from
+ * any of them.
  */
 function sendBackToApp(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
   reply: FastifyReply,
   client: ResolvedClient | null,
   location: string
@@ -270,11 +279,39 @@ function sendBackToApp(
   if (client !== null && isOperatorProvisionedClient(client)) {
     return reply.redirect(location, 303);
   }
+  const errorPage = ceremonyErrorPageOf(fastify, requestRealm(request));
+  if (errorPage !== null) {
+    const target = redirectTarget(location);
+    return sendToCeremonyErrorPage(request, reply, errorPage, 'logout_finished', {
+      signedOut: true,
+      ...(target?.target === 'host' ? { host: target.host } : {}),
+    });
+  }
   return sendEndSessionPage(reply, 200, {
     kind: 'leaving',
     host: redirectHost(location),
     href: safeUrl(location),
   });
+}
+
+/**
+ * The page of a logout that leaves this browser with no session of the
+ * realm and no app to go back to: the realm's error page (#1106) with
+ * `logout_finished` and `signed_out=true` when it names one, else the auth
+ * server's signed-out page.
+ */
+function sendSignedOut(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply
+): FastifyReply {
+  const errorPage = ceremonyErrorPageOf(fastify, requestRealm(request));
+  if (errorPage !== null) {
+    return sendToCeremonyErrorPage(request, reply, errorPage, 'logout_finished', {
+      signedOut: true,
+    });
+  }
+  return sendEndSessionPage(reply, 200, { kind: 'signed_out' });
 }
 
 /** Record why a logout ended nothing. */
@@ -373,6 +410,12 @@ export async function answerEndSession(
         : eventClientIdOf({ request: { client_id: checked.client.clientId } }),
       null
     );
+    // The realm's error page (#1106), when it names one: nothing was signed
+    // out, and the page shows the request's trace id.
+    const errorPage = ceremonyErrorPageOf(fastify, realm);
+    if (errorPage !== null) {
+      return sendToCeremonyErrorPage(request, reply, errorPage, 'logout_refused');
+    }
     return sendEndSessionPage(reply, 400, { kind: 'refused', traceId: request.id });
   }
   const { hint, client, logout } = checked;
@@ -386,8 +429,8 @@ export async function answerEndSession(
   if (session === null) {
     await recordSignOutFailed(request, realm.id, 'no_session', clientId, null);
     return back === undefined
-      ? sendEndSessionPage(reply, 200, { kind: 'signed_out' })
-      : sendBackToApp(reply, client, back);
+      ? sendSignedOut(fastify, request, reply)
+      : sendBackToApp(fastify, request, reply, client, back);
   }
 
   const carried: CarriedSession = { userId: session.userId, sid: session.sid };
@@ -402,8 +445,8 @@ export async function answerEndSession(
     clearSessionCookie(reply);
     await recordSignedOut(request, realm.id, carried, clientId);
     return back === undefined
-      ? sendEndSessionPage(reply, 200, { kind: 'signed_out' })
-      : sendBackToApp(reply, client, back);
+      ? sendSignedOut(fastify, request, reply)
+      : sendBackToApp(fastify, request, reply, client, back);
   }
 
   // No valid hint names this account: the person is asked, and nothing ends
@@ -570,7 +613,9 @@ export function resendAsGet(
 /**
  * The status page (`GET /oauth/end-session/status`): whether this browser is
  * still signed in. It takes no parameter, so nobody can make it say anything
- * but the truth about this browser.
+ * but the truth about this browser. A realm that names its ceremony app's
+ * error page (#1106) gets `303` to it with `logout_finished` and the same
+ * truth as `signed_out`.
  */
 export async function answerEndSessionStatus(
   fastify: FastifyInstance,
@@ -578,5 +623,11 @@ export async function answerEndSessionStatus(
   reply: FastifyReply
 ): Promise<FastifyReply> {
   const session = await resolveBrowserSession(fastify, request, reply);
+  const errorPage = ceremonyErrorPageOf(fastify, requestRealm(request));
+  if (errorPage !== null) {
+    return sendToCeremonyErrorPage(request, reply, errorPage, 'logout_finished', {
+      signedOut: session === null,
+    });
+  }
   return sendEndSessionPage(reply, 200, { kind: session === null ? 'signed_out' : 'signed_in' });
 }

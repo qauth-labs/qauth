@@ -64,12 +64,20 @@ describe('upstreamRouteHost (#639)', () => {
         : undefined
     ),
   };
-  const host = upstreamRouteHost({ redis, log: { error: vi.fn(), warn: vi.fn() } } as never, {
-    catalog,
-    engines: () => {
-      throw new Error('no engine in this test');
-    },
-  });
+  // The realm's ceremony app error page (#1106), which a test may set.
+  const policies = { errorPage: null as string | null };
+  const policyStore = {
+    ofRealm: vi.fn(() => ({ policies: { ceremonyApp: { errorPage: policies.errorPage } } })),
+  };
+  const host = upstreamRouteHost(
+    { redis, log: { error: vi.fn(), warn: vi.fn() }, policyStore } as never,
+    {
+      catalog,
+      engines: () => {
+        throw new Error('no engine in this test');
+      },
+    }
+  );
 
   /** What a start of `type` left pending, bound to the flow cookie `secret`. */
   function park(secret: string, type = method.type): string {
@@ -127,6 +135,7 @@ describe('upstreamRouteHost (#639)', () => {
 
   beforeEach(() => {
     store.clear();
+    policies.errorPage = null;
     redis.getdel.mockClear();
     vi.mocked(emitUserEvent).mockClear();
   });
@@ -188,6 +197,57 @@ describe('upstreamRouteHost (#639)', () => {
       { method: 'upstream', reason: 'transaction_mismatch' },
       expect.objectContaining({ realmId: REALM.id, userId: null, actor: 'user' })
     );
+  });
+
+  it("sends a callback with nothing pending to the realm's error page, when it names one (#1106)", async () => {
+    policies.errorPage = '/ui/error';
+    const request = callback(mintFlowSecret());
+    const { reply: answer, sent, redirect } = reply();
+    await host.complete(
+      method,
+      { kind: 'failed', reason: 'transaction_mismatch' },
+      request,
+      answer
+    );
+
+    expect(redirect).toHaveBeenCalledTimes(1);
+    const [location, status] = redirect.mock.calls[0] as [string, number];
+    expect(status).toBe(303);
+    const url = new URL(location);
+    expect(url.origin + url.pathname).toBe(`${REALM.issuer}/ui/error`);
+    expect([...url.searchParams]).toEqual([
+      ['code', 'interaction_expired'],
+      ['trace_id', 'req-639'],
+    ]);
+    expect(sent.body).toBeUndefined();
+    expect(sent.headers['cache-control']).toBe('no-store');
+    // The refusal is logged under the request's id, which the page shows.
+    expect(vi.mocked(request.log.info)).toHaveBeenCalledWith(
+      { upstreamProvider: method.type, upstreamRefusal: 'transaction_mismatch' },
+      'upstream sign-in refused'
+    );
+    expect(vi.mocked(emitUserEvent)).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      { method: 'upstream', reason: 'transaction_mismatch' },
+      expect.objectContaining({ realmId: REALM.id })
+    );
+  });
+
+  it("keeps the pages' own error page, with the way back, whatever the realm names (#1106)", async () => {
+    policies.errorPage = '/ui/error';
+    const secret = mintFlowSecret();
+    park(secret);
+    const request = callback(secret);
+    await host.takeTransaction(method, request, BINDING);
+    const { reply: answer, sent, redirect } = reply();
+
+    await host.complete(method, { kind: 'failed', reason: 'invalid_response' }, request, answer);
+
+    expect(sent.status).toBe(400);
+    expect(sent.body).toContain('<code>req-639</code>');
+    expect(sent.body).toContain(`href="${WAY_BACK.replace(/&/g, '&amp;')}"`);
+    expect(redirect).not.toHaveBeenCalled();
   });
 
   it.each([

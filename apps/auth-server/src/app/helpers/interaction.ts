@@ -6,7 +6,11 @@ import type { SignInTransaction } from '@qauth-labs/fastify-plugin-sign-in-engin
 import { ForbiddenError, InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { EventDataOf, RegisteredEventType } from '@qauth-labs/shared-events';
 import type { ClientDisplay } from '@qauth-labs/shared-interaction-client';
-import { ceremonyPagePath, type RestartNotice } from '@qauth-labs/shared-interaction-contract';
+import {
+  ceremonyPagePath,
+  isTraceId,
+  type RestartNotice,
+} from '@qauth-labs/shared-interaction-contract';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
@@ -190,6 +194,13 @@ export interface InteractionView {
    * Absent from every other view.
    */
   readonly notice?: RestartNotice;
+  /**
+   * The id the server logged the request under that refused the current
+   * step (#1106), while the step holds an `error`: the step read shows it
+   * as `trace_id`. Absent without an `error`, and when that request's id is
+   * not one a `trace_id` can carry.
+   */
+  readonly traceId?: string;
 }
 
 /** The current step's personal data, for the browser holding the flow cookie. */
@@ -486,6 +497,9 @@ function viewOf(record: InteractionRecord): InteractionView {
     deadline: interactionDeadline(record),
     revision: record.revision,
     csrf: interactionCsrf(record),
+    ...(record.step.error === undefined || record.traceId === undefined
+      ? {}
+      : { traceId: record.traceId }),
     ...((record.purpose === 'authorization' || record.purpose === 'account') &&
     record.upstreamLink?.state === 'signing_in'
       ? { upstreamLink: { provider: record.upstreamLink.provider, name: record.upstreamLink.name } }
@@ -706,6 +720,7 @@ async function createInteraction(
     ...input.target,
     ...(input.upstreamLink === undefined ? {} : { upstreamLink: input.upstreamLink }),
     step,
+    ...refusalTraceOf(request, step),
     personal: input.personal ?? {},
     transaction: input.transaction ?? { amr: [] },
     ...(input.carriedSession === undefined ? {} : { carriedSession: input.carriedSession }),
@@ -1315,10 +1330,12 @@ async function settleAnswer(
   }
 
   if (decision.kind === 'step') {
+    const step = interactionStepSchema.parse(decision.step);
     const next: InteractionRecord = {
-      ...withoutRestartNotice(withUpstreamLink(taken, decision.upstreamLink)),
+      ...withoutStateNotes(withUpstreamLink(taken, decision.upstreamLink)),
       ...(decision.restartNotice === undefined ? {} : { restartNotice: decision.restartNotice }),
-      step: interactionStepSchema.parse(decision.step),
+      step,
+      ...refusalTraceOf(request, step),
       personal: decision.personal ?? {},
       transaction: { ...taken.transaction, amr: withAmr(taken.transaction.amr, decision.amr) },
       ...(decision.signInTransaction === undefined
@@ -1393,8 +1410,9 @@ async function settleAnswer(
   }
   const secret = mintFlowSecret();
   const next: InteractionRecord = {
-    ...withoutRestartNotice(withUpstreamLink(taken, decision.upstreamLink)),
+    ...withoutStateNotes(withUpstreamLink(taken, decision.upstreamLink)),
     step,
+    ...refusalTraceOf(request, step),
     personal: decision.personal ?? {},
     transaction: proved,
     // The sign-in is complete: a later one in this interaction starts afresh.
@@ -1419,12 +1437,31 @@ async function settleAnswer(
   return { kind: 'step', view: viewOf(next) };
 }
 
-/** `taken` without the restart notice of its state (#1081): a next state keeps none of its own. */
-function withoutRestartNotice(taken: AnswerableInteractionRecord): AnswerableInteractionRecord {
-  if (taken.restartNotice === undefined) return taken;
+/**
+ * `taken` without the restart notice (#1081) and the trace id (#1106) of its
+ * state: a next state keeps neither, and writes its own.
+ */
+function withoutStateNotes(taken: AnswerableInteractionRecord): AnswerableInteractionRecord {
+  if (taken.restartNotice === undefined && taken.traceId === undefined) return taken;
   const rest = { ...taken };
   delete rest.restartNotice;
+  delete rest.traceId;
   return rest;
+}
+
+/**
+ * The trace id a state written with `step` keeps (#1106; ADR-019 Decision
+ * 7): for a step with an `error`, the id of the request that refused it,
+ * which its log lines carry, so the ceremony page can show it and an
+ * operator find the request. Nothing for a step without one, or for a
+ * request id a `trace_id` cannot carry, such as an over-long one a client
+ * sent in the request-id header.
+ */
+function refusalTraceOf(
+  request: Pick<FastifyRequest, 'id'>,
+  step: InteractionStep
+): { readonly traceId?: string } {
+  return step.error !== undefined && isTraceId(request.id) ? { traceId: request.id } : {};
 }
 
 /** The upstream link an authorization or an account record holds, if any (#670, #844). */

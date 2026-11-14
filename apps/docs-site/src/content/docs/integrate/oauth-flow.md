@@ -3,7 +3,7 @@ title: OAuth 2.1 Flow
 description: QAuth's OAuth 2.1 / OIDC endpoints with copy-paste curl for every step, to implement a client by hand.
 sidebar:
   order: 2
-lastVerified: '2026-11-08'
+lastVerified: '2026-11-13'
 ---
 
 This page documents QAuth's OAuth 2.1 / OIDC endpoints with copy-paste `curl`
@@ -865,7 +865,13 @@ What happens:
 - **A refused request** (a `client_id` that is not the hint's audience, a
   return URI with no client named, a URI the client did not register, or a
   disabled client) gets a `400` information page. Nothing ends and the browser
-  is not redirected.
+  is not redirected to the app.
+- **A realm that names its ceremony app's error page**
+  ([`ceremonyApp.errorPage`](/integrate/hosted-ui/#the-ceremony-apps-error-page),
+  #1106) gets a `303` to that page on its own origin in place of each of QAuth's
+  pages above: the refusal (`logout_refused`), "You are signed out", with the
+  return URI's host as text and no link (`logout_finished`), and the status
+  page.
 
 The route ends the browser session only. It revokes no refresh token: an app
 that signs out revokes its own refresh token at [`/oauth/revoke`](#token-revocation-rfc-7009)

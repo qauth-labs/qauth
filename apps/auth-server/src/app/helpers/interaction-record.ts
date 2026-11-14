@@ -7,6 +7,8 @@ import {
   type RestartNotice,
   stepByUrn,
   stepUrn,
+  TRACE_ID_MAX_LENGTH,
+  TRACE_ID_PATTERN,
 } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -80,7 +82,7 @@ const INTERACTION_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
  * from before it reads a record that holds it as absent, as any record it
  * cannot parse. The optional `client` (#629) joined version 2 the same way,
  * and so did an authorization record's optional `upstreamLink` (#670), and
- * the optional `restartNotice` (#1081).
+ * the optional `restartNotice` (#1081), and the optional `traceId` (#1106).
  */
 export const INTERACTION_RECORD_VERSION = 2;
 
@@ -368,6 +370,14 @@ const recordFields = {
    * shows it itself, and the record keeps none. The next state drops it.
    */
   restartNotice: z.enum(RESTART_NOTICES).optional(),
+  /**
+   * The id the server logged the request under that wrote the current step
+   * with an `error` (#1106; ADR-019 Decision 7): an answer the engine
+   * refused, or an upstream provider's callback that came back refused. The
+   * step read shows it as `trace_id` while the step holds its `error`; a
+   * next state drops it, and writes its own.
+   */
+  traceId: z.string().max(TRACE_ID_MAX_LENGTH).regex(new RegExp(TRACE_ID_PATTERN)).optional(),
   revision: z.int().min(0).max(1_000_000),
   createdAt: z.int().positive(),
   expiresAt: z.int().positive(),

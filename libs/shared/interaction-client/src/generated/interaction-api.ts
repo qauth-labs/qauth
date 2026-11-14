@@ -22,6 +22,8 @@ export interface Interaction {
   step: StepName;
   /** Why the last answer to the current step was refused, from that step’s closed error set. Absent otherwise. */
   error?: StepError;
+  /** With an `error`: the id the server logged the request that refused the step under, the same as a problem document’s `trace_id` (ADR-019 Decision 7; #1106). The request may be another than the page’s own, such as the upstream provider’s callback that brought the browser back. A page shows it with the error, so an operator can find the failure (ADR-020 §3). Absent without an `error`, and when that request’s id is not one this member can carry. */
+  trace_id?: string;
   /** Why the sign-in is back at its first step (#1081): the sign-in engine ended its transaction, and the current step is the first of a new one in the same interaction. `code_burned`: an emailed code was answered wrong too often, and no new code was sent. `subject_mismatch`: an answer named another account than the one the sign-in had, by another identifier or by a passkey of another account. `expired`: the sign-in outlived its age, or what it held could no longer be used. It names no account, and before a factor succeeded it is the same for every identifier, known or unknown (ADR-017 Decision 4). Carried once: by the result of the JSON answer that went back to the first step or, after a form post, by the next step read; every later read carries none. Absent otherwise. A page that does not know the value shows the step without it. */
   notice?: 'code_burned' | 'subject_mismatch' | 'expired' | (string & {});
   /** The other steps the engine accepts as the next answer, preferred first: "try another way", the paths a page links to (a reset, a resend), and the account switch. Never the current step. Before a first factor succeeds, the list holds only what the same request would offer every account, so it reveals no account’s methods; after it, that account’s remaining methods (ADR-017 Decision 4). The list is part of the read with the interaction id alone, so after a first factor that read shows which methods the account has. The contract accepts this: the read shows which methods remain, never who the account is or any of its data. */
@@ -80,6 +82,9 @@ export type StepError =
   | 'provider_unavailable'
   | 'provider_declined'
   | 'provider_error'
+  | 'unknown_identity'
+  | 'too_many_requests'
+  | 'service_unavailable'
   | 'already_linked'
   | 'provider_linked'
   | 'invalid_user_code'

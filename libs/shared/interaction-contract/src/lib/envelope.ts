@@ -240,6 +240,34 @@ export const clientDisplaySchema = object(
 );
 
 /**
+ * What a `trace_id` may be (ADR-019 Decision 7): the id the server logged a
+ * request under, printable ASCII but for a space, `"`, `<` and `>`, at most
+ * 128 characters. A request id the server would have to change to fit is not
+ * sent at all.
+ */
+export const TRACE_ID_PATTERN = '^[!#-;=?-~]+$';
+
+/** The longest `trace_id`. */
+export const TRACE_ID_MAX_LENGTH = 128;
+
+/** Whether `value` fits the contract's `trace_id`. */
+export function isTraceId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= TRACE_ID_MAX_LENGTH &&
+    new RegExp(TRACE_ID_PATTERN).test(value)
+  );
+}
+
+const traceId = (description: string): JsonSchema => ({
+  type: 'string',
+  minLength: 1,
+  maxLength: TRACE_ID_MAX_LENGTH,
+  pattern: TRACE_ID_PATTERN,
+  description,
+});
+
+/**
  * Why a sign-in is back at its first step (#1081): the notice the step read
  * carries once after the engine ended the sign-in's transaction. A set that
  * may grow within the major version, so it is published as an extensible
@@ -260,6 +288,9 @@ export const interactionSchema = object(
       description:
         'Why the last answer to the current step was refused, from that step’s closed error set. Absent otherwise.',
     },
+    trace_id: traceId(
+      'With an `error`: the id the server logged the request that refused the step under, the same as a problem document’s `trace_id` (ADR-019 Decision 7; #1106). The request may be another than the page’s own, such as the upstream provider’s callback that brought the browser back. A page shows it with the error, so an operator can find the failure (ADR-020 §3). Absent without an `error`, and when that request’s id is not one this member can carry.'
+    ),
     notice: extensibleEnum(
       RESTART_NOTICES,
       '^[a-z][a-z0-9_]{0,63}$',
@@ -399,14 +430,9 @@ export const problemSchema = openObject(
       64,
       'The error, from the published list. A page shows its own text for it, and treats a code it does not know by its HTTP status.'
     ),
-    trace_id: {
-      type: 'string',
-      minLength: 1,
-      maxLength: 128,
-      pattern: '^[!#-;=?-~]+$',
-      description:
-        'The id the server logged the request under. A page shows it, so an operator can find the failure (ADR-020 §3).',
-    },
+    trace_id: traceId(
+      'The id the server logged the request under. A page shows it, so an operator can find the failure (ADR-020 §3).'
+    ),
     detail: { ...NEVER, description: 'Never sent: no prose.' },
     instance: { ...NEVER, description: 'Never sent.' },
     errors: {

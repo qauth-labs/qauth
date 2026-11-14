@@ -9,8 +9,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../config/env', () => ({ env: { NODE_ENV: 'test' } }));
 
-import { codeMailOf, decisionOf } from './interaction-engines';
+import type { InteractionState } from './interaction';
+import { codeMailOf, decisionOf, requestRoundFlagsOf } from './interaction-engines';
 import { InteractionExpiredError } from './interaction-expired';
+import type { InteractionRequest } from './interaction-record';
 
 /**
  * The interaction's next state for an engine round, and the mail of a code,
@@ -243,5 +245,71 @@ describe('a password reset (#642)', () => {
       expiresInSeconds: 600,
     });
     expect(codeMailOf({ ...mail, reset: 'withheld' })).toBeUndefined();
+  });
+});
+
+describe('requestRoundFlagsOf: what the request asks of every round (#1106)', () => {
+  const REQUEST = {
+    response_type: 'code',
+    client_id: 'notes-app',
+    redirect_uri: 'https://notes.example.com/callback',
+    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+    code_challenge_method: 'S256',
+  } as InteractionRequest;
+
+  function authorization(
+    request: Partial<InteractionRequest> = {},
+    upstreamLink?: Extract<InteractionState, { purpose: 'authorization' }>['upstreamLink']
+  ): Extract<InteractionState, { purpose: 'authorization' }> {
+    return {
+      purpose: 'authorization',
+      request: { ...REQUEST, ...request },
+      ...(upstreamLink === undefined ? {} : { upstreamLink }),
+    } as Extract<InteractionState, { purpose: 'authorization' }>;
+  }
+
+  const SIGNING_IN = {
+    state: 'signing_in',
+    provider: 'oidc_corp',
+    name: 'Corp',
+    externalSub: 'sub-1',
+    iss: 'https://corp.example.com',
+  } as const;
+
+  it('lets a plain sign-in switch to a registration, and asks for nothing else', () => {
+    expect(requestRoundFlagsOf(authorization(), false)).toEqual({ switchFlows: true });
+  });
+
+  it('runs a registration for prompt=create, and a fresh sign-in for prompt=login or max_age', () => {
+    expect(requestRoundFlagsOf(authorization({ prompt: 'create' }), false)).toEqual({
+      flow: 'register',
+      switchFlows: true,
+    });
+    expect(requestRoundFlagsOf(authorization({ prompt: 'login' }), false)).toEqual({
+      switchFlows: true,
+      freshSignIn: true,
+    });
+    expect(requestRoundFlagsOf(authorization({ max_age: 0 }), false)).toEqual({
+      switchFlows: true,
+      freshSignIn: true,
+    });
+  });
+
+  it('makes the sign-in to link an upstream account a fresh sign-in that withholds the provider it links', () => {
+    expect(
+      requestRoundFlagsOf(authorization({ prompt: 'create' }, SIGNING_IN as never), true)
+    ).toEqual({ freshSignIn: true, withheldUpstream: 'oidc_corp' });
+  });
+
+  it('never lets an interaction that holds a link switch flows', () => {
+    expect(requestRoundFlagsOf(authorization({}, SIGNING_IN as never), false)).toEqual({});
+  });
+
+  it('asks nothing of an account page’s round: its own flags come with it', () => {
+    const account = { purpose: 'account', request: {} } as Extract<
+      InteractionState,
+      { purpose: 'account' }
+    >;
+    expect(requestRoundFlagsOf(account, false)).toEqual({});
   });
 });

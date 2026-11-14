@@ -48,7 +48,11 @@ import {
   readInteractionStep,
   refuseForbidden,
 } from '../helpers/interaction';
-import { createInteractionEngines, decisionOf } from '../helpers/interaction-engines';
+import {
+  createInteractionEngines,
+  decisionOf,
+  requestRoundFlagsOf,
+} from '../helpers/interaction-engines';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
 import { restartNoticeOf } from '../helpers/interaction-outcomes';
@@ -265,6 +269,9 @@ function stepRead(view: InteractionView) {
     // Why the sign-in is back at its first step (#1081), on the one read
     // that shows it.
     ...(view.notice === undefined ? {} : { notice: view.notice }),
+    // The request that refused the step (#1106), with its `error`: the page
+    // shows it, so an operator can find that request in the log.
+    ...(view.traceId === undefined ? {} : { trace_id: view.traceId }),
     brand: DEFAULT_BRAND,
     expiresAt: new Date(view.deadline).toISOString(),
   };
@@ -556,23 +563,11 @@ async function decideAnswer(
   ): RoundContext => ({
     realm: { id: realmId },
     client: { id: engineClientId },
-    // `prompt=create` (#640): the engine's rounds are a registration's; a
-    // sign-in to link an upstream account (#670) registers nobody.
-    ...(authorization?.prompt === 'create' && !linking ? { flow: 'register' as const } : {}),
-    // The person may switch between a sign-in and a registration (#1079):
-    // on an authorization request's interaction, never on one that links an
-    // upstream account (#670), whatever state the link is in.
-    ...(authorization !== undefined && !linking && state.upstreamLink === undefined
-      ? { switchFlows: true }
-      : {}),
-    // `prompt=login` and `max_age` ask for a fresh sign-in, which a password
-    // reset never is (#642; ADR-017 Decision 8): no reset is offered. A
-    // sign-in to link an upstream account (#670) is always a fresh one, and
-    // so is every sign-in of the account page, which may bind a factor
-    // (#844).
-    ...(authorization?.prompt === 'login' || authorization?.max_age !== undefined || linking
-      ? { freshSignIn: true }
-      : {}),
+    // What the request asked for: a registration, the switch between a
+    // sign-in and a registration, a fresh sign-in, the provider a link
+    // withholds. Every sign-in of the account page is a fresh one too, which
+    // may bind a factor (#844).
+    ...requestRoundFlagsOf(state, linking),
     ...(state.purpose === 'account' ? accountRoundOf(state.request) : {}),
     receivedAt,
     ...ladderEndUserIp(request),
@@ -580,13 +575,9 @@ async function decideAnswer(
     sendCode,
     // A pick of an upstream provider (#639) starts it, bound to this
     // interaction once the round's state is written; the way back from the
-    // provider is this ceremony page. A sign-in to link an upstream account
-    // (#670) offers the realm's other providers (#1080; ADR-020 §3), never
-    // the one it links: the callback takes one only as proof of an account
-    // that already holds the identity it proves.
-    ...(linking && state.upstreamLink !== undefined
-      ? { withheldUpstream: state.upstreamLink.provider }
-      : {}),
+    // provider is this ceremony page. On a sign-in to link an upstream
+    // account (#670) the callback takes another provider only as proof of an
+    // account that already holds the identity it proves.
     startUpstream: upstreamStarter(
       request.server,
       request,

@@ -1,4 +1,5 @@
 import { BRAND_FONTS, RESTART_NOTICES } from './envelope';
+import { errorPageDescription } from './error-page';
 import {
   FLOW_COOKIE_NAME,
   INTERACTION_API_PREFIX,
@@ -20,7 +21,7 @@ import { STEPS } from './steps';
  */
 
 /** The date the page's prose was last checked; change it with the prose. */
-export const INTERACTION_PAGE_LAST_VERIFIED = '2026-11-12';
+export const INTERACTION_PAGE_LAST_VERIFIED = '2026-11-13';
 
 /** The shared test vectors of the built-in proof of work, by their path in the repository. */
 export const PROOF_OF_WORK_VECTORS_PATH = 'test-vectors/interaction/proof-of-work.json';
@@ -126,7 +127,7 @@ An answer is ${code('application/json')} or a plain HTML form post (${code('appl
 
 A form post gets the same as a ${code('303 See Other')}. Anything the API refuses is an **error**: a problem document (below).
 
-A ${code('notice')} is carried once: by the result of the JSON answer, or, after a form post, by the next step read; every later read carries none. It names no account, and before a factor succeeded it is the same for every identifier (ADR-017 Decision 4). An upstream provider that did not sign the person in, and a refused upstream link, come back the same way, as the ${code('upstream')} and ${code('upstream_link')} steps' ${code('error')} (#1081): the auth server shows no page of its own for them.`,
+A ${code('notice')} is carried once: by the result of the JSON answer, or, after a form post, by the next step read; every later read carries none. It names no account, and before a factor succeeded it is the same for every identifier (ADR-017 Decision 4). An upstream provider's callback that refuses while the interaction is live, and a refused upstream link, come back the same way, as the ${code('upstream')} and ${code('upstream_link')} steps' ${code('error')} (#1081, #1106): the auth server shows no page of its own for them. A step read with an ${code('error')} carries the ${code('trace_id')} of the request that refused the step, which may be that callback rather than an answer, so a page shows it as it shows a problem document's.`,
     `## Steps
 
 Each step is named ${code(`urn:qauth:ia:<name>:${INTERACTION_API_VERSION}`)}. A step read names the current step (${code('step')}), the other steps the engine accepts next (${code('alternatives')}), their params keyed by step name (${code('params')}) and, after a refused answer, the reason (${code('error')}): the shape of the FiPA endpoint's answer, so a new step is a new name and a new member, not a break. A step's params are what any reader of the interaction id may see; its personal data needs the flow cookie. Each step's schema file holds the whole step as one record (params, answer, personal data, errors and ${code('amr')}) with its example, which the implementation reuses as a test vector. The params and answer fields keep the step grammar's names on both transports, which is why they are ${code('snake_case')} while the envelope is ${code('camelCase')}.
@@ -149,6 +150,7 @@ An error is an RFC 9457 problem details document (${code('application/problem+js
 | ---- | ------ | ------- |
 ${problemRows().join('\n')}`,
     `## Paths\n\n${bullets([RESERVED_PREFIX_RULE, DOCUMENT_PATH_RULE])}`,
+    `## Error page\n\n${errorPageDescription()}`,
     `## Replacement apps
 
 A sign-in UI that replaces the reference ceremony app and follows this contract is a supported setup (#618). Beside the contract, it needs:

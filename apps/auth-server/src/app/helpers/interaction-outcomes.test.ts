@@ -1,4 +1,4 @@
-import { RESTART_NOTICES, stepUrn } from '@qauth-labs/shared-interaction-contract';
+import { RESTART_NOTICES, stepByUrn, stepUrn } from '@qauth-labs/shared-interaction-contract';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,6 +7,7 @@ import {
   refusedUpstreamStep,
   restartNoticeOf,
   type TransactionEndCause,
+  upstreamRefusalCodeOf,
 } from './interaction-outcomes';
 import { type InteractionStep, interactionStepSchema } from './interaction-record';
 
@@ -152,6 +153,69 @@ describe('refusedLinkStep (#1081)', () => {
         error: reason,
       });
       expect(interactionStepSchema.parse(step)).toEqual(step);
+    }
+  });
+});
+
+describe('upstreamRefusalCodeOf (#1106)', () => {
+  const STEP: InteractionStep = {
+    name: IDENTIFIER,
+    params: {},
+    alternatives: [UPSTREAM],
+    alternativeParams: { [UPSTREAM]: { providers: [CORP] } },
+  };
+
+  it('says what the provider did, and a throttle and a store that could not answer', () => {
+    expect(upstreamRefusalCodeOf('declined')).toBe('provider_declined');
+    for (const reason of [
+      'provider_error',
+      'invalid_response',
+      'method_fault',
+      'verification_refused',
+    ]) {
+      expect(upstreamRefusalCodeOf(reason), reason).toBe('provider_error');
+    }
+    expect(upstreamRefusalCodeOf('upstream_unavailable')).toBe('provider_unavailable');
+    expect(upstreamRefusalCodeOf('throttled')).toBe('too_many_requests');
+    expect(upstreamRefusalCodeOf('unavailable')).toBe('service_unavailable');
+  });
+
+  it('says unknown_identity for every reason that depends on the account, and for one it does not know', () => {
+    for (const reason of [
+      'unknown_identity',
+      'credential_invalid',
+      'issuer_mismatch',
+      'credential_disabled',
+      'sign_up_disabled',
+      'verification_unavailable',
+      'invalid_answer',
+      'step_not_available',
+      'a_reason_added_later',
+    ]) {
+      expect(upstreamRefusalCodeOf(reason), reason).toBe('unknown_identity');
+    }
+  });
+
+  it('answers nothing for a callback with no interaction left to go back to', () => {
+    expect(upstreamRefusalCodeOf('transaction_mismatch')).toBeNull();
+    expect(upstreamRefusalCodeOf('interaction_expired')).toBeNull();
+  });
+
+  it("answers only the upstream step's errors, each a step the record keeps", () => {
+    const errors = stepByUrn(UPSTREAM)?.errors ?? [];
+    for (const reason of [
+      'declined',
+      'method_fault',
+      'upstream_unavailable',
+      'throttled',
+      'unavailable',
+      'credential_disabled',
+    ]) {
+      const code = upstreamRefusalCodeOf(reason);
+      expect(code).not.toBeNull();
+      expect(errors).toContain(code);
+      const refused = refusedUpstreamStep(STEP, CORP, code as NonNullable<typeof code>);
+      expect(interactionStepSchema.safeParse(refused).success, reason).toBe(true);
     }
   });
 });

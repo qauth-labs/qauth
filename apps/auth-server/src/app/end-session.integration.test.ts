@@ -731,4 +731,76 @@ describe('RP-initiated logout at /oauth/end-session (#675, real containers)', ()
       expect(await statusFor(undefined)).toBe('signed_out');
     });
   });
+
+  describe("the realm's ceremony app error page (#1106)", () => {
+    const ERROR_PAGE = '/ui/error';
+
+    beforeEach(async () => {
+      const current = await server().policyStore.get(realmId);
+      if (current === undefined) throw new Error('no policies for the realm');
+      await server().policyStore.update(
+        realmId,
+        { ceremonyApp: { errorPage: ERROR_PAGE } },
+        { expectedVersion: current.version }
+      );
+      server().realmHostCache.clear();
+    });
+
+    /** The status page for a browser that sends `cookie`. */
+    function statusOf(cookie: string): Promise<LightMyRequestResponse> {
+      return server().inject({
+        method: 'GET',
+        url: '/oauth/end-session/status',
+        headers: { cookie },
+      });
+    }
+
+    /** The error page's query a response sends the browser to, with no page of the server's own. */
+    function errorPageQuery(response: LightMyRequestResponse): [string, string][] {
+      expect(response.statusCode, response.body).toBe(303);
+      expect(response.body).toBe('');
+      const location = new URL(String(response.headers['location']));
+      expect(`${location.origin}${location.pathname}`).toBe(`${ORIGIN}${ERROR_PAGE}`);
+      return [...location.searchParams];
+    }
+
+    it('answers a logout with no return URI with 303 to it, signed out, and no page', async () => {
+      const { jar, sid, idToken } = await signedInWithIdToken();
+      const oldCookie = jar.header() as string;
+
+      const response = await endSession(jar, { id_token_hint: idToken });
+
+      const query = errorPageQuery(response);
+      expect(query.slice(0, 1)).toEqual([['code', 'logout_finished']]);
+      expect(query).toContainEqual(['signed_out', 'true']);
+      expect(query.find(([name]) => name === 'trace_id')?.[1]).toMatch(/.+/);
+      expectSessionCookieCleared(response);
+      const row = await sessionRow(sid);
+      expect(row.revoked_at).not.toBeNull();
+      expect(row.revoked_reason).toBe('sign_out');
+      // The status page says the same, on the error page too.
+      expect(errorPageQuery(await statusOf(oldCookie))).toContainEqual(['signed_out', 'true']);
+      // A browser with nothing to end gets the same.
+      expect(errorPageQuery(await endSession(new CookieJar(), {}))).toContainEqual([
+        'code',
+        'logout_finished',
+      ]);
+    });
+
+    it('answers a return URI the client did not register with 303 to it, and ends nothing', async () => {
+      const { jar, sid } = await signedInWithIdToken();
+      const cookie = jar.header() as string;
+
+      const response = await endSession(jar, {
+        client_id: CLIENT_ID,
+        post_logout_redirect_uri: 'https://evil.example/landing',
+      });
+
+      expect(errorPageQuery(response).slice(0, 1)).toEqual([['code', 'logout_refused']]);
+      expect(String(response.headers['location'])).not.toContain('evil.example');
+      expect(await sessionRow(sid)).toEqual({ revoked_at: null, revoked_reason: null });
+      expect(jar.header()).toBe(cookie);
+      expect(errorPageQuery(await statusOf(cookie))).toContainEqual(['signed_out', 'false']);
+    });
+  });
 });

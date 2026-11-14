@@ -228,6 +228,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pages keep their own pages until the cut-over ([#709]). The published
   Interaction API contract (`/interaction/v1-rc.0/openapi.json`) and its
   docs page say so.
+- **Every refusal of an upstream provider's callback goes back to the
+  ceremony page with its trace id, and a realm can name its ceremony app's
+  error page** ([#1106], ADR-019 Decisions 5, 6 and 7, ADR-020 §3). With the
+  Interaction API on, only a cancel or an error at the provider reached the
+  ceremony page ([#1081]); every other refusal of the callback showed the auth
+  server's own error page. Now each one that leaves the interaction live
+  sends the browser back to it, the `upstream` step current and refused with
+  a code of a closed set: `provider_declined`, `provider_error`, and the new
+  `provider_unavailable`, `unknown_identity`, `too_many_requests` and
+  `service_unavailable`. No code says anything about an account the person
+  has not proved: an identity no account holds, a disabled credential and a
+  disabled account all answer `unknown_identity`. A refused step carries
+  `trace_id`, the id the refusing request is logged under. A transaction the
+  engine ended starts the sign-in again with its restart notice. A callback
+  with no interaction left, and the pages an RP-initiated logout ends on (the
+  refusal, the signed-out page, the page that offers an unvetted app's return
+  URI, and `/oauth/end-session/status`), go to the realm's new
+  `ceremonyApp.errorPage` policy when it is set: a path on the realm's origin
+  under `/ui/`, never another origin, answered `303` with `code`, `trace_id`
+  and, for a logout, `signed_out` and the app's host as text. Unset, the
+  default, the auth server keeps its own pages. The server-rendered pages
+  (`INTERACTION_UI_ENABLED` off) keep theirs for a refusal with an
+  interaction. The published Interaction API contract, its docs page and the
+  realm policies page say so.
 
 ### Fixed
 
@@ -4274,6 +4298,7 @@ It adds migrations 0068 and 0069.
 [#1081]: https://github.com/qauth-labs/qauth/issues/1081
 [#1082]: https://github.com/qauth-labs/qauth/issues/1082
 [#1083]: https://github.com/qauth-labs/qauth/issues/1083
+[#1106]: https://github.com/qauth-labs/qauth/issues/1106
 
 ### Deprecated
 

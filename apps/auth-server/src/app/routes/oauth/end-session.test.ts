@@ -41,6 +41,7 @@ import {
   createBrowserSessionFixture,
 } from '../../../testing/browser-sessions';
 import { createMemoryInteractionRedis } from '../../../testing/interaction-redis';
+import { testPolicyStore } from '../../../testing/realm-policies';
 import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { REDIS_KEYS } from '../../constants';
 import { interactionIdHash, interactionRecordSchema } from '../../helpers/interaction-record';
@@ -163,6 +164,8 @@ let sessions: BrowserSessionFixture;
 let verifyIdTokenHint: ReturnType<typeof vi.fn>;
 
 const mutableEnv = env as { INTERACTION_UI_ENABLED: boolean };
+/** The realm's ceremony app error page (#1106): none unless a test sets one. */
+let errorPage: string | null = null;
 
 async function buildApp(): Promise<FastifyInstance> {
   const instance = Fastify({ logger: false });
@@ -183,6 +186,10 @@ async function buildApp(): Promise<FastifyInstance> {
   instance.decorate('sessionService', sessions.service);
   instance.decorate('sessionEpochs', sessions.epochs);
   instance.decorate('signer', sessions.signer as unknown as FastifyInstance['signer']);
+  instance.decorate(
+    'policyStore',
+    testPolicyStore({}, { ceremonyApp: { errorPage } }) as unknown as FastifyInstance['policyStore']
+  );
   verifyIdTokenHint = vi.fn(async (_realm: unknown, token: string) => {
     const hint = HINTS[token];
     if (hint === undefined) throw new JWTInvalidError('the hint does not verify');
@@ -210,6 +217,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   mutableEnv.INTERACTION_UI_ENABLED = false;
+  errorPage = null;
   await app.close();
 });
 
@@ -813,6 +821,102 @@ describe('the status page (#675)', () => {
     expect(response.body).toContain('You are signed out');
     expect(response.body).not.toContain('locked');
     expect(response.body).not.toContain(STATE);
+  });
+});
+
+describe("the realm's error page (#1106)", () => {
+  const ERROR_PAGE = '/ui/error';
+
+  beforeEach(async () => {
+    await app.close();
+    errorPage = ERROR_PAGE;
+    app = await buildApp();
+  });
+
+  /** The error page's query a response sends the browser to: no page of the auth server's. */
+  function errorPageQuery(response: LightMyRequestResponse): [string, string][] {
+    expect(response.statusCode, response.body).toBe(303);
+    expect(response.body).toBe('');
+    expect(response.headers['cache-control']).toBe('no-store');
+    const location = new URL(String(response.headers.location));
+    expect(location.origin + location.pathname).toBe(`${ISSUER}${ERROR_PAGE}`);
+    return [...location.searchParams];
+  }
+
+  it('sends a refused request to it with logout_refused and the trace id, and ends nothing', async () => {
+    const cookie = await signedIn();
+    const response = await endSession(
+      { client_id: 'notes-app', post_logout_redirect_uri: 'https://evil.example/landing' },
+      cookie
+    );
+    expect(errorPageQuery(response)).toEqual([
+      ['code', 'logout_refused'],
+      ['trace_id', 'req-1'],
+    ]);
+    expect(String(response.headers.location)).not.toContain('evil.example');
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+  });
+
+  it('sends a logout with no return URI to it, signed out, instead of the signed-out page', async () => {
+    expect(errorPageQuery(await endSession({}))).toEqual([
+      ['code', 'logout_finished'],
+      ['trace_id', 'req-1'],
+      ['signed_out', 'true'],
+    ]);
+    const cookie = await signedIn();
+    const ended = await endSession({ id_token_hint: 'hint.alice' }, cookie);
+    expect(errorPageQuery(ended)).toContainEqual(['signed_out', 'true']);
+    expect(sessions.service.revoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the host of an app the operator did not set up as text, with no link to it', async () => {
+    const response = await endSession({
+      client_id: 'dcr-app',
+      post_logout_redirect_uri: DCR_RETURN_URI,
+      state: STATE,
+    });
+    expect(errorPageQuery(response)).toEqual([
+      ['code', 'logout_finished'],
+      ['trace_id', 'req-1'],
+      ['signed_out', 'true'],
+      ['host', 'registered.example.net'],
+    ]);
+    expect(String(response.headers.location)).not.toContain(STATE);
+  });
+
+  it('still sends the browser back to an app the operator set up', async () => {
+    const response = await endSession({
+      id_token_hint: 'hint.alice',
+      post_logout_redirect_uri: RETURN_URI,
+      state: STATE,
+    });
+    expect(response.statusCode).toBe(303);
+    expect(response.headers.location).toBe(`${RETURN_URI}?state=${STATE}`);
+  });
+
+  it('sends the status page to it with the truth about this browser', async () => {
+    const cookie = await signedIn();
+    const inside = await app.inject({
+      method: 'GET',
+      url: '/oauth/end-session/status',
+      headers: { cookie },
+    });
+    expect(errorPageQuery(inside)).toEqual([
+      ['code', 'logout_finished'],
+      ['trace_id', 'req-1'],
+      ['signed_out', 'false'],
+    ]);
+    const outside = await app.inject({
+      method: 'GET',
+      url: `/oauth/end-session/status?${query({ signed_out: 'false' })}`,
+    });
+    expect(errorPageQuery(outside)).toContainEqual(['signed_out', 'true']);
+  });
+
+  it('keeps the confirm page, which has an interaction to answer', async () => {
+    const response = await endSession({}, await signedIn());
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.body).toContain(`${INTERACTION_API_PREFIX}/`);
   });
 });
 

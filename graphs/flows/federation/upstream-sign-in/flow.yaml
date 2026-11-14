@@ -8,11 +8,15 @@
 #   provider) through the provider's callback (GET or POST /upstream/<type>/callback) to the response. The provider
 #   link's own redirect (GET /ui/upstream/<type>) and the routed start (GET /ui/upstream/<type>/start) lead into
 #   `resolvingProvider`.
-# - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the browser gets. Every
-#   refusal shows the same error page with the request's trace id, so the exits differ only in the audited reason of
-#   user.sign_in_failed (`method: upstream`), which is the cause in the exit's name. A cancel or an error at the
-#   provider shows the provider-error page instead on the pages; on the ceremony page it comes back as the upstream
-#   step's error (#1081). No refusal sends anything to the client's redirect_uri.
+# - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the browser gets. On the
+#   pages every refusal shows the same error page with the request's trace id, so the exits differ only in the audited
+#   reason of user.sign_in_failed (`method: upstream`), which is the cause in the exit's name; a cancel or an error at
+#   the provider shows the provider-error page instead. On the ceremony page every refusal of a callback whose
+#   interaction is still live comes back to it as the upstream step's error, a code of a closed set that says nothing
+#   of an account the person has not proved, with the callback's trace id (#1081, #1106): those exits are named
+#   step_continues.<code>. A callback with no interaction left goes to the ceremony app's error page when the realm
+#   names one (ceremonyApp.errorPage), error_page.<cause>, and to the auth server's own error page when it does not.
+#   No refusal sends anything to the client's redirect_uri.
 # - Two sign-in UIs run the same flow (`mode`): the server-rendered pages while INTERACTION_UI_ENABLED is off, which
 #   show no further step, and the Interaction API's ceremony page while it is on.
 # - `invoke: { external }` names a store or a library the domain graph holds no entity for: the pending sign-in store
@@ -46,8 +50,11 @@ scope:
     - "the providers' admin API (#714): a provider is a row of realm_upstream_providers, or an enabled AuthMethod plugin"
     - 'on the ceremony page, the choice an unknown identity gets between a new account and an existing one, and the
       link to an existing one, also through qauth_link: federation.upstream-link'
-    - 'the per-address and per-realm rate limit on the callback, which answers 429 before the flow runs, as the sign-in
-      form does'
+    - "the per-address and per-realm rate limit on the callback, which answers 429 before the flow runs, as the sign-in
+      form does; the engine's round limits, which hold an address or an account back inside the flow, are drawn"
+    - 'a provider switched off between the start and the callback (provider_unavailable on the ceremony page), and an
+      engine round that answers a redirect (step_not_available)'
+    - "a refused step the interaction store cannot take either: the auth server's error page, with the trace id"
 
 context:
   provider:
@@ -70,13 +77,14 @@ context:
       otherBrowser: 'a browser with no such flow cookie: a callback replayed in another browser, forwarded or forged'
       taken: 'the pending sign-in was taken already: a replay in the same browser, or it expired'
   completion:
-    values: [identity, declined, providerError, failed, fault]
+    values: [identity, declined, providerError, failed, unreachable, fault]
     initial: any
     say:
       identity: 'the method proved an identity, its assurance capped at low'
       declined: 'the person cancelled or declined at the provider (error=access_denied)'
       providerError: 'the provider answered another error'
-      failed: "the provider's answer failed a check, or the provider could not be reached"
+      failed: "the provider's answer failed a check (invalid_response, verification_refused)"
+      unreachable: 'the provider could not be reached (upstream_unavailable)'
       fault: 'the method broke the AuthMethod contract'
   credential:
     values: [known, unknown]
@@ -122,11 +130,22 @@ context:
         the account is not verified yet: the provider's verified switch was off when it was created, so QAuth
         verifies the address the provider gave with an emailed code under the realm's gate, where a code can arrive
   engineAnswer:
-    values: [accepts, refuses]
+    values: [accepts, refuses, throttled, ended, movedOn]
     initial: any
     say:
       accepts: 'the engine takes the proof'
-      refuses: 'it refuses it: the account is disabled, or the interaction moved on'
+      refuses: 'it refuses it, and audits why: the account is disabled, or cannot sign in'
+      throttled: "the realm's round limits hold this address or this account back"
+      ended: >-
+        the engine ended its sign-in transaction, and audited why: it outlived its age, or the provider proved another
+        account than the one it named
+      movedOn: 'the interaction expired, ended or moved on since the provider was started'
+  errorPage:
+    values: [none, named]
+    initial: any
+    say:
+      none: "the realm names no ceremony app error page (ceremonyApp.errorPage, the default): the auth server's own"
+      named: 'the realm names one, a path on its origin under /ui/ (#1106)'
   mode:
     values: [pages, interaction]
     initial: any
@@ -144,6 +163,7 @@ guards:
   personDeclined: "completion == 'declined'"
   providerErrored: "completion == 'providerError'"
   checkFailed: "completion == 'failed'"
+  providerUnreachable: "completion == 'unreachable'"
   methodFault: "completion == 'fault'"
   knownCredential: "credential == 'known'"
   issuerDiffers: "issuer == 'differs'"
@@ -152,6 +172,10 @@ guards:
   credentialDisabled: "credentialState == 'disabled'"
   signUpOff: "signUp == 'off'"
   engineRefuses: "engineAnswer == 'refuses'"
+  engineThrottles: "engineAnswer == 'throttled'"
+  transactionEnded: "engineAnswer == 'ended'"
+  interactionMovedOn: "engineAnswer == 'movedOn'"
+  errorPageNamed: "errorPage == 'named'"
   needsFurtherStep: "furtherStep != 'none'"
   pagesMode: "mode == 'pages'"
 
@@ -184,6 +208,7 @@ main:
     furtherStep: none
     engineAnswer: accepts
     mode: pages
+    errorPage: none
   events: [PICK, DONE, DONE, BROWSER_RETURNS, DONE, DONE, DONE]
 
 initial: idle
@@ -197,7 +222,7 @@ states:
         say: >-
           the person picks a provider: the upstream alternative of the first sign-in step (Interaction API), or a
           provider link of /ui/login, which sends the browser back to the authorization request with qauth_upstream
-        source: apps/auth-server/src/app/routes/interaction-api.ts:514
+        source: apps/auth-server/src/app/routes/interaction-api.ts:521
       ROUTE:
         target: resolvingProvider
         say: >-
@@ -225,7 +250,7 @@ states:
   starting:
     title: Ask the provider's method to start
     description: start() answers the provider's authorization request, the transaction and the binding (the state).
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:241
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:256
     invoke: { external: authMethodStart }
     on:
       DONE:
@@ -234,14 +259,14 @@ states:
       FAIL.rejected:
         target: bad_request.upstream_unavailable
         say: 'start() rejects, or its answer fails a check; the browser goes nowhere'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:246
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:261
 
   keepingPending:
     title: Keep the pending sign-in, bound to the interaction and the flow cookie
     description: >-
       Redis keeps the transaction under a hash of its binding for ten minutes, with the interaction, the flow
       cookie's binding and the way back to the first step. The transaction never reaches the browser.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:268
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:283
     invoke: { external: upstreamSignInStore }
     on:
       DONE:
@@ -271,60 +296,79 @@ states:
       The callback's binding names the pending sign-in; it is read first, and taken once only when the request
       carries the flow cookie it is bound to, of the same realm and provider type. A callback in another browser
       spends nothing: the method never runs, no code is redeemed and the pending sign-in stays for its own browser.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:870
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:912
     always:
+      - guard: notTheStartingBrowser and errorPageNamed
+        target: error_page.transaction_mismatch
+        say: >-
+          no pending sign-in for this browser, in a realm that names its ceremony app's error page: no interaction is
+          left to go back to (#1106)
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:899
       - guard: notTheStartingBrowser
         target: bad_request.transaction_mismatch
         say: 'no pending sign-in for this browser: a replay in another browser, a forged callback, or a spent one'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:918
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:960
       - target: completingCallback
         effect: [takePending]
         say: "the pending sign-in is taken and handed to the method's callback"
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:890
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:932
 
   completingCallback:
     title: Turn the method's answer into the step's completion
-    description: federation.upstream-step's exits, one by one.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:912
+    description: >-
+      federation.upstream-step's exits, one by one. On the pages a refusal shows a page of the auth server's own; on
+      the ceremony page it goes back to the interaction as the upstream step's error (#1081, #1106), the code
+      upstreamRefusalCodeOf maps the audited reason to.
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1028
     always:
       - guard: personDeclined and pagesMode
         target: provider_error.declined
         say: 'the person cancelled or declined at the provider, on the pages'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:970
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1003
       - guard: providerErrored and pagesMode
         target: provider_error.provider_error
         say: 'the provider answered another error, on the pages'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:970
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1003
       - guard: personDeclined
         target: step_continues.provider_declined
         say: 'the person cancelled or declined at the provider: the ceremony page says so (#1081)'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:961
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1041
       - guard: providerErrored
         target: step_continues.provider_error
         say: 'the provider answered another error: the ceremony page says so (#1081)'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:961
-      - guard: checkFailed
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1051
+      - guard: (checkFailed or providerUnreachable) and pagesMode
         target: bad_request.invalid_response
-        say: "the provider's answer failed a check, or the provider could not be reached"
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:941
-      - guard: methodFault
+        say: "the provider's answer failed a check, or the provider could not be reached, on the pages"
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1012
+      - guard: methodFault and pagesMode
         target: bad_request.method_fault
-        say: 'the method broke the contract; its error is logged for the operator'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:916
-      - guard: issuerMissing
+        say: 'the method broke the contract, on the pages; its error is logged for the operator'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1033
+      - guard: issuerMissing and pagesMode
         target: bad_request.invalid_response
-        say: "the identity names no issuer: its sub could not be told apart from another issuer's"
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:953
+        say: "the identity names no issuer, on the pages: its sub could not be told apart from another issuer's"
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1059
+      - guard: providerUnreachable
+        target: step_continues.provider_unavailable
+        say: 'the provider could not be reached: the ceremony page says so (#1106)'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1053
+      - guard: checkFailed or methodFault or issuerMissing
+        target: step_continues.provider_error
+        say: >-
+          the provider's answer failed a check, the method broke the contract, or the identity names no issuer: the
+          ceremony page says the provider failed (#1106)
+        source: apps/auth-server/src/app/helpers/interaction-outcomes.ts:91
       - target: lookingUpCredential
         say: 'an identity and its attributes'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:959
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1064
 
   lookingUpCredential:
     title: Look the credential up by (realm, provider type, sub) alone
     description: >-
       Never by an email or another attribute: a person whose address another account holds gets an account of their
       own, and nothing is matched or merged.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:532
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:547
     invoke: { action: UserCredential.findByRealmProviderSub }
     on:
       DONE:
@@ -336,41 +380,47 @@ states:
 
   checkingCredential:
     title: Decide what the credential found allows
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:524
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:539
     always:
-      - guard: knownCredential and issuerDiffers
+      - guard: knownCredential and issuerDiffers and pagesMode
         target: bad_request.issuer_mismatch
         say: >-
           the credential was created under another issuer: a sub is unique only within its issuer (OIDC Core §5.7), so
           the old credential never signs in under the new one
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:546
-      - guard: knownCredential and credentialDisabled
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:584
+      - guard: knownCredential and credentialDisabled and pagesMode
         target: bad_request.credential_disabled
         say: 'the credential is disabled'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:549
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:587
+      - guard: knownCredential and (issuerDiffers or credentialDisabled)
+        target: step_continues.unknown_identity
+        say: >-
+          on the ceremony page, a credential under another issuer or a disabled one: the same refused step as an
+          identity no account can be signed in with, which says nothing of the account (ADR-017 Decision 4)
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1065
       - guard: knownCredential
         target: completingStep
         say: "the credential's user, and whether the account counts as verified, as its creation recorded"
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:558
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:573
       - guard: not pagesMode
         target: step_continues.upstream_link
         say: >-
           an unknown identity on the ceremony page: nothing is written yet, and the person chooses between a new
           account and an existing one at the upstream_link step (#670)
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1013
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1081
       - guard: signUpOff
         target: bad_request.sign_up_disabled
         say: 'an unknown identity, in a realm that does not allow sign-up'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:581
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:596
       - guard: cannotVerify
         target: bad_request.verification_unavailable
         say: >-
           an unknown identity the provider's verified switch leaves unverified, with no address for a code or on the
           pages, which show no code step: it could never sign in, so nothing is written
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:586
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:601
       - target: creatingAccount
         say: 'an unknown identity, in a realm that allows sign-up'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1038
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1106
 
   creatingAccount:
     title: Create the user, the credential and the attributes in one transaction
@@ -380,7 +430,7 @@ states:
       claim the method gave becomes an attribute whose source is the provider type; the email attribute is verified
       only when the provider said so and the switch is on. user.registered (method upstream) commits with them. A
       callback that loses the race to create the same identity reads the account the other created.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:619
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:634
     invoke: { external: accountStore }
     on:
       DONE:
@@ -396,42 +446,78 @@ states:
     description: >-
       The upstream step ranks with a password, below a passkey, under the realm's MFA policy. The interaction is
       answered at the revision the start recorded, so a callback for an interaction that moved on is refused.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1074
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1187
     invoke: { external: signInEngine }
     on:
       DONE:
         target: decidingRound
         say: 'the engine answers its round'
       FAIL.unavailable:
-        target: bad_request.unavailable
-        say: 'the interaction store or the failure ladder cannot answer'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1100
+        - guard: pagesMode
+          target: bad_request.unavailable
+          say: 'the interaction store or the failure ladder cannot answer, on the pages'
+          source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1012
+        - target: step_continues.service_unavailable
+          say: 'the interaction store or the failure ladder cannot answer: the ceremony page says so (#1106)'
+          source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1252
 
   decidingRound:
     title: Go on as the engine's round says
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1103
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1236
     always:
-      - guard: engineRefuses
+      - guard: interactionMovedOn and (pagesMode or not errorPageNamed)
+        target: bad_request.interaction_expired
+        say: "the interaction expired, ended or moved on: the auth server's error page"
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1257
+      - guard: interactionMovedOn
+        target: error_page.interaction_expired
+        say: >-
+          the interaction expired, ended or moved on, in a realm that names its ceremony app's error page: no
+          interaction is left to go back to (#1106)
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:899
+      - guard: engineThrottles and pagesMode
+        target: bad_request.throttled
+        say: "the realm's round limits hold the sign-in back, on the pages"
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1250
+      - guard: engineThrottles
+        target: step_continues.too_many_requests
+        say: "the realm's round limits hold the sign-in back: the ceremony page says so, with no Retry-After (#1106)"
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1249
+      - guard: transactionEnded and pagesMode
         target: bad_request.refused
-        say: 'the engine refuses the proof, and audits why'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:424
+        say: 'the engine ended its transaction, on the pages, and audited why'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:464
+      - guard: transactionEnded
+        target: step_continues.transaction_ended
+        say: 'the engine ended its transaction: the sign-in starts again at its first round, with a new one'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1214
+      - guard: engineRefuses and pagesMode
+        target: bad_request.refused
+        say: 'the engine refuses the proof, on the pages, and audits why'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:461
+      - guard: engineRefuses
+        target: step_continues.unknown_identity
+        say: >-
+          the engine refuses the proof, and audits why: the same refused step as an identity no account can be signed
+          in with (#1106)
+        source: apps/auth-server/src/app/helpers/interaction-outcomes.ts:102
       - guard: needsFurtherStep and pagesMode
         target: bad_request.step_not_available
         say: 'a further step the pages cannot show: the sign-in fails closed'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:423
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:460
       - guard: needsFurtherStep
         target: step_continues.ceremony_page
         say: 'a further step (the passkey, a code): the ceremony page shows it'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1109
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1261
       - guard: pagesMode
         target: signed_in.authorization_request
         effect: [signIn]
         say: 'signed in: the pages start the authorization request again under the new session'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1125
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1303
       - target: code_issued
         effect: [signIn]
         say: 'signed in: the interaction finishes the authorization request as the Interaction API does'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1126
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1304
 
   # Exits: success
 
@@ -493,9 +579,10 @@ states:
       picked at, with its upstream step current and refused with provider_declined, the provider's type and name in its
       params (error_provider), and the other ways in beside it (#1081): the ceremony page says so in its own words, and
       the auth server shows no page of its own. Nothing goes to the client. A step that offers no upstream step is shown
-      again as it was; an interaction that ended or moved on meanwhile gets the error page.
+      again as it was; an interaction that ended or moved on meanwhile gets the ending of a callback with no
+      interaction left: the realm's error page when it names one, else the auth server's (#1106).
     redirect: never
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:825
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:840
     response: &providerErrorStep
       status: 303
       headers:
@@ -504,11 +591,66 @@ states:
 
   step_continues.provider_error:
     type: final
-    title: Bring an error the provider answered back to the ceremony page
+    title: Bring an error the provider answered, or an answer that failed, back to the ceremony page
     description: >-
-      user.sign_in_failed is recorded with the reason provider_error, and the upstream step's error is provider_error
-      (#1081).
+      user.sign_in_failed is recorded with the reason provider_error (#1081), or with invalid_response,
+      verification_refused or method_fault (#1106), and the upstream step's error is provider_error.
     redirect: never
+    response: *providerErrorStep
+
+  step_continues.provider_unavailable:
+    type: final
+    title: Bring a provider that could not be reached back to the ceremony page
+    description: >-
+      user.sign_in_failed is recorded with the reason upstream_unavailable, and the upstream step's error is
+      provider_unavailable (#1106).
+    redirect: never
+    response: *providerErrorStep
+
+  # Exits: the sign-in's own refusals, on the ceremony page (#1106)
+
+  step_continues.unknown_identity:
+    type: final
+    title: Bring a proof that signs nobody in back to the ceremony page
+    description: >-
+      user.sign_in_failed is recorded with its reason: issuer_mismatch, credential_disabled, or the engine's own, such
+      as a disabled account. The upstream step's error is unknown_identity whatever the reason, the same for every
+      account (ADR-017 Decision 4): the person learns nothing of an account they have not proved. Nobody signs in,
+      nothing is created and nothing goes to the client.
+    redirect: never
+    source: apps/auth-server/src/app/helpers/interaction-outcomes.ts:102
+    response: *providerErrorStep
+
+  step_continues.too_many_requests:
+    type: final
+    title: Bring a throttled callback back to the ceremony page
+    description: >-
+      user.sign_in_failed is recorded with the reason throttled, and the upstream step's error is too_many_requests.
+      The 303 carries no Retry-After: the page says the sign-in was held back.
+    redirect: never
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1249
+    response: *providerErrorStep
+
+  step_continues.service_unavailable:
+    type: final
+    title: Bring a callback a store could not answer back to the ceremony page
+    description: >-
+      user.sign_in_failed is recorded with the reason unavailable, and the upstream step's error is
+      service_unavailable. A refused step the interaction store cannot take either gets the auth server's error page.
+    redirect: never
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:872
+    response: *providerErrorStep
+
+  step_continues.transaction_ended:
+    type: final
+    title: Start the sign-in again at its first round
+    description: >-
+      The engine ended its sign-in transaction (it outlived its age, or the provider proved another account than the
+      one it named) and recorded user.sign_in_failed with its reason. The interaction goes back to the sign-in's first
+      round, with a new transaction for what the request asked for, no error and a restart notice that names no
+      account, as an answer's restart does (#1081). Nobody signs in, and nothing goes to the client.
+    redirect: never
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1234
     response: *providerErrorStep
 
   provider_error.declined:
@@ -535,7 +677,30 @@ states:
     redirect: never
     response: *providerErrorPage
 
-  # Exits: refusals, all with the one error page
+  # Exits: a callback with no interaction left, in a realm that names its ceremony app's error page (#1106)
+
+  error_page.transaction_mismatch:
+    type: final
+    title: Send a callback with no pending sign-in for this browser to the realm's error page
+    description: >-
+      user.sign_in_failed is recorded with the reason transaction_mismatch. No code is redeemed and no account is
+      created. The ceremony app shows its page; the auth server renders none.
+    redirect: never
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:899
+    response: &errorPageRedirect
+      status: 303
+      headers:
+        Location: "<issuer><the realm's ceremonyApp.errorPage>?code=interaction_expired&trace_id=<the request id>"
+        Cache-Control: no-store
+
+  error_page.interaction_expired:
+    type: final
+    title: Send a callback whose interaction expired or moved on to the realm's error page
+    description: user.sign_in_failed is recorded with the reason interaction_expired. Nobody signs in.
+    redirect: never
+    response: *errorPageRedirect
+
+  # Exits: refusals on the pages, or with no interaction left and no error page, all with the one error page
 
   bad_request.upstream_unavailable:
     type: final
@@ -551,7 +716,7 @@ states:
 
   bad_request.transaction_mismatch:
     type: final
-    title: Refuse a callback with no pending sign-in for this browser
+    title: Refuse a callback with no pending sign-in for this browser, in a realm that names no error page
     description: >-
       user.sign_in_failed is recorded with the reason transaction_mismatch. No code is redeemed and no account is
       created.
@@ -560,7 +725,7 @@ states:
 
   bad_request.invalid_response:
     type: final
-    title: Refuse an answer of the provider that fails a check
+    title: Refuse an answer of the provider that fails a check, on the pages
     description: >-
       user.sign_in_failed is recorded with the method's reason: invalid_response, upstream_unavailable or
       verification_refused.
@@ -569,21 +734,21 @@ states:
 
   bad_request.method_fault:
     type: final
-    title: Refuse the answer of a method that broke the contract
+    title: Refuse the answer of a method that broke the contract, on the pages
     description: user.sign_in_failed is recorded with the reason method_fault.
     redirect: never
     response: *errorPage
 
   bad_request.issuer_mismatch:
     type: final
-    title: Refuse a known sub under another issuer
+    title: Refuse a known sub under another issuer, on the pages
     description: user.sign_in_failed is recorded with the reason issuer_mismatch and the credential's user.
     redirect: never
     response: *errorPage
 
   bad_request.credential_disabled:
     type: final
-    title: Refuse a disabled credential
+    title: Refuse a disabled credential, on the pages
     description: user.sign_in_failed is recorded with the reason credential_disabled.
     redirect: never
     response: *errorPage
@@ -604,8 +769,10 @@ states:
 
   bad_request.refused:
     type: final
-    title: Refuse a proof the engine refuses
-    description: The engine records user.sign_in_failed with its own reason.
+    title: Refuse a proof the engine refuses, on the pages
+    description: >-
+      The engine records user.sign_in_failed with its own reason, transaction_ended among them: a transaction the
+      engine ended is refused here, and started again only on the ceremony page.
     redirect: never
     response: *errorPage
 
@@ -620,8 +787,24 @@ states:
 
   bad_request.unavailable:
     type: final
-    title: Refuse the callback when a store cannot answer
+    title: Refuse the callback when a store cannot answer, on the pages
     description: user.sign_in_failed is recorded with the reason unavailable.
+    redirect: never
+    response: *errorPage
+
+  bad_request.throttled:
+    type: final
+    title: Refuse a throttled callback, on the pages
+    description: user.sign_in_failed is recorded with the reason throttled.
+    redirect: never
+    response: *errorPage
+
+  bad_request.interaction_expired:
+    type: final
+    title: Refuse a callback whose interaction expired or moved on
+    description: >-
+      user.sign_in_failed is recorded with the reason interaction_expired. On the ceremony page only in a realm that
+      names no error page.
     redirect: never
     response: *errorPage
 
@@ -645,33 +828,33 @@ assertions:
     say: >-
       A callback replayed in another browser, forwarded or forged never signs anyone in, and never takes the pending
       sign-in
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:885
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:927
   - id: a-foreign-callback-spends-nothing
     never: 'pendingTaken and notTheStartingBrowser'
     say: 'Only the browser whose flow cookie the start bound takes the pending sign-in'
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:890
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:932
   - id: no-account-without-sign-up
     never: 'accountCreated and signUpOff'
     say: 'An unknown identity creates an account only in a realm that allows sign-up'
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:581
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:596
   - id: no-account-that-could-never-sign-in
     never: 'accountCreated and cannotVerify'
     say: >-
       A new account the provider does not vouch for is created only where QAuth can verify its address: on the
       ceremony page, with an address
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:586
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:601
   - id: no-subject-without-its-issuer
     never: '(accountCreated or signedIn) and issuerMissing'
     say: 'An identity that names no issuer neither creates an account nor signs in'
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:500
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:515
   - id: no-account-for-a-known-identity
     never: 'accountCreated and knownCredential'
     say: 'A known credential signs its own user in; it never creates a second account'
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:558
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:573
   - id: an-issuer-change-never-signs-in
     never: 'signedIn and knownCredential and issuerDiffers'
     say: 'A credential signs in only under the issuer it was created with'
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:546
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:561
   - id: a-passkey-is-never-skipped
     never: "signedIn and furtherStep == 'passkey'"
     say: >-
@@ -681,10 +864,35 @@ assertions:
   - id: a-cancel-is-not-a-failure
     never: "(state == 'provider_error.declined' or state == 'step_continues.provider_declined') and not personDeclined"
     say: 'Only a cancel at the provider shows the cancel page, or the ceremony page with provider_declined'
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:923
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:965
+  - id: the-ceremony-page-gets-every-live-refusal
+    never: >-
+      not pagesMode and state in ['bad_request.invalid_response', 'bad_request.method_fault',
+      'bad_request.issuer_mismatch', 'bad_request.credential_disabled', 'bad_request.refused', 'bad_request.unavailable',
+      'bad_request.throttled', 'bad_request.step_not_available']
+    say: >-
+      On the ceremony page every refusal of a callback whose interaction is still live goes back to it as the upstream
+      step's error, with the callback's trace id; the auth server shows a page of its own there only when no
+      interaction is left (#1106)
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1018
+  - id: the-error-page-only-where-the-realm-names-it
+    never: >-
+      (not errorPageNamed and state in ['error_page.transaction_mismatch', 'error_page.interaction_expired']) or
+      (errorPageNamed and state == 'bad_request.transaction_mismatch') or (errorPageNamed and not pagesMode and state
+      == 'bad_request.interaction_expired')
+    say: >-
+      A callback with no interaction left goes to the ceremony app's error page exactly when the realm names one, and
+      to the auth server's own error page otherwise (#1106)
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:899
+  - id: a-refused-step-signs-nobody-in
+    never: >-
+      (signedIn or accountCreated) and state in ['step_continues.unknown_identity', 'step_continues.too_many_requests',
+      'step_continues.service_unavailable', 'step_continues.provider_unavailable', 'step_continues.provider_error',
+      'step_continues.provider_declined', 'step_continues.transaction_ended']
+    say: 'A refusal that goes back to the ceremony page signs nobody in and creates no account'
   - id: the-ceremony-page-shows-a-provider-refusal-itself
     never: "(state == 'provider_error.declined' or state == 'provider_error.provider_error') and not pagesMode"
     say: >-
       On the ceremony page a cancel or an error at the provider comes back as the upstream step's error: the auth
       server's own provider-error page is the pages' alone (#1081)
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:961
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1041
