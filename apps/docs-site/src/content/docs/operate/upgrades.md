@@ -1372,6 +1372,67 @@ Nothing checks the grant at boot. Without it a regeneration, or an enrolment's
 first set, answers `500` or binds the app without a set, with
 `permission denied` for the table in the log.
 
+### Credential changes call migration 0074's function
+
+A realm can now make a second admin's approval mandatory
+([#521](https://github.com/qauth-labs/qauth/issues/521)). The rule refuses an
+approver whose credentials, identifier or contact address changed in the 7
+days before the request, so every such change, on any account, calls
+`admin_grants_record_security_change`, the function migration 0074 adds, in
+the change's own transaction: a password changed or reset, a credential added
+or removed, new recovery codes, an upstream account linked or unlinked, a
+wallet linked. The function moves the time on the account's admin grants, and
+nothing for an account that administers nothing.
+
+`EXECUTE` on it is revoked from `PUBLIC`; the grants give it to `web`, `api`
+and `admin`. A deployment whose migration runner grants the roles' database
+users ([above](#each-role-can-connect-as-a-database-user-of-its-own)), or
+whose roles connect as the one user that owns the tables, needs nothing. One
+that applies the grants by hand applies the statements of
+`databaseUserGrantStatements` from `@qauth-labs/infra-db` again, or these,
+before the new version starts:
+
+```sql
+GRANT EXECUTE ON FUNCTION "admin_grants_record_security_change"(uuid, uuid) TO <web_role>;
+GRANT EXECUTE ON FUNCTION "admin_grants_record_security_change"(uuid, uuid) TO <api_role>;
+GRANT EXECUTE ON FUNCTION "admin_grants_record_security_change"(uuid, uuid) TO <admin_role>;
+```
+
+Nothing checks the grant at boot. Without it each of those changes fails,
+with `permission denied` for the function in the log, and writes nothing.
+During a rolling upgrade, a change that a node of the previous release makes
+moves no grant's time.
+
+### Keys rotate on a schedule
+
+The `key-rotation` job
+([#542](https://github.com/qauth-labs/qauth/issues/542)) runs every hour on
+the nodes of the `signer` role, from the first start of 0.2.5 on. It rotates
+each realm's token signing, event signing, cookie, data-at-rest, OID4VP
+response and agent wrapping keys on the windows
+[Keys](/operate/keys/#the-scheduled-rotation) describes: by default it
+publishes the `next` key once the active key has served 83 days, and switches
+to it on day 90. A key that has already served 83 days gets its `next` key at
+the first run, and the switch follows the whole window later. A relying party
+that reads the realm's JWKS by `kid` follows the switch; one that pinned a key
+stops verifying the new tokens. A key variable such as `JWT_PRIVATE_KEY` that
+still holds a key the job has retired changes nothing, and each boot warns
+about it; remove the key variables once the store holds the keys.
+
+The job writes the events of its steps (`key.next_created`, `key.rotated`),
+so the `signer` role's database user gets grants on the event store. A
+deployment whose runner grants the users, or whose roles share the owner,
+needs nothing. One that applies the grants by hand applies, before the new
+version starts:
+
+```sql
+GRANT INSERT ON TABLE "events" TO <signer_role>;
+GRANT EXECUTE ON FUNCTION "events_admin_chain_head"(uuid), "events_own_row"(uuid), "events_oldest_unread_time"() TO <signer_role>;
+```
+
+Without them each step fails and is logged, the next run retries it, and the
+keys do not rotate.
+
 ### The ceremony app's error page fills once from `CEREMONY_APP_ERROR_PAGE`
 
 0.2.4 added the realm policy `ceremonyApp.errorPage` with no environment key,
