@@ -229,6 +229,23 @@ export interface PlanKeyRotationInput {
  * - `refuse` — the keys are not in a state the job can choose for: two
  *   active or two `next` keys, or a `next` key that would split a hybrid pair.
  */
+/**
+ * How long a purpose's switch waits for a key it retired before: for a purpose
+ * whose verifiers hold one previous key ({@link ONE_RETIRED_KEY_PURPOSES}),
+ * the end of every retired key's retention, so the switch never pushes a
+ * previous key out of the ring while its cookies may live. A retired key kept
+ * with no end (a replaced cookie key's) holds nothing. `0` for the others.
+ */
+function previousKeyHold(purpose: KeyPurpose, keys: readonly StoredKeySummary[]): number {
+  if (!ONE_RETIRED_KEY_PURPOSES.includes(purpose)) return 0;
+  let hold = 0;
+  for (const key of keys) {
+    if (key.status === 'retired' && key.unpublishAt !== null)
+      hold = Math.max(hold, key.unpublishAt);
+  }
+  return hold;
+}
+
 export function planKeyRotation(input: PlanKeyRotationInput): KeyRotationPlan {
   const { purpose, algorithm, keys, settings, now } = input;
   const definition: KeyPurposeDefinition = KEY_PURPOSES[purpose];
@@ -259,7 +276,11 @@ export function planKeyRotation(input: PlanKeyRotationInput): KeyRotationPlan {
     if (now < startedAt + settings.periodMs - settings.prepublishMs) return { action: 'none' };
     return {
       action: 'create',
-      activatesAt: Math.max(startedAt + settings.periodMs, now + settings.prepublishMs),
+      activatesAt: Math.max(
+        startedAt + settings.periodMs,
+        now + settings.prepublishMs,
+        previousKeyHold(purpose, ofAlgorithm)
+      ),
     };
   }
 
@@ -284,16 +305,9 @@ export function planKeyRotation(input: PlanKeyRotationInput): KeyRotationPlan {
     };
   }
 
-  let notBefore = startedAt + settings.periodMs;
+  let notBefore = Math.max(startedAt + settings.periodMs, previousKeyHold(purpose, ofAlgorithm));
   for (const key of incoming) {
     notBefore = Math.max(notBefore, (key.publishAt ?? key.createdAt) + settings.prepublishMs);
-  }
-  if (ONE_RETIRED_KEY_PURPOSES.includes(purpose)) {
-    for (const key of ofAlgorithm) {
-      if (key.status === 'retired' && key.unpublishAt !== null) {
-        notBefore = Math.max(notBefore, key.unpublishAt);
-      }
-    }
   }
   if (now < notBefore) return { action: 'none' };
 

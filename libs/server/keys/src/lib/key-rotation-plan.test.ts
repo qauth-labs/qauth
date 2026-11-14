@@ -252,6 +252,11 @@ describe('planKeyRotation', () => {
     const cookie = { purpose: 'cookie_hmac' as const, algorithm: 'HS256' as const, keys };
     expect(plan({ ...cookie, now: T0 + 120 * DAY - 1 })).toEqual({ action: 'none' });
     expect(plan({ ...cookie, now: T0 + 120 * DAY }).action).toBe('activate');
+    // The next key's planned activation names the hold already.
+    expect(plan({ ...cookie, keys: keys.slice(0, 2), now: T0 + 83 * DAY })).toEqual({
+      action: 'create',
+      activatesAt: T0 + 120 * DAY,
+    });
     // A data-at-rest key decrypts with any retired key it keeps: no hold.
     const data = keys.map((stored) => ({ ...stored, algorithm: 'A256GCM' }));
     expect(

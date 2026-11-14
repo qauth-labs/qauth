@@ -109,7 +109,7 @@ export const keyNextCreated = defineEventType({
   version: 1,
   rc: 0,
   description:
-    "The scheduled key rotation created the realm's next key for a purpose (ADR-019 Decision 9): a published key is in the realm's JWKS from now on but signs nothing yet, and the key it will replace keeps signing. Emitted in the transaction that stores the key.",
+    "The scheduled key rotation created the realm's next key for a purpose (ADR-019 Decision 9): a published key is in its JWKS from now on (the realm's, or the SSF transmitter's for an event signing key) but signs nothing yet, and the key it will replace keeps signing. Emitted in the transaction that stores the key.",
   category: 'admin',
   severity: 'info',
   since: 'v0.3.0',
@@ -123,7 +123,7 @@ export const keyNextCreated = defineEventType({
     activatesAt: z.iso
       .datetime()
       .describe(
-        'The earliest moment the new keys may sign, as an RFC 3339 time in UTC: once the active key has served its period and the new keys have been published for the pre-publication window. The switch itself is recorded as `key.rotated`.'
+        'The earliest moment the new keys may sign, as an RFC 3339 time in UTC: once the active key has served its period and the new keys have been published for the pre-publication window, and, for a cookie key, once the cookie key retired before it has left its retention. The switch itself is recorded as `key.rotated`.'
       ),
   }),
 });
