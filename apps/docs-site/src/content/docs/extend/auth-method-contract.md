@@ -3,7 +3,7 @@ title: The AuthMethod contract
 description: The experimental plugin API for sign-in methods — what an AuthMethod adds to CredentialProvider, the upstream step it serves, what a method is handed, where its routes mount, the test kit that checks a method against the contract, and how to write a plugin in its own repository with @qauth-labs/plugin-sdk.
 sidebar:
   order: 6
-lastVerified: '2026-11-12'
+lastVerified: '2026-11-14'
 experimental: true
 ---
 
@@ -671,10 +671,11 @@ releases it, yet it is not on the server's first-party list: like any other pack
 while `PLUGIN_API_ENABLED` is on.
 
 QAuth's preset plugins are built the same way, each in its own repository:
-[qauth-labs/plugin-google](https://github.com/qauth-labs/plugin-google) and
-[qauth-labs/plugin-microsoft](https://github.com/qauth-labs/plugin-microsoft)
+[qauth-labs/plugin-google](https://github.com/qauth-labs/plugin-google),
+[qauth-labs/plugin-microsoft](https://github.com/qauth-labs/plugin-microsoft) and
+[qauth-labs/plugin-apple](https://github.com/qauth-labs/plugin-apple)
 ([Write a preset plugin](/extend/preset-plugins/)). [QAuth's provider plugins](/operate/images/#qauths-provider-plugins)
-lists all three, with their packages and the redirect URI each one registers.
+lists all four, with their packages and the redirect URI each one registers.
 
 **Install the SDK.** The package carries QAuth's own version: install the version of the QAuth
 release the plugin is for. A release is on npm's `latest` dist-tag, the first being `0.2.0`,
