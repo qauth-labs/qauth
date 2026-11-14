@@ -43,6 +43,10 @@ export interface SignerGrant {
   readonly signClientAssertion: boolean;
   readonly signRequestObject: boolean;
   readonly getCookieSecrets: boolean;
+  /** A key derived from the cookie secret for a digest, which makes no cookie (#497). */
+  readonly getCookieDerivedKey: boolean;
+  /** Checking a cookie's MAC with the cookie key, which hands out no key (#497). */
+  readonly verifyCookieMac: boolean;
   /**
    * `true`: with any `context`. A list: only with a `context` that starts with
    * one of these prefixes, so a role that stores one kind of secret cannot
@@ -143,6 +147,8 @@ const NOTHING_ELSE = {
   signClientAssertion: false,
   signRequestObject: false,
   getCookieSecrets: false,
+  getCookieDerivedKey: false,
+  verifyCookieMac: false,
   encrypt: false,
   decrypt: false,
 } as const;
@@ -151,13 +157,25 @@ const NOTHING_ELSE = {
  * The policy table: what each role may call.
  *
  * - `web` gets the cookie HMAC secrets, the one secret ADR-019 Decision 9 hands
- *   to a role outside the signer. It never signs a token. It serves the wallet
+ *   to a role outside the signer, and the keys derived from them for its
+ *   digests (`getCookieDerivedKey`, #497). It never signs a token. It serves the wallet
  *   sign-in pages, so it signs OID4VP request objects with the
  *   `oid4vp_request_signing` key and seals each request's ephemeral response
- *   key with the `data_at_rest` key (#546): it may encrypt only with an
- *   {@link OID4VP_RESPONSE_KEY_CONTEXT_PREFIX} context, and decrypts nothing.
+ *   key with the `data_at_rest` key (#546). It serves the sign-in itself (the
+ *   Interaction API, the hosted pages, the upstream and plugin sign-ins), so
+ *   it opens what those need, as `api` does where the same code runs (#497):
+ *   an account's TOTP secret, which it also seals when an authenticator app
+ *   is bound ({@link TOTP_SECRET_CONTEXT_PREFIX}); an upstream provider's
+ *   client secret and an AuthMethod plugin's secret, which its code exchange
+ *   sends, and a client assertion toward that provider; and a realm's mail
+ *   transport secret, which its mail sender sends with. It encrypts nothing
+ *   else, and decrypts no other kind of secret.
  * - `api` signs access tokens, ID tokens and ID-JAGs (`token_signing`, hybrid
- *   included), but no logout token, signs
+ *   included), but no logout token. It never gets the cookie secrets, which
+ *   would let it make a browser session cookie: it gets the keys derived from
+ *   them for the failure ladder's and the emailed codes' digests
+ *   (`getCookieDerivedKey`), and has the signer check the session cookie
+ *   `/auth/logout` reads (`verifyCookieMac`), #497. It signs
  *   client assertions toward upstream providers (#547), and encrypts with the
  *   `data_at_rest` key. It decrypts only five kinds of stored secret: a
  *   realm's mail transport secret ({@link REALM_MAIL_SECRET_CONTEXT_PREFIX}),
@@ -171,8 +189,11 @@ const NOTHING_ELSE = {
  *   account's TOTP secret ({@link TOTP_SECRET_CONTEXT_PREFIX}), which the
  *   sign-in engine checks a code with (#653). Nothing
  *   else of the role decrypts, and it signs no request object: the request is
- *   signed when the `web` role builds it. No granted prefix is the start of
- *   another role's, so no grant reaches another role's secrets.
+ *   signed when the `web` role builds it. The two roles that serve sign-in,
+ *   `api` and `web`, share the prefixes of the secrets sign-in opens
+ *   ({@link SIGN_IN_SECRET_CONTEXT_PREFIXES}); apart from those, no granted
+ *   prefix is the start of another role's, so no grant reaches another role's
+ *   secrets.
  * - `delivery` signs Security Event Tokens (`event_signing`), logout tokens
  *   (`logout+jwt`, with the `token_signing` key that signs the ID tokens, as
  *   OpenID Connect Back-Channel Logout 1.0 §2.4 asks, #624) and webhook
@@ -194,6 +215,19 @@ const NOTHING_ELSE = {
  *
  * A role that is not in this table may call nothing.
  */
+/**
+ * The kinds of stored secret sign-in opens, wherever it runs: `api` and `web`
+ * both decrypt them (#497), and no other role but `local` does. A realm's mail
+ * transport secret, an upstream provider's client secret, an AuthMethod
+ * plugin's secret member and an account's TOTP secret.
+ */
+export const SIGN_IN_SECRET_CONTEXT_PREFIXES: readonly string[] = Object.freeze([
+  REALM_MAIL_SECRET_CONTEXT_PREFIX,
+  UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
+  AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
+  TOTP_SECRET_CONTEXT_PREFIX,
+]);
+
 export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freezePolicy({
   local: {
     signJws: JWS_TYPS,
@@ -202,15 +236,20 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     signClientAssertion: true,
     signRequestObject: true,
     getCookieSecrets: true,
+    getCookieDerivedKey: true,
+    verifyCookieMac: true,
     encrypt: true,
     decrypt: true,
     ...PUBLIC_READS,
   },
   web: {
     ...NOTHING_ELSE,
+    signClientAssertion: true,
     signRequestObject: true,
     getCookieSecrets: true,
-    encrypt: [OID4VP_RESPONSE_KEY_CONTEXT_PREFIX],
+    getCookieDerivedKey: true,
+    encrypt: [OID4VP_RESPONSE_KEY_CONTEXT_PREFIX, TOTP_SECRET_CONTEXT_PREFIX],
+    decrypt: [...SIGN_IN_SECRET_CONTEXT_PREFIXES],
     ...PUBLIC_READS,
   },
   api: {
@@ -218,6 +257,8 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     signJws: ['at+jwt', 'JWT', 'oauth-id-jag+jwt'],
     signHybrid: true,
     signClientAssertion: true,
+    getCookieDerivedKey: true,
+    verifyCookieMac: true,
     encrypt: true,
     decrypt: [
       REALM_MAIL_SECRET_CONTEXT_PREFIX,
@@ -258,6 +299,22 @@ function freezePolicy(
 /** Whether `value` is a role in {@link SIGNER_CALLERS}. */
 export function isSignerCaller(value: unknown): value is SignerCaller {
   return typeof value === 'string' && (SIGNER_CALLERS as readonly string[]).includes(value);
+}
+
+/**
+ * Whether `caller`'s grant names `operation` at all: some token type for
+ * `signJws`, some context (or any) for `encrypt` and `decrypt`, `true` for
+ * the others. The signer service (#497) checks it before it reads a
+ * request's body, so a role with no grant for an operation is refused before
+ * any of its claims are parsed; {@link isSignerCallAllowed} then decides the
+ * call itself. An unknown role or operation has no grant.
+ */
+export function hasSignerGrant(caller: unknown, operation: SignerOperation): boolean {
+  if (!isSignerCaller(caller)) return false;
+  const grant: SignerGrant = SIGNER_POLICY[caller];
+  if (!Object.hasOwn(grant, operation)) return false;
+  const granted: unknown = grant[operation];
+  return Array.isArray(granted) ? granted.length > 0 : granted === true;
 }
 
 /**

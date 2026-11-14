@@ -20,7 +20,12 @@ import { createInternalServer } from './app/internal/listener';
 import { readInternalTlsFiles } from './app/internal/tls-files';
 import { openapiOptions } from './app/openapi-options';
 import errorHandler from './app/plugins/error-handler';
-import { internalListenerPlan, servesAdminListener, servesApiDocs } from './app/service-roles';
+import {
+  internalListenerPlan,
+  servesAdminListener,
+  servesApiDocs,
+  signerClientTlsFiles,
+} from './app/service-roles';
 import { env, envDeprecationWarnings, envExperimentalWarnings } from './config/env';
 import { buildLoggerOptions } from './config/logger';
 
@@ -186,9 +191,15 @@ async function start() {
     // so a file that cannot be read or a key that is not the certificate's
     // own stops the boot too.
     const internalPlan = internalListenerPlan(env);
+    let internalMaterial: ReturnType<typeof readInternalTlsFiles> | undefined;
     if (internalPlan.serves) {
       if (internalPlan.problems.length > 0) {
         throw new ServiceRoleBootError(internalPlan.problems);
+      }
+      if (internalPlan.tls !== undefined) {
+        internalMaterial = readInternalTlsFiles(internalPlan.tls, {
+          onWarning: (message) => server.log.warn({ listener: 'internal' }, message),
+        });
       }
       internalServer = createInternalServer({
         loggerInstance: server.log.child({ listener: 'internal' }),
@@ -198,18 +209,31 @@ async function start() {
         ...(internalPlan.plainHttpPeerRole === undefined
           ? {}
           : { plainHttpPeerRole: internalPlan.plainHttpPeerRole }),
-        ...(internalPlan.tls === undefined
+        ...(internalPlan.tls === undefined || internalMaterial === undefined
           ? {}
-          : {
-              tls: {
-                files: internalPlan.tls,
-                material: readInternalTlsFiles(internalPlan.tls, {
-                  onWarning: (message) => server.log.warn({ listener: 'internal' }, message),
-                }),
-              },
-            }),
+          : { tls: { files: internalPlan.tls, material: internalMaterial } }),
       });
     }
+
+    // The signer client (#497) of a process without the signer: the same
+    // internal TLS files, the certificate this process presents to the
+    // signer service at SIGNER_URL. Read and checked now too, once with the
+    // listener's: a file that cannot be read stops the boot. The app's role
+    // check refuses a process that lacks one, so none is read then.
+    const signerTls = signerClientTlsFiles(env);
+    const remoteSigner =
+      signerTls === undefined
+        ? undefined
+        : {
+            tls: {
+              files: signerTls,
+              material:
+                internalMaterial ??
+                readInternalTlsFiles(signerTls, {
+                  onWarning: (message) => server.log.warn({ component: 'signer-client' }, message),
+                }),
+            },
+          };
 
     // The database must have every migration of this release (#474, ADR-018
     // §5) before the boot steps read it. Behind, the server waits up to
@@ -245,6 +269,7 @@ async function start() {
     await server.register(app, {
       ...(adminServer === undefined ? {} : { adminListener: { server: adminServer } }),
       ...(internalServer === undefined ? {} : { internalListener: { server: internalServer } }),
+      ...(remoteSigner === undefined ? {} : { remoteSigner }),
     });
 
     // The admin and internal listeners bind first, once the boot steps have

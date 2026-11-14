@@ -50,6 +50,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says how to write a change as expand, then switch, with no drop within
   1.x.
 
+- **The signer service: roles sign through the signer over mutual TLS**
+  ([#497], ADR-019 Decision 9). A process that holds `signer` while the roles
+  are split serves the signer on its internal listener, one `POST` route per
+  operation under `/internal/signer/v1-rc.0/`, and every process without the
+  signer calls it through a remote signer with the in-process signer's
+  interface: `api` issues tokens, `web` signs its cookies and wallet requests,
+  and `delivery` signs its webhooks and event tokens with no KEK and no key
+  variable. The signer takes the caller's role from its certificate's SAN in
+  `INTERNAL_PEER_ROLES` and holds each call to that role's grant: only `web`
+  gets the cookie keys, and `api` gets what it needs of them without them,
+  keys derived from the cookie key for its failure ladder and emailed-code
+  digests and a signer-side check of the session cookie at `/auth/logout`, so
+  `api` signs in, verifies and signs out with no cookie key; `web` opens the
+  secrets sign-in needs (TOTP, upstream and plugin client secrets, mail
+  transport secrets) and signs upstream client assertions, so every sign-in
+  works on a split deployment. Each refusal is
+  logged and counted in the new
+  `qauth_signer_refusals_total{role,operation,reason}`. Calls are capped at
+  64 KiB, or 2 MiB for claims, messages and data (`413`); each peer
+  certificate at 2,000 tokens a second after a burst of 4,000, a token per
+  16 KiB of body, and 128 calls in flight (`429`); and the internal listener
+  at 256 connections per peer certificate. The caller
+  gives each attempt 2 seconds, tries a read or a decryption once more, and
+  answers at once for 5 seconds after 5 outages in a row, then recovers by
+  itself; while the signer is down, what signs answers `503` and the JWKS,
+  token verification, `/userinfo` and introspection keep working, as they read
+  the realm's published keys. The new `SIGNER_SAN` names the SAN the signer's
+  certificate must hold: `SIGNER_URL`'s host name when unset, required when
+  that host is an IP address. A process without the signer that holds two
+  roles warns at boot, since it calls as the one role its certificate maps
+  to. [Service roles](https://docs.qauth.dev/operate/service-roles/#the-signer-service)
+  has the details and a deployment with every role apart.
+
 ## [0.2.5] - 2026-11-14
 
 A patch release with no breaking change. A deployment can now seed each

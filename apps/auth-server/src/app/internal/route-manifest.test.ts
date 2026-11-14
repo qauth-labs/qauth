@@ -1,3 +1,4 @@
+import { SIGNER_SERVICE_PATH } from '@qauth-labs/fastify-plugin-signer';
 import { SERVICE_ROLE_NAMES } from '@qauth-labs/server-config';
 import { describe, expect, it } from 'vitest';
 
@@ -9,6 +10,7 @@ import {
   internalRouteModulesFor,
   internalRouteProblem,
   publicInternalRouteProblem,
+  SIGNER_SERVICE_PREFIX,
 } from './route-manifest';
 
 /** Where an internal route may be served (#496). */
@@ -53,25 +55,46 @@ describe('publicInternalRouteProblem', () => {
 });
 
 describe('the internal route manifest', () => {
-  it('holds the metrics module alone until the signer service lands (#497)', () => {
-    expect(INTERNAL_ROUTE_MODULES.map((entry) => entry.module)).toEqual(['metrics']);
+  it('holds the metrics module and the signer service (#497)', () => {
+    expect(INTERNAL_ROUTE_MODULES.map((entry) => entry.module)).toEqual(['metrics', 'signer']);
     expect(Object.isFrozen(INTERNAL_ROUTE_MODULES)).toBe(true);
   });
 
+  it('serves the signer service on a split process that holds the signer, to the roles the signer has grants for', () => {
+    const signer = INTERNAL_ROUTE_MODULES.find((entry) => entry.module === 'signer');
+    expect(signer).toMatchObject({
+      prefix: SIGNER_SERVICE_PATH,
+      roles: ['signer'],
+      peerRoles: ['web', 'api', 'delivery', 'admin'],
+    });
+    expect(SIGNER_SERVICE_PREFIX).toBe(SIGNER_SERVICE_PATH);
+    expect(signer?.inSingleProcess).toBeUndefined();
+    expect(signer?.peerRoles).not.toContain('metrics');
+    for (const roles of [['signer'], ['api', 'signer'], ['signer', 'delivery']] as const) {
+      expect(
+        internalRouteModulesFor(roles).map((entry) => entry.module),
+        roles.join()
+      ).toEqual(['metrics', 'signer']);
+    }
+    expect(internalRouteModulesFor(SERVICE_ROLE_NAMES).map((entry) => entry.module)).toEqual([
+      'metrics',
+    ]);
+  });
+
   it('serves the metrics on every process, to the metrics peer only, while METRICS_ENABLED is on (#500)', () => {
-    const [metrics] = INTERNAL_ROUTE_MODULES;
+    const [metrics, signer] = INTERNAL_ROUTE_MODULES;
     expect(metrics).toMatchObject({
       prefix: '/internal',
       roles: SERVICE_ROLE_NAMES,
       peerRoles: ['metrics'],
       inSingleProcess: true,
     });
-    for (const roles of [SERVICE_ROLE_NAMES, ['web'], ['signer'], ['delivery']] as const) {
+    for (const roles of [SERVICE_ROLE_NAMES, ['web'], ['delivery']] as const) {
       expect(internalRouteModulesFor(roles), roles.join()).toEqual([metrics]);
     }
-    expect(enabledInternalRouteModules({})).toEqual([metrics]);
-    expect(enabledInternalRouteModules({ METRICS_ENABLED: true })).toEqual([metrics]);
-    expect(enabledInternalRouteModules({ METRICS_ENABLED: false })).toEqual([]);
+    expect(enabledInternalRouteModules({})).toEqual([metrics, signer]);
+    expect(enabledInternalRouteModules({ METRICS_ENABLED: true })).toEqual([metrics, signer]);
+    expect(enabledInternalRouteModules({ METRICS_ENABLED: false })).toEqual([signer]);
   });
 
   it('names the peer roles of every module', () => {

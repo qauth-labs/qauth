@@ -43,6 +43,7 @@ import {
   signSessionCookie,
   verifyLoginCsrfCookie,
   verifySessionCookie,
+  verifySessionCookieAtSigner,
   WALLET_FLOW_COOKIE_NAME,
 } from './session-cookie';
 
@@ -298,6 +299,58 @@ describe('session cookie: key rotation (#493)', () => {
     vi.setSystemTime(Date.now() + 61_000);
 
     expect(await verifySessionCookie(fastify, REALM_A, before)).toBeNull();
+  });
+});
+
+describe('session cookie: checked by the signer (#497)', () => {
+  /** A process that holds no cookie key: it may only ask the signer to check a MAC. */
+  const checker = () => ({ signer: { verifyCookieMac: signer.verifyCookieMac } });
+
+  it('agrees with the check made with the cookie keys, and reads none of them', async () => {
+    const value = await signSessionCookie(fastify, { sid: SID, realmId: REALM_A });
+    signer.getCookieSecrets.mockClear();
+    const [kid, payload, mac] = value.split('.');
+    const flipFirst = (text: string) => `${text.startsWith('A') ? 'B' : 'A'}${text.slice(1)}`;
+
+    expect(await verifySessionCookieAtSigner(checker(), REALM_A, value)).toBe(SID);
+    expect(signer.verifyCookieMac).toHaveBeenCalledWith('local', {
+      realmId: REALM_A,
+      cookieName: SESSION_COOKIE_NAME,
+      kid,
+      payload,
+      mac,
+    });
+    for (const refused of [
+      `${kid}.${payload}.${flipFirst(mac)}`,
+      `${kid}.${sessionPayload({ s: ['x'], a: 'x' })}.${mac}`,
+    ]) {
+      expect(await verifySessionCookieAtSigner(checker(), REALM_A, refused)).toBeNull();
+    }
+    expect(await verifySessionCookieAtSigner(checker(), REALM_B, value)).toBeNull();
+    expect(signer.getCookieSecrets).not.toHaveBeenCalled();
+  });
+
+  it('verifies a cookie of the previous key after a rotation', async () => {
+    const before = await signSessionCookie(fastify, { sid: SID, realmId: REALM_A });
+    signer.rotate(REALM_A);
+    expect(await verifySessionCookieAtSigner(checker(), REALM_A, before)).toBe(SID);
+  });
+
+  it('asks nothing for a value that cannot be a signed cookie', async () => {
+    for (const malformed of [undefined, null, '', 'a.b', 'a.b.c.d', `kid..${'A'.repeat(43)}`]) {
+      expect(await verifySessionCookieAtSigner(checker(), REALM_A, malformed)).toBeNull();
+    }
+    const long = `kid.${'p'.repeat(4097)}.${'A'.repeat(43)}`;
+    expect(await verifySessionCookieAtSigner(checker(), REALM_A, long)).toBeNull();
+    expect(signer.verifyCookieMac).not.toHaveBeenCalled();
+  });
+
+  it('throws when the signer cannot check it: an unreachable signer is not an invalid cookie', async () => {
+    const value = await signSessionCookie(fastify, { sid: SID, realmId: REALM_A });
+    signer.verifyCookieMac.mockRejectedValueOnce(new TemporarilyUnavailableError(60));
+    await expect(verifySessionCookieAtSigner(checker(), REALM_A, value)).rejects.toBeInstanceOf(
+      TemporarilyUnavailableError
+    );
   });
 });
 

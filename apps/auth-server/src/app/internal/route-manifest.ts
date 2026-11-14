@@ -17,8 +17,9 @@ import type { FastifyPluginAsync, RouteOptions } from 'fastify';
  *
  * The metrics module (#500) registers on every process while METRICS_ENABLED
  * is on: `GET /internal/metrics`, for a scraper whose certificate maps to the
- * `metrics` peer role. The signer service (#497) adds its routes under
- * `/internal/signer/v1-rc.0`, for the `signer` role. Each module names the
+ * `metrics` peer role. The signer service (#497) serves its routes under
+ * {@link SIGNER_SERVICE_PREFIX} on a process that holds the `signer` role
+ * while the roles are split, to the other roles. Each module names the
  * peer roles that may call it (`peerRoles`): the listener refuses a peer with
  * no role, and a peer whose role the module does not name, with 403 before
  * the route runs. A route reads the caller's role with
@@ -28,6 +29,13 @@ import type { FastifyPluginAsync, RouteOptions } from 'fastify';
 
 /** The path every internal route sits under. */
 export const INTERNAL_PATH_PREFIX = '/internal';
+
+/**
+ * Where the signer service's routes sit: `SIGNER_SERVICE_PATH` of the signer
+ * plugin, which its remote signer calls, written here so the manifest loads
+ * none of the signer's code (a test holds the two equal).
+ */
+export const SIGNER_SERVICE_PREFIX = '/internal/signer/v1-rc.0';
 
 /** One route module of the internal listener and where it runs. */
 export interface InternalRouteModule {
@@ -77,6 +85,17 @@ export const INTERNAL_ROUTE_MODULES: readonly InternalRouteModule[] = Object.fre
     enabled: (settings) => settings.METRICS_ENABLED !== false,
     inSingleProcess: true,
     load: () => import('./routes/metrics'),
+  },
+  {
+    // The signer service (#497): the other roles' calls to the signer, on a
+    // process that holds it while the roles are split (a single process
+    // signs in-process). It admits the roles the signer has grants for, and
+    // holds each call to its role's grant (`SIGNER_POLICY`).
+    module: 'signer',
+    prefix: SIGNER_SERVICE_PREFIX,
+    roles: ['signer'],
+    peerRoles: ['web', 'api', 'delivery', 'admin'],
+    load: () => import('./routes/signer'),
   },
 ]);
 
