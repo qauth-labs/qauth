@@ -2,12 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 
 import {
+  type CompromisedKey,
   compromisedKeyOf,
   isKid,
   KEY_RETIRE_OPERATION,
   KeyChangeRefusedError,
+  keyRetirementOperation,
   newOperationNonce,
   OperationApprovalError,
+  operationDigest,
   retireKey,
 } from '@qauth-labs/fastify-plugin-signer';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
@@ -15,10 +18,14 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { invalidateKeyDenylist } from './key-denylist';
 import {
   type KeyRetirementOutcome,
+  type KeyRetirementRepeat,
+  recordKeyRetirementRepeat,
   retireKeyNow,
   type RetireKeyNowInput,
   revokeSessionsOfRetiredKey,
 } from './key-retirement';
+
+export type { CompromisedKey };
 
 /**
  * The break-glass command `auth-server:keys:retire` (ADR-019 Decisions 7 and
@@ -48,8 +55,8 @@ key until it fetches the JWKS again, unless it acts on the security event.
   --yes    Confirm: signing in again is required for everyone whose session ends.
 
 Run it again for a key retired already to end the sessions again, if a run stopped before it ended
-them. Exit codes: 0 done, 3 the key is retired but its sessions were not all ended, 2 a usage error,
-1 any other error, with nothing changed.
+them: the run is recorded and announced too. Exit codes: 0 done, 3 the key is retired but its
+sessions were not all ended, 2 a usage error, 1 any other error, with nothing changed.
 
 Example:
 
@@ -138,25 +145,19 @@ export function hostKeyRetirementApproval(
   });
 }
 
-/** A key the command found compromised already, to end its sessions again. */
-export interface CompromisedKey {
-  /** Epoch ms. When it began, or was to begin, to sign; `null` when the store does not say. */
-  readonly activateAt: number | null;
-  /** Epoch ms. */
-  readonly createdAt: number;
-}
-
 /** What the command reads and writes, besides its arguments. */
 export interface KeysRetireDependencies {
   /** The realm's id, by name, or `undefined`. */
   readonly realmIdOf: (name: string) => Promise<string | undefined>;
   /** `retireKeyNow` over this host's database, Redis and KEK. */
   readonly retireKeyNow: (input: RetireKeyNowInput) => Promise<KeyRetirementOutcome>;
-  /** The key with `kid` of the realm when it is compromised, else `undefined`. */
+  /** The token-signing key with `kid` of the realm when it is compromised, else `undefined`. */
   readonly findCompromisedKey: (
     realmId: string,
     kid: string
   ) => Promise<CompromisedKey | undefined>;
+  /** Record a run for a key compromised already: its audit row and event, in one transaction. */
+  readonly recordRepeat: (repeat: KeyRetirementRepeat) => Promise<void>;
   /** `sessionService.revokeAllForRealm` of this host. */
   readonly sessions: Parameters<typeof revokeSessionsOfRetiredKey>[0];
   /** The user the command runs as, as the operating system names it. */
@@ -174,7 +175,7 @@ export interface KeysRetireHost {
   readonly log: FastifyBaseLogger;
   readonly repositories: Pick<
     FastifyInstance['repositories'],
-    'realms' | 'refreshTokens' | 'events' | 'adminAuditLog'
+    'realms' | 'refreshTokens' | 'events' | 'adminAuditLog' | 'realmPublicKeys'
   >;
   readonly sessionService: FastifyInstance['sessionService'];
 }
@@ -195,14 +196,13 @@ export interface KeysRetireSettings {
 /**
  * The command's dependencies over a process's plugins: the retirement runs
  * with this host's KEK provider and database, and, as the process holds no
- * copy of the denylist, deletes the Redis snapshot after the commit, so every
- * node reads the database at its next refresh.
+ * copy of the denylist, stores the database's list as the Redis snapshot
+ * after the commit, so every node learns the change at its next read.
  */
 export function keysRetireDependencies(
   host: KeysRetireHost,
   settings: KeysRetireSettings
 ): KeysRetireDependencies {
-  const { realms, refreshTokens, events, adminAuditLog } = host.repositories;
   const retireDeps = {
     db: host.db,
     kekEnv: settings.kekEnv,
@@ -212,21 +212,38 @@ export function keysRetireDependencies(
     hybridSigning: settings.hybridSigning,
   };
   return {
-    realmIdOf: async (name) => (await realms.findByName(name))?.id,
+    realmIdOf: async (name) => (await host.repositories.realms.findByName(name))?.id,
     retireKeyNow: (input) =>
       retireKeyNow(
         {
           retire: (retireInput) => retireKey(retireDeps, retireInput),
-          refreshTokens,
-          events,
-          adminAuditLog,
+          refreshTokens: host.repositories.refreshTokens,
+          events: host.repositories.events,
+          adminAuditLog: host.repositories.adminAuditLog,
           sessions: host.sessionService,
           invalidateDenylist: (retired) =>
-            invalidateKeyDenylist(null, host.redis, host.log, retired),
+            invalidateKeyDenylist(
+              null,
+              {
+                redis: () => host.redis,
+                listDenied: () => host.repositories.realmPublicKeys.listDenied(),
+              },
+              host.log,
+              retired
+            ),
         },
         input
       ),
     findCompromisedKey: (realmId, kid) => compromisedKeyOf(host.db, realmId, kid),
+    recordRepeat: (repeat) =>
+      recordKeyRetirementRepeat(
+        {
+          transaction: (run) => host.db.transaction(run),
+          events: host.repositories.events,
+          adminAuditLog: host.repositories.adminAuditLog,
+        },
+        repeat
+      ),
     sessions: host.sessionService,
     operatingSystemUser: settings.operatingSystemUser,
     out: settings.out,
@@ -332,7 +349,10 @@ export async function runKeysRetire(
   }
 }
 
-/** For a key retired already: end the realm's sessions used since it began to sign, again. */
+/**
+ * For a key retired already: record and announce the run, as every run is,
+ * then end the realm's sessions used since the key may have signed, again.
+ */
 async function endSessionsAgain(
   deps: KeysRetireDependencies,
   realmId: string,
@@ -344,18 +364,41 @@ async function endSessionsAgain(
     deps.err('keys:retire: the key is no longer compromised; nothing was changed.');
     return 1;
   }
-  // The status the key had is gone; when it began to sign is not, or else
-  // when it was made: the earlier moment, so no session it may have served
-  // stays.
-  const signedSince = key.activateAt ?? key.createdAt;
-  deps.out(
-    `The key ${kid} is retired already. Ending the realm's sessions used since ` +
-      `${isoTime(signedSince)} again.`
+  const approval = hostKeyRetirementApproval(actor.operatingSystemUser);
+  const digest = operationDigest(
+    keyRetirementOperation({ realmId, kid, requester: actor, nonce: approval.nonce })
   );
+  try {
+    await deps.recordRepeat({
+      realmId,
+      kid,
+      algorithm: key.algorithm,
+      actor,
+      approvalId: approval.id,
+      operationDigest: Buffer.from(digest),
+      signedSince: key.signedSince,
+    });
+  } catch (error) {
+    deps.err(
+      `keys:retire: the run could not be recorded: ${sentence(describeKeysRetireError(error))} ` +
+        'Nothing was changed.'
+    );
+    return 1;
+  }
+  deps.out(
+    `keys.retire of kid ${kid} in realm ${realmId}, by ${actor.operatingSystemUser} on this host, ` +
+      `approval ${approval.id}: the key is retired already. Recorded in the admin audit log, ` +
+      'and announced as key.emergency_retired again.'
+  );
+  if (key.signedSince === null) {
+    deps.out('The key never signed: no session was ended.');
+    return 0;
+  }
+  deps.out(`Ending the realm's sessions used since ${isoTime(key.signedSince)} again.`);
   try {
     const sessions = await revokeSessionsOfRetiredKey(deps.sessions, {
       realmId,
-      signedSince,
+      signedSince: key.signedSince,
       actor,
     });
     deps.out(`Ended ${sessions.ended} browser sessions of the realm.`);

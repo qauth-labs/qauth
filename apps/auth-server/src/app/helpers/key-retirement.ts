@@ -27,10 +27,15 @@ import { RESERVED_OPERATIONS } from './admin-operations-reserved';
  * - the admin audit log records the operation, its actor and its approval.
  *
  * After the commit, the node's copy of the `kid` denylist learns the retired
- * keys at once and the shared snapshot is dropped, so every node refuses
- * their tokens within seconds; then every browser session of the realm used
- * since the key began to sign is ended, in batches, each batch writing the
- * back-channel logout notices of the clients it served.
+ * keys at once and the shared snapshot is replaced from the database, so
+ * every node refuses their tokens within seconds; then every browser session
+ * of the realm used since the key may have signed is ended, in batches, each
+ * batch writing the back-channel logout notices of the clients it served.
+ *
+ * The break-glass command (`keys-retire.ts`) runs it today. A signer node
+ * holds `fastify.keyRotation.retireNow` too, but no route calls it yet: the
+ * admin route that will must run it under a database role that may revoke
+ * refresh tokens and write the admin audit log, which the signer's may not.
  */
 
 type Repositories = FastifyInstance['repositories'];
@@ -86,8 +91,8 @@ export interface KeyRetirementDependencies {
   readonly adminAuditLog: Pick<AdminAuditLog, 'appendAdminAudit'>;
   readonly sessions: Pick<SessionService, 'revokeAllForRealm'>;
   /**
-   * After the commit: deny the retired `kid`s on this node's copy, and drop
-   * the shared snapshot (`invalidateKeyDenylist`). It must not throw.
+   * After the commit: deny the retired `kid`s on this node's copy, and
+   * replace the shared snapshot (`invalidateKeyDenylist`). It must not throw.
    */
   readonly invalidateDenylist: (retired: readonly DeniedKid[]) => Promise<void>;
 }
@@ -118,7 +123,10 @@ export function eventActorOf(actor: SecurityOperationActor) {
 }
 
 /** The `key.emergency_retired` event of one retired key. */
-export function emergencyRetiredEvent(record: KeyRetirementRecord, kid: string) {
+export function emergencyRetiredEvent(
+  record: Pick<KeyRetirementRecord, 'realmId' | 'actor' | 'purpose'>,
+  kid: string
+) {
   return {
     type: KEY_EMERGENCY_RETIRED_EVENT,
     realm: record.realmId,
@@ -181,6 +189,65 @@ export function keyRetirementAuditEntry(record: KeyRetirementRecord): AdminAudit
     requestDigest: Buffer.from(record.operationDigest),
     traceId: record.approvalId,
   };
+}
+
+/**
+ * A break-glass run for a key compromised already (ADR-019 Decision 7: each
+ * use is recorded and announced): it changes no key, and ends the realm's
+ * sessions used since the key may have signed again.
+ */
+export interface KeyRetirementRepeat {
+  readonly realmId: string;
+  readonly kid: string;
+  readonly algorithm: string;
+  readonly actor: Extract<SecurityOperationActor, { kind: 'break_glass' }>;
+  /** The host approval the run was made under, and the digest of its operation. */
+  readonly approvalId: string;
+  readonly operationDigest: Buffer;
+  /** Epoch ms, or `null` for a key that never signed: no session is ended. */
+  readonly signedSince: number | null;
+}
+
+/** The admin audit row of a run again: the operation, its actor, the key compromised before and after. */
+export function keyRetirementRepeatAuditEntry(repeat: KeyRetirementRepeat): AdminAuditEntry {
+  const keys = [{ kid: repeat.kid, algorithm: repeat.algorithm, status: 'compromised' }];
+  return {
+    realmId: repeat.realmId,
+    actorKind: 'break_glass_operator',
+    actorId: repeat.actor.operatingSystemUser,
+    actorRealmId: null,
+    actChain: null,
+    operationId: KEY_RETIRE_OPERATION,
+    operationClass: 'security',
+    effects: KEY_RETIRE_EFFECTS,
+    outcome: 'succeeded',
+    diff: { change: { before: { keys }, after: { keys } }, annotations: {} },
+    approvals: [],
+    requestDigest: Buffer.from(repeat.operationDigest),
+    traceId: repeat.approvalId,
+  };
+}
+
+/**
+ * Record a run again in one transaction: its admin audit row and the
+ * critical `key.emergency_retired` event of the key, which every event route
+ * sends again.
+ */
+export async function recordKeyRetirementRepeat(
+  deps: {
+    readonly transaction: <T>(run: (tx: DbTransaction) => Promise<T>) => Promise<T>;
+    readonly events: Pick<Repositories['events'], 'emit'>;
+    readonly adminAuditLog: Pick<AdminAuditLog, 'appendAdminAudit'>;
+  },
+  repeat: KeyRetirementRepeat
+): Promise<void> {
+  await deps.transaction(async (tx) => {
+    await deps.events.emit(
+      tx,
+      emergencyRetiredEvent({ ...repeat, purpose: 'token_signing' }, repeat.kid)
+    );
+    await deps.adminAuditLog.appendAdminAudit(tx, keyRetirementRepeatAuditEntry(repeat));
+  });
 }
 
 /**

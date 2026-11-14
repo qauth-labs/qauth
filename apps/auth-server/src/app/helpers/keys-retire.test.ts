@@ -8,7 +8,11 @@ import {
 } from '@qauth-labs/fastify-plugin-signer';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KeyRetirementOutcome, RetireKeyNowInput } from './key-retirement';
+import type {
+  KeyRetirementOutcome,
+  KeyRetirementRepeat,
+  RetireKeyNowInput,
+} from './key-retirement';
 import {
   type CompromisedKey,
   describeKeysRetireError,
@@ -23,7 +27,7 @@ import {
 
 const REALM = '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01';
 const ACTIVATED = 1_790_000_000_000;
-const CREATED = 1_789_000_000_000;
+const COMPROMISED: CompromisedKey = { algorithm: 'EdDSA', signedSince: ACTIVATED };
 
 const RECORD: KeyRetirementRecord = {
   operation: KEY_RETIRE_OPERATION,
@@ -52,6 +56,7 @@ async function run(
     retire?: (input: RetireKeyNowInput) => Promise<KeyRetirementOutcome>;
     compromised?: CompromisedKey | Error;
     sessions?: Error;
+    record?: Error;
     realm?: string;
   } = {}
 ) {
@@ -74,6 +79,9 @@ async function run(
     if (answers.sessions !== undefined) throw answers.sessions;
     return { ended: 4, batches: 1 };
   });
+  const recordRepeat = vi.fn<(repeat: KeyRetirementRepeat) => Promise<void>>(async () => {
+    if (answers.record !== undefined) throw answers.record;
+  });
   const realmIdOf = vi.fn(async (name: string) =>
     name === (answers.realm ?? 'qauth') ? REALM : undefined
   );
@@ -81,12 +89,22 @@ async function run(
     realmIdOf,
     retireKeyNow,
     findCompromisedKey,
+    recordRepeat,
     sessions: { revokeAllForRealm },
     operatingSystemUser: () => 'qauth-ops',
     out: (line) => out.push(line),
     err: (line) => err.push(line),
   });
-  return { code, out, err, retireKeyNow, findCompromisedKey, revokeAllForRealm, realmIdOf };
+  return {
+    code,
+    out,
+    err,
+    retireKeyNow,
+    findCompromisedKey,
+    recordRepeat,
+    revokeAllForRealm,
+    realmIdOf,
+  };
 }
 
 describe('parseKeysRetireArguments', () => {
@@ -203,32 +221,74 @@ describe('the keys:retire command', () => {
     }
   });
 
-  it('for a key retired already, ends the sessions again since it began to sign, exiting 0', async () => {
+  it('for a key retired already, records and announces the run, then ends the sessions again since it may have signed, exiting 0', async () => {
     const result = await run(['--kid', 'ed-1', '--yes'], {
       retire: async () => {
         throw new KeyChangeRefusedError('ALREADY_COMPROMISED', 'The key is compromised already');
       },
-      compromised: { activateAt: ACTIVATED, createdAt: CREATED },
+      compromised: COMPROMISED,
     });
     expect(result.code).toBe(0);
+    const repeat = result.recordRepeat.mock.calls[0]?.[0];
+    expect(repeat).toMatchObject({
+      realmId: REALM,
+      kid: 'ed-1',
+      algorithm: 'EdDSA',
+      actor: { kind: 'break_glass', operatingSystemUser: 'qauth-ops' },
+      signedSince: ACTIVATED,
+    });
+    expect(repeat?.operationDigest).toHaveLength(32);
+    expect(result.recordRepeat.mock.invocationCallOrder[0]).toBeLessThan(
+      result.revokeAllForRealm.mock.invocationCallOrder[0] ?? 0
+    );
     expect(result.revokeAllForRealm).toHaveBeenCalledWith({
       realmId: REALM,
       activeSince: ACTIVATED,
       reason: 'key_retired',
       actor: { type: 'operator_cli', id: 'qauth-ops' },
     });
+    expect(result.out.join('\n')).toContain('Recorded in the admin audit log');
     expect(result.out.at(-1)).toBe('Ended 4 browser sessions of the realm.');
   });
 
-  it('for a key retired already that never had an activation time, ends the sessions since it was made', async () => {
+  it('records a run again under a fresh approval each time: its digest differs', async () => {
+    const digests: string[] = [];
+    for (let run_ = 0; run_ < 2; run_ += 1) {
+      const result = await run(['--kid', 'ed-1', '--yes'], {
+        retire: async () => {
+          throw new KeyChangeRefusedError('ALREADY_COMPROMISED', 'The key is compromised already');
+        },
+        compromised: COMPROMISED,
+      });
+      digests.push(result.recordRepeat.mock.calls[0]?.[0].operationDigest.toString('hex') ?? '');
+    }
+    expect(new Set(digests).size).toBe(2);
+  });
+
+  it('for a key retired already that never signed, records the run and ends nothing', async () => {
     const result = await run(['--kid', 'ed-1', '--yes'], {
       retire: async () => {
         throw new KeyChangeRefusedError('ALREADY_COMPROMISED', 'The key is compromised already');
       },
-      compromised: { activateAt: null, createdAt: CREATED },
+      compromised: { algorithm: 'EdDSA', signedSince: null },
     });
     expect(result.code).toBe(0);
-    expect(result.revokeAllForRealm.mock.calls[0]?.[0]).toMatchObject({ activeSince: CREATED });
+    expect(result.recordRepeat).toHaveBeenCalledTimes(1);
+    expect(result.revokeAllForRealm).not.toHaveBeenCalled();
+    expect(result.out.at(-1)).toBe('The key never signed: no session was ended.');
+  });
+
+  it('exits 1 and ends nothing when the run again cannot be recorded', async () => {
+    const result = await run(['--kid', 'ed-1', '--yes'], {
+      retire: async () => {
+        throw new KeyChangeRefusedError('ALREADY_COMPROMISED', 'The key is compromised already');
+      },
+      compromised: COMPROMISED,
+      record: new Error('audit log down'),
+    });
+    expect(result.code).toBe(1);
+    expect(result.err[0]).toContain('the run could not be recorded');
+    expect(result.revokeAllForRealm).not.toHaveBeenCalled();
   });
 
   it('exits 3 when the sessions of a key retired already cannot be ended', async () => {
@@ -236,7 +296,7 @@ describe('the keys:retire command', () => {
       retire: async () => {
         throw new KeyChangeRefusedError('ALREADY_COMPROMISED', 'The key is compromised already');
       },
-      compromised: { activateAt: ACTIVATED, createdAt: CREATED },
+      compromised: COMPROMISED,
       sessions: new Error('sessions down'),
     });
     expect(result.code).toBe(KEYS_RETIRE_SESSIONS_LEFT);
@@ -248,7 +308,7 @@ describe('the keys:retire command', () => {
       retire: async () => {
         throw new Error('sessions down');
       },
-      compromised: { activateAt: ACTIVATED, createdAt: CREATED },
+      compromised: COMPROMISED,
     });
     expect(result.code).toBe(KEYS_RETIRE_SESSIONS_LEFT);
     expect(result.err[0]).toContain('the key is retired');

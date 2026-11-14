@@ -13,6 +13,9 @@ import {
   KEY_RETIRED_REASON,
   keyRetirementAuditEntry,
   type KeyRetirementDependencies,
+  type KeyRetirementRepeat,
+  keyRetirementRepeatAuditEntry,
+  recordKeyRetirementRepeat,
   retireKeyNow,
   revokeSessionsOfRetiredKey,
 } from './key-retirement';
@@ -252,5 +255,62 @@ describe('the records of a retirement', () => {
       revokeSessionsOfRetiredKey(sessions, { ...RECORD, signedSince: null })
     ).resolves.toEqual({ ended: 0, batches: 0 });
     expect(sessions.revokeAllForRealm).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a run again for a key compromised already, and announces it again, in one transaction', async () => {
+    const repeat: KeyRetirementRepeat = {
+      realmId: REALM,
+      kid: 'ed-1',
+      algorithm: 'EdDSA',
+      actor: { kind: 'break_glass', operatingSystemUser: 'qauth-ops' },
+      approvalId: '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6edd',
+      operationDigest: Buffer.alloc(32, 0xcd),
+      signedSince: ACTIVATED,
+    };
+    const entry = keyRetirementRepeatAuditEntry(repeat);
+    expect(entry).toMatchObject({
+      realmId: REALM,
+      actorKind: 'break_glass_operator',
+      actorId: 'qauth-ops',
+      operationId: 'keys.retire',
+      operationClass: 'security',
+      outcome: 'succeeded',
+      traceId: repeat.approvalId,
+    });
+    expect(entry.requestDigest).toEqual(repeat.operationDigest);
+    const keys = [{ kid: 'ed-1', algorithm: 'EdDSA', status: 'compromised' }];
+    expect(entry.diff).toEqual({ change: { before: { keys }, after: { keys } }, annotations: {} });
+
+    const calls: string[] = [];
+    const deps = {
+      async transaction<T>(work: (tx: never) => Promise<T>): Promise<T> {
+        calls.push('begin');
+        const value = await work(TX as never);
+        calls.push('commit');
+        return value;
+      },
+      events: {
+        emit: vi.fn(async () => {
+          calls.push('event');
+          return 'event-id';
+        }),
+      },
+      adminAuditLog: {
+        // The appended row: what the run does not read.
+        appendAdminAudit: vi.fn(async () => {
+          calls.push('audit');
+          return {} as never;
+        }),
+      },
+    };
+    await recordKeyRetirementRepeat(deps, repeat);
+    expect(calls).toEqual(['begin', 'event', 'audit', 'commit']);
+    expect(deps.events.emit).toHaveBeenCalledWith(TX, {
+      type: KEY_EMERGENCY_RETIRED_EVENT,
+      realm: REALM,
+      actor: { type: 'operator_cli', id: 'qauth-ops' },
+      data: { keyId: 'ed-1', purpose: 'token_signing' },
+    });
+    expect(deps.adminAuditLog.appendAdminAudit).toHaveBeenCalledWith(TX, entry);
   });
 });

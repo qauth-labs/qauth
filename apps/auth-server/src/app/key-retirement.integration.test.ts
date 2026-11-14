@@ -1,3 +1,4 @@
+import { KEY_ACTIVATION_DELAY_MS } from '@qauth-labs/fastify-plugin-signer';
 import { requireDockerOrSkip, truncateDomainTablesStatement } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { decodeProtectedHeader, type JSONWebKeySet } from 'jose';
@@ -294,7 +295,15 @@ describe('emergency key retirement (#551)', () => {
         adminAuditLog: app.repositories.adminAuditLog,
         sessions: app.sessionService,
         invalidateDenylist: (retired) =>
-          invalidateKeyDenylist(app.keyDenylist, app.redis, app.log, retired),
+          invalidateKeyDenylist(
+            app.keyDenylist,
+            {
+              redis: () => app.redis,
+              listDenied: () => app.repositories.realmPublicKeys.listDenied(),
+            },
+            app.log,
+            retired
+          ),
       },
       { realmId: await realmId(app), kid, approval: hostKeyRetirementApproval(OPERATOR) }
     );
@@ -373,12 +382,14 @@ describe('emergency key retirement (#551)', () => {
     const kid = await activeKid(app, 'EdDSA');
     const now = Date.now();
     const activeFrom = now - 10 * MINUTE;
+    // A switch is written the activation delay ahead: the key may sign from then.
+    const signedSince = activeFrom - KEY_ACTIVATION_DELAY_MS;
     const before = now - 120 * MINUTE;
     const during = now - MINUTE;
-    // The key began to sign ten minutes ago.
+    // The key was made a quarter of an hour ago, and began to sign ten minutes ago.
     await app.dbPool.query(
-      `UPDATE realm_keys SET activate_at = $3 WHERE realm_id = $1 AND kid = $2`,
-      [realm, kid, activeFrom]
+      `UPDATE realm_keys SET created_at = $3, activate_at = $4 WHERE realm_id = $1 AND kid = $2`,
+      [realm, kid, now - 15 * MINUTE, activeFrom]
     );
     // Rows only: a sign-in would add a session and a family of its own.
     const { rows: users } = await app.dbPool.query<{ id: string }>(
@@ -432,7 +443,7 @@ describe('emergency key retirement (#551)', () => {
 
     const outcome = await retireOnNode(app, kid);
 
-    expect(outcome.record.signedSince).toBe(activeFrom);
+    expect(outcome.record.signedSince).toBe(signedSince);
     expect(outcome.families).toEqual({ families: 2, tokens: 2 });
     expect(outcome.sessions.ended).toBe(2);
     const { rows: sessionRows } = await app.dbPool.query<{ id: string; reason: string | null }>(
@@ -541,16 +552,22 @@ describe('emergency key retirement (#551)', () => {
       },
     ]);
 
-    // A second run, for a key retired already, ends the sessions again and
-    // changes nothing else.
+    // A second run, for a key retired already, changes no key and ends the
+    // sessions again: recorded and announced, as every run is.
     out.length = 0;
     expect(await runKeysRetire(['--kid', kid, '--yes'], E2E_REALM_NAME, deps)).toBe(0);
-    expect(out[0]).toContain(`The key ${kid} is retired already.`);
+    expect(err).toEqual([]);
+    expect(out[0]).toContain('the key is retired already');
     const { rows: audited } = await app.dbPool.query(
       `SELECT count(*)::int AS n FROM admin_audit_log WHERE realm_id = $1 AND operation_id = 'keys.retire'`,
       [realm]
     );
-    expect(audited).toEqual([{ n: 1 }]);
+    expect(audited).toEqual([{ n: 2 }]);
+    const { rows: announced } = await app.dbPool.query(
+      `SELECT count(*)::int AS n FROM events WHERE realm_id = $1 AND type = $2`,
+      [realm, EMERGENCY_RETIRED]
+    );
+    expect(announced).toEqual([{ n: 2 }]);
   }, 180_000);
 
   it('keeps the denylist across a restart, and reads it with Redis down', async () => {
