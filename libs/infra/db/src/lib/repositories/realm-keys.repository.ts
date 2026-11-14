@@ -3,14 +3,17 @@ import {
   isUniqueConstraintError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, asc, desc, eq, gt, inArray, isNull, type SQL, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, isNull, type SQL, sql } from 'drizzle-orm';
 
 import type {
   NewRealmKeyInput,
   RealmKey,
   RealmKeyFilter,
+  RealmKeyKekRefCount,
+  RealmKeyRewrapCandidate,
   RealmKeysRepository,
   RealmKeyStatusChange,
+  RealmKeyWrappedDekChange,
   RealmPublicKey,
   WrappedRealmKey,
 } from '../../types';
@@ -235,6 +238,56 @@ export function createRealmKeysRepository(defaultDb: DbClient): RealmKeysReposit
         }
         return updated;
       });
+    },
+
+    async countByKekRef(tx?: DbClient): Promise<RealmKeyKekRefCount[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select({ kekRef: realmKeys.kekRef, rows: count() })
+        .from(realmKeys)
+        .groupBy(realmKeys.kekRef)
+        .orderBy(asc(realmKeys.kekRef));
+    },
+
+    async listByKekRef(
+      kekRef: string,
+      afterId: string | null,
+      limit: number,
+      tx?: DbClient
+    ): Promise<RealmKeyRewrapCandidate[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select({ id: realmKeys.id, realmId: realmKeys.realmId, kid: realmKeys.kid })
+        .from(realmKeys)
+        .where(
+          afterId === null
+            ? eq(realmKeys.kekRef, kekRef)
+            : and(eq(realmKeys.kekRef, kekRef), gt(realmKeys.id, afterId))
+        )
+        .orderBy(asc(realmKeys.id))
+        .limit(limit);
+    },
+
+    async replaceWrappedDek(
+      realmId: string,
+      kid: string,
+      change: RealmKeyWrappedDekChange,
+      tx?: DbClient
+    ): Promise<RealmKey | undefined> {
+      const invoker = tx ?? defaultDb;
+      const [updated] = await invoker
+        .update(realmKeys)
+        .set({ wrappedDek: change.wrappedDek, kekRef: change.kekRef })
+        .where(
+          and(
+            eq(realmKeys.realmId, realmId),
+            eq(realmKeys.kid, kid),
+            eq(realmKeys.kekRef, change.fromKekRef),
+            eq(realmKeys.wrappedDek, change.fromWrappedDek)
+          )
+        )
+        .returning(REALM_KEY_COLUMNS);
+      return updated;
     },
 
     async deleteByScope(
