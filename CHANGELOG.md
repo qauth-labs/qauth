@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-14
+
+A patch release that carries a breaking change, as a 0.x release may (see the
+**Action for operators** under Removed): a deployment that sets
+`PQC_TOKEN_DELIVERY=self-contained` or `PQC_SELF_CONTAINED_ACK` no longer
+boots. A relying party's own ceremony app can now draw every ending of a
+sign-in, the provider callback's refusals included, and a realm can name the
+ceremony app's error page. The account API serves the sign-in methods, the
+password change, passkeys, the authenticator app, recovery codes and sessions,
+so a backend can draw its own account pages. The admin API manages every
+client of a realm. The owner can undo a factor bound after a password-only
+sign-in, disabling an account ends what it holds at once, and a provider-issued
+client-assertion key can be imported. The `api`, `web`, `admin` and signer
+database users get new grants; see the upgrade notes.
+
 ### Added
 
 - **The account API lists the sessions and signs out everywhere** ([#1110],
@@ -5241,7 +5256,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/qauth-labs/qauth/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/qauth-labs/qauth/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/qauth-labs/qauth/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/qauth-labs/qauth/compare/v0.2.0...v0.2.1

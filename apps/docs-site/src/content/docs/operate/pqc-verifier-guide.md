@@ -119,7 +119,7 @@ out-of-band. Accordingly:
 - **`PQC_TOKEN_DELIVERY=self-contained`**, which would carry the signature with
   the token, is not built. The server refuses to start with it, and with
   `PQC_SELF_CONTAINED_ACK`, the acknowledgement it once required, which was
-  removed in 0.3.0. Until 0.3.0 both were accepted and ignored: the signature
+  removed in 0.2.4. Until 0.2.4 both were accepted and ignored: the signature
   was delivered by reference whatever they said.
 
 ## 3. Draft revision implemented, and churn risk
