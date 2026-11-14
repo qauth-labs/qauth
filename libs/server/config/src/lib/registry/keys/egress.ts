@@ -12,6 +12,7 @@ export const EGRESS_KEYS = defineKeys([
     name: 'EGRESS_ALLOWLIST_PATH',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'node',
     owner: 'server',
     default: null,
     since: '0.2.0',

@@ -1,22 +1,26 @@
-import type { ConfigKeyInput } from '../types';
+import type { ConfigKeyInput, KeyDigestClass } from '../types';
 import { defineKeys } from '../types';
 
 /**
  * A rate-limit pair: the most requests per window, and the window in seconds.
- * Every rate-limit key is advanced and seeds nothing.
+ * Every rate-limit key is advanced and seeds nothing. A pair is `shared` in
+ * the configuration digest (#499), since every node counts against the same
+ * Redis counters, unless it counts in the process's own memory.
  */
 function rateLimit(
   limitName: string,
   windowName: string,
   what: string,
   limit: string,
-  window: string
+  window: string,
+  digest: KeyDigestClass = 'shared'
 ): ConfigKeyInput[] {
   return [
     {
       name: limitName,
       tier: 'advanced',
       role: 'deployment',
+      digest,
       owner: 'rate-limits',
       default: limit,
       since: '0.1.0',
@@ -26,6 +30,7 @@ function rateLimit(
       name: windowName,
       tier: 'advanced',
       role: 'deployment',
+      digest,
       owner: 'rate-limits',
       default: window,
       since: '0.1.0',
@@ -40,6 +45,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'RATE_LIMIT_ENABLED',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: 'true',
     since: '0.1.0',
@@ -57,7 +63,8 @@ export const RATE_LIMIT_KEYS = defineKeys([
     'HEALTH_RATE_LIMIT_WINDOW',
     "requests per client address to each of `/health` and `/ready`, counted in the process's memory",
     '1000',
-    '60'
+    '60',
+    'node'
   ),
   ...rateLimit(
     'REGISTRATION_RATE_LIMIT',
@@ -91,6 +98,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'RESEND_VERIFICATION_MIN_INTERVAL',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '60',
     since: '0.1.0',
@@ -103,6 +111,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'CEREMONY_APP_PEERS',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '',
     since: '0.2.0',
@@ -112,6 +121,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'CEREMONY_APP_PEER_RATE_LIMIT',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: null,
     since: '0.2.0',
@@ -121,6 +131,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'AUTHORIZE_RATE_LIMIT',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '60',
     since: '0.1.0',
@@ -130,6 +141,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'AUTHORIZE_RATE_LIMIT_LENIENT',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '600',
     since: '0.1.0',
@@ -139,6 +151,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'AUTHORIZE_RATE_WINDOW',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '60',
     since: '0.1.0',
@@ -148,6 +161,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'TOKEN_RATE_LIMIT',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '30',
     since: '0.1.0',
@@ -157,6 +171,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'TOKEN_RATE_LIMIT_LENIENT',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '300',
     since: '0.1.0',
@@ -166,6 +181,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'TOKEN_RATE_WINDOW',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '60',
     since: '0.1.0',

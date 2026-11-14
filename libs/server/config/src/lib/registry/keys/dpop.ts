@@ -13,6 +13,7 @@ export const DPOP_KEYS = defineKeys([
     name: 'DPOP_ENABLED',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'tokens',
     default: 'false',
     since: '0.2.0',

@@ -99,6 +99,8 @@ function keyNamed(name: string, overrides: Partial<ConfigKey> = {}): ConfigKey {
     owner: 'observability',
     experimentalValues: [],
     developmentOnly: false,
+    digest: 'shared',
+    digestRoles: undefined,
     ...overrides,
   };
 }

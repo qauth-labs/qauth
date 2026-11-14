@@ -112,6 +112,29 @@ function tierSection(tier: KeyTier, keys: readonly ConfigKey[]): string[] {
   return lines;
 }
 
+/**
+ * The keys every auth server node compares at boot (#499): the `shared`
+ * class of the configuration digest.
+ */
+function sharedSettingsSection(registry: readonly ConfigKey[]): string[] {
+  const shared = registry.filter((key) => key.digest === 'shared').sort(byName);
+  if (shared.length === 0) return [];
+  return [
+    '## Settings every node shares',
+    '',
+    `At boot, each auth server node compares a digest of the keys below with the nodes that ran in the last two minutes ([ADR-019 Decision 8](${ADR_019})). A node whose value of one of them differs from a running node of the same release refuses to start, and the refusal names the keys, never their values. Beside a node of another release, as during a rolling upgrade, it starts with a warning. For a planned change of one of these keys, set \`CONFIG_DIGEST_ROLLOUT=true\` on the nodes that start with the new value, and remove it once every node runs it. Every other key may differ from node to node: a secret never enters the digest, and a realm-seed key only seeds a realm, whose row owns its policies.`,
+    '',
+    shared
+      .map((key) =>
+        key.digestRoles === undefined
+          ? code(key.name)
+          : `${code(key.name)} (between nodes that hold ${key.digestRoles.map(code).join(' or ')})`
+      )
+      .join(', ') + '.',
+    '',
+  ];
+}
+
 function experimentalValuesSection(registry: readonly ConfigKey[]): string[] {
   const keys = registry.filter((key) => key.experimentalValues.length > 0).sort(byName);
   if (keys.length === 0) return [];
@@ -209,6 +232,7 @@ export function renderConfigurationPage(
     '',
     'A key marked **Secret** holds a credential. This page never shows its value, not even as a default, and neither does the boot log.',
     '',
+    ...sharedSettingsSection(registry),
   ];
 
   for (const tier of KEY_TIERS) {

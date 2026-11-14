@@ -28,6 +28,7 @@ export {
 } from './bot-challenge';
 export { type CryptoEnv, cryptoEnvSchema } from './crypto';
 export { type DatabaseEnv, databaseEnvSchema } from './database';
+export { type DeploymentNodesEnv, deploymentNodesEnvSchema } from './deployment-nodes';
 export { type DpopEnv, dpopEnvSchema } from './dpop';
 export { type EgressEnv, egressEnvSchema } from './egress';
 export { type EmailEnv, emailEnvSchema } from './email';

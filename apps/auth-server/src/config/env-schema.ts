@@ -8,6 +8,7 @@ import {
   botChallengeEnvSchema,
   ceremonyAppPeerProblems,
   databaseEnvSchema,
+  deploymentNodesEnvSchema,
   dpopEnvSchema,
   egressEnvSchema,
   emailEnvSchema,
@@ -73,6 +74,10 @@ export const envSchema = z
     // `all`, and the signer service's address and internal TLS files for a
     // process without the signer. The app checks them at boot.
     ...serviceRolesEnvSchema.shape,
+    // The node list and its configuration digest (ADR-019 Decision 8, #499):
+    // CONFIG_DIGEST_ROLLOUT, off by default, turns the refusal of a node
+    // whose digest differs from a running node's into a warning.
+    ...deploymentNodesEnvSchema.shape,
     // The admin API's internal listener (ADR-019 Decisions 7 and 8, #511,
     // #520): ADMIN_API_ENABLED (default off until #517), ADMIN_API_HOST
     // (default loopback), ADMIN_API_PORT and ADMIN_API_BASE_URL, for a

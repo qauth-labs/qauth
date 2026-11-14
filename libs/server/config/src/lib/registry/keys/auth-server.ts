@@ -9,6 +9,7 @@ export const AUTH_SERVER_KEYS = defineKeys([
     name: 'CORS_ORIGIN',
     tier: 'stable',
     role: 'deployment',
+    digest: 'shared',
     owner: 'server',
     default: {
       computed: 'none in `production`, so cross-origin requests are refused; `*` otherwise',
@@ -20,6 +21,7 @@ export const AUTH_SERVER_KEYS = defineKeys([
     name: 'ENABLE_SWAGGER',
     tier: 'stable',
     role: 'deployment',
+    digest: 'shared',
     owner: 'server',
     default: { computed: '`true`, or `false` when `NODE_ENV=production`' },
     since: '0.1.0',

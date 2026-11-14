@@ -13,6 +13,7 @@ export const SSF_KEYS = defineKeys([
     name: 'SSF_TRANSMITTER_ENABLED',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'events',
     default: 'false',
     since: '0.2.0',
