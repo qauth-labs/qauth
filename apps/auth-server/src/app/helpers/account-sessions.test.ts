@@ -241,4 +241,31 @@ describe('endAllAccountSessions (#1110)', () => {
     expect(recorded.map((data) => data.sid).sort()).toEqual([one, two].sort());
     expect(recorded.every((data) => Object.keys(data).length === 1)).toBe(true);
   });
+
+  it('keeps nothing when the session asked for has ended, and records one sign-out without a sid', async () => {
+    const { fastify, sessions, signIn } = server();
+    const gone = signIn({});
+    await endAccountSession(fastify, REQUEST, OWNER, gone);
+    const one = signIn({});
+    const two = signIn({});
+    emitUserEvent.mockClear();
+
+    const ended = await endAllAccountSessions(fastify, REQUEST, OWNER, { keepSid: gone });
+
+    expect([...ended].sort()).toEqual([one, two].sort());
+    expect(sessions.service.sessions.size).toBe(0);
+    expect(emitUserEvent).toHaveBeenCalledTimes(1);
+    expect(emitUserEvent).toHaveBeenCalledWith(REQUEST, SIGNED_OUT, {}, expect.any(Object));
+  });
+
+  it('keeps nothing of another account’s session named as the one to keep', async () => {
+    const { fastify, signIn } = server();
+    const theirs = signIn({ userId: OTHER_USER_ID });
+    signIn({});
+
+    await endAllAccountSessions(fastify, REQUEST, OWNER, { keepSid: theirs });
+
+    expect(emitUserEvent).toHaveBeenCalledTimes(1);
+    expect(emitUserEvent).toHaveBeenCalledWith(REQUEST, SIGNED_OUT, {}, expect.any(Object));
+  });
 });

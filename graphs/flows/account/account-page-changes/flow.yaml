@@ -809,7 +809,7 @@ states:
     description: >-
       Every session ends, each queues its back-channel logout tokens, every unredeemed authorization code and then every
       refresh token of the account is revoked, and user.signed_out is recorded without a sid.
-    source: apps/auth-server/src/app/helpers/account-sessions.ts:198
+    source: apps/auth-server/src/app/helpers/account-sessions.ts:200
     invoke: { external: browserSessionStore }
     on:
       DONE:

@@ -184,7 +184,9 @@ export async function endAccountSession(
  * unredeemed code and refresh-token family of the account ends, as
  * `POST /auth/logout` ends them. Recorded as `user.signed_out` without a
  * `sid`, or, when a session was kept, once per session it ended, with its
- * `sid`.
+ * `sid`. A session is kept only when the one asked for is still live after
+ * the sweep: a token may name a session that has ended since, and then every
+ * session has ended, as the `sid`-less event says.
  *
  * @returns the ids of the sessions it ended
  */
@@ -203,10 +205,24 @@ export async function endAllAccountSessions(
   // token that survives it.
   await fastify.repositories.authorizationCodes.invalidateForUser(userId);
   await fastify.repositories.refreshTokens.revokeAllForUser(userId, 'logout');
-  if (options.keepSid === undefined) {
-    await recordSignedOut(request, owner, undefined);
-  } else {
+  const kept =
+    options.keepSid !== undefined &&
+    (await isLiveSessionOf(fastify, realmId, userId, options.keepSid));
+  if (kept) {
     for (const sid of ended) await recordSignedOut(request, owner, sid);
+  } else {
+    await recordSignedOut(request, owner, undefined);
   }
   return ended;
+}
+
+/** Whether `sid` names a live session of the user in the realm. */
+async function isLiveSessionOf(
+  fastify: FastifyInstance,
+  realmId: string,
+  userId: string,
+  sid: string
+): Promise<boolean> {
+  const session = await fastify.sessionService.get({ realmId, sid });
+  return session !== null && session.userId === userId;
 }
