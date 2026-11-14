@@ -118,6 +118,45 @@ export type SignerRefusalReason =
   /** A request object's leaf certificate holds another key than the realm's active one. */
   | 'CERTIFICATE_KEY_MISMATCH';
 
+/**
+ * Every {@link SignerRefusalReason}, for a reader that must tell a known
+ * reason from any other string: the remote signer (#497) rebuilds a refusal
+ * only for a reason in this list. A type check keeps it equal to the union.
+ */
+export const SIGNER_REFUSAL_REASONS = Object.freeze([
+  'INVALID_REALM_ID',
+  'PURPOSE_NOT_ALLOWED',
+  'TYP_NOT_ALLOWED',
+  'ALGORITHM_NOT_ALLOWED',
+  'SCOPE_NOT_ALLOWED',
+  'INVALID_SCOPE_ID',
+  'RESERVED_CLAIM',
+  'MISSING_CLAIM',
+  'INVALID_AUDIENCE',
+  'INVALID_WEBHOOK_ID',
+  'INVALID_TIMESTAMP',
+  'INVALID_BODY',
+  'UNEXPECTED_FIELD',
+  'INVALID_CLAIMS',
+  'HYBRID_SIGNING_DISABLED',
+  'INVALID_PLAINTEXT',
+  'INVALID_CONTEXT',
+  'INVALID_KID',
+  'INVALID_CERTIFICATE_CHAIN',
+  'CERTIFICATE_KEY_MISMATCH',
+] as const satisfies readonly SignerRefusalReason[]);
+
+// Fails to compile when the union gains a reason the list lacks.
+type MissingRefusalReason = Exclude<SignerRefusalReason, (typeof SIGNER_REFUSAL_REASONS)[number]>;
+const everyReasonListed: [MissingRefusalReason] extends [never] ? true : MissingRefusalReason =
+  true;
+void everyReasonListed;
+
+/** Whether `value` is a {@link SignerRefusalReason}. */
+export function isSignerRefusalReason(value: unknown): value is SignerRefusalReason {
+  return typeof value === 'string' && (SIGNER_REFUSAL_REASONS as readonly string[]).includes(value);
+}
+
 /** A request the signer does not run. Nothing was signed, encrypted or read. */
 export class SignerRequestRefusedError extends SignerError {
   readonly code = 'SIGNER_REQUEST_REFUSED';

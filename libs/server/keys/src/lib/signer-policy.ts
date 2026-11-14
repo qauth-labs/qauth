@@ -261,6 +261,22 @@ export function isSignerCaller(value: unknown): value is SignerCaller {
 }
 
 /**
+ * Whether `caller`'s grant names `operation` at all: some token type for
+ * `signJws`, some context (or any) for `encrypt` and `decrypt`, `true` for
+ * the others. The signer service (#497) checks it before it reads a
+ * request's body, so a role with no grant for an operation is refused before
+ * any of its claims are parsed; {@link isSignerCallAllowed} then decides the
+ * call itself. An unknown role or operation has no grant.
+ */
+export function hasSignerGrant(caller: unknown, operation: SignerOperation): boolean {
+  if (!isSignerCaller(caller)) return false;
+  const grant: SignerGrant = SIGNER_POLICY[caller];
+  if (!Object.hasOwn(grant, operation)) return false;
+  const granted: unknown = grant[operation];
+  return Array.isArray(granted) ? granted.length > 0 : granted === true;
+}
+
+/**
  * Whether `caller` may call `operation`. For `signJws`, `detail` names the
  * token type (`typ`) to sign, and the call is allowed only when the role's
  * grant lists it; a purpose is not a type, and is never allowed, so no caller
