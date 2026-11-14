@@ -81,10 +81,13 @@ export {
   createKeyRotation,
   type KeyRotation,
   type KeyRotationFailure,
+  type KeyRotationNowRecord,
   type KeyRotationOptions,
   type KeyRotationReport,
   type KeyRotationRunOptions,
   type KeyRotationStore,
+  type RotatedNowKeys,
+  type RotateNowInput,
 } from './lib/key-rotation';
 export type {
   NewKeyStatus,

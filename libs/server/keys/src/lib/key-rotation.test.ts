@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
+
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import { compactVerify, decodeProtectedHeader, importJWK, type JWK } from 'jose';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { KEK_A, localProvider } from '../testing/keks';
 import {
@@ -9,6 +11,16 @@ import {
   type MemoryTx,
 } from '../testing/memory-key-store';
 import { createMemorySignerStore, type MemorySignerStore } from '../testing/memory-signer-store';
+import {
+  type ApprovedOperation,
+  KEY_ROTATE_OPERATION,
+  type KeyRotateOperation,
+  keyRotationOperation,
+  newOperationNonce,
+  OperationApprovalError,
+  operationDigest,
+  type SecurityOperationActor,
+} from './approved-operation';
 import { DATA_AT_REST_CONSUMERS, dataAtRestLifetimeMs } from './data-at-rest-consumers';
 import { createInProcessSigner, signingKeyOf } from './in-process-signer';
 import { KeyChangeRefusedError } from './key-creation-errors';
@@ -17,14 +29,17 @@ import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
 import {
   createKeyRotation,
   type KeyRotation,
+  type KeyRotationNowRecord,
   type KeyRotationReport,
   type KeyRotationRunOptions,
+  type RotateNowInput,
 } from './key-rotation';
 import {
   KEY_ACTIVATION_DELAY_MS,
   type KeyRotationSettings,
   type KeyRotationStep,
   type KeysRotatedStep,
+  type NextKeyCreatedStep,
 } from './key-rotation-plan';
 import type { Signer } from './signer';
 import type { SignerKeyRecord } from './signer-key-store';
@@ -641,5 +656,407 @@ describe('DATA_AT_REST_CONSUMERS', () => {
         { contextPrefix: 'b:', description: 'b', longestLifetimeMs: 5_000 },
       ])
     ).toBe(5_000);
+  });
+});
+
+describe('rotateNow: a manual rotation under an approval (#544)', () => {
+  const ADMIN: SecurityOperationActor = Object.freeze({
+    kind: 'human',
+    realmId: OTHER_REALM,
+    accountId: '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6eaa',
+  });
+
+  /** An approval of a test, single use, filed for one rotation by `requester`. */
+  interface TestApproval extends ApprovedOperation<KeyRotateOperation, MemoryTx> {
+    /** The digest and transaction of each successful use. */
+    readonly uses: { readonly digest: Buffer; readonly tx: MemoryTx }[];
+  }
+
+  function approvalOf(
+    filedFor: { readonly realmId: string; readonly purpose: KeyPurpose },
+    requester: SecurityOperationActor = ADMIN
+  ): TestApproval {
+    const nonce = newOperationNonce();
+    const filed = operationDigest(
+      keyRotationOperation({
+        realmId: filedFor.realmId,
+        purpose: filedFor.purpose,
+        requester,
+        nonce,
+      })
+    );
+    const uses: { digest: Buffer; tx: MemoryTx }[] = [];
+    return {
+      id: randomUUID(),
+      operation: KEY_ROTATE_OPERATION,
+      requester,
+      nonce,
+      uses,
+      async consume(digest, tx) {
+        if (uses.length > 0) throw new OperationApprovalError('refused', 'used already');
+        if (!digest.equals(filed)) {
+          throw new OperationApprovalError('refused', 'filed for another operation');
+        }
+        uses.push({ digest, tx });
+      },
+    };
+  }
+
+  /** A manual rotation of `purpose` in the realm at the clock's time, with an approval of it. */
+  function rotateNow(
+    w: World,
+    purpose: KeyPurpose,
+    overrides: Partial<RotateNowInput<MemoryTx>> = {}
+  ): Promise<KeyRotationNowRecord> {
+    return w.rotation.rotateNow({
+      realmId: REALM,
+      purpose,
+      now: () => w.clock.now,
+      onAudit: async () => undefined,
+      ...overrides,
+      approval: overrides.approval ?? approvalOf({ realmId: REALM, purpose }),
+    });
+  }
+
+  /** Every stored key's lifecycle, to show that a refused call changed nothing. */
+  function snapshot(w: World) {
+    return w.keys.rows.map((row) => ({
+      kid: row.key.kid,
+      purpose: row.key.purpose,
+      status: row.key.status,
+      activateAt: row.key.activateAt,
+      retireAt: row.key.retireAt,
+      unpublishAt: row.key.unpublishAt,
+    }));
+  }
+
+  /** The realm's keys of `purpose`, as the store holds them. */
+  function stored(w: World, purpose: KeyPurpose) {
+    return w.keys.rows
+      .filter((row) => row.key.realmId === REALM && row.key.purpose === purpose)
+      .map((row) => ({ kid: row.key.kid, algorithm: row.key.algorithm, status: row.key.status }));
+  }
+
+  it('fails without a valid approval, at compile time and at run time, and changes nothing', async () => {
+    const w = await world();
+    const before = snapshot(w);
+    const base = {
+      realmId: REALM,
+      purpose: 'token_signing' as const,
+      onAudit: async () => undefined,
+    };
+
+    // @ts-expect-error -- a manual rotation does not compile without an approval
+    await expect(w.rotation.rotateNow(base)).rejects.toMatchObject({
+      name: 'OperationApprovalError',
+      reason: 'missing',
+    });
+    const retire: ApprovedOperation<'keys.retire', MemoryTx> = {
+      ...approvalOf({ realmId: REALM, purpose: 'token_signing' }),
+      operation: 'keys.retire',
+    };
+    // @ts-expect-error -- nor with the approval of another operation
+    await expect(w.rotation.rotateNow({ ...base, approval: retire })).rejects.toMatchObject({
+      reason: 'other_operation',
+    });
+    const anyOperation: ApprovedOperation<string, MemoryTx> = approvalOf({
+      realmId: REALM,
+      purpose: 'token_signing',
+    });
+    // @ts-expect-error -- nor with one whose operation is any string, though it is this one
+    const typedLoosely = w.rotation.rotateNow({ ...base, approval: anyOperation });
+    await expect(
+      (await world()).rotation.rotateNow({ ...base, approval: retire as never })
+    ).rejects.toMatchObject({ reason: 'other_operation' });
+    // At run time, an approval of exactly this rotation is one, whatever its static type.
+    await expect(typedLoosely).resolves.toMatchObject({ approvalId: anyOperation.id });
+
+    const afterLoose = snapshot(w);
+    const valid = approvalOf({ realmId: REALM, purpose: 'token_signing' });
+    for (const malformed of [
+      'approved',
+      { ...valid, id: 'approval-1' },
+      { ...valid, nonce: 'short' },
+      { ...valid, requester: { kind: 'human' } },
+      { ...valid, consume: undefined },
+      { ...valid, operation: undefined },
+    ]) {
+      await expect(
+        w.rotation.rotateNow({ ...base, approval: malformed as never }),
+        JSON.stringify(malformed)
+      ).rejects.toMatchObject({ name: 'OperationApprovalError', reason: 'malformed' });
+    }
+    const noAudit = { ...base, approval: valid, onAudit: undefined };
+    // @ts-expect-error -- nor without its audit hook
+    await expect(w.rotation.rotateNow(noAudit)).rejects.toThrow(TypeError);
+    expect(valid.uses).toEqual([]);
+    expect(snapshot(w)).toEqual(afterLoose);
+    expect(afterLoose).toHaveLength(before.length + 1);
+  });
+
+  it('refuses an approval filed for another realm, purpose or requester, and changes nothing', async () => {
+    const w = await world();
+    const before = snapshot(w);
+    for (const approval of [
+      approvalOf({ realmId: OTHER_REALM, purpose: 'token_signing' }),
+      approvalOf({ realmId: REALM, purpose: 'event_signing' }),
+      {
+        ...approvalOf({ realmId: REALM, purpose: 'token_signing' }),
+        requester: { ...ADMIN, accountId: 'other' },
+      },
+    ]) {
+      const refused = rotateNow(w, 'token_signing', { approval });
+      await expect(refused).rejects.toBeInstanceOf(OperationApprovalError);
+      await expect(refused).rejects.toMatchObject({ reason: 'refused', statusCode: 403 });
+    }
+    // A used approval approves nothing more.
+    const once = approvalOf({ realmId: REALM, purpose: 'token_signing' });
+    await rotateNow(w, 'token_signing', { approval: once });
+    const after = snapshot(w);
+    await expect(rotateNow(w, 'token_signing', { approval: once })).rejects.toMatchObject({
+      reason: 'refused',
+    });
+    expect(snapshot(w)).toEqual(after);
+    expect(after.length).toBe(before.length + 1);
+  });
+
+  it('passes a fault of the approval on as it is, and takes a refusal from any copy of the module', async () => {
+    const w = await world();
+    const before = snapshot(w);
+    const failing = (error: Error): TestApproval => ({
+      ...approvalOf({ realmId: REALM, purpose: 'token_signing' }),
+      consume: async () => {
+        throw error;
+      },
+    });
+    // A serialization failure is no refusal: the caller may retry it.
+    const fault = Object.assign(new Error('could not serialize access'), { code: '40001' });
+    await expect(rotateNow(w, 'token_signing', { approval: failing(fault) })).rejects.toBe(fault);
+    const foreign = Object.assign(new Error('used already'), {
+      code: 'OPERATION_APPROVAL_REFUSED',
+    });
+    await expect(
+      rotateNow(w, 'token_signing', { approval: failing(foreign) })
+    ).rejects.toMatchObject({ name: 'OperationApprovalError', reason: 'refused', cause: foreign });
+    expect(snapshot(w)).toEqual(before);
+  });
+
+  it('creates the next key at once and publishes it; it signs only after the pre-publication window', async () => {
+    const w = await world();
+    const signer = w.signer();
+    w.clock.now = T0 + 10 * DAY;
+    const oldKid = await kidOf(await signer.signJws('local', accessToken(w.clock.now)));
+
+    const record = await rotateNow(w, 'token_signing');
+    expect(record.next).toEqual([
+      {
+        algorithm: 'EdDSA',
+        keys: [{ kid: expect.any(String), algorithm: 'EdDSA' }],
+        created: true,
+        activatesAt: T0 + 17 * DAY,
+      },
+    ]);
+    const newKid = record.next[0].keys[0].kid;
+    expect(stored(w, 'token_signing')).toEqual([
+      { kid: oldKid, algorithm: 'EdDSA', status: 'active' },
+      { kid: newKid, algorithm: 'EdDSA', status: 'next' },
+    ]);
+    // The key carries the moment it was approved to sign: the scheduled rotation reads it.
+    expect(w.keys.rows.find((row) => row.key.kid === newKid)?.key.activateAt).toBe(T0 + 17 * DAY);
+    // Published at once, and signs nothing yet; no verifier accepts it before it signs (#899).
+    w.clock.now += REFRESH_MS;
+    expect(await jwksKids(signer)).toContain(newKid);
+    expect(await kidOf(await signer.signJws('local', accessToken(w.clock.now)))).toBe(oldKid);
+    const verification = await signer.getVerificationKeys('local', REALM, 'token_signing');
+    expect(verification.map((key) => key.kid)).not.toContain(newKid);
+
+    // The scheduled rotation writes the switch once the window has run, long before day 90.
+    w.clock.now = T0 + 17 * DAY - 1;
+    expect(stepOf((await w.run()).steps, 'token_signing', 'rotated')).toEqual([]);
+    w.clock.now = T0 + 17 * DAY;
+    const step = rotatedStep((await w.run()).steps, 'token_signing');
+    expect(step).toMatchObject({
+      activated: [{ kid: newKid }],
+      retired: [{ kid: oldKid }],
+      switchAt: T0 + 17 * DAY + KEY_ACTIVATION_DELAY_MS,
+      retainedUntil: T0 + 17 * DAY + KEY_ACTIVATION_DELAY_MS + 14 * DAY,
+    });
+    w.clock.now = step.switchAt - 1;
+    expect(await kidOf(await signer.signJws('local', accessToken(w.clock.now)))).toBe(oldKid);
+    w.clock.now = step.switchAt;
+    expect(await kidOf(await signer.signJws('local', accessToken(w.clock.now)))).toBe(newKid);
+  });
+
+  it('returns the next key that waits already, and creates no second one', async () => {
+    const w = await world();
+    w.clock.now = T0 + 10 * DAY;
+    const first = await rotateNow(w, 'token_signing');
+    w.clock.now = T0 + 11 * DAY;
+    const second = await rotateNow(w, 'token_signing');
+    expect(second.next).toEqual([{ ...first.next[0], created: false }]);
+    expect(stored(w, 'token_signing').filter((key) => key.status === 'next')).toHaveLength(1);
+    // The scheduled rotation's own next key is the rotation's key too.
+    w.clock.now = T0 + 83 * DAY;
+    const job = await w.run();
+    const [created] = stepOf(job.steps, 'event_signing', 'next_created');
+    const waiting = await rotateNow(w, 'event_signing');
+    expect(waiting.next).toEqual([
+      {
+        algorithm: 'EdDSA',
+        keys: created.kind === 'next_created' ? created.keys : [],
+        created: false,
+        activatesAt: T0 + 90 * DAY,
+      },
+    ]);
+  });
+
+  it('keeps a next key an operator made by hand to its own schedule: it waits for the period', async () => {
+    const w = await world();
+    w.clock.now = T0 + 10 * DAY;
+    const byHand = createKeyFactory({
+      store: w.keys,
+      kekProvider: localProvider({ KEK: KEK_A }),
+      enabledSignatureAlgorithms: ED25519_ONLY,
+      hybridSigning: false,
+      now: () => w.clock.now,
+    });
+    const [made] = await byHand.createKey({
+      realmId: REALM,
+      purpose: 'token_signing',
+      status: 'next',
+    });
+    expect(made.activateAt).toBeNull();
+    // No approval cut the period short, so its window alone does not switch it (#542).
+    w.clock.now = T0 + 17 * DAY;
+    expect(stepOf((await w.run()).steps, 'token_signing', 'rotated')).toEqual([]);
+
+    w.clock.now = T0 + 20 * DAY;
+    const kept = await rotateNow(w, 'token_signing');
+    expect(kept.next).toEqual([
+      {
+        algorithm: 'EdDSA',
+        keys: [{ kid: made.kid, algorithm: 'EdDSA' }],
+        created: false,
+        activatesAt: T0 + 90 * DAY,
+      },
+    ]);
+    w.clock.now = T0 + 90 * DAY - 1;
+    expect(stepOf((await w.run()).steps, 'token_signing', 'rotated')).toEqual([]);
+    w.clock.now = T0 + 90 * DAY;
+    expect(rotatedStep((await w.run()).steps, 'token_signing')).toMatchObject({
+      activated: [{ kid: made.kid }],
+    });
+  });
+
+  it('rotates both keys of a hybrid pair together', async () => {
+    const w = await world({ hybrid: true });
+    w.clock.now = T0 + DAY;
+    const steps: NextKeyCreatedStep[] = [];
+    const record = await rotateNow(w, 'token_signing', {
+      onStep: async (step) => {
+        steps.push(step);
+      },
+    });
+    expect(record.next).toHaveLength(1);
+    expect(record.next[0].keys.map((key) => key.algorithm)).toEqual(['EdDSA', 'ML-DSA-65']);
+    expect(steps).toEqual([
+      {
+        kind: 'next_created',
+        realmId: REALM,
+        purpose: 'token_signing',
+        keys: record.next[0].keys,
+        activatesAt: T0 + 8 * DAY,
+      },
+    ]);
+    const next = w.keys.rows.filter(
+      (row) => row.key.purpose === 'token_signing' && row.key.status === 'next'
+    );
+    expect(next).toHaveLength(2);
+    expect(next[0].key.pairId).not.toBeNull();
+    expect(next[0].key.pairId).toBe(next[1].key.pairId);
+
+    w.clock.now = T0 + 8 * DAY;
+    const step = rotatedStep((await w.run()).steps, 'token_signing');
+    expect(step.activated.map((key) => key.kid)).toEqual(record.next[0].keys.map((key) => key.kid));
+    expect(step.retired.map((key) => key.algorithm).sort()).toEqual(['EdDSA', 'ML-DSA-65']);
+  });
+
+  it('calls the audit hook once per operation, with the actor and the approval id, in its transaction', async () => {
+    const w = await world();
+    w.clock.now = T0 + DAY;
+    const approval = approvalOf({ realmId: REALM, purpose: 'cookie_hmac' });
+    const calls: string[] = [];
+    const audits: { entry: KeyRotationNowRecord; tx: MemoryTx }[] = [];
+    const record = await rotateNow(w, 'cookie_hmac', {
+      approval,
+      onStep: async () => {
+        calls.push('step');
+      },
+      onAudit: async (entry, tx) => {
+        calls.push('audit');
+        audits.push({ entry, tx });
+      },
+    });
+    expect(audits).toHaveLength(1);
+    const [{ entry, tx }] = audits;
+    expect(entry).toBe(record);
+    expect(entry).toMatchObject({
+      operation: 'keys.rotate',
+      approvalId: approval.id,
+      actor: ADMIN,
+      realmId: REALM,
+      purpose: 'cookie_hmac',
+      scopeId: null,
+    });
+    // The digest the approval was consumed for, in the same transaction.
+    expect(approval.uses).toEqual([{ digest: entry.operationDigest, tx }]);
+    expect(calls).toEqual(['step', 'audit']);
+
+    // A second operation is audited once more, though it creates nothing.
+    const again = vi.fn<(entry: KeyRotationNowRecord, tx: MemoryTx) => Promise<void>>(
+      async () => undefined
+    );
+    await rotateNow(w, 'cookie_hmac', { onAudit: again });
+    expect(again).toHaveBeenCalledTimes(1);
+    expect(again.mock.calls[0][0]).toMatchObject({ next: [{ created: false }] });
+  });
+
+  it('rolls the new key back when the audit hook fails', async () => {
+    const w = await world();
+    const before = snapshot(w);
+    await expect(
+      rotateNow(w, 'token_signing', {
+        onAudit: async () => {
+          throw new Error('audit write failed');
+        },
+      })
+    ).rejects.toThrow('audit write failed');
+    expect(snapshot(w)).toEqual(before);
+  });
+
+  it.each([
+    ['a scoped purpose', 'webhook_signing', {}, 'NOT_A_ROTATING_PURPOSE'],
+    [
+      'a purpose that rotates by its own operation',
+      'federation_entity',
+      {},
+      'NOT_A_ROTATING_PURPOSE',
+    ],
+    ['a scope id', 'token_signing', { scopeId: 'sub-1' }, 'SCOPE_NOT_ALLOWED'],
+    ['a realm with no key of the purpose', 'oid4vp_response_encryption', {}, 'NO_ACTIVE_KEY'],
+    ['an unknown purpose', 'signing', {}, 'UNKNOWN_PURPOSE'],
+    ['a malformed realm id', 'token_signing', { realmId: 'realm-1' }, 'INVALID_REALM_ID'],
+  ] as const)('refuses %s, with the approval unused', async (_name, purpose, overrides, reason) => {
+    const w = await world();
+    const before = snapshot(w);
+    const approval = approvalOf({
+      realmId: REALM,
+      purpose: purpose === 'signing' ? 'token_signing' : purpose,
+    });
+    await expect(
+      rotateNow(w, purpose as KeyPurpose, { approval, ...overrides })
+    ).rejects.toMatchObject({ name: 'KeyChangeRefusedError', reason });
+    expect(approval.uses).toEqual([]);
+    expect(snapshot(w)).toEqual(before);
   });
 });

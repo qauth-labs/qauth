@@ -24,8 +24,10 @@ import { DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS } from './published-keys';
  * 2. When the active key has signed for `period`, and the `next` key has been
  *    published for `prepublish`, the switch is written: the `next` key becomes
  *    `active` and the old key `retired`, both as of a moment
- *    {@link KEY_ACTIVATION_DELAY_MS} ahead. Until that moment the old key
- *    keeps signing, while every process's key cache, which lives at most one
+ *    {@link KEY_ACTIVATION_DELAY_MS} ahead. A `next` key that a manual rotation
+ *    made (#544, {@link planKeyRotationNow}) carries the moment it was planned
+ *    to sign as its `activateAt`, and its switch waits for its window only,
+ *    not for the period. Until that moment the old key keeps signing, while every process's key cache, which lives at most one
  *    refresh interval, learns that the new key is `active` and so verifies its
  *    tokens. A signer picks its key by those times (`signingKeyOf`).
  * 3. The retired key stays published, or for the cookie HMAC and data at rest
@@ -284,11 +286,53 @@ export function planKeyRotation(input: PlanKeyRotationInput): KeyRotationPlan {
     };
   }
 
-  const [lead] = next;
-  const incoming =
-    lead.pairId === null
-      ? [lead]
-      : keys.filter((key) => key.status === 'next' && key.pairId === lead.pairId);
+  const incoming = incomingKeys(next[0], keys);
+  const split = splitPairRefusal(input, definition, incoming);
+  if (split !== null) return split;
+
+  const notBefore = switchNotBefore(
+    incoming,
+    startedAt,
+    previousKeyHold(purpose, ofAlgorithm),
+    settings
+  );
+  if (now < notBefore) return { action: 'none' };
+
+  const incomingAlgorithms = new Set(incoming.map((key) => key.algorithm));
+  const outgoing = keys.filter(
+    (key) =>
+      key.status === 'active' &&
+      (incomingAlgorithms.has(key.algorithm) ||
+        (current.pairId !== null && key.pairId === current.pairId))
+  );
+  return { action: 'activate', incoming, outgoing };
+}
+
+/** The `next` keys that switch together with `lead`: its hybrid pair, or `lead` alone. */
+function incomingKeys(
+  lead: StoredKeySummary,
+  keys: readonly StoredKeySummary[]
+): readonly StoredKeySummary[] {
+  return lead.pairId === null
+    ? [lead]
+    : keys.filter((key) => key.status === 'next' && key.pairId === lead.pairId);
+}
+
+/**
+ * The refusal of `incoming` when switching to it would split a hybrid pair:
+ * hybrid signing is on, and the next key of the purpose's default algorithm
+ * has no companion. `null` otherwise.
+ */
+function splitPairRefusal(
+  input: Pick<PlanKeyRotationInput, 'purpose' | 'algorithm' | 'hybridSigning'>,
+  definition: KeyPurposeDefinition,
+  incoming: readonly StoredKeySummary[]
+): {
+  readonly action: 'refuse';
+  readonly reason: 'SPLIT_HYBRID_PAIR';
+  readonly message: string;
+} | null {
+  const { purpose, algorithm } = input;
   const companion = definition.hybridCompanion;
   if (
     input.hybridSigning === true &&
@@ -304,19 +348,118 @@ export function planKeyRotation(input: PlanKeyRotationInput): KeyRotationPlan {
         'and hybrid signing is on',
     };
   }
+  return null;
+}
 
-  let notBefore = Math.max(startedAt + settings.periodMs, previousKeyHold(purpose, ofAlgorithm));
-  for (const key of incoming) {
-    notBefore = Math.max(notBefore, (key.publishAt ?? key.createdAt) + settings.prepublishMs);
+/** When every key of `incoming` has been published, or created when unpublished, for `prepublishMs`. */
+function windowEnd(incoming: readonly StoredKeySummary[], prepublishMs: number): number {
+  let end = 0;
+  for (const key of incoming) end = Math.max(end, (key.publishAt ?? key.createdAt) + prepublishMs);
+  return end;
+}
+
+/**
+ * The earliest moment of the switch to `incoming`, from an active key that
+ * started at `startedAt`, and no earlier than `hold` ({@link previousKeyHold}).
+ *
+ * Every `next` key waits for its window. A `next` key that a manual rotation
+ * made (#544) carries, as its `activateAt`, the moment it was planned to sign,
+ * and the switch to it comes then: before the active key's period has run,
+ * since the rotation was approved. Any other `next` key (the job's own, or one
+ * an operator made by hand) waits for the period as well, so that only an
+ * approved rotation cuts the period short.
+ */
+function switchNotBefore(
+  incoming: readonly StoredKeySummary[],
+  startedAt: number,
+  hold: number,
+  settings: Pick<ResolvedKeyRotationSettings, 'periodMs' | 'prepublishMs'>
+): number {
+  const window = Math.max(hold, windowEnd(incoming, settings.prepublishMs));
+  const planned = incoming.every((key) => key.activateAt !== null)
+    ? Math.max(...incoming.map((key) => key.activateAt ?? 0))
+    : startedAt + settings.periodMs;
+  return Math.max(window, planned);
+}
+
+/** What {@link planKeyRotationNow} decided for one purpose and algorithm. */
+export type KeyRotationNowPlan =
+  /** The realm holds no active key of the algorithm: there is nothing to rotate. */
+  | { readonly action: 'none' }
+  /** Create the `next` key now. `activatesAt` is the earliest moment it may sign. */
+  | { readonly action: 'create'; readonly activatesAt: number }
+  /**
+   * A `next` key (or a hybrid pair of them) waits already: keep it, create no
+   * second. `activatesAt` is the earliest moment it may sign.
+   */
+  | {
+      readonly action: 'keep';
+      readonly keys: readonly StoredKeySummary[];
+      readonly activatesAt: number;
+    }
+  | {
+      readonly action: 'refuse';
+      readonly reason: 'AMBIGUOUS_KEYS' | 'SPLIT_HYBRID_PAIR';
+      readonly message: string;
+    };
+
+/**
+ * What a manual rotation (#544) does for one purpose and algorithm of a realm,
+ * before the rotation is due. Pure, like {@link planKeyRotation}, and with its
+ * windows: the new key is published at once and signs only after the
+ * pre-publication window, once the scheduled rotation writes the switch.
+ *
+ * - `none` — the realm holds no active key of the algorithm.
+ * - `create` — no `next` key waits: create one now.
+ * - `keep` — a `next` key waits already: it is the rotation's key, and no
+ *   second one is created. It signs when the scheduled rotation switches to
+ *   it: once its window has run if a manual rotation made it, and once the
+ *   active key's period has run as well if the job or an operator did.
+ * - `refuse` — two active or two `next` keys, or a waiting `next` key that
+ *   would split a hybrid pair.
+ *
+ * The earliest moment a new key may sign is the end of its window, and no
+ * earlier than a switch to the active key still ahead or, for the cookie key,
+ * the end of the previous cookie key's retention. The rotation writes that
+ * moment as the new key's `activateAt` (`createPlannedNextKey`), which is
+ * how the scheduled rotation knows the key's switch was approved early.
+ */
+export function planKeyRotationNow(input: PlanKeyRotationInput): KeyRotationNowPlan {
+  const { purpose, algorithm, keys, settings, now } = input;
+  const definition: KeyPurposeDefinition = KEY_PURPOSES[purpose];
+  const ofAlgorithm = keys.filter((key) => key.algorithm === algorithm);
+  const active = ofAlgorithm.filter((key) => key.status === 'active');
+  if (active.length === 0) return { action: 'none' };
+  if (active.length > 1) {
+    return {
+      action: 'refuse',
+      reason: 'AMBIGUOUS_KEYS',
+      message: `The realm holds ${active.length} active '${algorithm}' keys for purpose '${purpose}'`,
+    };
   }
-  if (now < notBefore) return { action: 'none' };
-
-  const incomingAlgorithms = new Set(incoming.map((key) => key.algorithm));
-  const outgoing = keys.filter(
-    (key) =>
-      key.status === 'active' &&
-      (incomingAlgorithms.has(key.algorithm) ||
-        (current.pairId !== null && key.pairId === current.pairId))
-  );
-  return { action: 'activate', incoming, outgoing };
+  const next = ofAlgorithm.filter((key) => key.status === 'next');
+  if (next.length > 1) {
+    return {
+      action: 'refuse',
+      reason: 'AMBIGUOUS_KEYS',
+      message: `The realm holds ${next.length} next '${algorithm}' keys for purpose '${purpose}'`,
+    };
+  }
+  const [current] = active;
+  const startedAt = current.activateAt ?? current.createdAt;
+  const hold = previousKeyHold(purpose, ofAlgorithm);
+  if (next.length === 0) {
+    return {
+      action: 'create',
+      activatesAt: Math.max(startedAt, hold, now + settings.prepublishMs),
+    };
+  }
+  const incoming = incomingKeys(next[0], keys);
+  const split = splitPairRefusal(input, definition, incoming);
+  if (split !== null) return split;
+  return {
+    action: 'keep',
+    keys: incoming,
+    activatesAt: Math.max(startedAt, switchNotBefore(incoming, startedAt, hold, settings)),
+  };
 }

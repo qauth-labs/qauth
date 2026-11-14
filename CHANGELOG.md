@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Manual key rotation, as a security operation** ([#544], ADR-019
+  Decisions 7 and 9). The key library's `rotateNow` starts a rotation of one
+  of a realm's rotating key purposes before it is due: it creates the `next`
+  key at once, published at once, with its hybrid companion when hybrid
+  signing is on. The key carries the moment it may sign as its `activate_at`,
+  and the scheduled rotation switches to it then: once it has been published
+  for `KEY_PREPUBLISH_DAYS`, however much of the active key's period is left.
+  Any other `next` key (the job's own, or one `auth-server:keys:create
+  --status next` made) still waits for the period too. A `next` key that waits
+  already is returned, on its own schedule, and no second one is made. It
+  runs only under an `ApprovedOperation` of `keys.rotate`, an interface the
+  admin API's approvals implement: a call without one does not compile and is
+  refused at run time. The approval is consumed in the transaction that
+  creates the key, for the SHA-256 of the canonical record `{ op, realm,
+  purpose, scope, requester, nonce }` in its RFC 8785 form, and consumes
+  itself only for the record it rebuilds from what its approver approved. An
+  audit hook is called once per operation with the actor and the approval
+  id, and an event hook for each key created. No route calls it yet: the
+  admin API route, whose approval implements the interface, and the
+  break-glass CLI come later, and a key variable that holds a new signing key
+  keeps replacing the stored key at boot until emergency retirement ([#551])
+  ships too.
+
 - **A migration policy check** ([#473], ADR-018 §5). CI now refuses a
   migration added since the last release tag that drops a table, column or
   constraint, changes a column's type, renames, truncates or deletes rows,
@@ -4415,10 +4438,12 @@ It adds migrations 0068 and 0069.
 [#540]: https://github.com/qauth-labs/qauth/issues/540
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#542]: https://github.com/qauth-labs/qauth/issues/542
+[#544]: https://github.com/qauth-labs/qauth/issues/544
 [#545]: https://github.com/qauth-labs/qauth/issues/545
 [#546]: https://github.com/qauth-labs/qauth/issues/546
 [#549]: https://github.com/qauth-labs/qauth/issues/549
 [#550]: https://github.com/qauth-labs/qauth/issues/550
+[#551]: https://github.com/qauth-labs/qauth/issues/551
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#560]: https://github.com/qauth-labs/qauth/issues/560
