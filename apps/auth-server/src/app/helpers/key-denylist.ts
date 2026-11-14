@@ -124,9 +124,47 @@ function windowsOf(timing: KeyDenylistTiming): {
 }
 
 /** The database's list, in time, keeping only each row's realm and `kid`. */
-async function readStore(sources: KeyDenylistSources, timeoutMs: number): Promise<DeniedKid[]> {
-  const rows = await bounded(sources.listDenied, timeoutMs, 'The key denylist table');
+async function readStore(
+  sources: KeyDenylistSources,
+  timeoutMs: number,
+  listDenied: () => Promise<readonly DeniedKid[]> = sources.listDenied
+): Promise<DeniedKid[]> {
+  const rows = await bounded(listDenied, timeoutMs, 'The key denylist table');
   return rows.map(({ realmId, kid }) => ({ realmId, kid }));
+}
+
+/**
+ * `listDenied` with one query at a time: a call while one runs waits for
+ * that one. A query the loader gave up on still holds a pooled connection
+ * until the database answers (the repository bounds it there too), so a node
+ * does not stack them up and take the pool. One still running after
+ * `maxAgeMs` is left to itself: its connection may be gone, and the next
+ * call starts another.
+ */
+function singleFlight(
+  listDenied: () => Promise<readonly DeniedKid[]>,
+  maxAgeMs: number,
+  now: () => number
+): () => Promise<readonly DeniedKid[]> {
+  let running: { readonly read: Promise<readonly DeniedKid[]>; readonly since: number } | undefined;
+  return () => {
+    if (running !== undefined && now() - running.since < maxAgeMs) return running.read;
+    let started: Promise<readonly DeniedKid[]>;
+    try {
+      started = listDenied();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const current = {
+      read: started.finally(() => {
+        if (running === current) running = undefined;
+      }),
+      since: now(),
+    };
+    current.read.catch(() => undefined);
+    running = current;
+    return current.read;
+  };
 }
 
 /** The snapshot's list, or `undefined` when there is none, Redis fails, or it cannot be read. */
@@ -173,6 +211,7 @@ export function keyDenylistLoader(
   now: () => number = Date.now
 ): () => Promise<KidDenylistRead> {
   const { storeReadIntervalMs, storeTimeoutMs } = windowsOf(timing);
+  const listDenied = singleFlight(sources.listDenied, 2 * storeTimeoutMs, now);
   /** When the last database read that succeeded began. */
   let storeReadAt = -Infinity;
   return async () => {
@@ -183,7 +222,7 @@ export function keyDenylistLoader(
     }
     let rows: DeniedKid[];
     try {
-      rows = await readStore(sources, storeTimeoutMs);
+      rows = await readStore(sources, storeTimeoutMs, listDenied);
     } catch (error) {
       const cached = await readSnapshot(sources);
       if (cached !== undefined) return { entries: cached, complete: false };

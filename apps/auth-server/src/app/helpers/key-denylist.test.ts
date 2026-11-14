@@ -190,6 +190,47 @@ describe('keyDenylistLoader', () => {
     await expect(cached).resolves.toEqual({ entries: DENIED, complete: false });
   });
 
+  it('runs one database query at a time, and starts another once one hung twice the timeout', async () => {
+    vi.useFakeTimers();
+    const { redis } = fakeRedis();
+    const listDenied = vi.fn((): Promise<DeniedKid[]> => new Promise(() => undefined));
+    const load = keyDenylistLoader({ redis: () => redis, listDenied });
+    for (let round = 0; round < 2; round += 1) {
+      const refused = expect(load()).rejects.toThrow('did not answer in time');
+      await vi.advanceTimersByTimeAsync(KEY_DENYLIST_STORE_TIMEOUT_MS);
+      await refused;
+    }
+    // The second read waited for the first query, which still holds its connection.
+    expect(listDenied).toHaveBeenCalledTimes(1);
+    const third = expect(load()).rejects.toThrow('did not answer in time');
+    await vi.advanceTimersByTimeAsync(KEY_DENYLIST_STORE_TIMEOUT_MS);
+    await third;
+    expect(listDenied).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares a running database query, and queries again once it answered', async () => {
+    let answer: (rows: DeniedKid[]) => void = () => undefined;
+    const listDenied = vi.fn(
+      () =>
+        new Promise<DeniedKid[]>((resolve) => {
+          answer = resolve;
+        })
+    );
+    const { redis } = fakeRedis({ get: async () => null });
+    const load = keyDenylistLoader({ redis: () => redis, listDenied });
+    const first = load();
+    const second = load();
+    await vi.waitFor(() => expect(listDenied).toHaveBeenCalledTimes(1));
+    answer(DENIED);
+    await expect(first).resolves.toEqual({ entries: DENIED, complete: true });
+    await expect(second).resolves.toEqual({ entries: DENIED, complete: true });
+    expect(listDenied).toHaveBeenCalledTimes(1);
+    const third = load();
+    await vi.waitFor(() => expect(listDenied).toHaveBeenCalledTimes(2));
+    answer([]);
+    await expect(third).resolves.toEqual({ entries: [], complete: true });
+  });
+
   it("rejects with the database's error when Redis has no snapshot and the database fails", async () => {
     const { redis } = fakeRedis();
     const listDenied = vi.fn(async (): Promise<DeniedKid[]> => {
