@@ -44,6 +44,8 @@ export interface ServerFactorPortsDependencies {
   readonly requestOf: () => FastifyRequest | undefined;
   /** The OAuth client a binding's request came through, which its event names. */
   readonly clientIdOf?: (request: FastifyRequest) => string | null;
+  /** The session a new binding is named on, in its transaction (#1064). */
+  readonly newBindingSessionOf?: (request: FastifyRequest) => string | undefined;
   /** Whether the hosted pages, where a recovery code is redeemed, are on. */
   readonly hostedPages: boolean;
   /** Whether passkey sign-in is on, so a passkey is a usable second factor. */
@@ -69,6 +71,9 @@ export function createServerFactorPorts(
     passkeys: deps.passkeys,
     requestOf,
     ...(deps.clientIdOf === undefined ? {} : { clientIdOf: deps.clientIdOf }),
+    ...(deps.newBindingSessionOf === undefined
+      ? {}
+      : { newBindingSessionOf: deps.newBindingSessionOf }),
   });
   return Object.freeze({ recoveryCodes, totp });
 }

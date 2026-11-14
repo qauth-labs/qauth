@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { emitUserEvent, bindsNewFactor, tokenSessionOf } = vi.hoisted(() => ({
   emitUserEvent: vi.fn<(...args: unknown[]) => Promise<string>>(async () => 'event-id'),
   bindsNewFactor: vi.fn(() => false),
-  tokenSessionOf: vi.fn(async (): Promise<{ id: string } | undefined> => undefined),
+  tokenSessionOf: vi.fn(
+    async (): Promise<{ id: string; recoveryCodeUsed?: boolean } | undefined> => undefined
+  ),
 }));
 // The helpers' modules read the environment at import; these rules read none of it.
 vi.mock('../../config/env', () => ({ env: { NODE_ENV: 'test' } }));
@@ -21,6 +23,7 @@ vi.mock('./account-sign-in-methods', async (importOriginal) => ({
 }));
 
 import { REDIS_KEYS } from '../constants/redis-keys';
+import { InsufficientUserAuthenticationError } from './account-operation-errors';
 import {
   type AccountFactors,
   confirmTotpEnrolment,
@@ -35,6 +38,8 @@ const USER_ID = '00000000-0000-4000-8000-000000000001';
 const SESSION_ID = '00000000-0000-4000-8000-0000000000c1';
 const CREDENTIAL_ID = '00000000-0000-4000-8000-0000000000d1';
 const NOW = Date.UTC(2026, 10, 14, 12);
+/** The token's `auth_time`: a minute before now, in whole seconds. */
+const AUTH_TIME = NOW - 60_000;
 const OWNER = { realmId: REALM_ID, userId: USER_ID, clientId: 'account-console' };
 const KEY = REDIS_KEYS.ACCOUNT_TOTP_ENROLMENT(REALM_ID, USER_ID);
 const SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
@@ -71,6 +76,7 @@ interface Fakes {
     readonly confirm: ReturnType<typeof vi.fn>;
     readonly regenerate: ReturnType<typeof vi.fn>;
     readonly nameNewCredential: ReturnType<typeof vi.fn>;
+    readonly findSession: ReturnType<typeof vi.fn>;
     readonly currentSet: ReturnType<typeof vi.fn>;
     readonly findAllByUserId: ReturnType<typeof vi.fn>;
   };
@@ -98,6 +104,13 @@ function fakes(
     confirm: vi.fn(async () => true),
     regenerate: vi.fn(async () => ({ codes: CODES, setId: 'set-2' })),
     nameNewCredential: vi.fn(async () => true),
+    // The sign-in's session, ended: it signed in at the token's `auth_time`.
+    findSession: vi.fn(async (): Promise<Record<string, unknown> | undefined> => ({
+      id: SESSION_ID,
+      userId: USER_ID,
+      authTime: AUTH_TIME + 250,
+      revokedAt: NOW - 1000,
+    })),
     currentSet: vi.fn(async () => ({ issuedAt: NOW - 1000, unused: 10 })),
     findAllByUserId: vi.fn(async () =>
       (options.credentials ?? [{ providerType: 'password' }, { providerType: 'totp' }]).map(
@@ -122,7 +135,7 @@ function fakes(
           },
         },
     repositories: {
-      sessions: { nameNewCredential: ports.nameNewCredential },
+      sessions: { nameNewCredential: ports.nameNewCredential, findById: ports.findSession },
       userRecoveryCodes: { currentSet: ports.currentSet },
       userCredentials: { findAllByUserId: ports.findAllByUserId },
     },
@@ -130,7 +143,13 @@ function fakes(
   const request = {
     id: 'request-1',
     server: fastify,
-    jwtPayload: { sub: USER_ID, amr: ['pwd'], clientId: 'account-console' },
+    jwtPayload: {
+      sub: USER_ID,
+      amr: ['pwd'],
+      clientId: 'account-console',
+      sid: SESSION_ID,
+      authTime: AUTH_TIME,
+    },
   } as unknown as FastifyRequest;
   const factors = {
     totp: { start: ports.start, check: ports.check, bind: ports.bind },
@@ -160,7 +179,7 @@ beforeEach(() => {
 describe('startTotpEnrolment (#1109)', () => {
   it('draws a secret, keeps only its ciphertext, and answers the secret once', async () => {
     const f = fakes();
-    const started = await startTotpEnrolment(f.fastify, f.factors, OWNER, NOW);
+    const started = await startTotpEnrolment(f.fastify, f.request, f.factors, OWNER, NOW);
     expect(started).toEqual({
       kind: 'started',
       secret: SECRET,
@@ -187,7 +206,7 @@ describe('startTotpEnrolment (#1109)', () => {
   ] as const)('refuses with conflict (%s)', async (reason, overrides) => {
     const f = fakes();
     f.ports.findByUserId.mockResolvedValue(account(overrides));
-    expect(await startTotpEnrolment(f.fastify, f.factors, OWNER, NOW)).toEqual({
+    expect(await startTotpEnrolment(f.fastify, f.request, f.factors, OWNER, NOW)).toEqual({
       kind: 'conflict',
       reason,
     });
@@ -197,9 +216,9 @@ describe('startTotpEnrolment (#1109)', () => {
 
   it('answers 503 when the enrolment cannot be kept', async () => {
     const f = fakes({ redisDown: true });
-    await expect(startTotpEnrolment(f.fastify, f.factors, OWNER, NOW)).rejects.toBeInstanceOf(
-      TemporarilyUnavailableError
-    );
+    await expect(
+      startTotpEnrolment(f.fastify, f.request, f.factors, OWNER, NOW)
+    ).rejects.toBeInstanceOf(TemporarilyUnavailableError);
   });
 });
 
@@ -271,19 +290,69 @@ describe('confirmTotpEnrolment (#1109)', () => {
     ).toEqual({ kind: 'not_found' });
   });
 
-  it('binds a new app after a password-only sign-in, and the token’s session names it (#1064)', async () => {
+  it('binds a new app after a password-only sign-in whose session, live or ended, names it (#1064)', async () => {
     const f = fakes();
     held(f);
     bindsNewFactor.mockReturnValue(true);
     tokenSessionOf.mockResolvedValue({ id: SESSION_ID });
     await confirmTotpEnrolment(f.fastify, f.request, f.factors, OWNER, '492039', NOW);
     expect(f.ports.bind).toHaveBeenCalledWith(expect.objectContaining({ isNew: true }));
-    expect(f.ports.nameNewCredential).toHaveBeenCalledWith(
-      REALM_ID,
-      SESSION_ID,
-      USER_ID,
-      CREDENTIAL_ID
-    );
+    // The binding's own transaction names it (`totp-sign-in.ts`), never a
+    // write after it.
+    expect(f.ports.nameNewCredential).not.toHaveBeenCalled();
+
+    // The sign-in's session has ended since: it is still the one to name.
+    held(f);
+    f.ports.findByUserId.mockResolvedValue(account());
+    tokenSessionOf.mockResolvedValue(undefined);
+    expect(
+      await confirmTotpEnrolment(f.fastify, f.request, f.factors, OWNER, '492039', NOW)
+    ).toMatchObject({ kind: 'bound' });
+    expect(f.ports.findSession).toHaveBeenCalledWith(REALM_ID, SESSION_ID);
+  });
+
+  it('binds no new app that no session of its sign-in could name, and keeps the enrolment', async () => {
+    bindsNewFactor.mockReturnValue(true);
+    for (const missing of ['no session', 'another sign-in', 'no sid'] as const) {
+      const f = fakes();
+      if (missing === 'no session') f.ports.findSession.mockResolvedValue(undefined);
+      if (missing === 'another sign-in') {
+        f.ports.findSession.mockResolvedValue({
+          id: SESSION_ID,
+          userId: USER_ID,
+          authTime: AUTH_TIME - 5_000,
+        });
+      }
+      if (missing === 'no sid') {
+        (f.request as unknown as { jwtPayload: Record<string, unknown> }).jwtPayload['sid'] =
+          undefined;
+      }
+      // Refused at the start, before a secret is drawn...
+      await expect(
+        startTotpEnrolment(f.fastify, f.request, f.factors, OWNER, NOW)
+      ).rejects.toBeInstanceOf(InsufficientUserAuthenticationError);
+      expect(f.ports.start).not.toHaveBeenCalled();
+      // ...and at the confirmation, before the enrolment is taken.
+      held(f);
+      await expect(
+        confirmTotpEnrolment(f.fastify, f.request, f.factors, OWNER, '492039', NOW)
+      ).rejects.toBeInstanceOf(InsufficientUserAuthenticationError);
+      expect(f.ports.bind).not.toHaveBeenCalled();
+      expect(f.redis.has(KEY)).toBe(true);
+    }
+  });
+
+  it('lets a recovery-code sign-in rebind a lost app, which the binding replaces', async () => {
+    const f = fakes();
+    f.ports.findByUserId.mockResolvedValue(account({ factors: [{ type: 'totp' }] }));
+    tokenSessionOf.mockResolvedValue({ id: SESSION_ID, recoveryCodeUsed: true });
+    expect(await startTotpEnrolment(f.fastify, f.request, f.factors, OWNER, NOW)).toMatchObject({
+      kind: 'started',
+    });
+    expect(
+      await confirmTotpEnrolment(f.fastify, f.request, f.factors, OWNER, '492039', NOW)
+    ).toMatchObject({ kind: 'bound' });
+    expect(f.ports.bind).toHaveBeenCalledTimes(1);
   });
 
   it('answers no set where the account holds one it confirmed', async () => {

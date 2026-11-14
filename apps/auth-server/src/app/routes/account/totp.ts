@@ -129,7 +129,7 @@ export function registerAccountTotpRoutes(
     preValidation: start.guard,
     schema: {
       description:
-        "Start an authenticator-app enrolment for the token's user: a new secret, answered once as text and as an `otpauth://` URI. Nothing is bound until the enrolment is confirmed with a first code within ten minutes; a new enrolment replaces one not yet confirmed. Needs a fresh sign-in with the account's strongest factor, or one that used a recovery code in place of a lost one, and refuses an act-chain token. An account that holds an authenticator app, an unclaimed account, and one with no address the app could show are 409 conflict.",
+        "Start an authenticator-app enrolment for the token's user: a new secret, answered once as text and as an `otpauth://` URI. Nothing is bound until the enrolment is confirmed with a first code within ten minutes; a new enrolment replaces one not yet confirmed. Needs a fresh sign-in with the account's strongest factor, or one that used a recovery code in place of a lost one, and refuses an act-chain token. An account that holds an authenticator app is 409 conflict, unless the sign-in used a recovery code in place of a lost one: that enrolment replaces the app once confirmed. An unclaimed account, and one with no address the app could show, are 409 conflict too.",
       tags,
       security: [{ bearerAuth: [] }],
       'x-qauth-stability': 'stable',
@@ -139,7 +139,7 @@ export function registerAccountTotpRoutes(
     },
     config: { surface: 'api' },
     handler: async (request, reply) => {
-      const started = await startTotpEnrolment(fastify, factors, ownerOf(request));
+      const started = await startTotpEnrolment(fastify, request, factors, ownerOf(request));
       if (started.kind === 'conflict') throw new AccountFactorConflictError(started.reason);
       reply.code(201);
       return reply.send({
@@ -216,6 +216,7 @@ export function registerAccountTotpRoutes(
         case 'not_found':
           throw new NotFoundError('Authenticator app of user', owner.userId);
         case 'last_credential':
+          // Never for an app, which is no way in on its own.
           throw new LastCredentialError();
         case 'second_factor_required':
           throw new SecondFactorRequiredError();

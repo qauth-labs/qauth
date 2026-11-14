@@ -147,6 +147,15 @@ export interface ServerTotpDependencies {
    */
   readonly clientIdOf?: (request: FastifyRequest) => string | null;
   /**
+   * The browser session a new binding's request names (#1064, #1109): the
+   * sign-in the account API's token came from. A binding that is new is
+   * named on it in the binding's own transaction, so the password's undo
+   * ends what that sign-in opened; one no session names rolls back. Absent,
+   * as at a sign-in, whose session is written with its new credentials once
+   * it completes, nothing is named.
+   */
+  readonly newBindingSessionOf?: (request: FastifyRequest) => string | undefined;
+  /**
    * Whether the hosted pages are on (`INTERACTION_UI_ENABLED`): a recovery
    * code is redeemed there, so without them the hard action is never armed.
    */
@@ -205,17 +214,38 @@ export function createServerTotp(
         );
       },
       // The binding's record commits with it (ADR-019 Decision 8).
-      async recorded({ realmId, userId, credentialId }, tx) {
+      async recorded({ realmId, userId, credentialId, newUntil }, tx) {
         const request = deps.requestOf();
         if (request === undefined) {
           throw new Error('a TOTP bound outside the request that asked for it');
+        }
+        if (newUntil !== undefined && deps.newBindingSessionOf !== undefined) {
+          const sessionId = deps.newBindingSessionOf(request);
+          if (
+            sessionId === undefined ||
+            !(await fastify.repositories.sessions.nameNewCredential(
+              realmId,
+              sessionId,
+              userId,
+              credentialId,
+              tx
+            ))
+          ) {
+            throw new Error('a new TOTP whose sign-in session could not name it');
+          }
         }
         await emitUserEvent(
           request,
           'urn:qauth:event:user.credential_added:v1-rc.0',
           // An authenticator app (#1064): CAEP's `app`.
           { type: 'totp', credentialId, authenticator: 'app' },
-          { tx, realmId, userId, clientId: deps.clientIdOf?.(request) ?? null, actor: 'user' }
+          {
+            tx,
+            realmId,
+            userId,
+            ...(deps.clientIdOf === undefined ? {} : { clientId: deps.clientIdOf(request) }),
+            actor: 'user',
+          }
         );
       },
       async bound({ realmId, userId }) {

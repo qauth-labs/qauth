@@ -11,6 +11,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { env } from '../../config/env';
 import { REDIS_KEYS } from '../constants/redis-keys';
 import { type AccountOwner, isSecondFactor } from './account-credentials';
+import { InsufficientUserAuthenticationError } from './account-operation-errors';
 import { bindsNewFactor, tokenSessionOf } from './account-operation-guard';
 import { accountCredentials } from './account-sign-in-methods';
 import type { EngineMailer } from './engine-mail';
@@ -95,6 +96,12 @@ export function createAccountFactors(
     ladder: ladder.ladder,
     requestOf: () => requests.getStore(),
     clientIdOf: (request) => request.jwtPayload?.clientId ?? null,
+    // `bindingOfToken` found this session, signed in at the token's
+    // `auth_time`, before a new binding was let through.
+    newBindingSessionOf: (request) => {
+      const sid = request.jwtPayload?.sid;
+      return typeof sid === 'string' && sid.length > 0 ? sid : undefined;
+    },
     hostedPages: env.INTERACTION_UI_ENABLED === true,
     passkeys: fastify.passkeySignIn === true,
   });
@@ -180,13 +187,18 @@ export type TotpEnrolmentStart =
  * fresh sign-in.
  *
  * An account that holds an authenticator app, disabled or not, gets
- * `conflict`: it removes that one first, the first half of a rebind. So does
+ * `conflict`: it removes that one first. A sign-in that used a recovery code
+ * in place of a lost one is the exception (ADR-017 Decision 8: only a rebind
+ * after a lost factor lets a recovery code stand in for it): its enrolment
+ * replaces the app once confirmed, so a realm whose MFA policy refuses the
+ * removal of the last second factor still lets the person rebind. So does
  * an unclaimed account, which binds no factor (ADR-017 Decision 8), and one
  * with no address, which an authenticator app shows beside the code, as the
  * hosted page's set-up skips it.
  */
 export async function startTotpEnrolment(
   fastify: FastifyInstance,
+  request: FastifyRequest,
   factors: AccountFactors,
   owner: AccountOwner,
   now: number = Date.now()
@@ -197,12 +209,18 @@ export async function startTotpEnrolment(
     // The token guard found an enabled user of the realm a moment ago.
     throw new Error('an enrolment for an account that does not exist');
   }
-  if (account.factors.some((factor) => factor.type === 'totp')) {
+  if (
+    account.factors.some((factor) => factor.type === 'totp') &&
+    !(await rebindsLostFactor(request, realmId, now))
+  ) {
     return { kind: 'conflict', reason: 'bound' };
   }
   if (!account.verified) return { kind: 'conflict', reason: 'unclaimed' };
   const label = account.identifier;
   if (label === undefined) return { kind: 'conflict', reason: 'no_address' };
+  // A binding this sign-in would make new must have a session to name it:
+  // refused now, before the person scans a secret that could not bind.
+  await bindingOfToken(request, realmId, userId, now);
   const started = await factors.totp.start({ realmId, userId, identifier: label });
   const expiresAt = now + TOTP_ENROLMENT_LIFETIME_MS;
   const held: HeldEnrolment = { sealed: started.sealed, expiresAt };
@@ -282,12 +300,16 @@ export async function confirmTotpEnrolment(
   if (checked.kind !== 'valid') return { kind: 'invalid_code' };
   // Read before the enrolment is taken, so a read that fails leaves it to
   // confirm again. The account as it is now: an app bound meanwhile voids
-  // the enrolment.
+  // the enrolment, unless this is the rebind of a lost one, which replaces it.
   const account = await factors.accounts.findByUserId(realmId, userId);
-  if (account === null || account.factors.some((factor) => factor.type === 'totp')) {
+  if (
+    account === null ||
+    (account.factors.some((factor) => factor.type === 'totp') &&
+      !(await rebindsLostFactor(request, realmId, now)))
+  ) {
     return { kind: 'not_found' };
   }
-  const { isNew, sessionId } = await bindingOfToken(request, realmId, userId, now);
+  const { isNew } = await bindingOfToken(request, realmId, userId, now);
   let taken: unknown;
   try {
     taken = await fastify.redis.eval(TAKE_ENROLMENT, 1, key, raw as string);
@@ -306,24 +328,10 @@ export async function confirmTotpEnrolment(
       ...(isNew ? { isNew: true } : {}),
     })
   );
-  // Disabled, unclaimed or gone since the start: nothing is bound.
+  // Disabled, unclaimed or gone since the start: nothing is bound. A new
+  // one was named on the token's session in the binding's transaction.
   if (binding.kind !== 'bound') return { kind: 'not_found' };
   const enabledAt = Date.now();
-  if (isNew && sessionId !== undefined && binding.credentialId !== undefined) {
-    try {
-      await fastify.repositories.sessions.nameNewCredential(
-        realmId,
-        sessionId,
-        userId,
-        binding.credentialId
-      );
-    } catch (error) {
-      fastify.log.error(
-        { err: error, realmId },
-        'an authenticator app was bound, but the session it was bound under could not name it'
-      );
-    }
-  }
   const recoveryCodes = await firstRecoveryCodes(fastify, request, factors, owner);
   return {
     kind: 'bound',
@@ -334,14 +342,19 @@ export async function confirmTotpEnrolment(
 
 /**
  * What the sign-in behind the request's token makes of a factor bound under
- * it (#1064): whether it is new, and the session that names it then.
+ * it (#1064): whether it is new. A new one is named on the browser session
+ * that sign-in started, live or ended (an ended session's refresh-token
+ * families outlive it, and the password's undo ends them too), so a token
+ * that names no such session binds none: it gets the step-up challenge with
+ * `max_age="0"`, and the sign-in it sends the person through names one. A
+ * refreshed token names none.
  */
 async function bindingOfToken(
   request: FastifyRequest,
   realmId: string,
   userId: string,
   now: number
-): Promise<{ readonly isNew: boolean; readonly sessionId?: string }> {
+): Promise<{ readonly isNew: boolean }> {
   const claims = request.jwtPayload;
   if (claims === undefined) throw new Error('an account change without its token');
   const credentials = await accountCredentials(request.server, realmId, userId);
@@ -352,7 +365,45 @@ async function bindingOfToken(
     realmId,
     now
   );
-  return { isNew, ...(isNew && session !== undefined ? { sessionId: session.id } : {}) };
+  if (isNew && session === undefined && !(await namesSignIn(request, realmId, userId))) {
+    throw new InsufficientUserAuthenticationError(0);
+  }
+  return { isNew };
+}
+
+/**
+ * Whether the request is the rebind of a lost factor (ADR-017 Decision 8):
+ * the live session behind its token took a recovery code in place of the
+ * factor, as the operation guard let it through on.
+ */
+async function rebindsLostFactor(
+  request: FastifyRequest,
+  realmId: string,
+  now: number
+): Promise<boolean> {
+  const claims = request.jwtPayload;
+  if (claims === undefined) return false;
+  return (await tokenSessionOf(request, claims, realmId, now))?.recoveryCodeUsed === true;
+}
+
+/**
+ * Whether the token's `sid` names a session of `userId` in the realm signed
+ * in at the token's `auth_time` (to the second the claim keeps), live or
+ * ended: the sign-in the token came from.
+ */
+async function namesSignIn(
+  request: FastifyRequest,
+  realmId: string,
+  userId: string
+): Promise<boolean> {
+  const { sid, authTime } = request.jwtPayload ?? {};
+  if (typeof sid !== 'string' || sid.length === 0 || authTime === undefined) return false;
+  const session = await request.server.repositories.sessions.findById(realmId, sid);
+  return (
+    session !== undefined &&
+    session.userId === userId &&
+    Math.floor(session.authTime / 1000) * 1000 === authTime
+  );
 }
 
 /**
