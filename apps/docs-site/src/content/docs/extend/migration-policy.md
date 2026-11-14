@@ -23,7 +23,10 @@ A change of shape takes two steps, in this order.
 1. **Expand.** The migration adds the new form beside the old one: a new nullable column, a new
    table, a new index. A column that must always hold a value gets a `DEFAULT`, so the inserts of
    the previous release, which do not name it, still succeed. A backfill (`UPDATE`) may fill the
-   rows that exist.
+   rows that exist. When the new form must also hold what the previous release writes to the old
+   one, the migration adds a trigger that copies each such write across. The previous release
+   writes only the old form until its last node is replaced, and a backfill misses every write
+   it makes after the migration ran.
 2. **Switch the code.** The release reads and writes the new form. The old form stays, because
    the previous release still uses it while the upgrade runs.
 
@@ -32,13 +35,13 @@ expand-then-contract) drops something, so it waits for the next major release, l
 removal: deprecated in a minor release, removed no sooner than 12 months later, and only in a new
 major release.
 
-| You want to                       | Within 1.x                                                                                      |
-| --------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Rename a column or a table        | Add the new one, write both, read the new one. The old name stays until the next major release. |
-| Change a column's type            | Add a column of the new type and backfill it. The code switches to it; the old column stays.    |
-| Make a column required            | Add it with a `DEFAULT`, or keep it nullable and require it in the code.                        |
-| Remove a column, table or a check | Stop using it. The drop waits for the next major release.                                       |
-| Delete rows                       | Leave them, or let the code delete them at run time. A migration does not.                      |
+| You want to                       | Within 1.x                                                                                                                                                                                       |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Rename a column or a table        | Add the new one, a trigger that copies each write to the old one into it, and a backfill. The release reads the new one and writes both. The old name stays until the next major release.        |
+| Change a column's type            | Add a column of the new type, a trigger that copies (and converts) each write to the old column into it, and a backfill. The release reads the new column and writes both; the old column stays. |
+| Make a column required            | Add it with a `DEFAULT`, or keep it nullable and require it in the code.                                                                                                                         |
+| Remove a column, table or a check | Stop using it. The drop waits for the next major release.                                                                                                                                        |
+| Delete rows                       | Leave them, or let the code delete them at run time. A migration does not.                                                                                                                       |
 
 ## What the check refuses
 
@@ -66,8 +69,9 @@ backfill first, which made its upgrade a two-hop runbook (see
 
 The check reads what runs at migration time, which is the code that "runs now" above. The body of
 a `DO` block runs then, and so does the body of a routine the migration runs itself: a `pg_temp`
-helper, or a function or procedure another of its statements calls. Those are read like any
-other SQL. Any other `CREATE FUNCTION` or `CREATE PROCEDURE` body runs only when something calls
+helper, or a function or procedure another of its statements calls, including a call from a body
+that runs now. Those are read like any other SQL. A routine named only in a `CREATE`, `ALTER` or
+`DROP` statement (a trigger's `EXECUTE FUNCTION`, a column default) is not followed. Any other `CREATE FUNCTION` or `CREATE PROCEDURE` body runs only when something calls
 it later, so it is not read: a trigger function that raises to refuse a write is a guard, not a
 migration step. Words inside string literals, quoted identifiers and comments match nothing.
 Dropping a temporary table or a `pg_temp` helper the migration made is not refused either.
