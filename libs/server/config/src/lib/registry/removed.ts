@@ -33,7 +33,7 @@ export const REMOVED_CONFIG_KEYS: readonly RemovedConfigKey[] = Object.freeze([
   },
   {
     name: 'PQC_SELF_CONTAINED_ACK',
-    removedIn: '0.3.0',
+    removedIn: '0.2.4',
     replacement:
       "It acknowledged PQC_TOKEN_DELIVERY=self-contained, which was never built: a hybrid token's ML-DSA-65 signature reaches a verifier only through introspection, PQC_TOKEN_DELIVERY=reference.",
   },

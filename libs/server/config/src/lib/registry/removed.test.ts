@@ -70,7 +70,7 @@ describe('refuseRemovedKeys (PQC_SELF_CONTAINED_ACK)', () => {
     (value) => {
       const refuse = () => refuseRemovedKeys({ PQC_SELF_CONTAINED_ACK: value });
       expect(refuse).toThrow(RemovedConfigKeyError);
-      expect(refuse).toThrow('PQC_SELF_CONTAINED_ACK was removed in 0.3.0 and is set.');
+      expect(refuse).toThrow('PQC_SELF_CONTAINED_ACK was removed in 0.2.4 and is set.');
       expect(refuse).toThrow('PQC_TOKEN_DELIVERY=reference');
       expect(refuse).toThrow('Unset PQC_SELF_CONTAINED_ACK.');
     }
@@ -83,7 +83,7 @@ describe('refuseRemovedKeys (PQC_SELF_CONTAINED_ACK)', () => {
   it('runs before the schema, in readConfiguredEnv', () => {
     expect(() =>
       readConfiguredEnv(CONFIG_KEY_REGISTRY, { PQC_SELF_CONTAINED_ACK: 'true' })
-    ).toThrow('PQC_SELF_CONTAINED_ACK was removed in 0.3.0');
+    ).toThrow('PQC_SELF_CONTAINED_ACK was removed in 0.2.4');
   });
 });
 

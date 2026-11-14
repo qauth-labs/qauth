@@ -35,7 +35,7 @@ export const ACCOUNT_KEYS = defineKeys([
     seeds: 'accounts.newFactorWindowDays',
     owner: 'accounts',
     default: '7',
-    since: '0.3.0',
+    since: '0.2.4',
     docs: "How many days, from 1 to 30, a passkey or authenticator app bound after a sign-in that proved only the account's password stays new (the password alone, after a fresh sign-in, may remove it, and it does not count as the account's strongest factor for a password reset or for the fresh sign-in a change of the account's factors needs), that seeds `accounts.newFactorWindowDays` of a new realm, and of a realm whose stored policies lack it at the first boot of the release that added it; once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
   },
   {
