@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signer's database user may now write events; the grants map applies it at
   deploy.
 
+### Removed
+
+- `@qauth-labs/server-jwt` no longer exports `exportPublicKeyPem` ([#359]).
+  It exported a key with `jose`, which fails for every private key `jose`
+  imports, since those are not extractable: the trap behind the boot failure
+  without `JWT_PUBLIC_KEY`. Nothing called it. Use
+  `derivePublicKeyPemFromPrivate` to derive a public key from a private-key
+  PEM.
+
 ## [0.2.4] - 2026-11-14
 
 A patch release that carries a breaking change, as a 0.x release may (see the
