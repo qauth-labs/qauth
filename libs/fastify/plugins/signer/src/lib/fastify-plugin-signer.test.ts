@@ -99,7 +99,7 @@ describe('signerPlugin', () => {
       app.keyRotation?.rotateNow({
         realmId: '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01',
         purpose: 'token_signing',
-        onAudit: async () => {},
+        onAudit: async () => undefined,
       } as never)
     ).rejects.toMatchObject({ name: 'OperationApprovalError', reason: 'missing' });
     await app.close();
