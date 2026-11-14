@@ -458,6 +458,9 @@ describe('discovery and the JWKS are served per realm (#494)', () => {
     // A node with both switches off advertises ID-JAG in no realm, and CIMD
     // still as each realm stores it: CIMD_ENABLED only seeds a new realm. The
     // harness leaves these settings in place between boots: drop them first.
+    // The first node stops before: a node whose ID_JAG_* settings differ from
+    // a running node's refuses to boot (the configuration digest, #499).
+    await Promise.all(booted.splice(0).map(async (server) => server.close()));
     for (const key of UNCLEARED_SETTINGS) delete process.env[key];
     const off = await boot(variables({ CIMD_ENABLED: 'false' }));
     for (const path of DISCOVERY_DOCUMENTS) {
