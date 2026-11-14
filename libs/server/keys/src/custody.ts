@@ -68,6 +68,15 @@ export {
   type ScopedKeyInput,
 } from './lib/key-factory';
 export {
+  createKeyRotation,
+  type KeyRotation,
+  type KeyRotationFailure,
+  type KeyRotationOptions,
+  type KeyRotationReport,
+  type KeyRotationRunOptions,
+  type KeyRotationStore,
+} from './lib/key-rotation';
+export {
   assertAllowedBySigningMode,
   type GeneratedKeyMaterial,
   generateKeyMaterial,

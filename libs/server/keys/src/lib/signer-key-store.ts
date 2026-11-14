@@ -36,8 +36,20 @@ export interface SignerKeyRecord {
   readonly status: StoredKeyStatus;
   /** Shared by both keys of a hybrid pair; `null` outside a pair. */
   readonly pairId: string | null;
-  /** Epoch ms. When the key stopped signing; `null` while it has not. */
+  /**
+   * Epoch ms. When the key starts, or started, to sign or encrypt; `null` for
+   * a `next` key. A rotation sets it a little ahead of the switch, and the
+   * key it replaces signs until then (#542).
+   */
+  readonly activateAt: number | null;
+  /** Epoch ms. When the key stops, or stopped, signing; `null` while it has not been retired. */
   readonly retireAt: number | null;
+  /**
+   * Epoch ms. When a retired key's retention ends. A retired cookie HMAC or
+   * data-at-rest key verifies or decrypts until then; one with `null` is kept
+   * with no end (#542).
+   */
+  readonly unpublishAt: number | null;
   /** Epoch ms. */
   readonly createdAt: number;
 }

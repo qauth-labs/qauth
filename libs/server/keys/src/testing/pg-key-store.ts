@@ -84,9 +84,13 @@ export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
         status: StoredKeyStatus;
         pair_id: string | null;
         publish_at: string | null;
+        activate_at: string | null;
+        retire_at: string | null;
+        unpublish_at: string | null;
         created_at: string;
       }>(
-        `SELECT kid, algorithm, status, pair_id, publish_at, created_at FROM realm_keys
+        `SELECT kid, algorithm, status, pair_id, publish_at, activate_at, retire_at, unpublish_at,
+                created_at FROM realm_keys
          WHERE ${conditions.join(' AND ')} ORDER BY created_at, id`,
         values
       );
@@ -97,6 +101,9 @@ export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
         status: row.status,
         pairId: row.pair_id,
         publishAt: row.publish_at === null ? null : Number(row.publish_at),
+        activateAt: row.activate_at === null ? null : Number(row.activate_at),
+        retireAt: row.retire_at === null ? null : Number(row.retire_at),
+        unpublishAt: row.unpublish_at === null ? null : Number(row.unpublish_at),
         createdAt: Number(row.created_at),
       }));
     },
