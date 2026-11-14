@@ -411,10 +411,30 @@ describe('the remote signer (#497)', () => {
       expect(
         await caught(remote(malformed).getUpstreamJwks('api', SERVICE_REALM, SERVICE_PROVIDER))
       ).toMatchObject({ details: { reason: 'signer_malformed_answer' } });
-      const notFound = scripted(async () => answer(404, { code: 'not_found' }));
-      expect(await caught(remote(notFound).signJws('local', ACCESS_TOKEN))).toBeInstanceOf(
-        TemporarilyUnavailableError
+    });
+
+    it('fails a call the signer serves no route for, and keeps the circuit closed for the others', async () => {
+      // A signer of another version, during a rolling upgrade.
+      const service = loopback(setup.signer, 'api');
+      const transport = scripted(async (request) =>
+        request.path.endsWith('/sign-jws')
+          ? service.send(request)
+          : answer(404, { code: 'not_found' })
       );
+      const signer = remote(transport, { failureThreshold: 1 });
+      for (let index = 0; index < 3; index += 1) {
+        const refused = await caught(
+          signer.getCookieDerivedKey('api', {
+            realmId: SERVICE_REALM,
+            label: 'urn:qauth:key-use:identifier-hmac:v1-rc.0',
+          })
+        );
+        expect(refused).toBeInstanceOf(TemporarilyUnavailableError);
+        expect(refused).toMatchObject({ details: { reason: 'signer_not_served' } });
+      }
+      // Not tried again: the signer answered.
+      expect(transport.calls).toHaveLength(3);
+      expect(typeof (await signer.signJws('local', ACCESS_TOKEN))).toBe('string');
     });
 
     it("sends a call again once when the signer's listener refused it before it ran", async () => {

@@ -132,6 +132,8 @@ export type RemoteSignerEvent =
  * - `unreachable`: the transport failed (no connection, the handshake, the deadline);
  * - `signer_failed`: the signer answered that it cannot do its work now, or failed;
  * - `malformed_answer`: the answer is not one the signer service gives;
+ * - `not_served`: the signer answered that it serves no route for the
+ *   operation, such as a signer of another version during a rolling upgrade;
  * - `peer_refused`: the signer's listener refused this process, twice: its
  *   certificate maps to no role the signer service admits;
  * - `role_refused`: the signer refused the call for the role this process's
@@ -143,6 +145,7 @@ export type RemoteSignerFailure =
   | 'unreachable'
   | 'signer_failed'
   | 'malformed_answer'
+  | 'not_served'
   | 'peer_refused'
   | 'role_refused'
   | 'rate_limited'
@@ -237,7 +240,11 @@ type Attempt<T> =
    * `SIGNER_FAULT`): the call fails closed, and the circuit counts the signer
    * as up.
    */
-  | { readonly kind: 'signer_trouble'; readonly status: number }
+  | {
+      readonly kind: 'signer_trouble';
+      readonly status: number;
+      readonly reason: 'signer_failed' | 'not_served';
+    }
   /** The signer's listener refused the call before the service read it. */
   | { readonly kind: 'not_run'; readonly status: number }
   /** The signer refused the call for this process's certificate's role. */
@@ -395,7 +402,7 @@ export function createRemoteSigner(options: RemoteSignerOptions): Signer {
         // The signer answered: a key it cannot use (one realm's, maybe) or a
         // fault of its own is no sign that it is down.
         if (code === 'SIGNER_UNAVAILABLE' || code === 'SIGNER_FAULT') {
-          return { kind: 'signer_trouble', status: response.status };
+          return { kind: 'signer_trouble', status: response.status, reason: 'signer_failed' };
         }
         return { kind: 'outage', reason: 'signer_failed', status: response.status };
       }
@@ -423,6 +430,12 @@ export function createRemoteSigner(options: RemoteSignerOptions): Signer {
     // connection was made. The service never read the call.
     if (response.status === 403) return { kind: 'not_run', status: 403 };
     if (response.status === 429) return { kind: 'rate_limited' };
+    // No route for the operation: the signer is up, and serves the others.
+    // Counted as an outage, one operation a signer of another version does
+    // not serve would open the circuit for every operation.
+    if (response.status === 404 || response.status === 405) {
+      return { kind: 'signer_trouble', status: response.status, reason: 'not_served' };
+    }
     return {
       kind: 'outage',
       reason: response.status >= 500 ? 'signer_failed' : 'malformed_answer',
@@ -458,8 +471,8 @@ export function createRemoteSigner(options: RemoteSignerOptions): Signer {
         throw outcome.error;
       case 'signer_trouble':
         succeeded(probe);
-        report({ type: 'call_failed', operation, reason: 'signer_failed', status: outcome.status });
-        throw unavailable(operation, 'signer_failed', openMs);
+        report({ type: 'call_failed', operation, reason: outcome.reason, status: outcome.status });
+        throw unavailable(operation, outcome.reason, openMs);
       case 'role_refused':
         succeeded(probe);
         report({ type: 'call_failed', operation, reason: 'role_refused', status: 403 });

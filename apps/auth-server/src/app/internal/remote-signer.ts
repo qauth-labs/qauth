@@ -73,6 +73,8 @@ const FAILURE_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
   unreachable: 'A call to the signer service got no answer',
   signer_failed: 'The signer service could not do its work',
   malformed_answer: 'The signer service gave an answer of another shape',
+  not_served:
+    'The signer service serves no route for this operation: run the same QAuth version on the signer and on the processes that call it',
   peer_refused:
     "The signer service's listener refused this process's certificate: map its SAN to the process's role in the signer's INTERNAL_PEER_ROLES",
   role_refused:
