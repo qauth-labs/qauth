@@ -35,6 +35,7 @@ import { type BackgroundTasks } from './background-tasks';
 import { createServerBotChallenge, registrationChallengeRequired } from './bot-challenge';
 import { endBrowserSessions } from './browser-session';
 import { type CodeMail, createEngineMailer, type EngineMailer } from './engine-mail';
+import { createServerFactorPorts } from './factor-ports';
 import type { InteractionDecision, InteractionState } from './interaction';
 import { InvalidAnswerError } from './interaction-errors';
 import { InteractionExpiredError } from './interaction-expired';
@@ -42,11 +43,9 @@ import { EVENT_CLIENT_ID_MAX_LENGTH } from './interaction-record';
 import { createServerPasskeyAccounts, createServerPasskeys } from './passkey-sign-in';
 import { createServerEmailCodeDigest, createServerLadderParts } from './password-attempts';
 import { resetAllowed, signInNotBefore } from './password-reset';
-import { createServerRecoveryCodes } from './recovery-codes';
 import { registrationAllowed } from './registration';
 import { requestRealm } from './request-realm';
 import { createServerRoundLimiter } from './round-limits';
-import { createServerTotp } from './totp-sign-in';
 import { upstreamProviderDirectory } from './upstream-providers';
 import { emitUserEvent, type EventTransaction } from './user-events';
 
@@ -76,8 +75,9 @@ export interface InteractionEngines {
   readonly forRequest: <T>(request: FastifyRequest, rounds: () => Promise<T>) => Promise<T>;
   /**
    * The accounts' recovery codes (#649), which the engines redeem and show
-   * once. The account API's regeneration (ACC-02, #687) calls `regenerate`,
-   * inside {@link forRequest}, after a fresh authentication.
+   * once. The hosted account page's regeneration (#844) calls `regenerate`,
+   * inside {@link forRequest}, after a fresh authentication, as the account
+   * API's does over its own ports (#1109, `account-factors.ts`).
    */
   readonly recoveryCodes: RepositoryRecoveryCodes;
   /**
@@ -248,11 +248,20 @@ export function createInteractionEngines(
       return realm;
     })
   );
-  // The recovery codes (#649): taken with their event, and told to the user.
-  const recoveryCodes = createServerRecoveryCodes(fastify, {
+  // The recovery codes (#649) and the authenticator app (#653), as the
+  // account API builds them too (`factor-ports.ts`). The app is asked after
+  // the first factor of an account that holds one, and set up when the MFA
+  // policy needs a second factor the account lacks; its hard action is armed
+  // only while the hosted pages, where a recovery code is redeemed, are on,
+  // and a passkey counts as a usable second factor only while passkey
+  // sign-in is on.
+  const { recoveryCodes, totp } = createServerFactorPorts(fastify, {
     mailer,
     realmOf,
+    ladder: ladder.ladder,
     requestOf: () => roundRequests.getStore(),
+    hostedPages: env.INTERACTION_UI_ENABLED === true,
+    passkeys: fastify.passkeySignIn === true,
   });
   const passwordUpdates = createRepositoryPasswordUpdates(
     {
@@ -435,19 +444,6 @@ export function createInteractionEngines(
             registered: (input, tx) => recordRegistered(input, tx, 'passkey'),
           }),
         });
-  // The authenticator app (#653): asked after the first factor of an account
-  // that holds one, set up when the MFA policy needs a second factor the
-  // account lacks. Its hard action is armed only while the hosted pages,
-  // where a recovery code is redeemed, are on.
-  const totp = createServerTotp(fastify, {
-    mailer,
-    realmOf,
-    recoveryCodes,
-    ladder: ladder.ladder,
-    hostedPages: env.INTERACTION_UI_ENABLED === true,
-    passkeys: passkeys !== undefined,
-    requestOf: () => roundRequests.getStore(),
-  });
   const build = (requireVerifiedAccount: boolean) =>
     createCheckedSignInEngine({
       accounts: createRepositoryAccountDirectory(

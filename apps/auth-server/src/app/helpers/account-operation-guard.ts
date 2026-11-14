@@ -1,4 +1,7 @@
-import { WEBAUTHN_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-federation';
+import {
+  PASSWORD_PROVIDER_TYPE,
+  WEBAUTHN_PROVIDER_TYPE,
+} from '@qauth-labs/fastify-plugin-federation';
 import type { JWTPayload } from '@qauth-labs/fastify-plugin-jwt';
 import { TOTP_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
@@ -223,6 +226,60 @@ export function provedOnlyThroughNew(
   );
 }
 
+/** What {@link bindsNewFactor} reads of the sign-in behind a token. */
+export interface TokenSignIn {
+  /** The token's `amr`. */
+  readonly amr: readonly string[];
+  /**
+   * The browser session the token names, when it is the sign-in behind it
+   * ({@link tokenSessionOf}): whether it used a recovery code, and the new
+   * credentials it bound or proved.
+   */
+  readonly session?: {
+    readonly recoveryCodeUsed?: boolean | null;
+    readonly newCredentialIds?: readonly string[] | null;
+  };
+}
+
+/**
+ * Whether a factor bound under the sign-in behind a token is new (#1064;
+ * ADR-017 Decision 8, amended 2026-11-12), as the sign-in engine decides it
+ * for one bound within a sign-in (`bindsNew`): the account holds a password
+ * in `realmId`, and the sign-in proved no factor beyond it that is not new.
+ * A passkey (`pop`) or an authenticator app (`otp`) counts when the account
+ * holds one of that factor that is not new and the sign-in did not prove the
+ * factor only through a new one; a recovery code counts while the account
+ * holds no new credential, since the first binding of one may have shown
+ * the set. A token whose session cannot be read where it is needed proves
+ * nothing beyond the password: the binding is new, which the password alone
+ * may then undo.
+ */
+export function bindsNewFactor(
+  signIn: TokenSignIn,
+  credentials: readonly BoundCredential[],
+  realmId: string,
+  now: number
+): boolean {
+  const held = credentials.filter((row) => row.realmId === realmId);
+  if (!held.some((row) => row.providerType === PASSWORD_PROVIDER_TYPE)) return false;
+  const named = signIn.session?.newCredentialIds ?? [];
+  const provedSettled = (factor: AccountFactor): boolean => {
+    if (!signIn.amr.includes(factor)) return false;
+    if (
+      !held.some(
+        (row) => factorOfProvider(row.providerType) === factor && !isNewCredential(row, now)
+      )
+    ) {
+      return false;
+    }
+    if (!holdsNewFactor(factor, held, realmId, now)) return true;
+    return signIn.session !== undefined && !provedOnlyThroughNew(factor, named, held, realmId, now);
+  };
+  const tookCode =
+    signIn.session?.recoveryCodeUsed === true && !held.some((row) => isNewCredential(row, now));
+  return !(provedSettled('pop') || provedSettled('otp') || tookCode);
+}
+
 /**
  * Whether the sign-in behind a token, at `authTime` (epoch ms, from the
  * token's `auth_time`), is fresh at `now`: at most
@@ -291,7 +348,7 @@ function lookupFailed(request: FastifyRequest, read: string, cause: unknown) {
  * `undefined` for a token that names none, or names another. Throws when the
  * session cannot be read.
  */
-async function sessionOfToken(
+export async function tokenSessionOf(
   request: FastifyRequest,
   claims: JWTPayload,
   realmId: string,
@@ -384,9 +441,9 @@ export async function checkAccountOperation(
   }
   const requiredFactor = requiredFactorOf(credentials, realmId, now);
   // The session behind the token, read once and only when a rule needs it.
-  let read: Promise<Awaited<ReturnType<typeof sessionOfToken>>> | undefined;
+  let read: Promise<Awaited<ReturnType<typeof tokenSessionOf>>> | undefined;
   const session = async () => {
-    read ??= sessionOfToken(request, claims, realmId, now);
+    read ??= tokenSessionOf(request, claims, realmId, now);
     try {
       return await read;
     } catch (cause) {

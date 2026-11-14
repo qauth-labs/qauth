@@ -36,8 +36,10 @@ import {
 } from '@qauth-labs/shared-errors';
 
 import {
+  AccountFactorConflictError,
   DelegatedTokenRefusedError,
   InsufficientUserAuthenticationError,
+  InvalidCodeError,
   InvalidCurrentPasswordError,
   LastCredentialError,
   SecondFactorRequiredError,
@@ -232,7 +234,8 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
  * security operation that carries no approval, an approval's refused move,
  * a refused realm policy update, a sandbox realm's ceiling among them, the
  * account API's step-up challenge and act-chain refusal, its password
- * change's wrong current password and its removals' refusals. Each code is one the problem types page
+ * change's wrong current password, its removals' refusals and its
+ * authenticator-app enrolment's. Each code is one the problem types page
  * publishes, for the status the class carries.
  *
  * A test fails when an error class of the app that declares a `statusCode` has
@@ -332,6 +335,12 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
     code: 'invalid_current_password',
     oauthError: 'invalid_request',
   },
+  // The account API's authenticator-app enrolment (#1109): a first code that
+  // is not the enrolment's, and a change the account's sign-in methods do
+  // not allow as they stand (an app bound already, no second factor to
+  // stand recovery codes in for).
+  { errorClass: InvalidCodeError, code: 'invalid_code', oauthError: 'invalid_request' },
+  { errorClass: AccountFactorConflictError, code: 'conflict', oauthError: 'invalid_request' },
   // `@qauth-labs/server-ssf`, through the SSF plugin: a stream request the
   // protocol refuses. Its message, which echoes no value, is the `detail`.
   { errorClass: SsfRequestError, code: 'bad_request', oauthError: 'invalid_request' },

@@ -22,6 +22,14 @@ export interface UserRecoveryCodeStatus {
   readonly confirmed: boolean;
 }
 
+/** The account's current set, without its codes (#1109). */
+export interface RecoveryCodeSetSummary {
+  /** When the set was issued, in epoch ms on the auth server's clock. */
+  readonly issuedAt: number;
+  /** How many of its codes are unused: 0 once it is used up. */
+  readonly unused: number;
+}
+
 /** One unused code of an account's set. */
 export interface UnusedRecoveryCode {
   readonly id: string;
@@ -77,6 +85,16 @@ export interface ConfirmRecoveryCodeSetInput {
 export interface UserRecoveryCodesRepository {
   /** Whether the account holds a set, how many of its codes are unused, and whether it is confirmed. */
   status(realmId: string, userId: string, tx?: DbClient): Promise<UserRecoveryCodeStatus>;
+  /**
+   * When the account's set was issued and how many of its codes are unused,
+   * in one read: what the account API answers of it (#1109). `undefined`
+   * while the account holds no set.
+   */
+  currentSet(
+    realmId: string,
+    userId: string,
+    tx?: DbClient
+  ): Promise<RecoveryCodeSetSummary | undefined>;
   /** The account's unused codes; none when it holds no set. */
   findUnused(realmId: string, userId: string, tx?: DbClient): Promise<UnusedRecoveryCode[]>;
   /**
@@ -186,6 +204,20 @@ export function createUserRecoveryCodesRepository(
         unused: row?.unused ?? 0,
         confirmed: total > 0 && row?.confirmed === true,
       };
+    },
+
+    async currentSet(realmId, userId, tx) {
+      const [row] = await (tx ?? defaultDb)
+        .select({
+          total: sql<number>`count(*)::int`,
+          unused: sql<number>`count(*) FILTER (WHERE ${userRecoveryCodes.usedAt} IS NULL)::int`,
+          // Every row of a set holds the same time; NULL when there is no row.
+          issuedAt: sql<string | number | null>`min(${userRecoveryCodes.createdAt})`,
+        })
+        .from(userRecoveryCodes)
+        .where(ofAccount(realmId, userId));
+      if (row === undefined || row.total === 0 || row.issuedAt === null) return undefined;
+      return { issuedAt: Number(row.issuedAt), unused: row.unused };
     },
 
     async findUnused(realmId, userId, tx) {

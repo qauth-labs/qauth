@@ -40,7 +40,8 @@ export type { CredentialTarget } from './account-operation-guard';
  *   signs in with none: `signsInNow`) is refused with `last_credential`; one
  *   that would leave no second factor where the realm's policy requires one,
  *   with `second_factor_required`. An authenticator app is a second factor,
- *   never a way in on its own.
+ *   never a way in on its own, so its removal is never `last_credential`
+ *   (#1109).
  */
 
 /** The account a change is made to, and the client it came through. */
@@ -165,7 +166,11 @@ export async function removeCredential(
     // What the account keeps that still signs in: a marked credential is
     // none, nor the identity of a provider switched off.
     const others = held.filter((candidate) => candidate.id !== row.id && isLive(candidate));
-    if (!(await signsInNow(fastify, realmId, others))) return { kind: 'last_credential' };
+    // An authenticator app is no way in on its own: removing one never
+    // leaves the account fewer ways to sign in than it has.
+    if (target.type !== 'totp' && !(await signsInNow(fastify, realmId, others))) {
+      return { kind: 'last_credential' };
+    }
     if (mfaRequired && !others.some(isSecondFactor)) return { kind: 'second_factor_required' };
     const whileNew = isNewCredential(row, now);
     const deleted = await fastify.repositories.userCredentials.deleteById(realmId, row.id, tx);

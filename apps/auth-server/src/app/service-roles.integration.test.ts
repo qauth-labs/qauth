@@ -144,6 +144,12 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   'GET /account/v1-rc.0/passkeys/:passkeyId',
   'PATCH /account/v1-rc.0/passkeys/:passkeyId',
   'DELETE /account/v1-rc.0/passkeys/:passkeyId',
+  // The account API's authenticator app and recovery codes (#1109).
+  'POST /account/v1-rc.0/totp/enrollment',
+  'POST /account/v1-rc.0/totp/enrollment/confirm',
+  'DELETE /account/v1-rc.0/totp',
+  'GET /account/v1-rc.0/recovery-codes',
+  'POST /account/v1-rc.0/recovery-codes/regenerate',
 ];
 
 /** The routes removed since: the metrics moved to the internal listener (#500). */

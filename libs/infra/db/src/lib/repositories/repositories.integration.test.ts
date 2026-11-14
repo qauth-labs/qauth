@@ -1258,6 +1258,63 @@ describe('repository integration (real Postgres)', () => {
       // Another realm's call names the user in vain.
       expect(await repo.listNamingCredential(otherRealm.id, user.id, credential)).toEqual([]);
     });
+
+    it('nameNewCredential names a credential on one session of its user once, ended ones too (#1109)', async () => {
+      const realm = await seedRealm();
+      const otherRealm = await seedRealm('other');
+      const user = await seedUser(realm.id);
+      const other = await seedUser(realm.id);
+      const repo = createSessionsRepository(db().database.db);
+      const credential = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f00c3';
+      const earlier = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f00c4';
+      const session = await repo.create({
+        realmId: realm.id,
+        userId: user.id,
+        authTime: Date.now() - 60_000,
+        amr: ['pwd'],
+        expiresAt: Date.now() + 3_600_000,
+        newCredentialIds: [earlier],
+      });
+
+      // Another user's call, or another realm's, names nothing.
+      expect(await repo.nameNewCredential(realm.id, session.id, other.id, credential)).toBe(false);
+      expect(await repo.nameNewCredential(otherRealm.id, session.id, user.id, credential)).toBe(
+        false
+      );
+      expect(await repo.nameNewCredential(realm.id, session.id, user.id, credential)).toBe(true);
+      // Named once: naming it again (a rebind keeps the id) answers that it is named.
+      expect(await repo.nameNewCredential(realm.id, session.id, user.id, credential)).toBe(true);
+      expect((await repo.findById(realm.id, session.id))?.newCredentialIds).toEqual([
+        earlier,
+        credential,
+      ]);
+      expect(
+        (await repo.listNamingCredential(realm.id, user.id, credential)).map((row) => row.id)
+      ).toEqual([session.id]);
+
+      // An ended session is named too: its sign-in's families outlive it.
+      await repo.revoke(realm.id, session.id, 'sign_out');
+      const later = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f00c5';
+      expect(await repo.nameNewCredential(realm.id, session.id, user.id, later)).toBe(true);
+
+      // The row stays bounded.
+      const full = await repo.create({
+        realmId: realm.id,
+        userId: user.id,
+        authTime: Date.now() - 60_000,
+        amr: ['pwd'],
+        expiresAt: Date.now() + 3_600_000,
+        newCredentialIds: Array.from(
+          { length: 16 },
+          (_, index) => `0190f5a8-7c3e-7d10-8a4b-3c2d1e0f01${String(index).padStart(2, '0')}`
+        ),
+      });
+      expect(await repo.nameNewCredential(realm.id, full.id, user.id, credential)).toBe(false);
+      // One a full session names already is still named.
+      const listed = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f0100';
+      expect(await repo.nameNewCredential(realm.id, full.id, user.id, listed)).toBe(true);
+      expect((await repo.findById(realm.id, full.id))?.newCredentialIds).toHaveLength(16);
+    });
   });
 
   describe('oauth consents — soft-delete revoke + upsertGrant scope union', () => {

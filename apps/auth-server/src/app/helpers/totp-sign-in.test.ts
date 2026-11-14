@@ -6,6 +6,8 @@ import { createServerTotp, totpCipher, totpSecretContext } from './totp-sign-in'
 import { emitUserEvent } from './user-events';
 
 vi.mock('./user-events', () => ({ emitUserEvent: vi.fn(async () => 'event-id') }));
+// The realm's window for a factor bound after a password-only sign-in (#1064).
+vi.mock('./new-factor-window', () => ({ newFactorWindowIn: async () => 7 * 86_400_000 }));
 
 /** The request the engine's round runs for. */
 const REQUEST = { id: 'request-1' } as unknown as FastifyRequest;
@@ -173,6 +175,47 @@ describe('the server TOTPs (#653)', () => {
       expect.any(String)
     );
     expect(mailer.sendUncounted).toHaveBeenCalledTimes(2);
+  });
+
+  it('names a new binding through its caller, in the binding’s transaction (#1109)', async () => {
+    const nameNewBinding = vi.fn(async () => true);
+    const named = () =>
+      createServerTotp(fastify(), {
+        mailer: mailer as unknown as EngineMailer,
+        realmOf: async () => REALM,
+        recoveryCodes: { status: recoveryStatus },
+        ladder: { resetAccount },
+        hostedPages,
+        passkeys: false,
+        requestOf: () => REQUEST,
+        nameNewBinding,
+      });
+    const binding = {
+      realmId: REALM_ID,
+      userId: USER_ID,
+      clientId: CLIENT_ID,
+      sealed: 'v1.sealed',
+    };
+
+    await expect(named().bind({ ...binding, step: 7, isNew: true })).resolves.toEqual({
+      kind: 'bound',
+      credentialId: 'row-1',
+    });
+    expect(nameNewBinding).toHaveBeenCalledWith(
+      REQUEST,
+      { realmId: REALM_ID, userId: USER_ID, credentialId: 'row-1' },
+      TX
+    );
+
+    // One no session names rolls back: the transaction throws.
+    nameNewBinding.mockResolvedValueOnce(false);
+    await expect(named().bind({ ...binding, step: 8, isNew: true })).rejects.toThrow();
+
+    // A binding that is not new is named nowhere, nor is one at a sign-in.
+    nameNewBinding.mockClear();
+    await named().bind({ ...binding, step: 10 });
+    await build().bind({ ...binding, step: 11, isNew: true });
+    expect(nameNewBinding).not.toHaveBeenCalled();
   });
 
   it('disables at the ceiling with an unused recovery code, then mails the notice', async () => {

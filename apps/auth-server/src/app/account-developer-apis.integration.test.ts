@@ -652,9 +652,10 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
         expect(operation.deprecated, `${method} ${path}`).toBe(true);
       }
       // The 13 replacements, and the account API's linked accounts (#670),
-      // sign-in methods and password change (#1107) and passkeys (#1108),
-      // which replace nothing and are as undeprecated.
-      expect(replacements).toHaveLength(21);
+      // sign-in methods and password change (#1107), passkeys (#1108),
+      // authenticator app and recovery codes (#1109), which replace nothing
+      // and are as undeprecated.
+      expect(replacements).toHaveLength(26);
       for (const { path, method, operation } of replacements) {
         expect(operation.deprecated, `${method} ${path}`).toBeUndefined();
       }

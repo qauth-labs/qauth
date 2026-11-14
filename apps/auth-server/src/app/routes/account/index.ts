@@ -1,10 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 
 import { MERGE_PATCH_MEDIA_TYPE } from '../../api-conventions/conditional-requests';
+import { createAccountFactors } from '../../helpers/account-factors';
+import { createEngineMailer } from '../../helpers/engine-mail';
 import { registerAccountConsentRoutes } from './consents';
 import { registerAccountLinkedAccountRoutes } from './linked-accounts';
 import { registerAccountPasskeyRoutes } from './passkeys';
+import { registerAccountRecoveryCodeRoutes } from './recovery-codes';
 import { registerAccountSignInMethodRoutes } from './sign-in-methods';
+import { registerAccountTotpRoutes } from './totp';
 
 /**
  * THE ACCOUNT API, `/account/v1-rc.0` (ADR-019 Decision 7, #524).
@@ -14,7 +18,9 @@ import { registerAccountSignInMethodRoutes } from './sign-in-methods';
  * cookie-authenticated `/consents` (a deprecated alias until the account
  * console, v0.4, moves); then the linked upstream accounts and their
  * removal (#670); then the sign-in methods' read and the password change
- * (#1107); then the passkeys, their rename and their removal (#1108).
+ * (#1107); then the passkeys, their rename and their removal (#1108); then
+ * the authenticator app's enrolment and removal, and the recovery codes'
+ * status and regeneration (#1109).
  *
  * Every route is guarded by `requireFamilyToken('account')` (#509): a token
  * whose only audience is `urn:qauth:aud:account:v1-rc.0`, as the account
@@ -51,4 +57,11 @@ export default async function (fastify: FastifyInstance) {
   registerAccountLinkedAccountRoutes(fastify);
   registerAccountSignInMethodRoutes(fastify);
   registerAccountPasskeyRoutes(fastify);
+  // The authenticator app and the recovery codes share the sign-in engine's
+  // ports (#1109), built once here; their notices go out after the answer,
+  // through the engine's mail, whose background tasks register a hook.
+  const mailer = createEngineMailer(fastify);
+  const factors = createAccountFactors(fastify, mailer);
+  registerAccountTotpRoutes(fastify, factors, mailer);
+  registerAccountRecoveryCodeRoutes(fastify, factors);
 }

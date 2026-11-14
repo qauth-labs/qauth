@@ -141,6 +141,25 @@ export interface ServerTotpDependencies {
    */
   readonly requestOf: () => FastifyRequest | undefined;
   /**
+   * The OAuth client a binding's request came through, which its event
+   * names: the account API's caller (#1109). Absent, the event names none,
+   * as a sign-in's binding, whose engine client is no client a person sees.
+   */
+  readonly clientIdOf?: (request: FastifyRequest) => string | null;
+  /**
+   * Name a new binding on the browser session of the sign-in its request
+   * came from (#1064, #1109): the account API's, in the binding's own
+   * transaction, so the password's undo ends what that sign-in opened.
+   * `false` (no session named it) rolls the binding back. Absent, as at a
+   * sign-in, whose session is written with its new credentials once it
+   * completes, nothing is named.
+   */
+  readonly nameNewBinding?: (
+    request: FastifyRequest,
+    binding: { readonly realmId: string; readonly userId: string; readonly credentialId: string },
+    tx: EventTransaction
+  ) => Promise<boolean>;
+  /**
    * Whether the hosted pages are on (`INTERACTION_UI_ENABLED`): a recovery
    * code is redeemed there, so without them the hard action is never armed.
    */
@@ -199,17 +218,30 @@ export function createServerTotp(
         );
       },
       // The binding's record commits with it (ADR-019 Decision 8).
-      async recorded({ realmId, userId, credentialId }, tx) {
+      async recorded({ realmId, userId, credentialId, newUntil }, tx) {
         const request = deps.requestOf();
         if (request === undefined) {
           throw new Error('a TOTP bound outside the request that asked for it');
+        }
+        if (
+          newUntil !== undefined &&
+          deps.nameNewBinding !== undefined &&
+          !(await deps.nameNewBinding(request, { realmId, userId, credentialId }, tx))
+        ) {
+          throw new Error('a new TOTP whose sign-in session could not name it');
         }
         await emitUserEvent(
           request,
           'urn:qauth:event:user.credential_added:v1-rc.0',
           // An authenticator app (#1064): CAEP's `app`.
           { type: 'totp', credentialId, authenticator: 'app' },
-          { tx, realmId, userId, actor: 'user' }
+          {
+            tx,
+            realmId,
+            userId,
+            ...(deps.clientIdOf === undefined ? {} : { clientId: deps.clientIdOf(request) }),
+            actor: 'user',
+          }
         );
       },
       async bound({ realmId, userId }) {

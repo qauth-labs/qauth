@@ -461,6 +461,19 @@ describe('removeCredential (#844)', () => {
     expect(sendUncounted).not.toHaveBeenCalled();
   });
 
+  it('never refuses an authenticator app as the last way in: it is none (#1109)', async () => {
+    // The password is marked: the account signs in with nothing until a reset.
+    const app = credential('totp');
+    const { fastify, deleteById } = server([
+      { ...credential('password'), disabledAt: NOW - 60_000 },
+      app,
+    ]);
+    expect(
+      await removeCredential(fastify, REQUEST, session(['otp']), { type: 'totp' }, MAILER)
+    ).toEqual({ kind: 'removed' });
+    expect(deleteById).toHaveBeenCalledWith(REALM_ID, app.id, 'tx');
+  });
+
   it('counts no marked credential as a way in, nor as the second factor kept (#655)', async () => {
     // A rebind marked the lost passkey: it signs in no more.
     const lost = { ...credential('webauthn'), disabledAt: NOW - 60_000 };

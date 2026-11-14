@@ -101,3 +101,36 @@ export class InvalidCurrentPasswordError extends Error {
     this.name = 'InvalidCurrentPasswordError';
   }
 }
+
+/**
+ * A one-time code the account API refuses (#1109): `400`, the `invalid_code`
+ * problem document, such as a first code that is not the started
+ * authenticator-app enrolment's secret's. Nothing was bound, and the
+ * enrolment waits for another code.
+ */
+export class InvalidCodeError extends Error {
+  readonly statusCode = 400;
+  readonly code = 'INVALID_CODE';
+
+  constructor() {
+    super('The code is not valid for this enrolment.');
+    this.name = 'InvalidCodeError';
+  }
+}
+
+/**
+ * An account change the account's sign-in methods do not allow as they stand
+ * (#1109): `409`, the `conflict` problem document, such as an
+ * authenticator-app enrolment for an account that holds one, or a
+ * regeneration of recovery codes for an account with no second factor and
+ * no passkey. The message names why, for the log only.
+ */
+export class AccountFactorConflictError extends Error {
+  readonly statusCode = 409;
+  readonly code = 'CONFLICT';
+
+  constructor(reason: string) {
+    super(`The account's sign-in methods do not allow the change: ${reason}.`);
+    this.name = 'AccountFactorConflictError';
+  }
+}

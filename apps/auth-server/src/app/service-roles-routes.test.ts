@@ -105,12 +105,13 @@ const ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
 /**
  * The routes added since the manifest replaced the autoload: the account and
  * developer APIs under their versioned prefixes (#524), with the account
- * API's later operations (#670, #1107, #1108).
+ * API's later operations (#670, #1107, #1108, #1109).
  */
 const ROUTES_ADDED_SINCE: readonly string[] = [
   'DELETE /account/v1-rc.0/consents/:consentId',
   'DELETE /account/v1-rc.0/linked-accounts/:linkedAccountId',
   'DELETE /account/v1-rc.0/passkeys/:passkeyId',
+  'DELETE /account/v1-rc.0/totp',
   'DELETE /developer/v1-rc.0/clients/:clientId',
   'DELETE /developer/v1-rc.0/clients/:clientId/api-keys/:keyId',
   'DELETE /developer/v1-rc.0/consents/:consentId',
@@ -118,6 +119,7 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   'GET /account/v1-rc.0/linked-accounts',
   'GET /account/v1-rc.0/passkeys',
   'GET /account/v1-rc.0/passkeys/:passkeyId',
+  'GET /account/v1-rc.0/recovery-codes',
   'GET /account/v1-rc.0/sign-in-methods',
   'GET /developer/v1-rc.0/clients',
   'GET /developer/v1-rc.0/clients/:clientId',
@@ -126,6 +128,9 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   'PATCH /account/v1-rc.0/passkeys/:passkeyId',
   'PATCH /developer/v1-rc.0/clients/:clientId',
   'POST /account/v1-rc.0/password/change',
+  'POST /account/v1-rc.0/recovery-codes/regenerate',
+  'POST /account/v1-rc.0/totp/enrollment',
+  'POST /account/v1-rc.0/totp/enrollment/confirm',
   'POST /developer/v1-rc.0/clients',
   'POST /developer/v1-rc.0/clients/:clientId/api-keys',
   'POST /developer/v1-rc.0/clients/:clientId/regenerate-secret',

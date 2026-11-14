@@ -253,4 +253,14 @@ export const REDIS_KEYS = {
    * change is left. Both components are UUIDs.
    */
   PASSWORD_CHANGED: (realmId: string, userId: string) => `password-changed:${realmId}:${userId}`,
+  /**
+   * An account's authenticator-app enrolment the account API started and
+   * nobody confirmed yet (#1109): JSON of the secret sealed under the realm's
+   * `data_at_rest` key for the account, never the secret, and when it lapses.
+   * Written with `SET … PX` at the start, replacing one not yet confirmed,
+   * and deleted by the confirmation that binds it, only while it still holds
+   * what that confirmation checked. Both components are UUIDs.
+   */
+  ACCOUNT_TOTP_ENROLMENT: (realmId: string, userId: string) =>
+    `account-totp-enrolment:${realmId}:${userId}`,
 } as const;

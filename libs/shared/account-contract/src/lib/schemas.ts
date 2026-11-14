@@ -490,7 +490,7 @@ export const totpEnrollmentSchema = object(
     expiresAt: dateTime('When the enrolment lapses unless confirmed.'),
     emailCode: closedEnum(
       ['required', 'not_required'],
-      'Whether confirming also needs the 8-digit code QAuth just mailed to the account’s address: the first second factor of a password-only account does, unless the sign-in already proved that mailbox (ADR-017 Decision 8).'
+      'Whether confirming also needs a code mailed to the account’s address. Always `not_required`: the account decides, never a channel, so a verified account binds its first second factor after the fresh sign-in alone and no binding asks for a mailed code (ADR-017 Decision 8, amended 2026-11-08). `required` stays reserved.'
     ),
   },
   ['secret', 'otpauthUri', 'algorithm', 'digits', 'period', 'expiresAt', 'emailCode'],
@@ -502,7 +502,7 @@ export const totpConfirmRequestSchema = closedObject(
     code: digits(6, 'The first code the authenticator app shows.'),
     emailCode: digits(
       8,
-      'The code mailed to the account’s address, when the enrolment asks for one.'
+      'A code mailed to the account’s address, when the enrolment asks for one. None does today (`emailCode: not_required`); one sent is ignored.'
     ),
   },
   ['code'],

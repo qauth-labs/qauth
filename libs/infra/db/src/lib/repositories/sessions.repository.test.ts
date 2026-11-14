@@ -110,6 +110,7 @@ const CALLS: Record<keyof SessionsRepository, (repo: SessionsRepository) => Prom
   revoke: (repo) => repo.revoke(REALM_ID, SESSION_ID, 'sign_out'),
   listActiveForUser: (repo) => repo.listActiveForUser(REALM_ID, USER_ID),
   listNamingCredential: (repo) => repo.listNamingCredential(REALM_ID, USER_ID, CREDENTIAL_ID),
+  nameNewCredential: (repo) => repo.nameNewCredential(REALM_ID, SESSION_ID, USER_ID, CREDENTIAL_ID),
   // In a transaction of the recording client, as it requires.
   recordClient: (repo) =>
     recordingDb.transaction((tx) => repo.recordClient(REALM_ID, SESSION_ID, CLIENT_ID, tx)),
@@ -633,6 +634,26 @@ describe('createSessionsRepository', () => {
     expect(where).not.toContain('expires_at');
     expect(text).toContain('order by "sessions"."created_at" desc, "sessions"."id" desc');
     expect(query.values).toEqual([REALM_ID, USER_ID, JSON.stringify([CREDENTIAL_ID])]);
+  });
+
+  it('nameNewCredential appends a credential to one session of one user, once and within the bound (#1109)', async () => {
+    const query = await run('nameNewCredential');
+    const text = query.text.toLowerCase();
+
+    // Appended unless named already, which leaves the list as it is.
+    expect(text).toMatch(
+      /^update "sessions" set "new_credential_ids" = case when "sessions"\."new_credential_ids" @> \$1::jsonb then "sessions"\."new_credential_ids" else "sessions"\."new_credential_ids" \|\| \$2::jsonb end where/
+    );
+    expect(text).toContain(
+      'where ("sessions"."realm_id" = $3 and "sessions"."id" = $4 and "sessions"."user_id" = $5 and ' +
+        '("sessions"."new_credential_ids" @> $6::jsonb or ' +
+        'jsonb_array_length("sessions"."new_credential_ids") < $7))'
+    );
+    // A session that ended is named too: the families of its sign-in outlive it.
+    expect(text).not.toContain('revoked_at');
+    expect(text).not.toContain('expires_at');
+    const named = JSON.stringify([CREDENTIAL_ID]);
+    expect(query.values).toEqual([named, named, REALM_ID, SESSION_ID, USER_ID, named, 16]);
   });
 });
 

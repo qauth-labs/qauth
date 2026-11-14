@@ -3,7 +3,6 @@ import type { BrowserSession, ListedSession } from '@qauth-labs/fastify-plugin-s
 import { TOTP_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
-import { isSecondFactor } from './account-credentials';
 import {
   type AccountFactor,
   type CredentialTarget,
@@ -20,7 +19,6 @@ import {
   signInMethodsOf,
 } from './account-sign-in-methods';
 import { endBrowserSession, endBrowserSessions } from './browser-session';
-import type { InteractionEngines } from './interaction-engines';
 import { isNewCredential } from './new-factors';
 import { csrfTokensEqual, generateCsrfToken } from './session-cookie';
 import { readSessionSideRecord, writeSessionSideRecord } from './session-side-record';
@@ -35,6 +33,11 @@ export {
   removeCredential,
   renamePasskey,
 } from './account-credentials';
+export {
+  type RecoveryCodePorts,
+  type RecoveryCodesResult,
+  regenerateRecoveryCodes,
+} from './account-factors';
 export type { AccountPasskey } from './account-sign-in-methods';
 
 /**
@@ -75,8 +78,9 @@ export type { AccountPasskey } from './account-sign-in-methods';
  * password change, the sign-in methods' read and the passkey and
  * authenticator app changes are the account API's too, so they live apart
  * (`account-password-change.ts`, `account-sign-in-methods.ts`,
- * `account-credentials.ts`), where its routes reach them without the rest of
- * the page (#1107, #1108).
+ * `account-credentials.ts`), and so are the recovery codes' regeneration
+ * (`account-factors.ts`), where its routes reach them without the rest of
+ * the page (#1107, #1108, #1109).
  */
 
 /** A change of the account page, by the account API operation it stands for. */
@@ -353,50 +357,6 @@ export async function readAccountOverview(
       })),
     requiredFactor: methods.requiredFactor,
   };
-}
-
-// ── Recovery codes ───────────────────────────────────────────────────────────
-
-/** What a regeneration did. */
-export type RecoveryCodesResult =
-  | { readonly kind: 'issued'; readonly codes: readonly string[]; readonly setId: string }
-  /** The account holds no second factor and no passkey: a set would stand in for nothing. */
-  | { readonly kind: 'conflict' };
-
-/**
- * Issue a new set of recovery codes (`account.recoveryCodes.regenerate`),
- * returned once: every code of the old set stops working, and the notice
- * goes out. The caller has checked a fresh sign-in with the strongest factor
- * and the CSRF token, and shows the codes with `Cache-Control: no-store`.
- * The store writes the set itself, so `user.recovery_codes_regenerated` is
- * recorded right after it; a record that fails is logged, and the codes are
- * still shown: the old set is gone either way.
- */
-export async function regenerateRecoveryCodes(
-  fastify: FastifyInstance,
-  request: FastifyRequest,
-  engines: InteractionEngines,
-  session: BrowserSession
-): Promise<RecoveryCodesResult> {
-  const { realmId, userId } = session;
-  const held = (await fastify.repositories.userCredentials.findAllByUserId(userId)).filter(
-    (row) => row.realmId === realmId
-  );
-  if (!held.some(isSecondFactor)) return { kind: 'conflict' };
-  const set = await engines.forRequest(request, () =>
-    engines.recoveryCodes.regenerate({ realmId, userId })
-  );
-  try {
-    await emitUserEvent(
-      request,
-      'urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0',
-      {},
-      { realmId, userId, clientId: null, actor: 'user' }
-    );
-  } catch (error) {
-    fastify.log.error({ err: error, realmId }, 'recovery codes were regenerated, but not recorded');
-  }
-  return { kind: 'issued', codes: set.codes, setId: set.setId };
 }
 
 // ── Sessions ─────────────────────────────────────────────────────────────────

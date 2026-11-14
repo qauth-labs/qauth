@@ -14,6 +14,7 @@ import {
   type AccountOperationRules,
   ACT_CHAIN_RULES,
   AUTH_TIME_CLOCK_SKEW_LEEWAY_SECONDS,
+  bindsNewFactor,
   checkAccountOperation,
   FRESH_AUTHENTICATION_MAX_AGE_SECONDS,
   FRESH_AUTHENTICATION_RULES,
@@ -237,6 +238,67 @@ describe('the account operation guard (#663)', () => {
       expect(provedOnlyThroughNew('pop', ['passkey-new'], rows, REALM_ID, NOW)).toBe(true);
       expect(provedOnlyThroughNew('pop', [], rows, REALM_ID, NOW)).toBe(false);
       expect(provedOnlyThroughNew('pop', ['passkey-new'], rows, REALM_ID, NOW + 1)).toBe(false);
+    });
+  });
+
+  describe('whether a factor bound under a token is new (#1064, #1109)', () => {
+    const NOW = 1_800_000_000_000;
+    const password = credential('password');
+    const settledPasskey = { ...credential('webauthn'), id: 'passkey-settled', newUntil: null };
+    const settledTotp = { ...credential('totp'), id: 'totp-settled', newUntil: null };
+    const newPasskey = { ...credential('webauthn'), id: 'passkey-new', newUntil: NOW + 1 };
+
+    it('is new after a sign-in that proved the password alone', () => {
+      expect(bindsNewFactor({ amr: ['pwd'] }, [password], REALM_ID, NOW)).toBe(true);
+      // An `amr` that names a factor the account holds no settled one of
+      // proves nothing beyond the password.
+      expect(bindsNewFactor({ amr: ['pwd', 'otp'] }, [password], REALM_ID, NOW)).toBe(true);
+    });
+
+    it('is not new for an account without a password, nor after a settled factor', () => {
+      expect(bindsNewFactor({ amr: ['pop'] }, [settledPasskey], REALM_ID, NOW)).toBe(false);
+      expect(
+        bindsNewFactor({ amr: ['pwd', 'pop'] }, [password, settledPasskey], REALM_ID, NOW)
+      ).toBe(false);
+      expect(bindsNewFactor({ amr: ['pwd', 'otp'] }, [password, settledTotp], REALM_ID, NOW)).toBe(
+        false
+      );
+      // A password of another realm is none of this account's.
+      expect(
+        bindsNewFactor({ amr: ['pwd'] }, [credential('password', OTHER_REALM_ID)], REALM_ID, NOW)
+      ).toBe(false);
+    });
+
+    it('is new when the sign-in proved the factor only through a new credential', () => {
+      const rows = [password, settledPasskey, newPasskey];
+      // The session named the new passkey: it proved `pop` only through it.
+      expect(
+        bindsNewFactor(
+          { amr: ['pwd', 'pop'], session: { newCredentialIds: ['passkey-new'] } },
+          rows,
+          REALM_ID,
+          NOW
+        )
+      ).toBe(true);
+      // The session names none: it proved the settled one.
+      expect(
+        bindsNewFactor(
+          { amr: ['pwd', 'pop'], session: { newCredentialIds: [] } },
+          rows,
+          REALM_ID,
+          NOW
+        )
+      ).toBe(false);
+      // No session to tell: nothing is proved beyond the password.
+      expect(bindsNewFactor({ amr: ['pwd', 'pop'] }, rows, REALM_ID, NOW)).toBe(true);
+    });
+
+    it('counts a recovery code only while the account holds no new credential', () => {
+      const tookCode = { amr: ['pwd'], session: { recoveryCodeUsed: true } };
+      expect(bindsNewFactor(tookCode, [password, settledTotp], REALM_ID, NOW)).toBe(false);
+      expect(bindsNewFactor(tookCode, [password, settledTotp, newPasskey], REALM_ID, NOW)).toBe(
+        true
+      );
     });
   });
 

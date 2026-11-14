@@ -155,9 +155,10 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // it shows a new one. The account API, on `api`, counts the unused ones
   // (`account.signInMethods.get`, #1107), and its removal of a passkey or
   // authenticator app that is still new deletes the account's set (#1108;
-  // ADR-017 Decision 8, #1064), as the hosted page's removal does on `web`;
-  // its regeneration (#687) will write.
-  user_recovery_codes: { web: SIUD, api: SD },
+  // ADR-017 Decision 8, #1064), as the hosted page's removal does on `web`.
+  // Its regeneration and the first set of an authenticator app it binds
+  // replace the set and mark it confirmed, an `UPDATE` (#1109).
+  user_recovery_codes: { web: SIUD, api: SIUD },
   // The actions a user must take at the next sign-in (#635): the sign-in
   // engine, on `web`, reads and deletes a user's rows; `api` (the account
   // console's "this wasn't me") and `admin` (an admin's request) add them,
