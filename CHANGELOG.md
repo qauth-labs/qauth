@@ -80,6 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `null` under `1-rc.1`, which a 0.2.5 node reads as the key's page and its
   next boot stores so.
 
+- **The docs list QAuth's Apple plugin** ([#1076]). `@qauth-labs/plugin-apple`
+  `0.1.0`, a preset plugin in its own repository, is in the provider plugins
+  table of the published images page, with its redirect URI. It needs QAuth
+  `0.2.4` or later, whose signer imports the key Apple issues, and the page
+  links the operator's steps for that key.
+
 ### Removed
 
 - `@qauth-labs/server-jwt` no longer exports `exportPublicKeyPem` ([#359]).
