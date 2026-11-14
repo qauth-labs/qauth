@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The account API reads the sign-in methods and changes the password**
+  ([#1107], ADR-020 §3, ADR-017 Decision 8, ADR-019 Decision 7). A backend
+  that draws its own account pages can now call
+  `GET /account/v1-rc.0/sign-in-methods` (whether a password is set and when,
+  the passkey count, whether TOTP is on, the recovery codes left, the linked
+  accounts, whether there is a contact address, and the factor a fresh sign-in
+  must hold) and `POST /account/v1-rc.0/password/change`, as the account
+  contract states them. Both run on the hosted account page's logic. The
+  change needs a fresh sign-in with the account's strongest factor, refuses an
+  act-chain token, counts a wrong current password on the failure ladder
+  (`invalid_current_password`), applies the realm's password policy and breach
+  list (`weak_password`, whose `reasons` now include `breached`), ends the
+  account's other browser sessions and its refresh tokens while keeping the
+  session the token names in `sid`, records `user.password_changed` with the
+  calling client and sends the "password changed" notice. A password set from
+  now on records its set time in its credential (`password_set_at`); one set
+  before reads `changedAt: null`. Every account API answer now carries
+  `Cache-Control: no-store`, errors included, as the contract states. The
+  `api` role's database user gets `SELECT` on `user_recovery_codes` and
+  `DELETE` on `user_required_actions` (see the upgrade notes).
 - **A factor bound after a password-only sign-in is new for a window, and the
   owner can undo it with the password** ([#1064], ADR-017 Decision 8, ADR-020
   §3). Since [#1052] the first passkey or TOTP of a verified password-only
@@ -4299,6 +4319,7 @@ It adds migrations 0068 and 0069.
 [#1082]: https://github.com/qauth-labs/qauth/issues/1082
 [#1083]: https://github.com/qauth-labs/qauth/issues/1083
 [#1106]: https://github.com/qauth-labs/qauth/issues/1106
+[#1107]: https://github.com/qauth-labs/qauth/issues/1107
 
 ### Deprecated
 

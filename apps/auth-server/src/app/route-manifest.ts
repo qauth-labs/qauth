@@ -212,7 +212,18 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     // The linked accounts (#670): the provider catalog's discovery reads
     // through the egress client, and the unlink notice goes out by email.
-    plugins: ['egress', 'email', 'jwt'],
+    // The password change (#1107): the current password on the failure
+    // ladder, the new one under the password policy and the breach list, and
+    // the account's other browser sessions ended.
+    plugins: [
+      'breachedPasswords',
+      'egress',
+      'email',
+      'failureLadder',
+      'jwt',
+      'password',
+      'sessions',
+    ],
     repositories: [
       'authorizationCodes',
       'events',
@@ -228,6 +239,10 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       // browser session behind a token for a recovery-code sign-in.
       'sessions',
       'userCredentials',
+      // The sign-in methods' read counts the unused recovery codes, and the
+      // password change clears the account's `update_password` (#1107).
+      'userRecoveryCodes',
+      'userRequiredActions',
       'users',
     ],
     load: () => import('./routes/account'),

@@ -256,6 +256,8 @@ describe('POST /auth/register', () => {
           password_hash: '$argon2id$hashed',
           email_verified: false,
           password_normalization: 'nfc',
+          // When it was set (#1107).
+          password_set_at: expect.any(Number),
         },
       },
       TX
@@ -747,6 +749,7 @@ describe('POST /auth/register', () => {
             password_hash: '$argon2id$hashed',
             email_verified: false,
             password_normalization: 'nfc',
+            password_set_at: expect.any(Number),
           },
         }),
         TX

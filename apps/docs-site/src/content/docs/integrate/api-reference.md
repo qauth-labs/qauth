@@ -1028,6 +1028,29 @@ refuses an act-chain token, as every change to the ways into the account does. T
 way to sign in is `409` `last_credential`; one of another user is the same `404` as one that does
 not exist. **`204 No Content`**. Errors: `400`, `401`, `403`, `404`, `409`.
 
+### `GET /account/v1-rc.0/sign-in-methods`
+
+The user's sign-in methods at a glance (#1107): whether a password is set and when it was last
+set (`changedAt`, `null` without one and for a password set before the server recorded the
+time), the number of passkeys, whether an authenticator app (TOTP)
+is on, the recovery codes left, the number of linked upstream accounts and wallets, whether the
+account has a contact address, and `freshAuthenticationFactor`, the `amr` value a fresh sign-in
+must hold before a change to the account (`pop`, `otp` or `pwd`). Takes an act-chain token. Sent
+with `Cache-Control: no-store`. Errors: `400`, `401`, `403`.
+
+### `POST /account/v1-rc.0/password/change`
+
+Change the user's password, with the current one: a JSON body of `currentPassword` and
+`newPassword`. Needs a fresh sign-in with the account's strongest factor and refuses an act-chain
+token. A wrong current password is `400` `invalid_current_password` and counts on the account's
+failure ladder as a failed sign-in does, so repeated ones get `429` with `Retry-After`. A new
+password the realm's password policy or breach list refuses is `422` `weak_password`, whose
+`reasons` say why. An account without a password is `404`: setting a first password is no
+operation here. Afterwards the account's other browser sessions, its refresh tokens and its
+unredeemed authorization codes end, the session the token names in `sid` stays signed in,
+`user.password_changed` is recorded and the owner gets the "password changed" notice. Access
+tokens already issued stay valid until they expire. **`204 No Content`**. Errors: `400`, `401`, `403`, `404`, `422`, `429`, `503`.
+
 ---
 
 ## Consents (`/consents/`)

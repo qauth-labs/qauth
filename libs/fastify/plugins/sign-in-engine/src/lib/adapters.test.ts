@@ -823,6 +823,8 @@ describe('the repository password updates (#635)', () => {
         password_hash: `hash(${input.password})`,
         email_verified: true,
         password_normalization: 'nfc',
+        // When the password was set (#1107).
+        password_set_at: expect.any(Number),
         extra: 'kept',
       },
     ]);

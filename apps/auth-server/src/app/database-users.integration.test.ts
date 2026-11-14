@@ -502,6 +502,31 @@ describe('each service role on a database user of its own (#498)', () => {
     if (consent === undefined) throw new Error('the account API listed no consent');
     const withdrawn = await call('DELETE', `${ACCOUNT}/consents/${consent.id}`, account);
     expect(withdrawn.statusCode, withdrawn.body).toBe(204);
+
+    // The sign-in methods, and the password change (#1107): its current
+    // password counts on the failure ladder, whose keys need the signer
+    // (#497), so the change runs on api + signer.
+    const methods = await call('GET', `${ACCOUNT}/sign-in-methods`, account);
+    expect(methods.statusCode, methods.body).toBe(200);
+    expect(json<{ password: { set: boolean } }>(methods).password).toMatchObject({ set: true });
+    const freshlySignedIn = await fixture.app.jwtUtils.signAccessToken(
+      { id: realm.id },
+      {
+        sub: userId,
+        clientId: 'account-console',
+        aud: API_FAMILY_AUDIENCES.account,
+        scope: `${API_FAMILY_SCOPES.account.read} ${API_FAMILY_SCOPES.account.write}`,
+        authTime: (Math.floor(Date.now() / 1000) - 5) * 1000,
+        amr: ['pwd'],
+      }
+    );
+    const changed = await role('api+signer').inject({
+      method: 'POST',
+      url: `${ACCOUNT}/password/change`,
+      headers: { authorization: `Bearer ${freshlySignedIn}` },
+      payload: { currentPassword: E2E_PASSWORD, newPassword: 'Copper-Heron-Lattice-Orchard-81' },
+    });
+    expect(changed.statusCode, changed.body).toBe(204);
     expectNoPermissionError();
   });
 

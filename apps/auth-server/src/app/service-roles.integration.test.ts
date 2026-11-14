@@ -136,6 +136,9 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   // authenticator app".
   'GET /ui/totp/:interactionId',
   'GET /ui/totp-setup/:interactionId',
+  // The account API's sign-in methods and password change (#1107).
+  'GET /account/v1-rc.0/sign-in-methods',
+  'POST /account/v1-rc.0/password/change',
 ];
 
 /** The routes removed since: the metrics moved to the internal listener (#500). */

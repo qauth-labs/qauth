@@ -143,7 +143,7 @@ export interface SignInMethods {
   password: {
     /** Whether the account has a password. A passkey-only account has none. */
     set: boolean;
-    /** When it was last set; `null` without one. */
+    /** When it was last set; `null` without one, and for a password set before the server recorded the time. */
     changedAt: string | null;
   };
   passkeys: {

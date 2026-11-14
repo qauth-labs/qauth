@@ -305,7 +305,7 @@ The request is well formed, but its content cannot be applied, such as a merge p
 
 **Code** `weak_password` · **Status** 422 · **Title** Weak password
 
-The new password does not meet the password policy. `reasons` lists why (`too_short`, `too_long`, `blocklisted`, `too_weak`), and `errors` carries a message for each, then any feedback, under `/password`.
+The new password does not meet the password policy. `reasons` lists why (`too_short`, `too_long`, `blocklisted`, `too_weak`, and `breached` for a password on the breach list). Outside the account API, `errors` carries a message for each, then any feedback, under `/password`.
 
 ## `sandbox-ceiling`
 

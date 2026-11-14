@@ -295,9 +295,9 @@ export interface UserCredentialsRepository {
    * Replace the password of the realm's `password` credential `id` (#642),
    * in one statement: `passwordData` is the password's part of
    * `credential_data` as the password provider builds it
-   * (`buildPasswordCredentialData`: `password_hash`, `email_verified` and,
-   * when there is one, `password_normalization`). It replaces those three
-   * keys (a marker `passwordData` does not carry is dropped), keeps every
+   * (`buildPasswordCredentialData`: `password_hash`, `email_verified`,
+   * `password_set_at` and, when there is one, `password_normalization`). It
+   * replaces those keys (one `passwordData` does not carry is dropped), keeps every
    * other key, and clears the failure ladder's disabled mark (#615). A second
    * factor's credential is never touched: only a `password` row matches.
    *

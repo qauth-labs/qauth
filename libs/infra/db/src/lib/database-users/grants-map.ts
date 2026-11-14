@@ -149,15 +149,17 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // Each account's recovery codes (#649): the sign-in engine, on `web`,
   // reads an account's codes, takes one (an `UPDATE … WHERE used_at IS NULL`)
   // and replaces a set (a `DELETE` and an `INSERT` in one transaction) when
-  // it shows a new one. Nothing else touches them yet; the account console's
-  // regeneration (#687) adds `api`.
-  user_recovery_codes: { web: SIUD },
+  // it shows a new one. The account API, on `api`, counts the unused ones
+  // (`account.signInMethods.get`, #1107); its regeneration (#687) will write.
+  user_recovery_codes: { web: SIUD, api: S },
   // The actions a user must take at the next sign-in (#635): the sign-in
   // engine, on `web`, reads and deletes a user's rows; `api` (the account
-  // console's "this wasn't me") and `admin` (an admin's request) add them.
-  // `SELECT` stays with `INSERT` for the `RETURNING` of the write. Nothing
-  // updates a row.
-  user_required_actions: { web: SID, api: SI, admin: SI },
+  // console's "this wasn't me") and `admin` (an admin's request) add them,
+  // and the account API's password change, on `api`, deletes the user's
+  // `update_password` (#1107), as the hosted page's does on `web`. `SELECT`
+  // stays with `INSERT` for the `RETURNING` of the write. Nothing updates a
+  // row.
+  user_required_actions: { web: SID, api: SID, admin: SI },
   user_roles: {},
   // Each user's session epoch (#642): the owner's password reset, on `web`,
   // advances it (an upsert: `INSERT … ON CONFLICT DO UPDATE`), and the
