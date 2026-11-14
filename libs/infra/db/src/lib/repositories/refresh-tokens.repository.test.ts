@@ -256,29 +256,11 @@ describe('the client token lock (#631)', () => {
 
 describe('the realm family sweep of emergency key retirement (#551)', () => {
   const CLIENT_KEY = "'qauth:client-tokens:'";
-  const CLIENT_B = '0192f1c4-2222-7000-8000-000000000001';
+  const REALM_KEY = "'qauth:realm-tokens:'";
   const REALM_ID = '0192f1c4-4444-7000-8000-000000000004';
 
-  /** A recording client that answers the client list with two clients. */
-  function recordingDbWithClients(): { db: DbClient; queries: CapturedQuery[] } {
-    const queries: CapturedQuery[] = [];
-    const client = {
-      query: (config: { text?: string; values?: unknown[] } | string, values?: unknown[]) => {
-        const text = typeof config === 'string' ? config : (config.text ?? '');
-        const params =
-          typeof config === 'string' ? (values ?? []) : (config.values ?? values ?? []);
-        queries.push({ text, values: params });
-        const rows = /^select "id" from "oauth_clients"/i.test(text)
-          ? [[CLIENT_B], [CLIENT_ID]]
-          : [];
-        return Promise.resolve({ rows, rowCount: rows.length, fields: [], command: '', oid: 0 });
-      },
-    };
-    return { db: drizzle(client as unknown as Pool) as unknown as DbClient, queries };
-  }
-
-  it("locks each of the realm's clients, exclusive and in id order, before its one UPDATE", async () => {
-    const { db, queries } = recordingDbWithClients();
+  it("takes the realm's token lock, exclusive and once, before its one UPDATE", async () => {
+    const { db, queries } = createRecordingDb();
 
     await createRefreshTokensRepository(db).revokeFamiliesOfRealmActiveSince(
       REALM_ID,
@@ -288,40 +270,61 @@ describe('the realm family sweep of emergency key retirement (#551)', () => {
 
     const sql = texts(queries);
     expect(sql[0]).toBe('begin');
-    expect(sql[1]).toContain('from "oauth_clients"');
-    expect(sql[1]).toContain('order by "oauth_clients"."id" asc');
-    expect(queries[1].values).toEqual([REALM_ID]);
-    expect(sql[2]).toMatch(/pg_advisory_xact_lock\(/);
-    expect(sql[2]).toContain(CLIENT_KEY);
-    expect(queries[2].values).toContain(CLIENT_B);
-    expect(sql[3]).toMatch(/pg_advisory_xact_lock\(/);
-    expect(queries[3].values).toContain(CLIENT_ID);
-    expect(sql[4].startsWith('update "refresh_tokens"')).toBe(true);
-    expect(sql[4]).toContain('"created_at" >=');
-    expect(sql[4]).toContain('"last_used_at" >=');
-    expect(sql[5]).toBe('commit');
-    expect(sql).toHaveLength(6);
+    // One lock, however many clients the realm has: never one per client.
+    expect(sql.filter((t) => t.includes('pg_advisory'))).toHaveLength(1);
+    expect(sql[1]).toMatch(/pg_advisory_xact_lock\(/);
+    expect(sql[1]).toContain(REALM_KEY);
+    expect(sql[1]).not.toContain(CLIENT_KEY);
+    expect(queries[1].values).toContain(REALM_ID);
+    expect(sql[2].startsWith('update "refresh_tokens"')).toBe(true);
+    // The realm's clients by a subquery, not a list of their ids.
+    expect(sql[2]).toContain('from "oauth_clients" where "oauth_clients"."realm_id" =');
+    expect(sql[2]).toContain('"created_at" >=');
+    expect(sql[2]).toContain('"last_used_at" >=');
+    expect(sql[3]).toBe('commit');
+    expect(sql).toHaveLength(4);
   });
 
-  it('takes every family of the realm for no moment, and locks nothing in a realm without clients', async () => {
-    const all = recordingDbWithClients();
-    await createRefreshTokensRepository(all.db).revokeFamiliesOfRealmActiveSince(
+  it('takes every family of the realm for no moment', async () => {
+    const { db, queries } = createRecordingDb();
+    await createRefreshTokensRepository(db).revokeFamiliesOfRealmActiveSince(
       REALM_ID,
       null,
       'key_retired'
     );
-    const update = texts(all.queries).find((t) => t.startsWith('update "refresh_tokens"'));
+    const update = texts(queries).find((t) => t.startsWith('update "refresh_tokens"'));
     expect(update).not.toContain('"created_at" >=');
+  });
 
-    const empty = createRecordingDb();
-    await expect(
-      createRefreshTokensRepository(empty.db).revokeFamiliesOfRealmActiveSince(
-        REALM_ID,
-        null,
-        'key_retired'
-      )
-    ).resolves.toEqual({ families: 0, tokens: 0 });
-    expect(texts(empty.queries).some((t) => t.includes('pg_advisory'))).toBe(false);
+  it("makes every issue and rotation hold its realm's token lock shared, with its client's", async () => {
+    const rotation = createRecordingDb();
+    await createRefreshTokensRepository(rotation.db).revokeIfActive(
+      'token-1',
+      'rotated',
+      rotation.db
+    );
+    const insert = createRecordingDb();
+    await createRefreshTokensRepository(insert.db).create(
+      {
+        userId: USER_ID,
+        oauthClientId: CLIENT_ID,
+        tokenHash: 'h'.repeat(64),
+        familyCreatedAt: 1,
+        familySessionExpiresAt: null,
+        authTime: null,
+        amr: null,
+        expiresAt: 2,
+        scopes: [],
+      },
+      insert.db
+    );
+    for (const { queries } of [rotation, insert]) {
+      const lock = texts(queries).find((t) => t.includes(CLIENT_KEY));
+      expect(lock).toContain(REALM_KEY);
+      expect(lock?.match(/pg_advisory_xact_lock_shared\(/g)).toHaveLength(2);
+      // The realm is the client's, read from its row.
+      expect(lock).toContain('"oauth_clients"."realm_id"');
+    }
   });
 });
 

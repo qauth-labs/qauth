@@ -875,9 +875,10 @@ export interface RefreshTokensRepository {
    * every Authority Tree they carry, which survives a sign-out but not this.
    * A family from before, not used since, stays.
    *
-   * Under the exclusive token lock of each of the realm's clients, taken in
-   * client id order, as {@link revokeAllForClient} takes one: a rotation in
-   * flight commits first, and its new token is revoked with its family.
+   * Under the realm's exclusive token lock, which every issue and rotation
+   * of the realm's clients holds shared: a rotation in flight commits first,
+   * and its new token is revoked with its family. One lock, however many
+   * clients the realm has.
    */
   revokeFamiliesOfRealmActiveSince(
     realmId: string,

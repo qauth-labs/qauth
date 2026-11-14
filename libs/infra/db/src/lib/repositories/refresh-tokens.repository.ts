@@ -1,7 +1,6 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
 import {
   and,
-  asc,
   eq,
   getTableColumns,
   gt,
@@ -78,6 +77,12 @@ async function lockUserTokens(
  * The key is namespaced, so it never meets a user's key, and the id is hashed
  * as a `uuid` rendered to text, as `lockUserTokens` does.
  *
+ * An issue also holds the token lock of the client's realm shared, in the
+ * same statement: the realm-wide sweep of emergency key retirement (#551)
+ * takes that one lock exclusive, rather than one lock per client of the
+ * realm, which a realm of thousands of clients would fill the lock table
+ * with ({@link lockRealmTokens}).
+ *
  * @param clientId - The client row's id, or a subquery resolving one
  */
 async function lockClientTokens(
@@ -86,11 +91,33 @@ async function lockClientTokens(
   clientId: string | SQL
 ): Promise<void> {
   const key = sql`hashtextextended('qauth:client-tokens:' || (${clientId})::uuid::text, 0)`;
-  await invoker.execute(
-    mode === 'issue'
-      ? sql`select pg_advisory_xact_lock_shared(${key})`
-      : sql`select pg_advisory_xact_lock(${key})`
+  if (mode === 'revoke') {
+    await invoker.execute(sql`select pg_advisory_xact_lock(${key})`);
+    return;
+  }
+  const realmKey = realmTokensKey(
+    sql`(select ${oauthClients.realmId} from ${oauthClients} where ${oauthClients.id} = (${clientId})::uuid)`
   );
+  await invoker.execute(
+    sql`select pg_advisory_xact_lock_shared(${key}), pg_advisory_xact_lock_shared(${realmKey})`
+  );
+}
+
+/** The token lock key of a realm: namespaced, the id hashed as a `uuid` rendered to text. */
+function realmTokensKey(realmId: string | SQL): SQL {
+  return sql`hashtextextended('qauth:realm-tokens:' || (${realmId})::uuid::text, 0)`;
+}
+
+/**
+ * Serialise every refresh-token issue and rotation of a realm's clients
+ * against a revocation of the realm's families (#551): one exclusive lock,
+ * which every issue holds shared ({@link lockClientTokens}), however many
+ * clients the realm has. The revoking UPDATE then takes its snapshot only
+ * once each issue in flight has committed, and an issue that starts later
+ * waits for the revocation to commit.
+ */
+async function lockRealmTokens(invoker: DbClient, realmId: string): Promise<void> {
+  await invoker.execute(sql`select pg_advisory_xact_lock(${realmTokensKey(realmId)})`);
 }
 
 /**
@@ -565,28 +592,21 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
       tx?: DbClient
     ): Promise<RealmFamiliesRevocation> {
       const run = async (invoker: DbClient): Promise<RealmFamiliesRevocation> => {
-        // Every client of the realm, in id order: the order two of these
-        // sweeps take the client locks in, so they cannot deadlock. Each lock
-        // is the one `revokeAllForClient` takes (#631), which every rotation
-        // and every insert of the client's tokens holds shared: the UPDATE
-        // below takes its snapshot only once each rotation in flight has
-        // committed, so no child a rotation inserts escapes it.
-        const clients = await invoker
+        // The realm's token lock, exclusive: every issue and rotation of the
+        // realm's clients holds it shared, so the UPDATE below takes its
+        // snapshot only once each one in flight has committed, and no child a
+        // rotation inserts escapes it.
+        await lockRealmTokens(invoker, realmId);
+        const realmClients = invoker
           .select({ id: oauthClients.id })
           .from(oauthClients)
-          .where(eq(oauthClients.realmId, realmId))
-          .orderBy(asc(oauthClients.id));
-        if (clients.length === 0) return { families: 0, tokens: 0 };
-        for (const client of clients) {
-          await lockClientTokens(invoker, 'revoke', client.id);
-        }
-        const clientIds = clients.map((client) => client.id);
+          .where(eq(oauthClients.realmId, realmId));
         const touched = invoker
           .select({ familyId: refreshTokens.familyId })
           .from(refreshTokens)
           .where(
             and(
-              inArray(refreshTokens.oauthClientId, clientIds),
+              inArray(refreshTokens.oauthClientId, realmClients),
               since === null
                 ? undefined
                 : or(gte(refreshTokens.createdAt, since), gte(refreshTokens.lastUsedAt, since))
@@ -597,7 +617,7 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
           .set({ revoked: true, revokedAt: Date.now(), revokedReason: reason })
           .where(
             and(
-              inArray(refreshTokens.oauthClientId, clientIds),
+              inArray(refreshTokens.oauthClientId, realmClients),
               eq(refreshTokens.revoked, false),
               inArray(refreshTokens.familyId, touched)
             )
