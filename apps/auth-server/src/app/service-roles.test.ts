@@ -125,10 +125,16 @@ describe('what each role loads (the boot-time list)', () => {
     );
   });
 
-  it('gives signer the realms the resolver reads, their published keys and their secrets', () => {
+  it('gives signer the realms the resolver reads, their published keys, their secrets and the event store', () => {
     // The secrets for the boot's seed of the default realm (#529), which only
-    // a process that can encrypt runs.
-    expect(repositoriesFor(['signer'])).toEqual(['realms', 'realmPublicKeys', 'realmSecrets']);
+    // a process that can encrypt runs, and the events the key rotation job
+    // writes for its steps (#542).
+    expect(repositoriesFor(['signer'])).toEqual([
+      'realms',
+      'events',
+      'realmPublicKeys',
+      'realmSecrets',
+    ]);
     expect([...pluginsFor(['signer'])]).toEqual([]);
   });
 
@@ -239,7 +245,7 @@ describe('what each role loads (the boot-time list)', () => {
 });
 
 describe('the jobs of each role', () => {
-  it('places purge-expired and the SSF subject sweep on api, event retention on delivery, the approval expiry on admin, and the interaction sweep and the session expiry and purge on web', () => {
+  it('places purge-expired and the SSF subject sweep on api, event retention on delivery, the approval expiry on admin, the interaction sweep and the session expiry and purge on web, and the key rotation on signer', () => {
     expect(Object.fromEntries(SERVER_JOBS.map((job) => [job.name, job.role]))).toEqual({
       'purge-expired': 'api',
       'event-retention': 'delivery',
@@ -248,6 +254,7 @@ describe('the jobs of each role', () => {
       'interaction-expiry': 'web',
       'session-expiry': 'web',
       'session-purge': 'web',
+      'key-rotation': 'signer',
     });
   });
 
@@ -269,11 +276,21 @@ describe('the jobs of each role', () => {
       ),
       metrics: {},
     } as unknown as FastifyInstance;
-    expect(serverJobs(fastify, {}, ['signer'])).toEqual([]);
+    expect(serverJobs(fastify, {}, [])).toEqual([]);
     // The approval expiry reads its repository only when it runs.
-    expect(serverJobs(fastify, {}, ['admin', 'signer']).map((job) => job.name)).toEqual([
-      'approval-expiry',
-    ]);
+    expect(serverJobs(fastify, {}, ['admin']).map((job) => job.name)).toEqual(['approval-expiry']);
+    // The key rotation writes its audit events, and runs through the signer
+    // plugin's scheduled rotation, which a process without it lacks (#542).
+    expect(() => serverJobs(fastify, {}, ['signer'])).toThrow('read events');
+    const withAudit = {
+      repositories: { events: {}, realms: {} },
+      metrics: {},
+    } as unknown as FastifyInstance;
+    expect(() => serverJobs(withAudit, {}, ['signer'])).toThrow('fastify.keyRotation');
+    const withRotation = { ...withAudit, keyRotation: { run: async () => undefined } };
+    expect(
+      serverJobs(withRotation as unknown as FastifyInstance, {}, ['signer']).map((job) => job.name)
+    ).toEqual(['key-rotation']);
     // The session jobs read no repository: they run through the session
     // service, and refuse to be built without it.
     const withEvents = {
