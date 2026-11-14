@@ -64,6 +64,14 @@ export interface AdminApprovalEntry {
   readonly factor: string;
   /** When it was given, in epoch milliseconds. */
   readonly approvedAt: number;
+  /**
+   * Who made the approver an admin of the realm, as the two-admin rule read
+   * it when the approval was given (#521): the account that created the grant
+   * it approved through, or `null` when the operator CLI or QAuth did, or
+   * that account is gone. The admin events show it, since the rule binds
+   * accounts, not people. Absent on an approval given before #521.
+   */
+  readonly approverCreatedBy?: string | null;
 }
 
 /**

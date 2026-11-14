@@ -31,6 +31,9 @@ import type { DatabaseRole } from './roles';
  *   it, what that job deletes (`eventRetentionGrantStatements`). It runs no
  *   default realm boot step, so it never writes `realms`.
  * - `admin_grants`, who administers: every role that reads it only reads it.
+ *   A change of an account's credentials, identifier or contact address moves
+ *   its grants' `last_security_change_at` through the function of migration
+ *   0074 alone, which `web`, `api` and `admin` execute (#521).
  * - `audit_logs`: read-only since #458, and nothing reads it at run time, so
  *   no role holds anything on it; `roles` and `user_roles` are unused.
  * - No role holds `TRUNCATE`, `REFERENCES` or `TRIGGER`, owns a table, or can
@@ -88,7 +91,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   admin_audit_log: { admin: SI },
   admin_audit_log_checkpoints: { admin: S },
   // Who administers (#510): read on every admin request and at sign-in and
-  // token issuance, written by no role yet.
+  // token issuance, written by no role yet. A security change of an account
+  // moves its grants' last_security_change_at through migration 0074's
+  // function, never through UPDATE (#521).
   admin_grants: { web: S, api: S, admin: S },
   admin_roles: { web: S, api: S, admin: S },
   // The developer API's client API keys.
@@ -246,6 +251,11 @@ export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // secrets, and the write of the verification's two columns alone.
   '"user_credential_proofs"(uuid, uuid)': ['admin'],
   '"users_record_operator_verification"(uuid, uuid, uuid, bigint)': ['admin'],
+  // A change of an account's credentials, identifier or contact address
+  // (migration 0074, #521): the two-admin rule's 7-day window moves on the
+  // account's live grants. The account API (`api`), the hosted pages and
+  // sign-in flows (`web`) and the admin API (`admin`) make such changes.
+  '"admin_grants_record_security_change"(uuid, uuid)': ['web', 'api', 'admin'],
   // Whether an event about a user can still reach an SSF stream (migration
   // 0055): the subject sweep, an `api` job.
   '"ssf_subject_events_pending"(uuid, text)': ['api'],

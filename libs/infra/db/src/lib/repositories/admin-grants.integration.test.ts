@@ -668,11 +668,15 @@ describe('admin roles and grants (real Postgres)', () => {
         [customOfA.id, ops.id],
         [onA.id, null],
       ]);
-      expect(onTarget.map(({ account }) => account)).toEqual([
+      expect(onTarget.map(({ account: { createdAt: _, ...state } }) => state)).toEqual([
         { realmId: d.a, enabled: true, notValidBefore: null },
         { realmId: d.a, enabled: true, notValidBefore: null },
         { realmId: d.operator, enabled: true, notValidBefore: null },
       ]);
+      // When each account was created, which the two-admin rule reads (#521).
+      const created = await users.findById(d.a, d.adminOfA);
+      expect(onTarget[0]?.account.createdAt).toBe(created?.createdAt);
+      expect(onTarget.every(({ account }) => Number.isSafeInteger(account.createdAt))).toBe(true);
       expect(onTarget.map(({ grant }) => grant.id)).not.toContain(onB.id);
 
       // A grant on every realm, only from the operator realm (#489).
@@ -691,6 +695,92 @@ describe('admin roles and grants (real Postgres)', () => {
       ]);
       expect(await grants.listLiveOnTarget('not-a-uuid', d.a)).toEqual([]);
       expect(await grants.listLiveOnTarget(d.a, 'not-a-uuid')).toEqual([]);
+    });
+  });
+
+  describe('a security change of the account (#521)', () => {
+    /** Set the account's grants' times far back, past the trigger, as only the table owner can. */
+    const setOld = (userId: string) =>
+      pool().query(
+        `BEGIN;
+         ALTER TABLE admin_grants DISABLE TRIGGER admin_grants_revoke_only;
+         UPDATE admin_grants SET created_at = 1000, last_security_change_at = 1000,
+           revoked_at = CASE WHEN revoked_at IS NULL THEN NULL ELSE 1000 END
+         WHERE user_id = '${userId}';
+         ALTER TABLE admin_grants ENABLE TRIGGER admin_grants_revoke_only;
+         COMMIT;`
+      );
+
+    it("moves last_security_change_at of the account's live grants to now, and nothing else", async () => {
+      const d = await deployment();
+      const onA = await grants.create({
+        userId: d.operatorAdmin,
+        role: { kind: 'built-in', name: 'security-admin' },
+        targetRealmId: d.a,
+        createdBy: null,
+      });
+      const onAll = await grants.create({
+        userId: d.operatorAdmin,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: null,
+        createdBy: null,
+      });
+      const revoked = await grants.create({
+        userId: d.operatorAdmin,
+        role: { kind: 'built-in', name: 'editor' },
+        targetRealmId: d.b,
+        createdBy: null,
+      });
+      await grants.revoke(d.operator, revoked.id);
+      const other = await grants.create({
+        userId: d.adminOfA,
+        role: { kind: 'built-in', name: 'security-admin' },
+        targetRealmId: d.a,
+        createdBy: null,
+      });
+      await setOld(d.operatorAdmin);
+      await setOld(d.adminOfA);
+
+      const before = Math.floor(Date.now() / 1000) * 1000;
+      expect(await grants.recordSecurityChange(d.operator, d.operatorAdmin)).toBe(2);
+      const read = (grantId: string) => grants.findById(d.operator, grantId);
+      for (const id of [onA.id, onAll.id]) {
+        const row = await read(id);
+        expect(row?.lastSecurityChangeAt).toBeGreaterThanOrEqual(before);
+        // What the grant gives, and when it was made, stay as they were.
+        expect(row?.createdAt).toBe(1000);
+        expect(row?.revokedAt).toBeNull();
+      }
+      // A revoked grant, and another account's grant, are left alone.
+      expect((await read(revoked.id))?.lastSecurityChangeAt).toBe(1000);
+      expect((await grants.findById(d.a, other.id))?.lastSecurityChangeAt).toBe(1000);
+    });
+
+    it('acts only on an account of the realm it names, and never moves the time back', async () => {
+      const d = await deployment();
+      const grant = await grants.create({
+        userId: d.adminOfA,
+        role: { kind: 'built-in', name: 'security-admin' },
+        targetRealmId: d.a,
+        createdBy: null,
+      });
+      await setOld(d.adminOfA);
+      expect(await grants.recordSecurityChange(d.b, d.adminOfA)).toBe(0);
+      expect(await grants.recordSecurityChange(d.operator, d.adminOfA)).toBe(0);
+      expect((await grants.findById(d.a, grant.id))?.lastSecurityChangeAt).toBe(1000);
+
+      // A time ahead of the database's clock stays where it is.
+      const ahead = Date.now() + 3_600_000;
+      await pool().query(
+        `UPDATE admin_grants SET last_security_change_at = ${ahead} WHERE id = '${grant.id}'`
+      );
+      expect(await grants.recordSecurityChange(d.a, d.adminOfA)).toBe(1);
+      expect((await grants.findById(d.a, grant.id))?.lastSecurityChangeAt).toBe(ahead);
+
+      // An account that administers nothing, and ids that are no UUID.
+      expect(await grants.recordSecurityChange(d.operator, d.operatorAdmin)).toBe(0);
+      expect(await grants.recordSecurityChange('not-a-uuid', d.adminOfA)).toBe(0);
+      expect(await grants.recordSecurityChange(d.a, 'not-a-uuid')).toBe(0);
     });
   });
 

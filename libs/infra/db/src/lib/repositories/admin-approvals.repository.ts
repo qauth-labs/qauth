@@ -269,6 +269,7 @@ export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprov
         credentialId: entry.credentialId,
         factor: entry.factor,
         approvedAt: entry.approvedAt,
+        approverCreatedBy: entry.approverCreatedBy ?? null,
       };
       const sameApprover = JSON.stringify([
         { approverRealmId: entry.approverRealmId, approverId: entry.approverId },
