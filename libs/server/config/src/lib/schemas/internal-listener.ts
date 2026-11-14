@@ -246,6 +246,23 @@ export const internalListenerEnvSchema = z.object({
   ),
   /** Peer SAN → the role it calls the internal listener as (or `metrics`), as a JSON object. */
   INTERNAL_PEER_ROLES: z.string().optional().transform(parseInternalPeerRoles),
+  /**
+   * The SAN the signer service's certificate must hold (#497), a DNS name or
+   * a URI such as a SPIFFE ID, for a process that calls the signer at
+   * `SIGNER_URL`: the URL's host name when unset.
+   */
+  SIGNER_SAN: blankAsUnset(
+    z
+      .string()
+      .optional()
+      .superRefine((value, ctx) => {
+        if (value === undefined) return;
+        const parsed = parsePeerSan(value);
+        if ('problem' in parsed) {
+          ctx.addIssue({ code: 'custom', message: `SIGNER_SAN: ${parsed.problem}` });
+        }
+      })
+  ),
 });
 
 export type InternalListenerEnv = z.infer<typeof internalListenerEnvSchema>;

@@ -78,6 +78,20 @@ describe('internalListenerEnvSchema', () => {
     expect(parsed.INTERNAL_PEER_ROLES.size).toBe(0);
   });
 
+  it('reads SIGNER_SAN as a peer SAN, and leaves a blank one unset (#497)', () => {
+    expect(internalListenerEnvSchema.parse({}).SIGNER_SAN).toBeUndefined();
+    expect(internalListenerEnvSchema.parse({ SIGNER_SAN: ' ' }).SIGNER_SAN).toBeUndefined();
+    for (const value of ['signer.qauth.internal', 'spiffe://example.org/qauth/signer']) {
+      expect(internalListenerEnvSchema.parse({ SIGNER_SAN: value }).SIGNER_SAN).toBe(value);
+    }
+    for (const value of ['10.0.0.5', '*.qauth.internal', 'not a san']) {
+      const result = internalListenerEnvSchema.safeParse({ SIGNER_SAN: value });
+      expect(result.success, value).toBe(false);
+      expect(result.error?.issues[0]?.path).toEqual(['SIGNER_SAN']);
+      expect(result.error?.issues[0]?.message).toMatch(/^SIGNER_SAN: /);
+    }
+  });
+
   it('refuses a port out of range', () => {
     for (const value of ['0', '65536', 'https']) {
       const result = internalListenerEnvSchema.safeParse({ INTERNAL_PORT: value });
