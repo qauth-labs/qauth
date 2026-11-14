@@ -15,6 +15,11 @@
  * {@link KID_DENYLIST_MAX_STALENESS_MS}, or never was, is not current, and a
  * verify site refuses every token while it is not.
  *
+ * The copy only grows: a `kid` once denied stays denied on the node, as the
+ * table never removes one (a realm's deletion takes its rows, and its keys,
+ * with it). So a read of the shared cache that lacks a `kid` the node knows,
+ * whether stale or tampered with, never lets that key back in.
+ *
  * The key readers (the in-process signer, the published-key reader) watch the
  * copy's {@link KidDenylistView.revision}: when it changes, they drop the key
  * lists they cached, so a compromised key leaves the JWKS, the verification
@@ -62,6 +67,12 @@ export interface KidDenylist extends KidDenylistView {
    * is waited for first. Rejects when the read fails, and keeps the copy.
    */
   refresh(): Promise<void>;
+  /**
+   * Deny `entries` on this copy now, without a read: the node that retired
+   * the keys knows their `kid`s once its transaction committed, before any
+   * read could return them.
+   */
+  add(entries: readonly DeniedKid[]): void;
   /** Read the list every refresh interval, on a timer that keeps no process alive. */
   start(): void;
   /** Stop reading. */
@@ -118,7 +129,6 @@ export function createKidDenylist(options: KidDenylistOptions): KidDenylist {
   }
 
   let denied: ReadonlySet<string> = new Set();
-  let fingerprint: string | null = null;
   let currentRevision = 0;
   /** When the read the copy came from began; `null` until one succeeds. */
   let readAt: number | null = null;
@@ -133,11 +143,10 @@ export function createKidDenylist(options: KidDenylistOptions): KidDenylist {
       if (!Array.isArray(rows) || !rows.every(isDeniedKid)) {
         throw new TypeError('The denylist read is not a list of denied keys');
       }
-      const next = new Set(rows.map((row) => entryOf(row.realmId, row.kid)));
-      const nextFingerprint = [...next].sort().join('\n');
-      if (nextFingerprint !== fingerprint) {
+      const next = new Set(denied);
+      for (const row of rows) next.add(entryOf(row.realmId, row.kid));
+      if (next.size !== denied.size) {
         denied = next;
-        fingerprint = nextFingerprint;
         currentRevision += 1;
       }
       // A read that began before an earlier one succeeded never moves the time back.
@@ -181,6 +190,17 @@ export function createKidDenylist(options: KidDenylistOptions): KidDenylist {
       return readAt !== null && now() - readAt <= maxStalenessMs;
     },
     refresh,
+    add(entries: readonly DeniedKid[]): void {
+      if (!Array.isArray(entries) || !entries.every(isDeniedKid)) {
+        throw new TypeError('A denied key names its realm and kid');
+      }
+      const next = new Set(denied);
+      for (const entry of entries) next.add(entryOf(entry.realmId, entry.kid));
+      if (next.size !== denied.size) {
+        denied = next;
+        currentRevision += 1;
+      }
+    },
     start(): void {
       if (timer !== undefined) return;
       timer = setInterval(() => {

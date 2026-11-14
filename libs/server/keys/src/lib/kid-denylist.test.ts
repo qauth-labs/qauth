@@ -59,6 +59,29 @@ describe('createKidDenylist (#551)', () => {
     expect(denylist.revision()).toBe(first + 1);
   });
 
+  it('only grows: a read that lacks a kid it knew, stale or tampered with, does not let the key back', async () => {
+    const { denylist, rows } = fixture([{ realmId: REALM, kid: 'k1' }]);
+    await denylist.refresh();
+    const revision = denylist.revision();
+    rows.splice(0, rows.length);
+    await denylist.refresh();
+    expect(denylist.isDenied(REALM, 'k1')).toBe(true);
+    expect(denylist.revision()).toBe(revision);
+  });
+
+  it('denies what the node that retired a key adds, at once and without a read', async () => {
+    const { denylist, load } = fixture();
+    await denylist.refresh();
+    const revision = denylist.revision();
+    denylist.add([{ realmId: REALM, kid: 'k1' }]);
+    expect(denylist.isDenied(REALM, 'k1')).toBe(true);
+    expect(denylist.revision()).toBe(revision + 1);
+    denylist.add([{ realmId: REALM, kid: 'k1' }]);
+    expect(denylist.revision()).toBe(revision + 1);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(() => denylist.add([{ realmId: REALM, kid: '' }])).toThrow(TypeError);
+  });
+
   it('goes stale past the bound when no read succeeds, and keeps what it knew', async () => {
     const { denylist, load, clock } = fixture([{ realmId: REALM, kid: 'k1' }]);
     await denylist.refresh();
