@@ -2,9 +2,8 @@ import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 
 import {
   type ApprovedOperation,
+  checkedApproval,
   isOperationApprovalRefusal,
-  isOperationNonce,
-  isSecurityOperationActor,
   KEY_ROTATE_OPERATION,
   type KeyRotateOperation,
   keyRotationOperation,
@@ -382,7 +381,11 @@ export function createKeyRotation<Tx>(options: KeyRotationOptions<Tx>): KeyRotat
   }
 
   async function rotateNow(input: RotateNowInput<Tx>): Promise<KeyRotationNowRecord> {
-    const approval = checkedApproval(input?.approval);
+    const approval = checkedApproval<Tx>(
+      input?.approval,
+      KEY_ROTATE_OPERATION,
+      'A manual rotation needs an approval'
+    );
     const { realmId, purpose } = rotateNowTarget(input);
     if (typeof input.onAudit !== 'function') {
       throw new TypeError('A manual rotation needs its audit hook');
@@ -545,62 +548,6 @@ function keyChanged(purpose: KeyPurpose): KeyChangeRefusedError {
     'KEY_CHANGED',
     `A '${purpose}' key changed status during the rotation; nothing was changed`
   );
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** The approval members a manual rotation reads, checked; a copy, so a getter cannot change them later. */
-interface CheckedApproval<Tx> {
-  readonly id: string;
-  readonly requester: SecurityOperationActor;
-  readonly nonce: string;
-  consume(digest: Buffer, tx: Tx): Promise<void>;
-}
-
-/**
- * `approval`, when it is an approval of a manual rotation: an object with a
- * UUID id, the operation `keys.rotate`, an actor, a nonce and a `consume`
- * function. Its members are read once.
- *
- * @throws OperationApprovalError otherwise
- */
-function checkedApproval<Tx>(approval: unknown): CheckedApproval<Tx> {
-  if (approval === undefined || approval === null) {
-    throw new OperationApprovalError('missing', 'A manual rotation needs an approval');
-  }
-  if (typeof approval !== 'object') {
-    throw new OperationApprovalError('malformed', 'The approval is not an approval');
-  }
-  const given = approval as Partial<ApprovedOperation<string, Tx>>;
-  const { id, operation, requester, nonce, consume } = given;
-  if (operation !== KEY_ROTATE_OPERATION) {
-    throw new OperationApprovalError(
-      typeof operation === 'string' ? 'other_operation' : 'malformed',
-      `The approval is not for '${KEY_ROTATE_OPERATION}'`
-    );
-  }
-  if (typeof id !== 'string' || !UUID.test(id)) {
-    throw new OperationApprovalError('malformed', 'An approval id is a UUID');
-  }
-  if (!isSecurityOperationActor(requester)) {
-    throw new OperationApprovalError('malformed', "The approval's requester is not an actor");
-  }
-  if (!isOperationNonce(nonce)) {
-    throw new OperationApprovalError('malformed', "The approval's nonce is not one");
-  }
-  if (typeof consume !== 'function') {
-    throw new OperationApprovalError('malformed', 'The approval cannot be consumed');
-  }
-  return Object.freeze({
-    id: id.toLowerCase(),
-    requester: Object.freeze(
-      requester.kind === 'break_glass'
-        ? { kind: requester.kind, operatingSystemUser: requester.operatingSystemUser }
-        : { kind: requester.kind, realmId: requester.realmId, accountId: requester.accountId }
-    ),
-    nonce,
-    consume: (digest: Buffer, tx: Tx) => consume.call(approval, digest, tx),
-  });
 }
 
 /**
