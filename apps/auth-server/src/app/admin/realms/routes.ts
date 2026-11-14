@@ -39,8 +39,8 @@ import {
 import { sandboxPairingOf } from '../../helpers/sandbox-realm';
 import { requestClassification } from '../../plugins/admin-operations';
 import { eligibleApproverCount } from '../approvals/eligibility';
-import { requestApprovalRequirement } from '../approvals/two-admin';
 import { callerAccount } from '../approvals/standing';
+import { requestApprovalRequirement } from '../approvals/two-admin';
 import { changePreview, changePreviewSchema } from '../change-preview';
 import {
   ADMIN_SECURITY_SCHEME,

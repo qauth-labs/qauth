@@ -3,17 +3,17 @@ import { SECURITY_LOG_KINDS } from '@qauth-labs/shared-account-contract';
 import type { FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createTestApprovalFactor } from '../../../testing/approval-factor';
 import { SECURITY_CHANGE_EVENTS, securityChangeOfEvent } from '../../helpers/admin-security-change';
 import { emitUserEvent } from '../../helpers/user-events';
-import { createTestApprovalFactor } from '../../../testing/approval-factor';
 import { REALM_OPERATION_IDS } from '../realms/operations';
 import {
   type ApprovalRequestRecord,
-  type ApproverGrantRecord,
-  type ApproverRecord,
   approvalRequirementOf,
   approvalsFromOthers,
   approvalsRequiredFor,
+  type ApproverGrantRecord,
+  type ApproverRecord,
   approverRefusal,
   isEligibleApprover,
   TWO_ADMIN_WINDOW_MS,

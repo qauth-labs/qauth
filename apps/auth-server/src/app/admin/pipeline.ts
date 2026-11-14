@@ -47,6 +47,7 @@ import {
 } from '../plugins/admin-operations';
 import { intendedStatusCode } from '../plugins/error-handler';
 import { type CanonicalRequest, canonicalRequest, opHashOf } from './approvals/canonical-request';
+import { eligibleApprovers } from './approvals/eligibility';
 import { auditApproval } from './approvals/engine';
 import {
   APPROVAL_HEADER,
@@ -55,7 +56,6 @@ import {
   approvalRefusal,
 } from './approvals/gate';
 import { isApprovalEngineOperation } from './approvals/operations';
-import { eligibleApprovers } from './approvals/eligibility';
 import { callerAccount } from './approvals/standing';
 import { approvalsFromOthers, requestApprovalRequirement } from './approvals/two-admin';
 import { runInAdminHandler } from './handler-scope';
