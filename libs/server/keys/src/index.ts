@@ -99,6 +99,7 @@ export {
   type KeyRotationSettings,
   keyRotationSettingsFromDays,
   type KeyRotationStep,
+  keySignedSince,
   type KeysRotatedStep,
   type NextKeyCreatedStep,
   planKeyRotation,

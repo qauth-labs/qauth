@@ -1414,6 +1414,20 @@ describe('retireNow: an emergency retirement under an approval (#551)', () => {
     );
   });
 
+  it('revokes since the switch was written when it retires the incoming key before the switch takes effect', async () => {
+    const w = await world();
+    w.clock.now = T0 + 83 * DAY;
+    await w.run();
+    w.clock.now = T0 + 90 * DAY;
+    const step = rotatedStep((await w.run()).steps, 'token_signing');
+    expect(step.switchAt).toBeGreaterThan(w.clock.now);
+
+    const record = await retireNow(w, step.activated[0].kid);
+    // A signer with no outgoing key, or a clock ahead, signs with it already.
+    expect(record.signedSince).toBe(step.switchAt - w.rotation.settings.activationDelayMs);
+    expect(record.signedSince).toBeLessThanOrEqual(record.retiredAt);
+  });
+
   it('leaves a waiting next key to the scheduled rotation, which goes on', async () => {
     const w = await world();
     w.clock.now = T0 + 83 * DAY;

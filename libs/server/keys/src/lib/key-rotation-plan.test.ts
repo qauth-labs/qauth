@@ -13,6 +13,7 @@ import {
   DEFAULT_KEY_ROTATION_SETTINGS,
   KEY_ACTIVATION_DELAY_MS,
   keyRotationSettingsFromDays,
+  keySignedSince,
   planKeyRotation,
   type PlanKeyRotationInput,
   planKeyRotationNow,
@@ -425,5 +426,22 @@ describe('planKeyRotationNow', () => {
       action: 'refuse',
       reason,
     });
+  });
+});
+
+describe('keySignedSince (#551)', () => {
+  const CREATED = 1_790_000_000_000;
+
+  it('starts the activation delay before the key was to sign, never before it was made', () => {
+    const activateAt = CREATED + 10 * KEY_ACTIVATION_DELAY_MS;
+    expect(keySignedSince({ activateAt, createdAt: CREATED })).toBe(
+      activateAt - KEY_ACTIVATION_DELAY_MS
+    );
+    expect(keySignedSince({ activateAt: CREATED + 1, createdAt: CREATED })).toBe(CREATED);
+    expect(keySignedSince({ activateAt, createdAt: CREATED }, 0)).toBe(activateAt);
+  });
+
+  it('is the moment the key was made for a key with no activation time', () => {
+    expect(keySignedSince({ activateAt: null, createdAt: CREATED })).toBe(CREATED);
   });
 });

@@ -70,6 +70,24 @@ export const AUTOMATIC_ROTATION_PURPOSES: readonly KeyPurpose[] = Object.freeze(
 export const KEY_ACTIVATION_DELAY_MS = 2 * DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS;
 
 /**
+ * The earliest moment a key may have signed, in epoch ms (#551): what an
+ * emergency retirement revokes the sessions and refresh families since.
+ *
+ * A switch is written `activationDelayMs` ahead of its `activateAt`, and a
+ * signer whose clock runs ahead, or that has no outgoing key to sign with
+ * meanwhile, signs with the new key from then: so the bound starts that much
+ * earlier, but never before the key was made. A key with no `activateAt`
+ * signed from when it was made.
+ */
+export function keySignedSince(
+  key: { readonly activateAt: number | null; readonly createdAt: number },
+  activationDelayMs: number = KEY_ACTIVATION_DELAY_MS
+): number {
+  if (key.activateAt === null) return key.createdAt;
+  return Math.max(key.createdAt, key.activateAt - activationDelayMs);
+}
+
+/**
  * Purposes whose consumer holds one retired key at a time: the cookie ring
  * has one previous key (`CookieSecrets.previous`). Their next switch waits
  * until the retired key's retention has run, so no cookie loses its key early.

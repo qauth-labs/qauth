@@ -32,6 +32,7 @@ import {
   type KeyRotationNowPlan,
   type KeyRotationSettings,
   type KeyRotationStep,
+  keySignedSince,
   type NextKeyCreatedStep,
   planKeyRotation,
   planKeyRotationNow,
@@ -256,10 +257,11 @@ export interface KeyRetirementRecord {
    */
   readonly replacements: readonly RotatedKey[];
   /**
-   * Epoch ms. The earliest moment a retired key was active from: every
-   * session and refresh family created or used since then may rest on a token
-   * it signed, so the caller revokes them. `null` when no retired key ever
-   * signed (a `next` key), and nothing is revoked.
+   * Epoch ms. The earliest moment a retired key may have signed
+   * ({@link keySignedSince}), never later than {@link retiredAt}: every
+   * session and refresh family created or used since then may rest on a
+   * token it signed, so the caller revokes them. `null` when no retired key
+   * ever signed (a `next` key), and nothing is revoked.
    */
   readonly signedSince: number | null;
 }
@@ -689,12 +691,6 @@ export function createKeyRotation<Tx>(options: KeyRotationOptions<Tx>): KeyRotat
             .map((key) => key.algorithm as KeyAlgorithm)
         ),
       ].filter((algorithm) => isAllowedBySigningMode(algorithm, enabledSignatureAlgorithms));
-      const signed = retiring.filter((key) => key.status === 'active' || key.status === 'retired');
-      const signedSince =
-        signed.length === 0
-          ? null
-          : Math.min(...signed.map((key) => key.activateAt ?? key.createdAt));
-
       try {
         await approval.consume(Buffer.from(digest), tx);
       } catch (error) {
@@ -707,6 +703,13 @@ export function createKeyRotation<Tx>(options: KeyRotationOptions<Tx>): KeyRotat
       }
 
       const at = now();
+      const signed = retiring.filter((key) => key.status === 'active' || key.status === 'retired');
+      // Never later than now: an active key whose switch is still ahead may
+      // sign already (`keySignedSince`).
+      const signedSince =
+        signed.length === 0
+          ? null
+          : Math.min(at, ...signed.map((key) => keySignedSince(key, settings.activationDelayMs)));
       // Out first: the one-active index allows no moment with two.
       for (const key of retiring) {
         const moved = await store.markCompromised(realmId, key.kid, at, tx);

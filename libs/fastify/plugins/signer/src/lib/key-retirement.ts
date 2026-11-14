@@ -1,5 +1,6 @@
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import { createRealmKeysRepository, type DbClient } from '@qauth-labs/infra-db';
+import { keySignedSince } from '@qauth-labs/server-keys';
 import {
   createKeyRotation,
   type KekEnv,
@@ -19,8 +20,11 @@ import { createRepositoryKeyStore } from './repository-key-stores';
  *
  * It needs the KEK, as it creates the key that signs in place of the one it
  * retires, so it lives in the signer's wiring, which loads the KEK provider
- * from the environment it is given. A signer node retires through
- * `fastify.keyRotation.retireNow` instead.
+ * from the environment it is given. A signer node can retire through
+ * `fastify.keyRotation.retireNow`; no route does yet. The admin route that
+ * will must run it under a database role that may also revoke the realm's
+ * refresh tokens and write the admin audit log, which the signer's role may
+ * not.
  */
 
 /** What the retirement works with: it loads the KEK provider itself. */
@@ -59,23 +63,35 @@ export async function retireKey(
   }
 }
 
-/** When a compromised key began, or was to begin, to sign, and when it was made, in epoch ms. */
-export interface CompromisedKeyTimes {
-  readonly activateAt: number | null;
-  readonly createdAt: number;
+/** A key compromised already, as the break-glass command reads it to run again. */
+export interface CompromisedKey {
+  readonly algorithm: string;
+  /**
+   * Epoch ms. The earliest moment it may have signed (`keySignedSince`), or
+   * `null` when that moment is after it was marked compromised: it never
+   * signed. The status it had is gone: a key with no `activateAt` counts as
+   * signing since it was made, so a run again revokes no less than the first.
+   */
+  readonly signedSince: number | null;
 }
 
 /**
- * The times of the realm's key with `kid` when it is `compromised`, else
+ * The realm's `token_signing` key with `kid` when it is `compromised`, else
  * `undefined`: what the break-glass command reads to end the sessions of a
- * key retired already again. Times only; it returns no key material.
+ * key retired already again. No key material is returned.
  */
 export async function compromisedKeyOf(
   db: DbClient,
   realmId: string,
   kid: string
-): Promise<CompromisedKeyTimes | undefined> {
+): Promise<CompromisedKey | undefined> {
   const key = await createRealmKeysRepository(db).findByKid(realmId, kid, db);
-  if (key === undefined || key.status !== 'compromised') return undefined;
-  return { activateAt: key.activateAt, createdAt: key.createdAt };
+  if (key === undefined || key.status !== 'compromised' || key.purpose !== 'token_signing') {
+    return undefined;
+  }
+  const signedSince = keySignedSince(key);
+  return {
+    algorithm: key.algorithm,
+    signedSince: key.compromisedAt !== null && signedSince > key.compromisedAt ? null : signedSince,
+  };
 }
