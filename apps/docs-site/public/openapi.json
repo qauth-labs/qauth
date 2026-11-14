@@ -3316,6 +3316,403 @@
         }
       }
     },
+    "/account/v1-rc.0/sessions": {
+      "get": {
+        "operationId": "account.sessions.list",
+        "tags": [
+          "Account API"
+        ],
+        "description": "List the token's user's live browser sessions, most recently used first: each one's device label, when it started and when it was last used, and `current` on the one the token came through (its `sid`). Never the session's address or cookie.",
+        "parameters": [
+          {
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "read",
+        "x-qauth-permission": "sessions.read",
+        "x-qauth-fresh-authentication": "none",
+        "x-qauth-act-chain": "accepted",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            "description": "The session’s id: its record’s, never the cookie value."
+                          },
+                          "current": {
+                            "type": "boolean",
+                            "description": "Whether the token in this request was issued through this session (its `sid`)."
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                            "description": "When the session started."
+                          },
+                          "lastSeenAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                            "description": "When it was last used."
+                          },
+                          "device": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 96,
+                                "description": "A label from the user agent, such as `Firefox on Linux`."
+                              }
+                            },
+                            "required": [
+                              "label"
+                            ],
+                            "additionalProperties": false,
+                            "description": "The device the session came from."
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "current",
+                          "createdAt",
+                          "lastSeenAt",
+                          "device"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/v1-rc.0/sessions/{sessionId}": {
+      "delete": {
+        "operationId": "account.sessions.delete",
+        "tags": [
+          "Account API"
+        ],
+        "description": "End one of the token's user's sessions: its cookie stops working, its refresh-token families end, and every app it signed in to with a back-channel logout URI is sent a logout token. Needs no fresh sign-in and takes an act-chain token: ending a session only takes access away. A session of another user, or one that has ended, is 404.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "sessionId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "write",
+        "x-qauth-permission": "sessions.write",
+        "x-qauth-fresh-authentication": "none",
+        "x-qauth-act-chain": "accepted",
+        "responses": {
+          "204": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/v1-rc.0/sessions/end-all": {
+      "post": {
+        "operationId": "account.sessions.endAll",
+        "tags": [
+          "Account API"
+        ],
+        "description": "Sign out everywhere: every session of the token's user ends, each app a session signed in to with a back-channel logout URI is sent a logout token, and every unredeemed code and refresh-token family of the user is revoked. The session the token came through stays only when `keepCurrent` is true and the token names it in `sid`, which a refreshed token does not. Needs no fresh sign-in and takes an act-chain token.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "keepCurrent": {
+                        "default": false,
+                        "description": "Keep the session this request’s token was issued through. Default: end it too.",
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "\"Sign out everywhere\"."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "x-qauth-class": "write",
+        "x-qauth-permission": "sessions.write",
+        "x-qauth-fresh-authentication": "none",
+        "x-qauth-act-chain": "accepted",
+        "responses": {
+          "204": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/link/wallet": {
       "post": {
         "tags": [
@@ -3323,7 +3720,7 @@
         ],
         "description": "Start linking a wallet credential to the signed-in account. Requires a valid session cookie and an `X-CSRF-Token` header matching the per-session token returned by `GET /consents`. Issues an OID4VP 1.0 presentation request in LINKING mode: the validated response is bound to the caller's authenticated users.id and is never used to resolve or create an account (ADR-009 §5). Linking is same-device only (ADR-013, amended 2026-11-07): the wallet must be on the device the browser runs on, the link completes on the browser's return leg at `GET /ui/wallet-login/return`, and the poll answers `pending` until then (OID4VP 1.0 §14.2, HAIP 1.0 §5.1). The optional `device` field accepts only `this`, which is also what an absent field or body means; `other` (cross-device) is refused with `400` `validation_error`. Issues #238, #405.",
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
@@ -17493,7 +17890,7 @@
         "tags": [
           "UI"
         ],
-        "description": "Sign one of the account's sessions out (#844; `account.sessions.delete`): its cookie stops working, and every app it signed in to with a back-channel logout URI is sent a logout token. A session of another account is `404`, untouched.",
+        "description": "Sign one of the account's sessions out (#844; `account.sessions.delete`): its cookie stops working, the refresh-token families its sign-in opened end (#1110), and every app it signed in to with a back-channel logout URI is sent a logout token. A session of another account is `404`, untouched.",
         "requestBody": {
           "required": true,
           "content": {

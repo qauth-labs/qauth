@@ -66,6 +66,7 @@ declare module 'fastify' {
 /** The extension keys the per-route transform leaves for the document transform. */
 const ERROR_STATUSES_KEY = 'x-qauth-error-statuses';
 const ERROR_FORMAT_KEY = 'x-qauth-error-format';
+const BODY_OPTIONAL_KEY = 'x-qauth-body-optional';
 
 /**
  * The error statuses one operation's document lists (#513): the ones it
@@ -119,6 +120,37 @@ function withErrorResponses<Document extends { paths?: unknown }>(document: Docu
         };
       }
       operation['responses'] = responses;
+    }
+  }
+  return document;
+}
+
+/**
+ * Whether a route's Zod body schema takes a request with no body (#1110).
+ * Fastify validates such a request's body as `null`, so a `.nullish()` schema
+ * takes it and a merely `.optional()` one refuses it with 400.
+ */
+function acceptsNoBody(body: unknown): boolean {
+  const schema = body as { safeParse?: (value: unknown) => { success: boolean } } | undefined;
+  return typeof schema?.safeParse === 'function' && schema.safeParse(null).success;
+}
+
+/**
+ * `@fastify/swagger` marks every request body `required`, since Fastify needs
+ * one where a route has a body schema that refuses none. An operation whose
+ * body is optional ({@link acceptsNoBody}) says so here (#1110). The extension
+ * key is removed.
+ */
+function withOptionalBodies<Document extends { paths?: unknown }>(document: Document): Document {
+  const paths = (document.paths ?? {}) as Record<string, Record<string, unknown>>;
+  for (const pathItem of Object.values(paths)) {
+    for (const method of OPERATION_METHODS) {
+      const operation = pathItem[method] as Record<string, unknown> | undefined;
+      if (operation === undefined) continue;
+      const optional = operation[BODY_OPTIONAL_KEY] === true;
+      delete operation[BODY_OPTIONAL_KEY];
+      const requestBody = operation['requestBody'] as { required?: boolean } | undefined;
+      if (optional && requestBody !== undefined) requestBody.required = false;
     }
   }
   return document;
@@ -199,6 +231,7 @@ const transformRoute: SwaggerPlugin.SwaggerTransform = (input) => {
       ...rest,
       [ERROR_STATUSES_KEY]: documentedErrorStatuses(declared, config),
       [ERROR_FORMAT_KEY]: config?.errorFormat === 'oauth' ? 'oauth' : 'problem',
+      ...(acceptsNoBody(input.schema?.body) ? { [BODY_OPTIONAL_KEY]: true } : {}),
     },
   };
 };
@@ -288,5 +321,7 @@ export const openapiOptions: SwaggerPlugin.FastifyDynamicSwaggerOptions = {
   },
   transform: transformRoute,
   transformObject: (documentObject) =>
-    withReferencedSchemasOnly(withErrorResponses(addComponentSchemas(documentObject))),
+    withReferencedSchemasOnly(
+      withOptionalBodies(withErrorResponses(addComponentSchemas(documentObject)))
+    ),
 };

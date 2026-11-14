@@ -336,6 +336,14 @@ export function createSessionsRepository(
       .where(and(eq(sessions.realmId, realmId), where, after))
       .orderBy(desc(sessions.createdAt), desc(sessions.id))
       .limit(page.limit);
+    return withRegistry(invoker, rows);
+  }
+
+  /**
+   * The rows of a list, each with the clients its registry holds: none for a
+   * revoked one.
+   */
+  async function withRegistry(invoker: DbClient, rows: Session[]): Promise<ListedSession[]> {
     if (rows.length === 0) return [];
     // A revoked session holds no client. One a previous release revoked
     // during a rolling upgrade may still have registry rows; they are not
@@ -557,6 +565,38 @@ export function createSessionsRepository(
       return listPage(realmId, eq(sessions.userId, userId), page, false, tx);
     },
 
+    async listLiveForUser(realmId, userId, page, tx) {
+      const invoker = tx ?? defaultDb;
+      // Live at `page.now` by the rules `revokeLapsedBatch` ends sessions by:
+      // not revoked, before its absolute end and, in a realm with an idle
+      // limit, before its idle end.
+      const { absoluteEnd, idleEnd } = sessionEndsOf(page.defaultMaxLifespanMs);
+      const after =
+        page.after === undefined
+          ? undefined
+          : or(
+              lt(sessions.lastSeenAt, page.after.lastSeenAt),
+              and(eq(sessions.lastSeenAt, page.after.lastSeenAt), lt(sessions.id, page.after.id))
+            );
+      const rows = await invoker
+        .select(getTableColumns(sessions))
+        .from(sessions)
+        .innerJoin(realms, eq(realms.id, sessions.realmId))
+        .where(
+          and(
+            eq(sessions.realmId, realmId),
+            eq(sessions.userId, userId),
+            isNull(sessions.revokedAt),
+            sql`${absoluteEnd} > ${page.now}::bigint`,
+            or(isNull(realms.ssoIdleTimeout), sql`${idleEnd} > ${page.now}::bigint`),
+            after
+          )
+        )
+        .orderBy(desc(sessions.lastSeenAt), desc(sessions.id))
+        .limit(page.limit);
+      return withRegistry(invoker, rows);
+    },
+
     listForClient(realmId, oauthClientId, page, tx) {
       return listPage(
         realmId,
@@ -612,8 +652,7 @@ export function createSessionsRepository(
       // lifespan (SESSION_COOKIE_TTL without one) ends it sooner; the idle end
       // is the stored `last_seen_at` plus the realm's idle limit. Each end is
       // the first moment the session is no longer live.
-      const absoluteEnd = sql`least(${sessions.expiresAt}, ${sessions.createdAt} + coalesce(${realms.ssoMaxLifespan} * 1000, ${batch.defaultMaxLifespanMs}::bigint))`;
-      const idleEnd = sql`${sessions.lastSeenAt} + ${realms.ssoIdleTimeout} * 1000`;
+      const { absoluteEnd, idleEnd } = sessionEndsOf(batch.defaultMaxLifespanMs);
       const lapsed = or(
         sql`${absoluteEnd} <= ${batch.now}::bigint`,
         and(isNotNull(realms.ssoIdleTimeout), sql`${idleEnd} <= ${batch.now}::bigint`)
@@ -699,6 +738,22 @@ export function createSessionsRepository(
         selected: doomed.length,
       };
     },
+  };
+}
+
+/**
+ * A session's two ends as SQL over `sessions` joined to its realm, by the
+ * session service's rules (`sessionEnds`): the absolute end is the stored
+ * `expires_at`, or earlier when the realm's current maximum lifespan
+ * (`defaultMaxLifespanMs` for a realm without one) ends it sooner; the idle
+ * end is the stored `last_seen_at` plus the realm's idle limit, NULL for a
+ * realm without one. Each end is the first moment the session is no longer
+ * live.
+ */
+function sessionEndsOf(defaultMaxLifespanMs: number): { absoluteEnd: SQL; idleEnd: SQL } {
+  return {
+    absoluteEnd: sql`least(${sessions.expiresAt}, ${sessions.createdAt} + coalesce(${realms.ssoMaxLifespan} * 1000, ${defaultMaxLifespanMs}::bigint))`,
+    idleEnd: sql`${sessions.lastSeenAt} + ${realms.ssoIdleTimeout} * 1000`,
   };
 }
 

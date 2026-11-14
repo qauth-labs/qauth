@@ -56,6 +56,7 @@ function repositories(
     })),
     revokeLapsedBatch: vi.fn(async () => ({ ended: [], last: null, selected: 0 })),
     listForUser: vi.fn(async () => [{ session: ROW, clients: [CLIENT_ROW] }]),
+    listLiveForUser: vi.fn(async () => [{ session: ROW, clients: [CLIENT_ROW] }]),
     listForClient: vi.fn(async () => [{ session: ROW, clients: [] }]),
     deleteEnded: vi.fn(async () => ({ deleted: 2, last: SID, selected: 2 })),
   };
@@ -220,6 +221,43 @@ describe('repositorySessionStore', () => {
         { userId: ROW.userId },
         { limit: 3 }
       )
+    ).toBeUndefined();
+  });
+
+  it('lists a user’s live sessions with the realm’s lifetimes, the lifespan in milliseconds (#1110)', async () => {
+    const { repos, sessions } = repositories({ ssoMaxLifespan: null, ssoIdleTimeout: 600 });
+    const store = repositorySessionStore(repos);
+
+    expect(
+      await store.listLive(REALM, ROW.userId, {
+        limit: 3,
+        now: 9,
+        defaultMaxLifespanSeconds: 86_400,
+        after: { lastSeenAt: 5, sid: SID },
+      })
+    ).toEqual({
+      lifetimes: { maxLifespanSeconds: null, idleTimeoutSeconds: 600 },
+      sessions: [{ session: ROW, clients: [CLIENT] }],
+    });
+    expect(sessions.listLiveForUser).toHaveBeenCalledWith(REALM, ROW.userId, {
+      limit: 3,
+      now: 9,
+      defaultMaxLifespanMs: 86_400_000,
+      after: { lastSeenAt: 5, id: SID },
+    });
+
+    await store.listLive(REALM, ROW.userId, { limit: 1, now: 9, defaultMaxLifespanSeconds: 60 });
+    expect(sessions.listLiveForUser).toHaveBeenLastCalledWith(REALM, ROW.userId, {
+      limit: 1,
+      now: 9,
+      defaultMaxLifespanMs: 60_000,
+    });
+    expect(
+      await repositorySessionStore(repositories(undefined).repos).listLive(REALM, ROW.userId, {
+        limit: 3,
+        now: 9,
+        defaultMaxLifespanSeconds: 60,
+      })
     ).toBeUndefined();
   });
 });

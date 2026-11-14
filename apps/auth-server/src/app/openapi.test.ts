@@ -201,6 +201,45 @@ describe('OpenAPI / Swagger', () => {
   });
 });
 
+describe('request bodies in the OpenAPI document (#1110)', () => {
+  it('are required unless the route’s body schema takes none', async () => {
+    const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    await app.register(swagger, openapiOptions);
+    const body = z.strictObject({ keep: z.boolean().default(false) });
+    const schema = { 'x-qauth-stability': 'stable' as const, response: { 204: z.null() } };
+    app.post('/required', { schema: { ...schema, body } }, async (_request, reply) =>
+      reply.code(204).send(null)
+    );
+    app.post(
+      '/optional',
+      { schema: { ...schema, body: body.nullish() } },
+      async (_request, reply) => reply.code(204).send(null)
+    );
+    // Fastify validates a missing body as `null`, which `.optional()` refuses.
+    app.post(
+      '/undefined-only',
+      { schema: { ...schema, body: body.optional() } },
+      async (_r, reply) => reply.code(204).send(null)
+    );
+    await app.ready();
+
+    const paths = (app.swagger() as { paths: Record<string, { post: Record<string, unknown> }> })
+      .paths;
+    const documented = { '/required': true, '/optional': false, '/undefined-only': true };
+    for (const [path, required] of Object.entries(documented)) {
+      expect(paths[path]?.post['requestBody'], path).toMatchObject({ required });
+      expect(Object.keys(paths[path]?.post ?? {})).not.toContain('x-qauth-body-optional');
+      // What the document says is what Fastify does.
+      const response = await app.inject({ method: 'POST', url: path });
+      expect(response.statusCode, path).toBe(required ? 400 : 204);
+    }
+
+    await app.close();
+  });
+});
+
 describe('openapiVersion', () => {
   it('is the release version the image was built with', () => {
     expect(openapiVersion('0.1.4')).toBe('0.1.4');

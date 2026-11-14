@@ -118,6 +118,12 @@ const CALLS: Record<keyof SessionsRepository, (repo: SessionsRepository) => Prom
   listClientsForUser: (repo) => repo.listClientsForUser(REALM_ID, USER_ID),
   listSessionsForClient: (repo) => repo.listSessionsForClient(REALM_ID, CLIENT_ID),
   listForUser: (repo) => repo.listForUser(REALM_ID, USER_ID, { limit: 10 }),
+  listLiveForUser: (repo) =>
+    repo.listLiveForUser(REALM_ID, USER_ID, {
+      limit: 10,
+      now: NOW,
+      defaultMaxLifespanMs: 86_400_000,
+    }),
   listForClient: (repo) => repo.listForClient(REALM_ID, CLIENT_ID, { limit: 10 }),
   revokeForUser: (repo) => repo.revokeForUser(REALM_ID, USER_ID, 'sign_out_everywhere'),
   revokeRealmBatch: (repo) =>
@@ -166,6 +172,8 @@ export function bareIdsDoNotCompile(repo: SessionsRepository): void {
   void repo.listForUser(USER_ID, { limit: 10 });
   // @ts-expect-error a client id alone does not list a page of sessions
   void repo.listForClient(CLIENT_ID, { limit: 10 });
+  // @ts-expect-error a user id alone does not list the user's live sessions
+  void repo.listLiveForUser(USER_ID, { limit: 10, now: NOW, defaultMaxLifespanMs: 1 });
   // @ts-expect-error a user id alone does not end the user's sessions
   void repo.revokeForUser(USER_ID, 'sign_out_everywhere');
   // @ts-expect-error a batch of a realm's sessions names the realm
@@ -688,6 +696,50 @@ describe('session lists and bulk revocations (#550)', () => {
     expect(queries[0].values).toEqual([
       REALM_ID,
       USER_ID,
+      NOW - 60_000,
+      NOW - 60_000,
+      SESSION_ID,
+      10,
+    ]);
+  });
+
+  it('listLiveForUser reads one page of the user’s live sessions in the realm, most recently used first, after a position (#1110)', async () => {
+    const { db, queries } = createRecordingDb();
+
+    expect(
+      await createSessionsRepository(db).listLiveForUser(REALM_ID, USER_ID, {
+        limit: 10,
+        now: NOW,
+        defaultMaxLifespanMs: 86_400_000,
+        after: { lastSeenAt: NOW - 60_000, id: SESSION_ID },
+      })
+    ).toEqual([]);
+
+    expect(queries).toHaveLength(1);
+    const text = queries[0].text.toLowerCase();
+    expect(text).toContain('inner join "realms" on "realms"."id" = "sessions"."realm_id"');
+    expect(text).toContain(
+      '"sessions"."realm_id" = $1 and "sessions"."user_id" = $2 and "sessions"."revoked_at" is null'
+    );
+    // Both ends, as revokeLapsedBatch judges them, and both left behind.
+    expect(text).toContain(
+      'least("sessions"."expires_at", "sessions"."created_at" + coalesce("realms"."sso_max_lifespan" * 1000, $3::bigint)) > $4::bigint'
+    );
+    expect(text).toContain(
+      '("realms"."sso_idle_timeout" is null or "sessions"."last_seen_at" + "realms"."sso_idle_timeout" * 1000 > $5::bigint)'
+    );
+    expect(text).toContain(
+      '("sessions"."last_seen_at" < $6 or ("sessions"."last_seen_at" = $7 and "sessions"."id" < $8))'
+    );
+    expect(text).toContain(
+      'order by "sessions"."last_seen_at" desc, "sessions"."id" desc limit $9'
+    );
+    expect(queries[0].values).toEqual([
+      REALM_ID,
+      USER_ID,
+      86_400_000,
+      NOW,
+      NOW,
       NOW - 60_000,
       NOW - 60_000,
       SESSION_ID,

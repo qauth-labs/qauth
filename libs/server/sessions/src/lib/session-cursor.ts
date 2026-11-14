@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import type { SessionListOwner, SessionListPosition } from './ports';
+import type { SessionListOwner, SessionListPosition, SessionUsePosition } from './ports';
 
 /**
  * The cursor of a session list (#550): an opaque string to the caller, which
@@ -22,8 +22,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const cursorSchema = z.strictObject({
   v: z.literal(CURSOR_VERSION),
-  /** `u`: a user's sessions; `c`: a client's. */
-  k: z.enum(['u', 'c']),
+  /**
+   * `u`: a user's sessions; `c`: a client's; `l`: a user's live sessions,
+   * most recently used first, whose `c` is a `lastSeenAt` (#1110).
+   */
+  k: z.enum(['u', 'c', 'l']),
   r: z.string().regex(UUID),
   o: z.string().regex(UUID),
   c: z.number().int().nonnegative(),
@@ -44,21 +47,28 @@ export interface SessionList {
   owner: SessionListOwner;
 }
 
-function identityOf(list: SessionList): { k: 'u' | 'c'; r: string; o: string } {
+/** The live-session list of a user (#1110): a list of its own, with cursors of its own. */
+export interface LiveSessionList {
+  realmId: string;
+  userId: string;
+}
+
+type CursorIdentity = { k: 'u' | 'c' | 'l'; r: string; o: string };
+
+function identityOf(list: SessionList): CursorIdentity {
   return 'userId' in list.owner
     ? { k: 'u', r: list.realmId, o: list.owner.userId }
     : { k: 'c', r: list.realmId, o: list.owner.oauthClientId };
 }
 
+function encode(identity: CursorIdentity, at: number, sid: string): string {
+  const value = { v: CURSOR_VERSION, ...identity, c: at, i: sid };
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
 /** The cursor of the page after `position`, in `list`. */
 export function encodeSessionCursor(list: SessionList, position: SessionListPosition): string {
-  const value = {
-    v: CURSOR_VERSION,
-    ...identityOf(list),
-    c: position.createdAt,
-    i: position.sid,
-  };
-  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+  return encode(identityOf(list), position.createdAt, position.sid);
 }
 
 /**
@@ -67,6 +77,30 @@ export function encodeSessionCursor(list: SessionList, position: SessionListPosi
  * @throws InvalidSessionCursorError when it does not parse or names another list
  */
 export function decodeSessionCursor(list: SessionList, cursor: string): SessionListPosition {
+  const { at, sid } = decode(identityOf(list), cursor);
+  return { createdAt: at, sid };
+}
+
+/** The cursor of the page after `position`, in a user's live-session list. */
+export function encodeLiveSessionCursor(
+  list: LiveSessionList,
+  position: SessionUsePosition
+): string {
+  return encode({ k: 'l', r: list.realmId, o: list.userId }, position.lastSeenAt, position.sid);
+}
+
+/**
+ * The position a cursor names in a user's live-session list. A cursor of the
+ * user's full list, or of any other, is refused.
+ *
+ * @throws InvalidSessionCursorError when it does not parse or names another list
+ */
+export function decodeLiveSessionCursor(list: LiveSessionList, cursor: string): SessionUsePosition {
+  const { at, sid } = decode({ k: 'l', r: list.realmId, o: list.userId }, cursor);
+  return { lastSeenAt: at, sid };
+}
+
+function decode(expected: CursorIdentity, cursor: string): { at: number; sid: string } {
   if (cursor.length === 0 || cursor.length > SESSION_CURSOR_MAX_LENGTH) {
     throw new InvalidSessionCursorError();
   }
@@ -83,10 +117,9 @@ export function decodeSessionCursor(list: SessionList, cursor: string): SessionL
   }
   const result = cursorSchema.safeParse(parsed);
   if (!result.success) throw new InvalidSessionCursorError();
-  const expected = identityOf(list);
   const { k, r, o, c, i } = result.data;
   if (k !== expected.k || r !== expected.r || o !== expected.o) {
     throw new InvalidSessionCursorError();
   }
-  return { createdAt: c, sid: i };
+  return { at: c, sid: i };
 }

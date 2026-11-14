@@ -110,14 +110,14 @@ export const userSignedOut = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'A person signed out, and QAuth ended their browser sessions: the one session the relying party named at the end-session endpoint (OpenID Connect RP-Initiated Logout 1.0), one session the person ended on the hosted account page, or every session of the user at `POST /auth/logout` or at "sign out everywhere" on the hosted account page.',
+    'A person signed out, and QAuth ended their browser sessions: the one session the relying party named at the end-session endpoint (OpenID Connect RP-Initiated Logout 1.0), one session the person ended on the hosted account page or through the account API, or every session of the user at `POST /auth/logout` or at "sign out everywhere" on the hosted account page or the account API. A "sign out everywhere" that kept the session the person was using records one event per session it ended.',
   category: 'user',
   severity: 'info',
   since: FIRST_RELEASE,
   subject: 'user',
   data: z.strictObject({
     sid: recordId(
-      'The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` and "sign out everywhere" do.'
+      'The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` and "sign out everywhere" do; present on each event of a "sign out everywhere" that kept one session.'
     ).optional(),
   }),
   security: true,

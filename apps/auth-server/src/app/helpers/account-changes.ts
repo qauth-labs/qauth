@@ -1,5 +1,5 @@
 import { WEBAUTHN_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-federation';
-import type { BrowserSession, ListedSession } from '@qauth-labs/fastify-plugin-sessions';
+import type { BrowserSession } from '@qauth-labs/fastify-plugin-sessions';
 import { TOTP_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
@@ -13,12 +13,12 @@ import {
   provedOnlyThroughNew,
   requiredFactorOf,
 } from './account-operation-guard';
+import { type AccountSession, pageAccountSessions } from './account-sessions';
 import {
   accountCredentials,
   type AccountPasskey,
   signInMethodsOf,
 } from './account-sign-in-methods';
-import { endBrowserSession, endBrowserSessions } from './browser-session';
 import { isNewCredential } from './new-factors';
 import { csrfTokensEqual, generateCsrfToken } from './session-cookie';
 import { readSessionSideRecord, writeSessionSideRecord } from './session-side-record';
@@ -38,6 +38,7 @@ export {
   type RecoveryCodesResult,
   regenerateRecoveryCodes,
 } from './account-factors';
+export { type AccountSession, endAccountSession, endAllAccountSessions } from './account-sessions';
 export type { AccountPasskey } from './account-sign-in-methods';
 
 /**
@@ -79,8 +80,9 @@ export type { AccountPasskey } from './account-sign-in-methods';
  * authenticator app changes are the account API's too, so they live apart
  * (`account-password-change.ts`, `account-sign-in-methods.ts`,
  * `account-credentials.ts`), and so are the recovery codes' regeneration
- * (`account-factors.ts`), where its routes reach them without the rest of
- * the page (#1107, #1108, #1109).
+ * (`account-factors.ts`) and the sessions' list, end and sign-out everywhere
+ * (`account-sessions.ts`), where its routes reach them without the rest of
+ * the page (#1107, #1108, #1109, #1110).
  */
 
 /** A change of the account page, by the account API operation it stands for. */
@@ -256,17 +258,6 @@ export interface AccountNewBinding {
   readonly newUntil: number;
 }
 
-/** One live session of the account, as the page shows it. */
-export interface AccountSession {
-  readonly sid: string;
-  readonly current: boolean;
-  readonly createdAt: number;
-  readonly lastSeenAt: number;
-  readonly userAgent: string | null;
-  readonly ipAddress: string | null;
-  readonly clients: readonly string[];
-}
-
 /** Everything the overview shows. */
 export interface AccountOverview {
   readonly password: { readonly set: boolean; readonly address?: string };
@@ -328,10 +319,9 @@ export async function readAccountOverview(
   const linkable = (await upstreamProviderCatalog(fastify).offered(realmId))
     .filter((entry) => !holds.has(entry.provider))
     .map((entry) => ({ provider: entry.provider, name: entry.name }));
-  const page = await fastify.sessionService.listForUser({
-    realmId,
-    userId,
-    page: { limit: ACCOUNT_PAGE_SESSION_LIMIT },
+  const sessions = await pageAccountSessions(fastify, session, {
+    limit: ACCOUNT_PAGE_SESSION_LIMIT,
+    currentSid: session.sid,
   });
   return {
     password: {
@@ -344,76 +334,7 @@ export async function readAccountOverview(
     recoveryCodes: methods.recoveryCodes,
     linkedAccounts: linked.items,
     linkable,
-    sessions: page.items
-      .filter((item: ListedSession) => item.state === 'live')
-      .map((item) => ({
-        sid: item.sid,
-        current: item.sid === session.sid,
-        createdAt: item.createdAt,
-        lastSeenAt: item.lastSeenAt,
-        userAgent: item.userAgent,
-        ipAddress: item.ipAddress,
-        clients: item.clients.map((client) => client.name),
-      })),
+    sessions: sessions.items,
     requiredFactor: methods.requiredFactor,
   };
-}
-
-// ── Sessions ─────────────────────────────────────────────────────────────────
-
-/**
- * End one of the account's sessions (`account.sessions.delete`): its cookie
- * stops working, and every client it signed in to is queued a back-channel
- * logout by the revocation itself (#624). Recorded as `user.signed_out` with
- * its `sid`. A session of another account is `not_found`, untouched.
- */
-export async function endAccountSession(
-  fastify: FastifyInstance,
-  request: FastifyRequest,
-  session: BrowserSession,
-  sid: string
-): Promise<{ readonly kind: 'ended' | 'not_found' }> {
-  const { realmId, userId } = session;
-  const outcome = await endBrowserSession(
-    fastify,
-    realmId,
-    sid,
-    'sign_out',
-    { type: 'user', id: userId },
-    userId
-  );
-  if (outcome !== 'ended') return { kind: 'not_found' };
-  await emitUserEvent(
-    request,
-    'urn:qauth:event:user.signed_out:v1-rc.0',
-    { sid },
-    { realmId, userId, clientId: null, actor: 'user' }
-  );
-  return { kind: 'ended' };
-}
-
-/**
- * Sign out everywhere (`account.sessions.endAll`): every session of the
- * account ends, this one too, each client it signed in to is queued a
- * back-channel logout, and every unredeemed code and refresh token of the
- * account ends, as `POST /auth/logout` ends them. Recorded as
- * `user.signed_out` without a `sid`.
- */
-export async function endAllAccountSessions(
-  fastify: FastifyInstance,
-  request: FastifyRequest,
-  session: BrowserSession
-): Promise<void> {
-  const { realmId, userId } = session;
-  await endBrowserSessions(fastify, realmId, userId);
-  // Codes first: one redeemed after the sweep below would mint a refresh
-  // token that survives it.
-  await fastify.repositories.authorizationCodes.invalidateForUser(userId);
-  await fastify.repositories.refreshTokens.revokeAllForUser(userId, 'logout');
-  await emitUserEvent(
-    request,
-    'urn:qauth:event:user.signed_out:v1-rc.0',
-    {},
-    { realmId, userId, clientId: null, actor: 'user' }
-  );
 }

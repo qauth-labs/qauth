@@ -210,7 +210,7 @@ states:
       its side record. Where the account holds a new passkey or authenticator app (#1064: bound after a sign-in that
       proved only the password, inside the realm's window), the session's own row is read too, so that a binding
       this session's sign-in made is not shown back to it as a notice.
-    source: apps/auth-server/src/app/helpers/account-changes.ts:363
+    source: apps/auth-server/src/app/helpers/account-changes.ts:284
     invoke: { external: accountStore }
     on:
       DONE:
@@ -271,7 +271,7 @@ states:
 
   readingCsrf:
     title: Read the session's account CSRF value
-    source: apps/auth-server/src/app/helpers/account-changes.ts:231
+    source: apps/auth-server/src/app/helpers/account-changes.ts:233
     invoke: { external: sessionSideRecord }
     on:
       DONE:
@@ -288,7 +288,7 @@ states:
       - guard: wrongCsrf
         target: forbidden.csrf
         say: 'none, or another, compared in constant time'
-        source: apps/auth-server/src/app/helpers/account-changes.ts:238
+        source: apps/auth-server/src/app/helpers/account-changes.ts:240
       - target: choosingCeremony
         say: 'the right value'
 

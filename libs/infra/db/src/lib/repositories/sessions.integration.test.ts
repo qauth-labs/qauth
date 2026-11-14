@@ -750,6 +750,62 @@ describe('sessions integration (real Postgres)', () => {
       expect(await repo.listForClient(other, app, { limit: 10 })).toEqual([]);
     });
 
+    it('lists a user’s live sessions most recently used first across pages, ties broken by id, with their clients, and never an ended one or another realm’s (#1110)', async () => {
+      const now = Date.now();
+      // A realm with a two-hour maximum lifespan and a ten-minute idle limit.
+      const realm = await one(
+        `INSERT INTO realms (name, sso_max_lifespan, sso_idle_timeout) VALUES ($1, 7200, 600) RETURNING id`,
+        [`realm-${Math.random().toString(36).slice(2)}`]
+      );
+      const other = await seedRealm();
+      const user = await seedUser(realm);
+      const app = await seedClient(realm);
+      // Two sessions used in the same millisecond, the newer one used least
+      // recently, and four that are not live.
+      const a = await repo.create(
+        session(realm, user, { createdAt: now - HOUR, lastSeenAt: now - 60_000 })
+      );
+      const b = await repo.create(
+        session(realm, user, { createdAt: now - HOUR, lastSeenAt: now - 60_000 })
+      );
+      const newest = await repo.create(
+        session(realm, user, { createdAt: now - 10 * 60_000, lastSeenAt: now - 5 * 60_000 })
+      );
+      const revoked = await repo.create(session(realm, user, { createdAt: now, lastSeenAt: now }));
+      await repo.revoke(realm, revoked.id, 'sign_out');
+      await repo.create(
+        session(realm, user, { createdAt: now - HOUR, lastSeenAt: now - 11 * 60_000 })
+      );
+      await repo.create(
+        session(realm, user, { createdAt: now - 3 * HOUR, lastSeenAt: now, expiresAt: now + HOUR })
+      );
+      await repo.create(
+        session(realm, user, { createdAt: now - HOUR, lastSeenAt: now, expiresAt: now - 1 })
+      );
+      await recordAt(newest.id, app, now - 6 * 60_000);
+      const live = { now, defaultMaxLifespanMs: 4 * HOUR };
+
+      const [first, second] = [a, b].sort((x, y) => (x.id < y.id ? 1 : -1));
+      const page = await repo.listLiveForUser(realm, user, { ...live, limit: 2 });
+      expect(page.map((row) => row.session.id)).toEqual([first.id, second.id]);
+      const last = page[page.length - 1].session;
+      const rest = await repo.listLiveForUser(realm, user, {
+        ...live,
+        limit: 10,
+        after: { lastSeenAt: last.lastSeenAt, id: last.id },
+      });
+      expect(rest.map((row) => row.session.id)).toEqual([newest.id]);
+      expect(rest[0].clients).toEqual([
+        expect.objectContaining({ oauthClientId: app, clientName: 'app' }),
+      ]);
+      // A session past SESSION_COOKIE_TTL, in a realm with no maximum.
+      const lax = await seedRealm();
+      const laxUser = await seedUser(lax);
+      await repo.create(session(lax, laxUser, { createdAt: now - 5 * HOUR, lastSeenAt: now }));
+      expect(await repo.listLiveForUser(lax, laxUser, { ...live, limit: 10 })).toEqual([]);
+      expect(await repo.listLiveForUser(other, user, { ...live, limit: 10 })).toEqual([]);
+    });
+
     it('ends a user’s sessions but the one excepted and those created since the cut-off, returning their clients and spending their codes', async () => {
       const realm = await seedRealm();
       const user = await seedUser(realm);

@@ -1018,7 +1018,7 @@ states:
         target: signInNeeded
         effect: [forEndedSession]
         say: 'the session is no longer usable: the request needs a sign-in again'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:189
+        source: apps/auth-server/src/app/helpers/browser-session.ts:190
       - target: checkingAgentCap
         say: 'the session is live: the request is decided again for it'
         source: apps/auth-server/src/app/helpers/authorization-interaction.ts:369
