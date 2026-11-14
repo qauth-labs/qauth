@@ -18,7 +18,8 @@ import type { SecurityEffect } from '@qauth-labs/shared-validation';
  * marked `requestDependent` (a policy patch, a client update, an import) may
  * `classify`: such an operation declares every effect and lets `classify`
  * pick per request. Every other reserved operation needs its declaration on
- * every request.
+ * every request. An entry marked `selfProtecting` guards the two-admin rule
+ * (#521) and must register with the same flag.
  *
  * A request-dependent entry lists security cases (`vectors`): a request and
  * the state it meets, with the effects the request needs at least. The
@@ -60,6 +61,13 @@ export interface ReservedOperation {
    * write). Absent: every request needs the declaration.
    */
   readonly requestDependent?: true;
+  /**
+   * `true` when the operation guards the two-admin rule itself (ADR-019
+   * Decision 7, #521): it must register with `selfProtecting`, and needs a
+   * second admin wherever the realm makes any operation mandatory. Absent
+   * otherwise.
+   */
+  readonly selfProtecting?: true;
   /**
    * With `requestDependent`, the security cases its `classify` must meet;
    * one or more. Absent otherwise.
@@ -124,6 +132,19 @@ const reserveRequestDependent = (
     requestDependent: true as const,
     vectors: frozen([...vectors]),
   });
+
+/**
+ * An entry that guards the two-admin rule (#521): it must register as
+ * self-protecting, so a realm that makes any operation mandatory needs a
+ * second admin for it too.
+ */
+const reserveSelfProtecting = (
+  id: string,
+  effects: readonly SecurityEffect[],
+  source: string,
+  description: string
+): ReservedOperation =>
+  Object.freeze({ ...reserve(id, effects, source, description), selfProtecting: true as const });
 
 /** A merge patch of the resource at `params`, as `classify` sees it. */
 const patch = (params: Record<string, string>, body: Record<string, unknown>) => ({
@@ -739,19 +760,31 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'Issue an act-chain token to an admin who acts for an account.'
   ),
 
-  // administration: who administers.
-  reserve('admins.create', ['administration'], `${ADR_019}, #679`, 'Create an admin account.'),
+  // administration: who administers. The self-protecting entries guard the
+  // two-admin rule (#521).
+  reserveSelfProtecting(
+    'admins.create',
+    ['administration'],
+    `${ADR_019}, #679, #521`,
+    'Create an admin account.'
+  ),
   reserve('admins.delete', ['administration'], `${ADR_019}, #679`, 'Remove an admin account.'),
-  reserve(
+  reserveSelfProtecting(
+    'admins.credentials.update',
+    ['administration', 'credential-path'],
+    `${ADR_019}, #521`,
+    "Change an admin account's credentials, identifier or contact address."
+  ),
+  reserveSelfProtecting(
     'adminGrants.create',
     ['administration'],
-    `${ADR_019}, #679`,
+    `${ADR_019}, #679, #521`,
     'Grant an admin role to an account in a realm.'
   ),
-  reserve(
+  reserveSelfProtecting(
     'adminGrants.delete',
     ['administration'],
-    `${ADR_019}, #679`,
+    `${ADR_019}, #679, #521`,
     'Remove an admin role from an account.'
   ),
   reserve(

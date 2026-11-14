@@ -99,6 +99,25 @@ const input = (body: unknown = {}): ClassifyInput => ({
 });
 
 describe('defineOperation: the static rule (#508)', () => {
+  // #521: only a security operation needs an approval, so only one guards
+  // the two-admin rule.
+  it('takes selfProtecting only as true, and only on a security operation', () => {
+    const security = readOperation({
+      id: 'widgets.grant',
+      class: 'security',
+      effects: ['administration'],
+      permissions: ['realms.policies.security'],
+    });
+    expect(defineOperation({ ...security, selfProtecting: true }).selfProtecting).toBe(true);
+    expect(defineOperation(security).selfProtecting).toBeUndefined();
+    expect(() =>
+      defineOperation({ ...security, selfProtecting: false as unknown as true })
+    ).toThrow(/selfProtecting is true or absent/);
+    expect(() => defineOperation(readOperation({ selfProtecting: true }))).toThrow(
+      /only a security operation is self-protecting/
+    );
+  });
+
   it('accepts a read, a write and a security operation', () => {
     expect(defineOperation(readOperation()).class).toBe('read');
     expect(
@@ -500,6 +519,24 @@ describe('createOperationRegistry (#508)', () => {
       ).toBeDefined();
     });
 
+    // #521: an operation that guards the two-admin rule registers as one.
+    it('refuses a reserved self-protecting id registered without the flag', () => {
+      const guarded: readonly ReservedOperation[] = [{ ...reserved[0], selfProtecting: true }];
+      expect(() => registry([rotate({})], guarded)).toThrow(
+        /"widgets\.rotate" is reserved as self-protecting \(a test\)/
+      );
+      expect(
+        registry([rotate({ selfProtecting: true })], guarded).get('widgets.rotate')?.selfProtecting
+      ).toBe(true);
+      // An operation may protect the rule where its entry does not ask it to.
+      expect(
+        registry([rotate({ selfProtecting: true })], reserved).get('widgets.rotate')?.selfProtecting
+      ).toBe(true);
+      expect(() =>
+        registry([rotate({})], [{ ...reserved[0], selfProtecting: false as unknown as true }])
+      ).toThrow(/selfProtecting is true or absent/);
+    });
+
     // Acceptance criterion: registering a reserved id with a weaker effect fails.
     it('refuses a reserved id registered with a weaker effect', () => {
       expect(() => registry([rotate({ effects: ['key-custody'] })], reserved)).toThrow(
@@ -692,6 +729,21 @@ describe('the server registry and reserved table (#508)', () => {
     ]);
     expect(OPERATION_REGISTRY.permissions).toBe(PERMISSION_REGISTRY);
     expect(OPERATION_REGISTRY.reserved).toEqual(RESERVED_OPERATIONS);
+  });
+
+  // #521: the operations that guard the two-admin rule.
+  it('reserves the self-protecting operations', () => {
+    expect(
+      RESERVED_OPERATIONS.filter((entry) => entry.selfProtecting).map((entry) => entry.id)
+    ).toEqual([
+      'admins.create',
+      'admins.credentials.update',
+      'adminGrants.create',
+      'adminGrants.delete',
+    ]);
+    expect(
+      RESERVED_OPERATIONS.find((entry) => entry.id === 'admins.credentials.update')?.effects
+    ).toEqual(['administration', 'credential-path']);
   });
 
   it('lets only request-dependent reserved operations classify', () => {
