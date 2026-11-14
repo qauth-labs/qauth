@@ -13,9 +13,10 @@ import { type AccountFactor, requiredFactorOf } from './account-operation-guard'
 import { isNewCredential } from './new-factors';
 
 /**
- * THE ACCOUNT'S SIGN-IN METHODS (#844, #1107; ADR-017 Decision 8, ADR-020 §3):
- * what the hosted account page's overview and the account API's
- * `account.signInMethods.get` read of one account, from one place.
+ * THE ACCOUNT'S SIGN-IN METHODS (#844, #1107, #1108; ADR-017 Decision 8,
+ * ADR-020 §3): what the hosted account page's overview and the account API's
+ * `account.signInMethods.get` and `account.passkeys.*` read of one account,
+ * from one place.
  *
  * The page shows each passkey and the linked accounts' list; the API answers
  * counts. Both read the account's credentials of the realm, its recovery
@@ -69,6 +70,48 @@ export interface AccountSignInMethods {
   readonly requiredFactor: AccountFactor;
 }
 
+/**
+ * The passkey `row` holds, at `now`: `undefined` for a row that is no
+ * passkey, or whose credential data is not one's.
+ */
+export function passkeyOf(
+  row: Pick<
+    AccountCredentialRow,
+    'id' | 'providerType' | 'credentialData' | 'disabledAt' | 'newUntil'
+  >,
+  now: number
+): AccountPasskey | undefined {
+  if (row.providerType !== WEBAUTHN_PROVIDER_TYPE) return undefined;
+  const data = webauthnCredentialDataSchema.safeParse(row.credentialData);
+  if (!data.success) return undefined;
+  return {
+    id: row.id,
+    nickname: data.data.nickname,
+    createdAt: data.data.created_at,
+    lastUsedAt: data.data.last_used_at,
+    backedUp: data.data.backed_up,
+    disabled: row.disabledAt !== null && row.disabledAt !== undefined,
+    ...(isNewCredential(row, now) ? { newUntil: row.newUntil as number } : {}),
+  };
+}
+
+/**
+ * The passkeys among `credentials`, newest first: by when each was added, then
+ * by id, so two added in the same millisecond keep one order (#1108, the
+ * account API's list pages on it).
+ */
+export function passkeysOf(
+  credentials: readonly AccountCredentialRow[],
+  now: number
+): AccountPasskey[] {
+  return credentials
+    .flatMap((row) => {
+      const passkey = passkeyOf(row, now);
+      return passkey === undefined ? [] : [passkey];
+    })
+    .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+}
+
 /** The time a password credential records it was set, when it records one. */
 function setAtOf(credentialData: unknown): { readonly setAt?: number } {
   const setAt = passwordSetAtOf(credentialData);
@@ -99,24 +142,7 @@ export async function signInMethodsOf(
   now: number
 ): Promise<AccountSignInMethods> {
   const password = credentials.find((row) => row.providerType === PASSWORD_PROVIDER_TYPE);
-  const passkeys = credentials
-    .filter((row) => row.providerType === WEBAUTHN_PROVIDER_TYPE)
-    .flatMap((row): AccountPasskey[] => {
-      const data = webauthnCredentialDataSchema.safeParse(row.credentialData);
-      if (!data.success) return [];
-      return [
-        {
-          id: row.id,
-          nickname: data.data.nickname,
-          createdAt: data.data.created_at,
-          lastUsedAt: data.data.last_used_at,
-          backedUp: data.data.backed_up,
-          disabled: row.disabledAt !== null && row.disabledAt !== undefined,
-          ...(isNewCredential(row, now) ? { newUntil: row.newUntil as number } : {}),
-        },
-      ];
-    })
-    .sort((a, b) => b.createdAt - a.createdAt);
+  const passkeys = passkeysOf(credentials, now);
   const totp = credentials.find((row) => row.providerType === TOTP_PROVIDER_TYPE);
   const recovery = await fastify.repositories.userRecoveryCodes.status(realmId, userId);
   return {

@@ -60,17 +60,25 @@ export const webauthnCredentialDataSchema = z.object({
 
 export type WebAuthnCredentialData = z.infer<typeof webauthnCredentialDataSchema>;
 
-/** Longest nickname kept, in characters. */
+/** Longest nickname kept, in UTF-16 code units, as the stored schema counts them. */
 export const WEBAUTHN_NICKNAME_MAX_LENGTH = 64;
 
 /**
  * Tidy a user-given passkey name: trimmed, control characters removed, at most
- * {@link WEBAUTHN_NICKNAME_MAX_LENGTH} characters. Empty becomes `null`.
+ * {@link WEBAUTHN_NICKNAME_MAX_LENGTH} UTF-16 code units, the length the
+ * stored `nickname` takes, cut between characters so no surrogate pair is
+ * split (#1108: a name of emoji cut by characters outgrew the schema, and the
+ * credential no longer parsed). Empty becomes `null`.
  */
 export function normalisePasskeyNickname(nickname: string | null | undefined): string | null {
   if (nickname === null || nickname === undefined) return null;
   // eslint-disable-next-line no-control-regex -- removing control characters is the point
   const cleaned = nickname.replace(/[\u0000-\u001f\u007f-\u009f]/gu, '').trim();
   if (cleaned === '') return null;
-  return Array.from(cleaned).slice(0, WEBAUTHN_NICKNAME_MAX_LENGTH).join('');
+  let kept = '';
+  for (const character of cleaned) {
+    if (kept.length + character.length > WEBAUTHN_NICKNAME_MAX_LENGTH) break;
+    kept += character;
+  }
+  return kept.trimEnd();
 }

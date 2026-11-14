@@ -34,7 +34,10 @@ import {
  * `{ ran }` once the guard lets the call through. The password change is
  * served (#1107): a refusal is checked on its route, whose guard runs before
  * it reads the body, and a call the guard lets through on a probe of the same
- * rules, `account.recoveryCodes.regenerate`. Tokens are minted as the
+ * rules, `account.recoveryCodes.regenerate`. The passkey removal and rename
+ * are served (#1108) and called on their routes, at a passkey id no account
+ * holds: once the guard lets the call through, the handler answers 404.
+ * Tokens are minted as the
  * code exchange mints the account API's (`auth_time`, `amr`, `sid`); the
  * recovery-code suite (`recovery-codes.integration.test.ts`) walks the same
  * rebind through a real sign-in and code exchange.
@@ -45,14 +48,14 @@ import {
 
 const ACCOUNT_AUDIENCE = contract.ACCOUNT_API_AUDIENCE;
 const REFUSED = 'urn:qauth:event:request.account_operation_refused:v1-rc.0';
+/** A passkey id no account holds: the served removal answers 404 once its guard lets a call through. */
 const PASSKEY_ID = '00000000-0000-4000-8000-0000000000e1';
 
 /** The probed operations: every rule set and every kind of change the guard refuses an act chain on. */
 const PROBED = [
-  // Credentials: a passkey, the authenticator app, the recovery codes. The
-  // password change is served (#1107) and called where it is.
-  'account.passkeys.delete',
-  'account.passkeys.update',
+  // Credentials: the authenticator app, the recovery codes. The password
+  // change (#1107) and the passkey removal and rename (#1108) are served and
+  // called where they are.
   'account.totp.enrollment.create',
   'account.totp.delete',
   'account.recoveryCodes.regenerate',
@@ -66,7 +69,12 @@ const PROBED = [
 
 type ProbedOperation = (typeof PROBED)[number];
 /** The operations the suite calls: its probes, and the served password change. */
-type CalledOperation = ProbedOperation | 'account.password.change';
+/** The operations called on their served routes. */
+type ServedOperation =
+  | 'account.password.change'
+  | 'account.passkeys.delete'
+  | 'account.passkeys.update';
+type CalledOperation = ProbedOperation | ServedOperation;
 
 /** The operation's path with its parameters filled, under the account prefix. */
 function urlOf(id: CalledOperation): string {
@@ -232,6 +240,12 @@ describe('the account API’s fresh-authentication guard (#663, real containers)
     });
   }
 
+  /** The served passkey removal, past its guard: it finds no passkey at {@link PASSKEY_ID}. */
+  function expectPastGuard(response: LightMyRequestResponse): void {
+    expect(response.statusCode, response.body).toBe(404);
+    expect(response.json()).toMatchObject({ code: 'not_found' });
+  }
+
   it('challenges a sign-in older than five minutes with max_age="300", and records it', async () => {
     const userId = await account({ passkey: true });
     const stale = await token(userId, { authTime: signedInAgo(301), amr: ['pop', 'mfa'] });
@@ -276,7 +290,6 @@ describe('the account API’s fresh-authentication guard (#663, real containers)
 
     for (const id of [
       'account.recoveryCodes.regenerate',
-      'account.passkeys.delete',
       'account.addressChange.create',
       'account.deletion.create',
     ] as const) {
@@ -284,6 +297,7 @@ describe('the account API’s fresh-authentication guard (#663, real containers)
       expect(response.statusCode, `${id}: ${response.body}`).toBe(200);
       expect(response.json()).toEqual({ ran: id });
     }
+    expectPastGuard(await call('account.passkeys.delete', fresh));
     expect(await refusals(userId)).toEqual([]);
   });
 
@@ -347,10 +361,9 @@ describe('the account API’s fresh-authentication guard (#663, real containers)
     });
     const recovered = await token(userId, { authTime, amr: ['pwd'], sid: session.id });
 
-    for (const id of ['account.passkeys.delete', 'account.totp.enrollment.create'] as const) {
-      const response = await call(id, recovered);
-      expect(response.statusCode, `${id}: ${response.body}`).toBe(200);
-    }
+    const enrolment = await call('account.totp.enrollment.create', recovered);
+    expect(enrolment.statusCode, enrolment.body).toBe(200);
+    expectPastGuard(await call('account.passkeys.delete', recovered));
     for (const id of [
       'account.password.change',
       'account.recoveryCodes.regenerate',

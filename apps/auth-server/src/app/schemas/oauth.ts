@@ -5,6 +5,7 @@ import {
   OAUTH_SCOPE_PARAM_MAX_LENGTH,
   OAUTH_URI_PARAM_MAX_LENGTH,
 } from '../constants';
+import { AUTHORIZATION_ACTIONS } from '../helpers/authorization-actions';
 import { boundedArray, clientIdParamSchema, exactUrl } from './common';
 
 /**
@@ -104,6 +105,11 @@ export const upstreamRouteParamSchema = z.string().max(64).optional().meta({
 export const upstreamLinkParamSchema = z.string().max(64).optional().meta({
   description:
     "QAuth's link parameter (#670): the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included, whose account the person links to theirs. The request starts at that provider, then asks for a fresh sign-in to the existing account with its own factors, whatever session the browser has; the identity joins the account that sign-in proved. Honoured only for an operator-flagged first-party client while the interaction UI is on; any other value, or any other client's, is ignored.",
+});
+
+export const qauthActionParamSchema = z.enum(AUTHORIZATION_ACTIONS).optional().meta({
+  description:
+    "QAuth's set-up parameter (#1108): a change to the account's sign-in methods that runs on the realm origin. `setup_passkey` adds a passkey: a fresh sign-in, whatever session the browser has, then the passkey enrolment, then the code at the redirect URI. The person may decline the enrolment; the code comes back either way, and the account API's passkey list tells what was bound. Only a client whose `audience` lists `urn:qauth:aud:account:v1-rc.0` may ask for it (else `unauthorized_client`), never with `prompt=create` or `qauth_link`, and only while the interaction UI and passkey sign-in are on (else `invalid_request`).",
 });
 
 /* -------------------------------------------------------------------------- */
@@ -339,6 +345,8 @@ export const authorizeQuerySchema = z.object({
   qauth_upstream: upstreamRouteParamSchema,
   // QAuth's link parameter (#670): link an account of this upstream provider.
   qauth_link: upstreamLinkParamSchema,
+  // QAuth's set-up parameter (#1108): add a passkey on the realm origin.
+  qauth_action: qauthActionParamSchema,
 });
 
 export type AuthorizeQuery = z.infer<typeof authorizeQuerySchema>;

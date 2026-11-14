@@ -112,6 +112,16 @@ describe('passkeyFirstStarter (#651)', () => {
     for (const call of advance.mock.calls) expect(call[2]).toMatchObject({ freshSignIn: true });
   });
 
+  it('asks the first round of a set-up for a fresh sign-in that binds a passkey, with no switch to a registration (#1108)', async () => {
+    const start = passkeyFirstStarter(fastify(true), tasks);
+
+    await start(request, reply, REALM, query({ qauth_action: 'setup_passkey' }));
+
+    const context = advance.mock.calls[0]?.[2];
+    expect(context).toMatchObject({ freshSignIn: true, enrol: 'passkey' });
+    expect(context).not.toHaveProperty('switchFlows');
+  });
+
   it('builds the engines once, on the first request', async () => {
     const start = passkeyFirstStarter(fastify(true), tasks);
 

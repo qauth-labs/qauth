@@ -144,14 +144,20 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   ssf_streams: { api: SIUD, delivery: S },
   user_attributes: { web: SIU, api: SIU },
   // `admin` reads nothing of it: what `users.verify` shows of an account's
-  // credentials comes through `user_credential_proofs` (#1052).
-  user_credentials: { web: SIU, api: SIU },
+  // credentials comes through `user_credential_proofs` (#1052). A removal
+  // deletes the row: a passkey's or an authenticator app's on the hosted
+  // account page, on `web` (#844), and in the account API, on `api`
+  // (#1108), and an upstream account's unlink on `api` (#670).
+  user_credentials: { web: SIUD, api: SIUD },
   // Each account's recovery codes (#649): the sign-in engine, on `web`,
   // reads an account's codes, takes one (an `UPDATE … WHERE used_at IS NULL`)
   // and replaces a set (a `DELETE` and an `INSERT` in one transaction) when
   // it shows a new one. The account API, on `api`, counts the unused ones
-  // (`account.signInMethods.get`, #1107); its regeneration (#687) will write.
-  user_recovery_codes: { web: SIUD, api: S },
+  // (`account.signInMethods.get`, #1107), and its removal of a passkey or
+  // authenticator app that is still new deletes the account's set (#1108;
+  // ADR-017 Decision 8, #1064), as the hosted page's removal does on `web`;
+  // its regeneration (#687) will write.
+  user_recovery_codes: { web: SIUD, api: SD },
   // The actions a user must take at the next sign-in (#635): the sign-in
   // engine, on `web`, reads and deletes a user's rows; `api` (the account
   // console's "this wasn't me") and `admin` (an admin's request) add them,

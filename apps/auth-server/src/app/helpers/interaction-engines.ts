@@ -30,6 +30,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
 import { accountPoliciesOf } from './account-policies';
+import { actionRoundOf, asksForSetUp } from './authorization-actions';
 import { type BackgroundTasks } from './background-tasks';
 import { createServerBotChallenge, registrationChallengeRequired } from './bot-challenge';
 import { endBrowserSessions } from './browser-session';
@@ -504,15 +505,20 @@ export function createInteractionEngines(
  * every round of an answer takes them, and so does the first round of a
  * sign-in a provider's callback starts again (#1106), so that a restart asks
  * for what the request asked for. `linking` is a sign-in to the account an
- * upstream identity joins (#670).
+ * upstream identity joins (#670). A set-up the request asks for
+ * (`qauth_action`, #1108) adds a fresh sign-in and the factor it binds, and
+ * takes away the switch to a registration.
  */
 export function requestRoundFlagsOf(
   state: Extract<InteractionState, { readonly purpose: 'authorization' | 'account' }>,
   linking: boolean
-): Pick<RoundContext, 'flow' | 'switchFlows' | 'freshSignIn' | 'withheldUpstream'> {
+): Pick<RoundContext, 'flow' | 'switchFlows' | 'freshSignIn' | 'withheldUpstream' | 'enrol'> {
   // The authorization request, when the interaction is for one; the hosted
   // account page's (#844) is for no client.
   const authorization = state.purpose === 'authorization' ? state.request : undefined;
+  // A set-up the request asks for (`qauth_action`, #1108): a fresh sign-in
+  // and the factor it binds, as on the account page; nobody registers.
+  const setUp = asksForSetUp(authorization);
   return {
     // `prompt=create` (#640): the engine's rounds are a registration's; a
     // sign-in to link an upstream account (#670) registers nobody.
@@ -520,7 +526,7 @@ export function requestRoundFlagsOf(
     // The person may switch between a sign-in and a registration (#1079):
     // on an authorization request's interaction, never on one that links an
     // upstream account (#670), whatever state the link is in.
-    ...(authorization !== undefined && !linking && state.upstreamLink === undefined
+    ...(authorization !== undefined && !linking && state.upstreamLink === undefined && !setUp
       ? { switchFlows: true }
       : {}),
     // `prompt=login` and `max_age` ask for a fresh sign-in, which a password
@@ -534,6 +540,7 @@ export function requestRoundFlagsOf(
     ...(linking && state.upstreamLink !== undefined
       ? { withheldUpstream: state.upstreamLink.provider }
       : {}),
+    ...actionRoundOf(authorization),
   };
 }
 

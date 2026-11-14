@@ -301,6 +301,16 @@ describe('requestRoundFlagsOf: what the request asks of every round (#1106)', ()
     ).toEqual({ freshSignIn: true, withheldUpstream: 'oidc_corp' });
   });
 
+  it('makes a set-up a fresh sign-in that binds a passkey, with no switch to a registration (#1108)', () => {
+    expect(requestRoundFlagsOf(authorization({ qauth_action: 'setup_passkey' }), false)).toEqual({
+      freshSignIn: true,
+      enrol: 'passkey',
+    });
+    expect(
+      requestRoundFlagsOf(authorization({ qauth_action: 'setup_passkey', max_age: 0 }), false)
+    ).toEqual({ freshSignIn: true, enrol: 'passkey' });
+  });
+
   it('never lets an interaction that holds a link switch flows', () => {
     expect(requestRoundFlagsOf(authorization({}, SIGNING_IN as never), false)).toEqual({});
   });

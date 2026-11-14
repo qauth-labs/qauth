@@ -5,8 +5,10 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { API_FAMILY_AUDIENCES } from '../../api-conventions/families';
 import { AUTHORIZE_BODY_LIMIT_BYTES } from '../../constants';
 import { accountPoliciesOf } from '../../helpers/account-policies';
+import { actionRefusal } from '../../helpers/authorization-actions';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import {
   authorizationInteractionStart,
@@ -21,6 +23,7 @@ import {
 } from '../../helpers/authorization-request';
 import { createBackgroundTasks } from '../../helpers/background-tasks';
 import { resolveBrowserSession } from '../../helpers/browser-session';
+import { unlistedReservedAudiences } from '../../helpers/client-auth';
 import { startInteraction } from '../../helpers/interaction';
 import { passkeyFirstStarter } from '../../helpers/passkey-first';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
@@ -99,6 +102,12 @@ function withoutUpstreamRoute(query: AuthorizeQuery): AuthorizeQuery {
  * issues the code (helpers/authorization-interaction.ts). `prompt=none`
  * starts no interaction in either mode.
  *
+ * `qauth_action=setup_passkey` (#1108; ADR-020 §1) asks for a passkey set-up:
+ * a fresh sign-in whatever session the browser has, then the engine's
+ * passkey enrolment, then the code, in an interaction on the realm origin.
+ * Only for a client whose `audience` lists the account API, while the
+ * interaction UI and passkey sign-in are on (`actionRefusal`).
+ *
  * `prompt=create` (#640; OpenID Connect Prompt Create 1.0) starts a
  * registration: an interaction whose sign-in engine rounds create a password
  * account once an emailed code proved the mailbox and a new password met the
@@ -161,6 +170,18 @@ export default async function (fastify: FastifyInstance) {
     }
     const { target } = checked;
 
+    // `qauth_action` (#1108): a set-up the request cannot ask for is refused
+    // before the person sees any page.
+    const refusedAction = actionRefusal(
+      query,
+      {
+        listsAccountAudience:
+          unlistedReservedAudiences(target.client, API_FAMILY_AUDIENCES.account).length === 0,
+      },
+      env.INTERACTION_UI_ENABLED === true && fastify.passkeySignIn === true
+    );
+    if (refusedAction !== null) return refuse(request, reply, target, query, refusedAction);
+
     // `prompt=create` (#640): a registration, whatever session the browser has.
     if (query.prompt === 'create') return startRegistration(request, reply, target, query);
 
@@ -172,14 +193,16 @@ export default async function (fastify: FastifyInstance) {
 
     // User authentication: the browser session cookie. The legacy Bearer
     // path is retired (#524), so an `Authorization` header counts for
-    // nothing: without a session the user signs in first.
+    // nothing: without a session the user signs in first. A set-up
+    // (`qauth_action`, #1108) takes a fresh sign-in whatever session the
+    // browser has, as a link does: decided as a request with no session.
     const browserSession = await resolveBrowserSession(fastify, request, reply);
     const outcome = await decideAuthorization(
       fastify,
       request,
       target,
       query,
-      linkTo === undefined ? browserSession : null
+      linkTo === undefined && query.qauth_action === undefined ? browserSession : null
     );
 
     switch (outcome.kind) {
@@ -334,6 +357,36 @@ export default async function (fastify: FastifyInstance) {
   };
 
   /**
+   * Refuse the request on the client's `redirect_uri` (or on the issuer, for
+   * a client no operator provisioned), recorded as `authorization.failed`
+   * with its reason.
+   */
+  const refuse = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    target: AuthorizationTarget,
+    query: AuthorizeQuery,
+    refusal: {
+      readonly error: 'invalid_request' | 'unauthorized_client';
+      readonly reason: string;
+      readonly description: string;
+    }
+  ) => {
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: refusal.error, reason: refusal.reason },
+      target.clientEvent
+    );
+    return sendAuthorizationError(reply, target.client, query.redirect_uri, {
+      error: refusal.error,
+      error_description: refusal.description,
+      state: query.state ?? undefined,
+      iss: target.iss,
+    });
+  };
+
+  /**
    * `prompt=create` (#640; ADR-017 Decisions 3 and 8): refused, before the
    * person sees any page, unless the request asks for `openid`, the realm and
    * the client both allow registration and it carries no `max_age`
@@ -355,20 +408,7 @@ export default async function (fastify: FastifyInstance) {
       target.client,
       query
     );
-    if (refusal !== null) {
-      await emitUserEvent(
-        request,
-        'urn:qauth:event:authorization.failed:v1-rc.0',
-        { error: refusal.error, reason: refusal.reason },
-        target.clientEvent
-      );
-      return sendAuthorizationError(reply, target.client, query.redirect_uri, {
-        error: refusal.error,
-        error_description: refusal.description,
-        state: query.state ?? undefined,
-        iss: target.iss,
-      });
-    }
+    if (refusal !== null) return refuse(request, reply, target, query, refusal);
     const browserSession = await resolveBrowserSession(fastify, request, reply);
     const held = withoutUpstreamRoute(query);
     const first =

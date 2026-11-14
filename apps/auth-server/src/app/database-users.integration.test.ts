@@ -527,6 +527,56 @@ describe('each service role on a database user of its own (#498)', () => {
       payload: { currentPassword: E2E_PASSWORD, newPassword: 'Copper-Heron-Lattice-Orchard-81' },
     });
     expect(changed.statusCode, changed.body).toBe(204);
+
+    // The passkeys (#1108): the list, the rename under If-Match, and the
+    // removal of one still new (#1064), which the password alone allows and
+    // which deletes the account's recovery codes. None needs a signature, so
+    // all run on api alone.
+    const passkey = await fixture.app.repositories.userCredentials.create({
+      userId,
+      realmId: realm.id,
+      providerType: 'webauthn',
+      externalSub: 'cm9sZXMtcGFzc2tleQ',
+      credentialData: {
+        public_key: 'pQECAyYgASFYIK_voW-Xypst',
+        algorithm: -7,
+        sign_count: 0,
+        transports: ['internal'],
+        backup_eligible: true,
+        backed_up: true,
+        aaguid: '00000000-0000-0000-0000-000000000000',
+        rp_id: 'auth.example.com',
+        user_handle: 'cm9sZXMtdXNlcg',
+        nickname: 'Phone',
+        created_at: Date.now(),
+        last_used_at: null,
+        sign_counter_regressed_at: null,
+      },
+    });
+    await fixture.app.dbPool.query('UPDATE user_credentials SET new_until = $2 WHERE id = $1', [
+      passkey.id,
+      Date.now() + 86_400_000,
+    ]);
+    const passkeys = await call('GET', `${ACCOUNT}/passkeys`, account);
+    expect(passkeys.statusCode, passkeys.body).toBe(200);
+    expect(json<{ items: { id: string }[] }>(passkeys).items.map((item) => item.id)).toEqual([
+      passkey.id,
+    ]);
+    const one = await call('GET', `${ACCOUNT}/passkeys/${passkey.id}`, account);
+    expect(one.statusCode, one.body).toBe(200);
+    const renamed = await api.inject({
+      method: 'PATCH',
+      url: `${ACCOUNT}/passkeys/${passkey.id}`,
+      headers: {
+        authorization: `Bearer ${account}`,
+        'content-type': 'application/merge-patch+json',
+        'if-match': String(one.headers['etag']),
+      },
+      payload: JSON.stringify({ nickname: 'Pixel' }),
+    });
+    expect(renamed.statusCode, renamed.body).toBe(200);
+    const removed = await call('DELETE', `${ACCOUNT}/passkeys/${passkey.id}`, freshlySignedIn);
+    expect(removed.statusCode, removed.body).toBe(204);
     expectNoPermissionError();
   });
 

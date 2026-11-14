@@ -40,6 +40,7 @@ import {
   InsufficientUserAuthenticationError,
   InvalidCurrentPasswordError,
   LastCredentialError,
+  SecondFactorRequiredError,
 } from '../helpers/account-operation-errors';
 import { AccountVerificationConflictError } from '../helpers/account-verification-errors';
 import { ClientManagedByDocumentError } from '../helpers/admin-client-errors';
@@ -230,8 +231,8 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
  * routes answer problem documents), the admin pipeline's refusal of a
  * security operation that carries no approval, an approval's refused move,
  * a refused realm policy update, a sandbox realm's ceiling among them, the
- * account API's step-up challenge and act-chain refusal, and its password
- * change's wrong current password. Each code is one the problem types page
+ * account API's step-up challenge and act-chain refusal, its password
+ * change's wrong current password and its removals' refusals. Each code is one the problem types page
  * publishes, for the status the class carries.
  *
  * A test fails when an error class of the app that declares a `statusCode` has
@@ -318,6 +319,13 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // An account change that would leave no way to sign in (#670): unlinking
   // the last upstream account of an account that holds nothing else.
   { errorClass: LastCredentialError, code: 'last_credential', oauthError: 'invalid_request' },
+  // A removal that would leave no second factor where the realm's policy
+  // requires one (#1108): the account API's passkey removal.
+  {
+    errorClass: SecondFactorRequiredError,
+    code: 'second_factor_required',
+    oauthError: 'invalid_request',
+  },
   // The account API's password change with a wrong current password (#1107).
   {
     errorClass: InvalidCurrentPasswordError,

@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 
+import { MERGE_PATCH_MEDIA_TYPE } from '../../api-conventions/conditional-requests';
 import { registerAccountConsentRoutes } from './consents';
 import { registerAccountLinkedAccountRoutes } from './linked-accounts';
+import { registerAccountPasskeyRoutes } from './passkeys';
 import { registerAccountSignInMethodRoutes } from './sign-in-methods';
 
 /**
@@ -12,7 +14,7 @@ import { registerAccountSignInMethodRoutes } from './sign-in-methods';
  * cookie-authenticated `/consents` (a deprecated alias until the account
  * console, v0.4, moves); then the linked upstream accounts and their
  * removal (#670); then the sign-in methods' read and the password change
- * (#1107).
+ * (#1107); then the passkeys, their rename and their removal (#1108).
  *
  * Every route is guarded by `requireFamilyToken('account')` (#509): a token
  * whose only audience is `urn:qauth:aud:account:v1-rc.0`, as the account
@@ -37,7 +39,16 @@ export default async function (fastify: FastifyInstance) {
     reply.header('Cache-Control', 'no-store');
     return payload;
   });
+  // A PATCH body here is a JSON Merge Patch (RFC 7396), parsed as JSON is.
+  // Registered in this module only, so no route outside the families starts
+  // taking the media type.
+  fastify.addContentTypeParser(
+    MERGE_PATCH_MEDIA_TYPE,
+    { parseAs: 'string' },
+    fastify.getDefaultJsonParser('error', 'error')
+  );
   registerAccountConsentRoutes(fastify);
   registerAccountLinkedAccountRoutes(fastify);
   registerAccountSignInMethodRoutes(fastify);
+  registerAccountPasskeyRoutes(fastify);
 }

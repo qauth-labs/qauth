@@ -23,7 +23,11 @@ import {
   type WebAuthnEnrolment,
   type WebAuthnRawClaims,
 } from './webauthn.provider';
-import { normalisePasskeyNickname, type WebAuthnCredentialData } from './webauthn-credential-data';
+import {
+  normalisePasskeyNickname,
+  type WebAuthnCredentialData,
+  webauthnCredentialDataSchema,
+} from './webauthn-credential-data';
 
 /**
  * The WebAuthn provider (issue #467) end to end over the WebAuthn Level 3 §16
@@ -647,5 +651,19 @@ describe('normalisePasskeyNickname', () => {
     expect(normalisePasskeyNickname('   ')).toBeNull();
     expect(normalisePasskeyNickname(undefined)).toBeNull();
     expect(normalisePasskeyNickname('é'.repeat(80))).toHaveLength(64);
+  });
+
+  it('caps the length in UTF-16 code units, as the stored schema counts, never splitting a pair (#1108)', () => {
+    const emoji = '\u{1F511}';
+    expect(normalisePasskeyNickname(emoji.repeat(40))).toBe(emoji.repeat(32));
+    // 63 units, then a pair that would make 65: the pair is left out whole.
+    expect(normalisePasskeyNickname(`a${emoji.repeat(40)}`)).toBe(`a${emoji.repeat(31)}`);
+    expect(normalisePasskeyNickname(`${'b'.repeat(63)} c`)).toBe('b'.repeat(63));
+    for (const name of [emoji.repeat(40), `a${emoji.repeat(40)}`]) {
+      expect(
+        webauthnCredentialDataSchema.shape.nickname.safeParse(normalisePasskeyNickname(name))
+          .success
+      ).toBe(true);
+    }
   });
 });

@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — the upgrade from 0.1 to 0.2 with its hosts, keys, sessions and roles, and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-11-08'
+lastVerified: '2026-11-13'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -1325,6 +1325,30 @@ password is next set. During a rolling upgrade a node of the previous release
 that changes or resets a password set on a node of this release leaves that
 time behind, so `changedAt` names the earlier time until the password is set
 again.
+
+### The account API manages passkeys
+
+The account API serves the passkeys of an account (list, read, rename and
+remove, [#1108](https://github.com/qauth-labs/qauth/issues/1108)) on the `api`
+role. A removal deletes the passkey's credential, and the removal of one still
+new also deletes the account's recovery codes, as the hosted account page's
+removal does on `web`. Neither role's database user could delete a credential
+until now, so the hosted page's removals and the account API's upstream unlink
+failed under per-role database users too. A deployment whose migration runner
+grants the roles' database users
+([above](#each-role-can-connect-as-a-database-user-of-its-own)), or whose roles
+connect as the one user that owns the tables, needs nothing. One that applies
+the grants by hand applies the statements of `databaseUserGrantStatements`
+from `@qauth-labs/infra-db` again, or these, before the new version starts:
+
+```sql
+GRANT DELETE ON TABLE "user_credentials" TO <api_role>;
+GRANT DELETE ON TABLE "user_credentials" TO <web_role>;
+GRANT DELETE ON TABLE "user_recovery_codes" TO <api_role>;
+```
+
+Nothing checks the grants at boot. Without them a removal answers `500`, with
+`permission denied` for the table in the log, and changes nothing.
 
 ## Upgrading within 1.x
 

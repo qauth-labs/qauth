@@ -69,6 +69,23 @@ export class LastCredentialError extends Error {
 }
 
 /**
+ * A removal the account API refuses because it would leave the account
+ * without the second factor the realm's MFA policy requires of it (#1108):
+ * `409`, the `second_factor_required` problem document, such as removing the
+ * only passkey of an account that holds no authenticator app while the realm
+ * requires a second factor.
+ */
+export class SecondFactorRequiredError extends Error {
+  readonly statusCode = 409;
+  readonly code = 'SECOND_FACTOR_REQUIRED';
+
+  constructor() {
+    super('The change would remove the last second factor the realm requires of the account.');
+    this.name = 'SecondFactorRequiredError';
+  }
+}
+
+/**
  * A password change whose current password is wrong (#1107): `400`, the
  * `invalid_current_password` problem document. The wrong password counted on
  * the account's failure ladder, as a failed sign-in does. A reset that

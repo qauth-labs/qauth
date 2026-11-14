@@ -128,7 +128,29 @@ async function buildHarness(): Promise<Harness> {
       handler: async () => ({ ran: id }),
     });
   }
+  // A removal that names its passkey (#1108), as the account API's route
+  // hands it to the guard (`accountOperation`'s `removing`).
+  const removal = rulesOf('account.passkeys.delete');
+  app.post<{ Params: { passkeyId: string } }>('/account/v1-rc.0/remove/:passkeyId', {
+    preValidation: async (request) => {
+      request.jwtPayload = harness.claims;
+      await checkAccountOperation(request, removal, {
+        type: 'passkey',
+        id: request.params.passkeyId,
+      });
+    },
+    handler: async () => ({ ran: 'removal' }),
+  });
   return harness;
+}
+
+/** Remove the passkey `passkeyId` through the route that names it to the guard. */
+function remove(harness: Harness, passkeyId: string) {
+  return harness.app.inject({
+    method: 'POST',
+    url: `/account/v1-rc.0/remove/${passkeyId}`,
+    headers: { authorization: 'Bearer a.b.c' },
+  });
 }
 
 function call(harness: Harness, id: string) {
@@ -368,6 +390,96 @@ describe('the account operation guard (#663)', () => {
 
       expect(response.statusCode).toBe(200);
       expect(harness.events).toEqual([]);
+      await harness.app.close();
+    });
+  });
+
+  describe('a removal of a credential still new (#1064, #1108)', () => {
+    /** A password, a settled authenticator app, a settled passkey and a new passkey. */
+    function rows(newUntil: number, realmId = REALM_ID) {
+      return [
+        credential('password'),
+        { ...credential('totp'), id: 'totp-settled', newUntil: null },
+        { ...credential('webauthn'), id: 'passkey-settled', newUntil: null },
+        { ...credential('webauthn', realmId), id: 'passkey-new', newUntil },
+      ];
+    }
+
+    it('passes on a fresh password sign-in while the passkey it names is new', async () => {
+      const harness = await buildHarness();
+      harness.credentials.mockResolvedValue(rows(Date.now() + 3_600_000));
+      harness.claims = { ...harness.claims, amr: ['pwd'], authTime: signedInAgo(30) };
+
+      const response = await remove(harness, 'passkey-new');
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(harness.events).toEqual([]);
+      await harness.app.close();
+    });
+
+    it('challenges the same sign-in at a passkey that is not new, and at a call that names none', async () => {
+      const harness = await buildHarness();
+      harness.credentials.mockResolvedValue(rows(Date.now() + 3_600_000));
+      harness.claims = { ...harness.claims, amr: ['pwd'], authTime: signedInAgo(30) };
+
+      for (const response of [
+        await remove(harness, 'passkey-settled'),
+        await call(harness, 'account.passkeys.delete'),
+      ]) {
+        expect(response.statusCode).toBe(401);
+        expect(response.headers['www-authenticate']).toContain('max_age="0"');
+      }
+      await harness.app.close();
+    });
+
+    it('challenges it once the window is over, or for a passkey of another realm', async () => {
+      for (const credentials of [
+        rows(Date.now() - 1),
+        rows(Date.now() + 3_600_000, OTHER_REALM_ID),
+      ]) {
+        const harness = await buildHarness();
+        harness.credentials.mockResolvedValue(credentials);
+        harness.claims = { ...harness.claims, amr: ['pwd'], authTime: signedInAgo(30) };
+
+        const response = await remove(harness, 'passkey-new');
+
+        expect(response.statusCode).toBe(401);
+        expect(response.headers['www-authenticate']).toContain('max_age="0"');
+        await harness.app.close();
+      }
+    });
+
+    it('challenges a password sign-in too old, and a sign-in that proved no password', async () => {
+      const harness = await buildHarness();
+      harness.credentials.mockResolvedValue(rows(Date.now() + 3_600_000));
+
+      harness.claims = { ...harness.claims, amr: ['pwd'], authTime: signedInAgo(301) };
+      const old = await remove(harness, 'passkey-new');
+      expect(old.statusCode).toBe(401);
+      expect(old.headers['www-authenticate']).toContain('max_age="300"');
+
+      harness.claims = { ...harness.claims, amr: ['hwk'], authTime: signedInAgo(30) };
+      const other = await remove(harness, 'passkey-new');
+      expect(other.statusCode).toBe(401);
+      expect(other.headers['www-authenticate']).toContain('max_age="0"');
+      await harness.app.close();
+    });
+
+    it('refuses an act-chain token before the rule of a new passkey', async () => {
+      const harness = await buildHarness();
+      harness.credentials.mockResolvedValue(rows(Date.now() + 3_600_000));
+      harness.claims = {
+        ...harness.claims,
+        amr: ['pwd'],
+        authTime: signedInAgo(30),
+        act: { sub: 'agent-client' },
+      };
+
+      const response = await remove(harness, 'passkey-new');
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ code: 'delegated_token_refused' });
+      expect(harness.credentials).not.toHaveBeenCalled();
       await harness.app.close();
     });
   });

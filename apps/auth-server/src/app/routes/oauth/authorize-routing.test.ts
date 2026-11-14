@@ -248,6 +248,83 @@ describe('GET /oauth/authorize routing', () => {
   });
 });
 
+describe('GET /oauth/authorize — a passkey set-up (qauth_action, #1108)', () => {
+  const SET_UP = `${QUERY}&qauth_action=setup_passkey`;
+
+  function clients(): ReturnType<typeof vi.fn> {
+    return (
+      server as unknown as {
+        repositories: { oauthClients: { findByClientId: ReturnType<typeof vi.fn> } };
+      }
+    ).repositories.oauthClients.findByClientId;
+  }
+
+  /** The `authorization.failed` events the request recorded, by their data. */
+  function failures(): unknown[] {
+    return emitUserEventMock.mock.calls
+      .filter(([, type]) => type === 'urn:qauth:event:authorization.failed:v1-rc.0')
+      .map(([, , data]) => data);
+  }
+
+  it('refuses a client whose audience does not list the account API, on its redirect URI', async () => {
+    server = await buildServer();
+
+    const response = await server.inject({ method: 'GET', url: `/oauth/authorize?${SET_UP}` });
+
+    expect(response.statusCode).toBe(302);
+    const location = new URL(response.headers.location as string);
+    expect(location.origin + location.pathname).toBe('https://example.com/cb');
+    expect(location.searchParams.get('error')).toBe('unauthorized_client');
+    expect(location.searchParams.get('state')).toBe('st-1');
+    expect(failures()).toEqual([
+      { error: 'unauthorized_client', reason: 'action_not_allowed_for_client' },
+    ]);
+    // Refused before any sign-in: nothing was stashed for one.
+    const setSession = (
+      server as unknown as { sessionUtils: { setSession: ReturnType<typeof vi.fn> } }
+    ).sessionUtils.setSession;
+    expect(setSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses it while the interaction UI is off, even for a client of the account API', async () => {
+    server = await buildServer();
+    clients().mockResolvedValue({ ...CLIENT, audience: ['urn:qauth:aud:account:v1-rc.0'] });
+
+    const response = await server.inject({ method: 'GET', url: `/oauth/authorize?${SET_UP}` });
+
+    expect(response.statusCode).toBe(302);
+    const location = new URL(response.headers.location as string);
+    expect(location.searchParams.get('error')).toBe('invalid_request');
+    expect(failures()).toEqual([{ error: 'invalid_request', reason: 'action_not_offered' }]);
+  });
+
+  it('refuses it beside prompt=create before the registration is considered', async () => {
+    server = await buildServer();
+
+    const response = await server.inject({
+      method: 'GET',
+      url: `/oauth/authorize?${SET_UP}&prompt=create`,
+    });
+
+    expect(response.statusCode).toBe(302);
+    const location = new URL(response.headers.location as string);
+    expect(location.searchParams.get('error')).toBe('invalid_request');
+    expect(failures()).toEqual([{ error: 'invalid_request', reason: 'action_with_prompt_create' }]);
+  });
+
+  it('refuses a value it does not know at the edge, with no redirect', async () => {
+    server = await buildServer({ errorHandler: true });
+
+    const response = await server.inject({
+      method: 'GET',
+      url: `/oauth/authorize?${QUERY}&qauth_action=setup_totp`,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers.location).toBeUndefined();
+  });
+});
+
 describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
   /**
    * A signed-in browser whose stored consent covers the request: the

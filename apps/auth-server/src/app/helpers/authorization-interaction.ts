@@ -11,6 +11,7 @@ import { MINT_TRANSACTION, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../constants';
 import type { AuthorizeQuery } from '../schemas/oauth';
 import { accountPoliciesOf } from './account-policies';
 import { accountCredentialRefusal } from './account-validity';
+import { asksForSetUp } from './authorization-actions';
 import { mintAuthorizationCode } from './authorization-code';
 import type { AuthorizationErrorParams } from './authorization-error';
 import {
@@ -336,9 +337,11 @@ export async function authorizationInteractionStart(
   if (outcome.kind === 'sign_in') {
     const providers = await upstreamProviderCatalog(fastify).offered(target.realm.id);
     // The switch to a registration (#1079), under the gate the engine reads
-    // again on every round; never on a sign-in to link an upstream account.
+    // again on every round; never on a sign-in to link an upstream account,
+    // nor on one of a request that asks for a set-up (#1108).
     const register =
       options.linking !== true &&
+      !asksForSetUp(query) &&
       registrationSwitchAllowed(
         () => accountPoliciesOf(fastify, target.realm),
         target.client,

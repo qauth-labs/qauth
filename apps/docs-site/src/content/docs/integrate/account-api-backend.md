@@ -3,7 +3,7 @@ title: Account API from a backend
 description: How a backend for frontend, such as the account console's, calls the account API — the token it holds, the fresh-authentication challenge it answers, and the refusals it must not retry.
 sidebar:
   order: 8
-lastVerified: '2026-11-07'
+lastVerified: '2026-11-13'
 ---
 
 The [account API](/reference/account-api/) is called by backends that hold a person's access
@@ -84,6 +84,48 @@ answers the challenge with `max_age="0"`.
 The guard finds the recovery code through the token's `sid`: the browser session records that its
 sign-in took one. So make the rebind calls with the token of that sign-in's code exchange, within
 the five minutes; a refreshed token names no session and gets the challenge.
+
+## Adding a passkey
+
+A passkey belongs to the realm's host (its WebAuthn relying party ID), so a BFF on another host
+cannot create one, and the account API has no operation that does. Send the person to the
+authorization endpoint instead, with `qauth_action=setup_passkey` (ADR-020 §1):
+
+```http
+GET /oauth/authorize?response_type=code&client_id=account-console
+    &redirect_uri=https%3A%2F%2Faccount.example.com%2Fpasskeys%2Fadded
+    &scope=openid%20qauth%3Aaccount%3Aread%20qauth%3Aaccount%3Awrite
+    &resource=urn%3Aqauth%3Aaud%3Aaccount%3Av1-rc.0
+    &qauth_action=setup_passkey
+    &code_challenge=…&code_challenge_method=S256&state=…
+```
+
+- Only a client whose `audience` lists `urn:qauth:aud:account:v1-rc.0` may ask: any other gets
+  `unauthorized_client` at its redirect URI. The server must run the hosted pages
+  (`INTERACTION_UI_ENABLED`) with passkeys on (`WEBAUTHN_ENABLED`); otherwise the request gets
+  `invalid_request`, as it does beside `prompt=create` or `qauth_link`. Under `prompt=none` it gets
+  `login_required`.
+- The person signs in again, with the account's strongest factor, whatever session the browser
+  has. Then the hosted pages ask for a passkey, which the browser creates on the realm's origin,
+  and show the first recovery codes when the passkey is the account's first factor beyond its
+  password. The consent follows if one is owed, then the code comes back to your redirect URI.
+- The person may decline the passkey, and an account whose address was never verified binds none,
+  so a code does not mean a passkey was added. Exchange it, then read
+  `GET /account/v1-rc.0/passkeys` with the new token and compare the list with the one you had.
+- The person may sign in to another account than the one your console shows: the set-up binds the
+  passkey to whichever account signed in. Check that the new token's `sub` (and the ID token's) is
+  the user you started the set-up for before you use the token; otherwise discard it and start
+  over (a `login_hint` with that user's address pre-fills the sign-in, but does not bind it).
+- The new token comes from a sign-in that just happened, so it also meets the fresh-authentication
+  rule above for the next five minutes. A passkey added after a sign-in that proved only the
+  password is new for the realm's window (ADR-017 Decision 8): until the window ends, a fresh
+  sign-in with the password alone may remove it.
+
+Renaming a passkey (`account.passkeys.update`, a JSON Merge Patch with `If-Match`) needs no fresh
+sign-in, since a name is no credential, but refuses an act-chain token. Removing one
+(`account.passkeys.delete`) needs a fresh sign-in with the strongest factor or a recovery code, and
+answers 409 `last_credential` for the account's last way to sign in and 409
+`second_factor_required` for the last second factor the realm requires of the account.
 
 ## Refusals a step-up cannot lift
 

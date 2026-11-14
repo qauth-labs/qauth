@@ -151,6 +151,7 @@ http://localhost:3000/oauth/authorize
 | `prompt`                | no          | `none`, `login`, `consent`, or `create` to register. See below.           |
 | `qauth_upstream`        | no          | An upstream provider's type; starts the sign-in there. See below.         |
 | `qauth_link`            | no          | An upstream provider's type; links an account of it. See below.           |
+| `qauth_action`          | no          | `setup_passkey` asks the person to add a passkey. See below.              |
 
 `redirect_uri` and each `resource` are absolute URIs of at most 2048
 characters, written in ASCII as RFC 3986 requires: an internationalised host in
@@ -190,6 +191,36 @@ and only for a provider the realm has on, hidden or not; otherwise it is
 ignored. It takes precedence over `qauth_upstream`. At most 64 characters;
 QAuth-defined. The account API lists the linked accounts and unlinks one
 ([`/account/v1-rc.0/linked-accounts`](/integrate/api-reference/#get-accountv1-rc0linked-accounts)).
+
+#### Adding a passkey: `qauth_action=setup_passkey`
+
+`qauth_action=setup_passkey` asks the person to add a passkey to their account
+(#1108), the `setup_passkey` required action of ADR-020 §1. A passkey belongs to
+the realm's host, so an account console on another host cannot create one
+itself: it sends the person here instead. The person signs in again, with the
+account's strongest factor, whatever session the browser already has. Then the
+hosted pages ask for a passkey, which the browser creates on the realm's own
+origin, and the request goes on to the consent or the code as after any
+sign-in. Nobody registers in such a request.
+
+The person may decline the passkey, and an account whose address was never
+verified binds none, so the code comes back either way: read the account's
+passkeys with the account API
+([`/account/v1-rc.0/passkeys`](/integrate/api-reference/#get-accountv1-rc0passkeys))
+to learn whether one was added. The request is refused, by a redirect to your
+`redirect_uri` with `state` and `iss`, when:
+
+| Cause                                                                                    | `error`               |
+| ---------------------------------------------------------------------------------------- | --------------------- |
+| the request also carries `prompt=create` or `qauth_link`                                 | `invalid_request`     |
+| your client's `audience` does not list the account API (`urn:qauth:aud:account:v1-rc.0`) | `unauthorized_client` |
+| the Interaction API (`INTERACTION_UI_ENABLED`) or passkeys (`WEBAUTHN_ENABLED`) are off  | `invalid_request`     |
+| `prompt=none`: a set-up always signs the person in                                       | `login_required`      |
+
+Only an operator gives a client the account API's audience. Any other value of
+the parameter is refused with `400`, never redirected. QAuth-defined, so other
+authorization servers ignore it. [Account API from a backend](/integrate/account-api-backend/#adding-a-passkey)
+shows the request a console sends.
 
 #### Registration: `prompt=create`
 

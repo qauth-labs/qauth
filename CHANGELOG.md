@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The account API manages passkeys, and an authorization request can add
+  one** ([#1108], ADR-020 §1 and §3, ADR-017 Decision 8, ADR-019 Decision 7).
+  A backend that draws its own account pages can now call
+  `GET /account/v1-rc.0/passkeys` (each passkey's nickname, creation time,
+  last use and whether it syncs, newest first, by cursor),
+  `GET /account/v1-rc.0/passkeys/{passkeyId}` (with its `ETag`),
+  `PATCH /account/v1-rc.0/passkeys/{passkeyId}` (a rename, as a JSON Merge
+  Patch under `If-Match`) and `DELETE /account/v1-rc.0/passkeys/{passkeyId}`,
+  as the account contract states them, on the hosted account page's logic.
+  The rename needs no fresh sign-in; the removal needs one with the
+  account's strongest factor or a recovery code, takes the password alone
+  for a passkey still new, and answers `last_credential` and the new
+  `second_factor_required`; both refuse an act-chain token. Because a
+  passkey belongs to the realm's host, a console adds one by sending the
+  person to the authorization endpoint with the new
+  `qauth_action=setup_passkey`: only a client whose audience lists the
+  account API may ask, the person signs in again whatever session the
+  browser has, the hosted pages ask for the passkey, and the code returns
+  to the client's redirect URI. The `api` and `web` roles' database users
+  get `DELETE` on `user_credentials`, which every removal and unlink needs,
+  and `api` gets `DELETE` on `user_recovery_codes` (see the upgrade notes).
 - **The account API reads the sign-in methods and changes the password**
   ([#1107], ADR-020 §3, ADR-017 Decision 8, ADR-019 Decision 7). A backend
   that draws its own account pages can now call
@@ -4320,6 +4341,7 @@ It adds migrations 0068 and 0069.
 [#1083]: https://github.com/qauth-labs/qauth/issues/1083
 [#1106]: https://github.com/qauth-labs/qauth/issues/1106
 [#1107]: https://github.com/qauth-labs/qauth/issues/1107
+[#1108]: https://github.com/qauth-labs/qauth/issues/1108
 
 ### Deprecated
 
