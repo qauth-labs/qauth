@@ -478,16 +478,19 @@ export function createSessionsRepository(
       tx?: DbClient
     ): Promise<boolean> {
       const named = JSON.stringify([credentialId]);
+      // One the session names already stays named once: a rebind keeps the
+      // credential's id, so the same sign-in may name it again.
       const written = await (tx ?? defaultDb)
         .update(sessions)
-        .set({ newCredentialIds: sql`${sessions.newCredentialIds} || ${named}::jsonb` })
+        .set({
+          newCredentialIds: sql`CASE WHEN ${sessions.newCredentialIds} @> ${named}::jsonb THEN ${sessions.newCredentialIds} ELSE ${sessions.newCredentialIds} || ${named}::jsonb END`,
+        })
         .where(
           and(
             eq(sessions.realmId, realmId),
             eq(sessions.id, sessionId),
             eq(sessions.userId, userId),
-            sql`NOT (${sessions.newCredentialIds} @> ${named}::jsonb)`,
-            sql`jsonb_array_length(${sessions.newCredentialIds}) < ${SESSION_NEW_CREDENTIALS_MAX}`
+            sql`(${sessions.newCredentialIds} @> ${named}::jsonb OR jsonb_array_length(${sessions.newCredentialIds}) < ${SESSION_NEW_CREDENTIALS_MAX})`
           )
         )
         .returning({ id: sessions.id });

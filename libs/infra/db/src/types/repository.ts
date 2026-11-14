@@ -1693,10 +1693,10 @@ export interface SessionsRepository {
    * sign-in, as it ends those of a sign-in that bound one. Live or ended
    * alike: the families outlive the browser session.
    *
-   * @returns `true` when the session now names the credential; `false` when
-   *   it is no session of that user in the realm, names the credential
-   *   already, or names as many credentials as a session may
-   *   (`SESSION_NEW_CREDENTIALS_MAX`)
+   * @returns `true` when the session names the credential now, this call or
+   *   an earlier one having added it (a rebind keeps the credential's id);
+   *   `false` when it is no session of that user in the realm, or names as
+   *   many other credentials as a session may (`SESSION_NEW_CREDENTIALS_MAX`)
    */
   nameNewCredential(
     realmId: string,

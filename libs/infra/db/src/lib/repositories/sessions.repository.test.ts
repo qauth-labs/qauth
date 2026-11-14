@@ -640,19 +640,20 @@ describe('createSessionsRepository', () => {
     const query = await run('nameNewCredential');
     const text = query.text.toLowerCase();
 
+    // Appended unless named already, which leaves the list as it is.
     expect(text).toMatch(
-      /^update "sessions" set "new_credential_ids" = "sessions"\."new_credential_ids" \|\| \$1::jsonb where/
+      /^update "sessions" set "new_credential_ids" = case when "sessions"\."new_credential_ids" @> \$1::jsonb then "sessions"\."new_credential_ids" else "sessions"\."new_credential_ids" \|\| \$2::jsonb end where/
     );
     expect(text).toContain(
-      'where ("sessions"."realm_id" = $2 and "sessions"."id" = $3 and "sessions"."user_id" = $4 and ' +
-        'not ("sessions"."new_credential_ids" @> $5::jsonb) and ' +
-        'jsonb_array_length("sessions"."new_credential_ids") < $6)'
+      'where ("sessions"."realm_id" = $3 and "sessions"."id" = $4 and "sessions"."user_id" = $5 and ' +
+        '("sessions"."new_credential_ids" @> $6::jsonb or ' +
+        'jsonb_array_length("sessions"."new_credential_ids") < $7))'
     );
     // A session that ended is named too: the families of its sign-in outlive it.
     expect(text).not.toContain('revoked_at');
     expect(text).not.toContain('expires_at');
     const named = JSON.stringify([CREDENTIAL_ID]);
-    expect(query.values).toEqual([named, REALM_ID, SESSION_ID, USER_ID, named, 16]);
+    expect(query.values).toEqual([named, named, REALM_ID, SESSION_ID, USER_ID, named, 16]);
   });
 });
 

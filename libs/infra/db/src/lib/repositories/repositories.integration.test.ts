@@ -1282,8 +1282,8 @@ describe('repository integration (real Postgres)', () => {
         false
       );
       expect(await repo.nameNewCredential(realm.id, session.id, user.id, credential)).toBe(true);
-      // Named once.
-      expect(await repo.nameNewCredential(realm.id, session.id, user.id, credential)).toBe(false);
+      // Named once: naming it again (a rebind keeps the id) answers that it is named.
+      expect(await repo.nameNewCredential(realm.id, session.id, user.id, credential)).toBe(true);
       expect((await repo.findById(realm.id, session.id))?.newCredentialIds).toEqual([
         earlier,
         credential,
@@ -1310,6 +1310,10 @@ describe('repository integration (real Postgres)', () => {
         ),
       });
       expect(await repo.nameNewCredential(realm.id, full.id, user.id, credential)).toBe(false);
+      // One a full session names already is still named.
+      const listed = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f0100';
+      expect(await repo.nameNewCredential(realm.id, full.id, user.id, listed)).toBe(true);
+      expect((await repo.findById(realm.id, full.id))?.newCredentialIds).toHaveLength(16);
     });
   });
 
