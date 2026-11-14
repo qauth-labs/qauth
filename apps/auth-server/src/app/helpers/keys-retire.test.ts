@@ -314,6 +314,20 @@ describe('the keys:retire command', () => {
     expect(result.err[0]).toContain('the key is retired');
   });
 
+  it('exits 3 when the retirement failed and whether it committed cannot be read', async () => {
+    const result = await run(['--kid', 'ed-1', '--yes'], {
+      retire: async () => {
+        throw new Error('connection reset');
+      },
+      compromised: new Error('connection refused'),
+    });
+    expect(result.code).toBe(KEYS_RETIRE_SESSIONS_LEFT);
+    expect(result.err).toEqual([
+      'keys:retire: Error: connection reset. Whether the key was retired cannot be read: ' +
+        'Error: connection refused. Run keys:retire again for the same kid once the database answers.',
+    ]);
+  });
+
   it('exits 1 with nothing changed when the retirement failed before its commit', async () => {
     const result = await run(['--kid', 'ed-1', '--yes'], {
       retire: async () => {

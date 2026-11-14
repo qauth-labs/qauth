@@ -55,8 +55,9 @@ key until it fetches the JWKS again, unless it acts on the security event.
   --yes    Confirm: signing in again is required for everyone whose session ends.
 
 Run it again for a key retired already to end the sessions again, if a run stopped before it ended
-them: the run is recorded and announced too. Exit codes: 0 done, 3 the key is retired but its
-sessions were not all ended, 2 a usage error, 1 any other error, with nothing changed.
+them: the run is recorded and announced too. Exit codes: 0 done, 3 run it again (the key is
+retired, or may be, but its sessions were not all ended), 2 a usage error, 1 any other error, with
+nothing changed.
 
 Example:
 
@@ -251,7 +252,10 @@ export function keysRetireDependencies(
   };
 }
 
-/** The exit code of a run that retired the key but did not end all its sessions. */
+/**
+ * The exit code of a run to repeat: it retired the key, or may have, but did
+ * not end all its sessions.
+ */
 export const KEYS_RETIRE_SESSIONS_LEFT = 3;
 
 /** An epoch-ms time as the command prints it. */
@@ -292,8 +296,9 @@ export function formatKeyRetirement(outcome: Omit<KeyRetirementOutcome, 'session
 /**
  * Run the command with `argv`, the arguments after the script name.
  *
- * @returns the exit code: 0 done, 3 the key is retired but its sessions were
- *   not all ended, 2 a usage error, 1 any other error (nothing changed)
+ * @returns the exit code: 0 done, 3 run it again (the key is retired, or may
+ *   be, but its sessions were not all ended), 2 a usage error, 1 any other
+ *   error (nothing changed)
  */
 export async function runKeysRetire(
   argv: readonly string[],
@@ -336,7 +341,18 @@ export async function runKeysRetire(
     }
     // Retired or not depends on where it failed: a failure before the commit
     // changed nothing, one after it (the session sweep) left the key retired.
-    const retired = await deps.findCompromisedKey(realmId, command.kid).catch(() => undefined);
+    let retired: CompromisedKey | undefined;
+    try {
+      retired = await deps.findCompromisedKey(realmId, command.kid);
+    } catch (lookupError) {
+      // The database may have gone after the commit: the key may be retired.
+      deps.err(
+        `keys:retire: ${sentence(describeKeysRetireError(error))} Whether the key was retired ` +
+          `cannot be read: ${sentence(describeKeysRetireError(lookupError))} Run keys:retire ` +
+          'again for the same kid once the database answers.'
+      );
+      return KEYS_RETIRE_SESSIONS_LEFT;
+    }
     if (retired === undefined) {
       deps.err(`keys:retire: ${sentence(describeKeysRetireError(error))} Nothing was changed.`);
       return 1;
