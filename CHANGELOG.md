@@ -14,10 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `admin.twoAdminMandatoryOperations` policy now need two approvals: the
   requester's own step-up and one from another admin. While that list is not
   empty, so do the self-protecting operations (creating an admin, granting or
-  removing an admin role, changing an admin's credentials, identifier or
-  contact address; reserved, registered by the admin console work) and every
-  change to the list but an addition: one admin can add an operation, never
-  remove one. The second approver must be a different human account that held
+  removing an admin role, changing or deleting a custom role, changing an
+  admin's credentials, identifier or contact address, and a realm import;
+  reserved, registered by the admin console work) and every change to the
+  list but an addition: one admin can add an operation, never remove one. On
+  the operator realm a self-protecting operation needs a second admin while
+  any realm's list is not empty. The second approver must be a different human account that held
   `approvals.approve` on the realm before the request, was not created or
   granted a role and had no credential, identifier or contact address change
   in the 7 days before it, whoever made the change, and approves with a

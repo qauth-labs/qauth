@@ -251,10 +251,14 @@ one \`x-qauth-two-admin: recommended\`. A realm makes the second admin mandatory
 - A human requester's own fresh step-up is the first approval. Where the second is mandatory, a
   different, eligible admin gives it.
 - The rule protects itself. While the realm's list is not empty, the operations marked
-  self-protecting below (creating an admin, granting or removing an admin role, changing an
-  admin's credentials, identifier or contact address) need a second admin too, and so does every
-  change to the list but an addition: one admin alone can add an operation to it, never remove
-  one, replace the list or empty it. The registry refuses a reserved self-protecting operation
+  self-protecting below (creating an admin, granting or removing an admin role, changing what a
+  custom role gives, changing an admin's credentials, identifier or contact address, and an import
+  that can rewrite the list) need a second admin too, and so does every change to the list but an
+  addition: one admin alone can add an operation to it, never remove one, replace the list or
+  empty it. On the operator realm, whose admins administer every realm, a self-protecting
+  operation needs a second admin while any realm's list is not empty. The operations that change
+  an account's credentials refuse an admin's account, whose credentials change only through
+  \`admins.credentials.update\`. The registry refuses a reserved self-protecting operation
   registered without the flag.
 - An approver is eligible only when all of these hold:
   1. It is a different human account from the requester. A service account never approves.
@@ -264,7 +268,8 @@ one \`x-qauth-two-admin: recommended\`. A realm makes the second admin mandatory
      credentials, identifier and contact address did not change, whoever changed them. The 7 days
      are a constant. The automatic password disable of
      [ADR-017](/reference/records/adr/017-first-party-login/) Decision 7 is not such a change.
-  4. The credential it approves with is not registered to the requester's account.
+  4. The credential it approves with is not registered to the requester's account, did not give
+     the same request an earlier approval, and is not registered to an account that did.
 - Filing an approval answers \`twoAdmin\` (\`recommended\` or \`mandatory\`) and
   \`eligibleApprovers\`, the other admins that could give the second approval now.
 - An approval filed for one approval does not approve a call the realm has since made mandatory:

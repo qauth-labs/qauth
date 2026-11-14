@@ -740,10 +740,27 @@ describe('the server registry and reserved table (#508)', () => {
       'admins.credentials.update',
       'adminGrants.create',
       'adminGrants.delete',
+      'adminRoles.update',
+      'adminRoles.delete',
+      'realms.imports.apply',
     ]);
     expect(
       RESERVED_OPERATIONS.find((entry) => entry.id === 'admins.credentials.update')?.effects
     ).toEqual(['administration', 'credential-path']);
+    // A `users.*` operation that changes what an account signs in with
+    // refuses an admin: the admin path is the self-protecting one.
+    for (const id of [
+      'users.links.copy',
+      'users.identifiers.update',
+      'users.password.set',
+      'users.passkeys.create',
+      'users.credentials.create',
+      'users.idJagSubjects.create',
+    ]) {
+      expect(RESERVED_OPERATIONS.find((entry) => entry.id === id)?.description).toContain(
+        'refuses an account that holds a live admin grant'
+      );
+    }
   });
 
   it('lets only request-dependent reserved operations classify', () => {
@@ -1219,6 +1236,7 @@ function requestDependentOperation(id: string, classify: AdminOperationDefinitio
     permissions: DECLARED_PERMISSIONS[id] ?? REQUEST_DEPENDENT_PERMISSIONS,
     description: entry.description,
     classify,
+    ...(entry.selfProtecting === true ? { selfProtecting: true as const } : {}),
   });
 }
 
