@@ -1093,8 +1093,9 @@ Start an authenticator-app enrolment (#1109): a new 160-bit secret, answered onc
 minutes ahead. Nothing is bound until it is confirmed; a new start replaces an unconfirmed
 enrolment. `emailCode` is always `not_required`. Needs a fresh sign-in with the account's strongest
 factor, or one that used a recovery code in place of a lost one, and refuses an act-chain token. An
-account that has an authenticator app, an unclaimed account and one with no address are `409`
-`conflict`. **`201 Created`**. Errors: `400`, `401`, `403`, `409`, `503`.
+account that has an authenticator app is `409` `conflict`, unless the sign-in used a recovery code
+in place of it: that enrolment replaces the app once confirmed. An unclaimed account and one with
+no address are `409` `conflict` too. **`201 Created`**. Errors: `400`, `401`, `403`, `409`, `503`.
 
 ### `POST /account/v1-rc.0/totp/enrollment/confirm`
 
@@ -1102,7 +1103,9 @@ Bind the started enrolment with the first code the app shows, `{"code":"492039"}
 `400` `invalid_code` and leaves the enrolment for another; none started, lapsed or already confirmed
 is `404`. Answers `enabledAt`, and `recoveryCodes` (ten codes and `issuedAt`, shown once) when the
 app is the account's first second factor. An app bound after a sign-in that proved only the password
-is new for the realm's window (ADR-017 Decision 8). The owner gets the "authenticator app added"
+is new for the realm's window (ADR-017 Decision 8), and is named on the session of the token's
+`sid`: a token that names none, such as a refreshed one, gets the challenge with `max_age="0"`
+instead. The owner gets the "authenticator app added"
 notice. Same fresh sign-in and act-chain rule as the start. Errors: `400`, `401`, `403`, `404`, `503`.
 
 ### `DELETE /account/v1-rc.0/totp`

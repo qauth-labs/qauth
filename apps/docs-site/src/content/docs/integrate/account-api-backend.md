@@ -146,15 +146,19 @@ lost one):
    lapsed or once it was confirmed, the answer is `404` `not_found`.
 
 - The start answers `409` `conflict` when the account already has an authenticator app (remove it
-  first, the first half of a rebind), when its address was never verified (an unclaimed account
-  binds no factor), and when it has no address the app could show beside the code.
+  first), when its address was never verified (an unclaimed account binds no factor), and when it
+  has no address the app could show beside the code. A sign-in that used a recovery code in place
+  of a lost app is the exception: its enrolment replaces the bound app once confirmed, even where
+  the realm's policy refuses removing the last second factor.
 - When the app is the account's first second factor, the confirmation also answers
   `recoveryCodes`: the account's first set of ten codes, shown once. QAuth marks the set as saved
   as it answers it, so show the codes then; a later sign-in does not show them again.
 - An app bound with a token whose sign-in proved only the password is new for the realm's window
   (ADR-017 Decision 8), and the browser session that sign-in started names it: until the window
   ends, a fresh sign-in with the password alone may remove it (`DELETE /account/v1-rc.0/totp`),
-  which ends that session.
+  which ends that session and what it opened. Such a binding needs the token of that sign-in's
+  code exchange, which names the session in `sid`: a refreshed token names none, and the start and
+  the confirmation then answer the challenge with `max_age="0"`.
 - Removing the app needs the same fresh sign-in as the start, and answers `409`
   `second_factor_required` for the last second factor the realm requires of the account.
 

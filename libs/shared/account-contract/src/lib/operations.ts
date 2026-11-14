@@ -381,7 +381,7 @@ export const ACCOUNT_OPERATIONS: readonly AccountOperation[] = [
     tag: 'Sign-in methods',
     summary: 'Start an authenticator-app enrolment',
     description:
-      'Draw a new TOTP secret and return it once, as text and as an `otpauth://` URI. Nothing is bound until the enrolment is confirmed within ten minutes; a new enrolment replaces one not yet confirmed. No code is mailed: a verified account binds its first second factor after the fresh sign-in alone (ADR-017 Decision 8). An account that has TOTP gets `conflict`, as do an unclaimed account, which binds no factor, and one with no address for the app to show. A sign-in that used a recovery code in place of a lost second factor may enrol a new one.',
+      'Draw a new TOTP secret and return it once, as text and as an `otpauth://` URI. Nothing is bound until the enrolment is confirmed within ten minutes; a new enrolment replaces one not yet confirmed. No code is mailed: a verified account binds its first second factor after the fresh sign-in alone (ADR-017 Decision 8). An account that has TOTP gets `conflict`, as do an unclaimed account, which binds no factor, and one with no address for the app to show. A sign-in that used a recovery code in place of a lost second factor may enrol a new one, which replaces a bound authenticator app once confirmed.',
     class: 'write',
     permission: 'totp.write',
     freshAuthentication: 'strongest-factor-or-recovery-code',
