@@ -1128,6 +1128,12 @@ export const E2E_PASSWORD = 'Correct-Horse-Battery-Staple-42!';
  * `options.host` registers the account in the realm of that host (#487); by
  * default the requests go to the default realm's host.
  *
+ * `options.verifyOn` verifies on that process instead, through the mailed
+ * link's page (`GET /auth/verify`) and its form (`POST /ui/verify`), as a
+ * browser does: a process that serves `api` without the signer cannot verify
+ * (#497), as `POST /auth/verify` reserves a failure-ladder attempt keyed by
+ * the realm's cookie key, which the signer hands the `web` role only.
+ *
  * @returns the new account's `users.id`.
  * @throws Error when registration, the mail or the verification fails.
  */
@@ -1135,7 +1141,7 @@ export async function registerPasswordAccount(
   app: FastifyInstance,
   email: string,
   password = E2E_PASSWORD,
-  options: { readonly host?: string } = {}
+  options: { readonly host?: string; readonly verifyOn?: FastifyInstance } = {}
 ): Promise<string> {
   const headers = options.host === undefined ? {} : { host: options.host };
   const emailService = app.emailService;
@@ -1167,14 +1173,18 @@ export async function registerPasswordAccount(
     throw new Error(`registration of ${email} sent no verification mail`);
   }
 
-  const verified = await app.inject({
-    method: 'POST',
-    url: '/auth/verify',
-    headers,
-    payload: { token, password },
-  });
-  if (verified.statusCode !== 200) {
-    throw new Error(`POST /auth/verify answered ${verified.statusCode}: ${verified.body}`);
+  if (options.verifyOn === undefined) {
+    const verified = await app.inject({
+      method: 'POST',
+      url: '/auth/verify',
+      headers,
+      payload: { token, password },
+    });
+    if (verified.statusCode !== 200) {
+      throw new Error(`POST /auth/verify answered ${verified.statusCode}: ${verified.body}`);
+    }
+  } else {
+    await verifyThroughForm(options.verifyOn, token, password, headers);
   }
 
   const realm =
@@ -1188,6 +1198,43 @@ export async function registerPasswordAccount(
     throw new Error(`registration of ${email} left no password credential`);
   }
   return credential.userId;
+}
+
+/** Verify an account as a browser does: open the mailed link's page, then post its form. */
+async function verifyThroughForm(
+  app: FastifyInstance,
+  token: string,
+  password: string,
+  headers: { readonly host?: string }
+): Promise<void> {
+  const jar = new CookieJar();
+  const page = await app.inject({
+    method: 'GET',
+    url: `/auth/verify?${new URLSearchParams({ token }).toString()}`,
+    headers,
+  });
+  if (page.statusCode !== 200) {
+    throw new Error(`GET /auth/verify answered ${page.statusCode}: ${page.body}`);
+  }
+  jar.absorb(page.headers['set-cookie']);
+  const cookie = jar.header();
+  const verified = await app.inject({
+    method: 'POST',
+    url: '/ui/verify',
+    headers: {
+      ...headers,
+      'content-type': 'application/x-www-form-urlencoded',
+      ...(cookie === undefined ? {} : { cookie }),
+    },
+    payload: new URLSearchParams({
+      token,
+      password,
+      csrf_token: extractCsrfToken(page.body),
+    }).toString(),
+  });
+  if (verified.statusCode !== 200) {
+    throw new Error(`POST /ui/verify answered ${verified.statusCode}: ${verified.body}`);
+  }
 }
 
 /**

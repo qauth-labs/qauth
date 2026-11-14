@@ -76,7 +76,7 @@ const FAILURE_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
   peer_refused:
     "The signer service's listener refused this process's certificate: map its SAN to the process's role in the signer's INTERNAL_PEER_ROLES",
   role_refused:
-    "The signer service took this process's certificate for another role than the call's: map its SAN to the process's role in the signer's INTERNAL_PEER_ROLES, and give each role a process and a certificate of its own",
+    "The signer service refused the call for the role this process's certificate maps to: either that role may not make it (SIGNER_POLICY; a process serving api without the signer cannot read the cookie key its failure ladder and session cookies need), or the certificate maps to another role than the process serves (map its SAN to the process's role in the signer's INTERNAL_PEER_ROLES, and give each role a process and a certificate of its own)",
   rate_limited: 'The signer service refused a call for the rate of this peer',
 });
 

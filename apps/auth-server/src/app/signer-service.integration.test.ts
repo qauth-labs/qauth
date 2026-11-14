@@ -372,8 +372,10 @@ describe('the signer service over mutual TLS, between processes (#497)', () => {
   it('answers 503 to token issuance while the signer is stopped, keeps the JWKS, userinfo and introspection, and recovers when it is back', async () => {
     // A person signs in on web (its cookies signed with the cookie key from
     // the signer) and the api role redeems the code: both through the signer.
-    await registerPasswordAccount(app('api'), EMAIL);
+    // The address is verified on web too: `POST /auth/verify` on api reads
+    // the cookie key for its failure ladder, which api may not.
     const web = app('web');
+    await registerPasswordAccount(app('api'), EMAIL, undefined, { verifyOn: web });
     const jar = await signInWithPassword(web, EMAIL);
     const pkce = pkcePair();
     const authorize = await web.inject({
