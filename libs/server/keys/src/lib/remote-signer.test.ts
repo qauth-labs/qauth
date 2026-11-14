@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto';
+
 import { TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
 import { createLocalJWKSet, jwtVerify } from 'jose';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -20,6 +22,7 @@ import {
   type SignerTransportRequest,
   type SignerTransportResponse,
 } from './remote-signer';
+import { COOKIE_DERIVED_KEY_LABELS, cookieMacInput, deriveCookieKey } from './cookie-derivation';
 import { type Signer, SIGNER_OPERATIONS, type SignerOperation } from './signer';
 import { isSignerError, SignerAccessDeniedError, SignerRequestRefusedError } from './signer-errors';
 import type { SignerCaller } from './signer-policy';
@@ -202,6 +205,38 @@ describe('the remote signer (#497)', () => {
         { type: 'call_failed', operation: 'getCookieSecrets', reason: 'role_refused', status: 403 },
       ]);
       expect(await signer.signJws('api', ACCESS_TOKEN)).toMatch(/^ey/);
+    });
+
+    it('hands api a derived key and checks a cookie for it, never the cookie secret (#497)', async () => {
+      const api = remote(loopback(setup.signer, 'api'));
+      const { current } = await setup.signer.getCookieSecrets('local', SERVICE_REALM);
+      const label = COOKIE_DERIVED_KEY_LABELS[1];
+      const derived = await api.getCookieDerivedKey('local', { realmId: SERVICE_REALM, label });
+      expect(derived.kid).toBe(current.kid);
+      expect(derived.key.equals(deriveCookieKey(current.secret, label))).toBe(true);
+
+      const fields = {
+        realmId: SERVICE_REALM,
+        cookieName: '__Host-qauth_session',
+        kid: current.kid,
+        payload: 'eyJzIjpbInNpZCJdfQ',
+      };
+      const mac = createHmac('sha256', current.secret)
+        .update(cookieMacInput(fields))
+        .digest('base64url');
+      expect(await api.verifyCookieMac('local', { ...fields, mac })).toBe(true);
+      expect(
+        await api.verifyCookieMac('local', { ...fields, payload: 'eyJzIjpbIm90aGVyIl19', mac })
+      ).toBe(false);
+      // The cookie secrets stay the web role's.
+      expect(await caught(api.getCookieSecrets('local', SERVICE_REALM))).toMatchObject({
+        details: { reason: 'signer_role_refused' },
+      });
+      // And delivery gets neither.
+      const delivery = remote(loopback(setup.signer, 'delivery'));
+      expect(
+        await caught(delivery.getCookieDerivedKey('local', { realmId: SERVICE_REALM, label }))
+      ).toMatchObject({ details: { reason: 'signer_role_refused' } });
     });
 
     it('refuses a request larger than the service takes, before it is sent, and a 413 alike', async () => {
@@ -507,7 +542,15 @@ describe('the remote signer (#497)', () => {
 
   it('retries only operations whose repeat changes nothing', () => {
     expect([...IDEMPOTENT_SIGNER_OPERATIONS].sort()).toEqual(
-      ['decrypt', 'getCookieSecrets', 'getJwks', 'getUpstreamJwks', 'getVerificationKeys'].sort()
+      [
+        'decrypt',
+        'getCookieDerivedKey',
+        'getCookieSecrets',
+        'getJwks',
+        'getUpstreamJwks',
+        'getVerificationKeys',
+        'verifyCookieMac',
+      ].sort()
     );
   });
 });

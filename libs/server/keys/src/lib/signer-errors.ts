@@ -122,7 +122,11 @@ export type SignerRefusalReason =
    * (`SIGNER_REQUEST_BODY_LIMITS`, #497): only a remote signer refuses it,
    * before anything is sent.
    */
-  | 'REQUEST_TOO_LARGE';
+  | 'REQUEST_TOO_LARGE'
+  /** A key derivation names a label that is not one of `COOKIE_DERIVED_KEY_LABELS` (#497). */
+  | 'INVALID_LABEL'
+  /** A cookie to check has a name, `kid`, payload or MAC not of the signed cookie's format (#497). */
+  | 'INVALID_COOKIE';
 
 /**
  * Every {@link SignerRefusalReason}, for a reader that must tell a known
@@ -151,6 +155,8 @@ export const SIGNER_REFUSAL_REASONS = Object.freeze([
   'INVALID_CERTIFICATE_CHAIN',
   'CERTIFICATE_KEY_MISMATCH',
   'REQUEST_TOO_LARGE',
+  'INVALID_LABEL',
+  'INVALID_COOKIE',
 ] as const satisfies readonly SignerRefusalReason[]);
 
 // Fails to compile when the union gains a reason the list lacks.

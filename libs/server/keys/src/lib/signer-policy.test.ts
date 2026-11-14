@@ -48,6 +48,8 @@ describe('SIGNER_POLICY', () => {
         'signClientAssertion',
         'signRequestObject',
         'getCookieSecrets',
+        'getCookieDerivedKey',
+        'verifyCookieMac',
         'encrypt',
         'decrypt',
         'getVerificationKeys',
@@ -57,6 +59,7 @@ describe('SIGNER_POLICY', () => {
       web: [
         'signRequestObject',
         'getCookieSecrets',
+        'getCookieDerivedKey',
         'getVerificationKeys',
         'getJwks',
         'getUpstreamJwks',
@@ -67,6 +70,8 @@ describe('SIGNER_POLICY', () => {
         'signJws:oauth-id-jag+jwt',
         'signHybrid',
         'signClientAssertion',
+        'getCookieDerivedKey',
+        'verifyCookieMac',
         'encrypt',
         'getVerificationKeys',
         'getJwks',
@@ -269,10 +274,16 @@ describe('SIGNER_POLICY', () => {
     }
   });
 
-  it('gives the cookie secrets to web and local only', () => {
+  it('gives the cookie secrets to web and local only, and what makes no cookie to api too (#497)', () => {
     expect(
       SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'getCookieSecrets'))
     ).toEqual(['local', 'web']);
+    expect(
+      SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'getCookieDerivedKey'))
+    ).toEqual(['local', 'web', 'api']);
+    expect(
+      SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'verifyCookieMac'))
+    ).toEqual(['local', 'api']);
   });
 
   it('is frozen', () => {

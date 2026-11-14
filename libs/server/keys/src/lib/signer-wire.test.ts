@@ -245,3 +245,22 @@ describe('the signer wire format (#497)', () => {
     expect(decodeSignerError('SIGNER_FAULT', context)).toBeUndefined();
   });
 });
+
+describe('the derived key and cookie check answers (#497)', () => {
+  it('decodes a derived key of 32 bytes and a boolean, and nothing of another shape', () => {
+    const key = Buffer.alloc(32, 9);
+    const encoded = encodeSignerResult('getCookieDerivedKey', { kid: 'k1', key: Buffer.from(key) });
+    expect(decodeSignerResult('getCookieDerivedKey', encoded)).toEqual({ kid: 'k1', key });
+    expect(() => decodeSignerResult('getCookieDerivedKey', { kid: 'k1', bytes: 'AAAA' })).toThrow(
+      SignerWireFormatError
+    );
+    expect(decodeSignerResult('verifyCookieMac', true)).toBe(true);
+    expect(() => decodeSignerResult('verifyCookieMac', 'true')).toThrow(SignerWireFormatError);
+  });
+
+  it('zeroes the derived key it encoded', () => {
+    const key = Buffer.alloc(32, 9);
+    encodeSignerResult('getCookieDerivedKey', { kid: 'k1', key });
+    expect(key.equals(Buffer.alloc(32))).toBe(true);
+  });
+});

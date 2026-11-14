@@ -43,6 +43,10 @@ export interface SignerGrant {
   readonly signClientAssertion: boolean;
   readonly signRequestObject: boolean;
   readonly getCookieSecrets: boolean;
+  /** A key derived from the cookie secret for a digest, which makes no cookie (#497). */
+  readonly getCookieDerivedKey: boolean;
+  /** Checking a cookie's MAC with the cookie key, which hands out no key (#497). */
+  readonly verifyCookieMac: boolean;
   /**
    * `true`: with any `context`. A list: only with a `context` that starts with
    * one of these prefixes, so a role that stores one kind of secret cannot
@@ -143,6 +147,8 @@ const NOTHING_ELSE = {
   signClientAssertion: false,
   signRequestObject: false,
   getCookieSecrets: false,
+  getCookieDerivedKey: false,
+  verifyCookieMac: false,
   encrypt: false,
   decrypt: false,
 } as const;
@@ -151,13 +157,18 @@ const NOTHING_ELSE = {
  * The policy table: what each role may call.
  *
  * - `web` gets the cookie HMAC secrets, the one secret ADR-019 Decision 9 hands
- *   to a role outside the signer. It never signs a token. It serves the wallet
+ *   to a role outside the signer, and the keys derived from them for its
+ *   digests (`getCookieDerivedKey`, #497). It never signs a token. It serves the wallet
  *   sign-in pages, so it signs OID4VP request objects with the
  *   `oid4vp_request_signing` key and seals each request's ephemeral response
  *   key with the `data_at_rest` key (#546): it may encrypt only with an
  *   {@link OID4VP_RESPONSE_KEY_CONTEXT_PREFIX} context, and decrypts nothing.
  * - `api` signs access tokens, ID tokens and ID-JAGs (`token_signing`, hybrid
- *   included), but no logout token, signs
+ *   included), but no logout token. It never gets the cookie secrets, which
+ *   would let it make a browser session cookie: it gets the keys derived from
+ *   them for the failure ladder's and the emailed codes' digests
+ *   (`getCookieDerivedKey`), and has the signer check the session cookie
+ *   `/auth/logout` reads (`verifyCookieMac`), #497. It signs
  *   client assertions toward upstream providers (#547), and encrypts with the
  *   `data_at_rest` key. It decrypts only five kinds of stored secret: a
  *   realm's mail transport secret ({@link REALM_MAIL_SECRET_CONTEXT_PREFIX}),
@@ -202,6 +213,8 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     signClientAssertion: true,
     signRequestObject: true,
     getCookieSecrets: true,
+    getCookieDerivedKey: true,
+    verifyCookieMac: true,
     encrypt: true,
     decrypt: true,
     ...PUBLIC_READS,
@@ -210,6 +223,7 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     ...NOTHING_ELSE,
     signRequestObject: true,
     getCookieSecrets: true,
+    getCookieDerivedKey: true,
     encrypt: [OID4VP_RESPONSE_KEY_CONTEXT_PREFIX],
     ...PUBLIC_READS,
   },
@@ -218,6 +232,8 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     signJws: ['at+jwt', 'JWT', 'oauth-id-jag+jwt'],
     signHybrid: true,
     signClientAssertion: true,
+    getCookieDerivedKey: true,
+    verifyCookieMac: true,
     encrypt: true,
     decrypt: [
       REALM_MAIL_SECRET_CONTEXT_PREFIX,

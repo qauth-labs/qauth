@@ -73,6 +73,19 @@ export type {
   RotatedNowKeys,
   RotateNowInput,
 } from '@qauth-labs/server-keys/custody';
+// What the cookie key gives a role that does not hold it (#497): the labels
+// keys are derived for, and the signed cookie's MAC format the signer checks.
+export {
+  COOKIE_DERIVED_KEY_LABELS,
+  COOKIE_KID_PATTERN,
+  COOKIE_MAC_LABEL,
+  COOKIE_MAC_PATTERN,
+  type CookieDerivedKey,
+  type CookieDerivedKeyLabel,
+  cookieMacInput,
+  deriveCookieKey,
+  MAX_COOKIE_PAYLOAD_LENGTH,
+} from '@qauth-labs/server-keys';
 // The signer service and the remote signer (#497): the signer role serves
 // the routes of SIGNER_SERVICE_ROUTES on its internal listener with the
 // service, and every other role calls them through the remote signer, over

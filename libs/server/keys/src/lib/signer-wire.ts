@@ -6,6 +6,7 @@ import { isKeyPurpose } from './key-purposes';
 import { PRIVATE_JWK_MEMBERS } from './published-keys';
 import { isRealmId } from './realm-id';
 import {
+  type CookieDerivedKey,
   type CookieSecret,
   type CookieSecrets,
   type RealmJwks,
@@ -67,6 +68,8 @@ export const SIGNER_SERVICE_ROUTES: Readonly<Record<SignerOperation, string>> = 
   signClientAssertion: '/sign-client-assertion',
   signRequestObject: '/sign-request-object',
   getCookieSecrets: '/cookie-secrets',
+  getCookieDerivedKey: '/cookie-derived-key',
+  verifyCookieMac: '/verify-cookie-mac',
   encrypt: '/encrypt',
   decrypt: '/decrypt',
   getVerificationKeys: '/verification-keys',
@@ -98,6 +101,8 @@ export const SIGNER_REQUEST_BODY_LIMITS: Readonly<Record<SignerOperation, number
   signClientAssertion: SMALL_REQUEST_BYTES,
   signRequestObject: LARGE_REQUEST_BYTES,
   getCookieSecrets: SMALL_REQUEST_BYTES,
+  getCookieDerivedKey: SMALL_REQUEST_BYTES,
+  verifyCookieMac: SMALL_REQUEST_BYTES,
   encrypt: LARGE_REQUEST_BYTES,
   decrypt: LARGE_REQUEST_BYTES,
   getVerificationKeys: SMALL_REQUEST_BYTES,
@@ -336,6 +341,12 @@ export function encodeSignerResult<O extends SignerOperation>(
         previous: secrets.previous === null ? null : encode(secrets.previous),
       };
     }
+    case 'getCookieDerivedKey': {
+      const derived = result as CookieDerivedKey;
+      const encoded = { kid: derived.kid, ...encodeWireBytes(derived.key) };
+      derived.key.fill(0);
+      return encoded;
+    }
     case 'decrypt': {
       const plaintext = result as Buffer;
       const encoded = encodeWireBytes(plaintext);
@@ -450,6 +461,14 @@ export function decodeSignerResult<O extends SignerOperation>(
       if (current === undefined || previous === undefined) return fail();
       return Object.freeze({ current, previous }) as SignerOperationResult<O>;
     }
+    case 'getCookieDerivedKey': {
+      // Of the same shape as a cookie secret: a `kid` and the key's bytes.
+      const derived = decodeCookieSecret(value);
+      if (derived === undefined || derived.secret.length !== 32) return fail();
+      return Object.freeze({ kid: derived.kid, key: derived.secret }) as SignerOperationResult<O>;
+    }
+    case 'verifyCookieMac':
+      return (typeof value === 'boolean' ? value : fail()) as SignerOperationResult<O>;
     case 'decrypt': {
       const plaintext = decodeWireBytes(value);
       return (plaintext ?? fail()) as SignerOperationResult<O>;

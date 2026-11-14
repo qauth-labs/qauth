@@ -75,10 +75,10 @@ import {
  *   the signer, and the first that gets an answer closes the circuit. So a
  *   restarted signer is used again with no restart of this process.
  * - **The upstream JWKS is cached** for `upstreamJwksCacheMs` per realm and
- *   provider. The cookie secrets are not: their caller, the auth server's
- *   cookie key ring, keeps them for 60 seconds as key objects, and a second
- *   cache here would keep the raw secrets on the heap and delay a rotation
- *   twice.
+ *   provider. The cookie secrets and the keys derived from them are not:
+ *   their callers, the auth server's cookie key ring and its derived key
+ *   cache, keep them for 60 seconds as key objects, and a second cache here
+ *   would keep the raw secrets on the heap and delay a rotation twice.
  *
  * Errors name the operation and a reason. They never carry a claim value,
  * a plaintext, a ciphertext or key material: the request's body is not read
@@ -197,6 +197,8 @@ const DEFAULT_UPSTREAM_JWKS_CACHE_SIZE = 256;
  */
 export const IDEMPOTENT_SIGNER_OPERATIONS: readonly SignerOperation[] = Object.freeze([
   'getCookieSecrets',
+  'getCookieDerivedKey',
+  'verifyCookieMac',
   'getUpstreamJwks',
   'getVerificationKeys',
   'getJwks',
@@ -554,6 +556,14 @@ export function createRemoteSigner(options: RemoteSignerOptions): Signer {
     async getCookieSecrets(caller, realmId, cookieOptions) {
       authorize(caller, 'getCookieSecrets');
       return call('getCookieSecrets', [realmId, cookieOptions], realmId);
+    },
+    async getCookieDerivedKey(caller, request) {
+      authorize(caller, 'getCookieDerivedKey');
+      return call('getCookieDerivedKey', [request], member(request, 'realmId'));
+    },
+    async verifyCookieMac(caller, request) {
+      authorize(caller, 'verifyCookieMac');
+      return call('verifyCookieMac', [request], member(request, 'realmId'));
     },
     async encrypt(caller: SignerCaller, request: EncryptRequest) {
       authorize(caller, 'encrypt', request);

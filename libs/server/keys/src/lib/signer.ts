@@ -154,6 +154,39 @@ export interface Signer {
   ): Promise<CookieSecrets>;
 
   /**
+   * A key derived from the realm's active cookie HMAC secret for
+   * `request.label` (#497, ADR-017 Decision 7): HKDF-SHA-256 (RFC 5869), the
+   * secret as its input key, no salt, the label as `info`, 32 bytes
+   * (`deriveCookieKey`). A keyed digest every process of the realm must agree
+   * on is an HMAC under it, such as the failure ladder's identifier digest,
+   * and the key makes no cookie: a role that holds it cannot sign one. Each
+   * call returns a fresh buffer that belongs to the caller, and the `kid` of
+   * the cookie key it comes from.
+   *
+   * @throws SignerKeyNotFoundError when the realm has no active `cookie_hmac` key
+   * @throws SignerRequestRefusedError (`INVALID_LABEL`) when the label is not
+   *   one of `COOKIE_DERIVED_KEY_LABELS`
+   */
+  getCookieDerivedKey(
+    caller: SignerCaller,
+    request: CookieDerivedKeyRequest
+  ): Promise<CookieDerivedKey>;
+
+  /**
+   * Whether `request.mac` is the MAC of a signed cookie of the realm (#493):
+   * HMAC-SHA-256 of `cookieMacInput` under the realm's current or previous
+   * cookie key that `request.kid` names, compared in constant time. A `kid`
+   * neither names makes the store be read again, as `getCookieSecrets` does
+   * for one, and is `false` when it still names neither. A role that holds no
+   * cookie key checks a cookie with it, and can make none.
+   *
+   * @throws SignerKeyNotFoundError when the realm has no active `cookie_hmac` key
+   * @throws SignerRequestRefusedError (`INVALID_COOKIE`) when a field is not
+   *   of the signed cookie's format
+   */
+  verifyCookieMac(caller: SignerCaller, request: VerifyCookieMacRequest): Promise<boolean>;
+
+  /**
    * Encrypt `plaintext` with the realm's active `data_at_rest` key
    * (AES-256-GCM). The result names the key's `kid`, so it still decrypts after
    * a rotation, while the old key is retained. The format is `v1.<kid>.<iv>.<ciphertext>`;
@@ -321,6 +354,34 @@ export interface CookieSecrets {
   readonly previous: CookieSecret | null;
 }
 
+/** Input of {@link Signer.getCookieDerivedKey}. */
+export interface CookieDerivedKeyRequest {
+  readonly realmId: string;
+  /** What the key is for: a label of `COOKIE_DERIVED_KEY_LABELS`. */
+  readonly label: string;
+}
+
+/** What {@link Signer.getCookieDerivedKey} returns. */
+export interface CookieDerivedKey {
+  /** The `kid` of the cookie key it is derived from. */
+  readonly kid: string;
+  /** The derived key, 32 bytes. A fresh buffer that belongs to the caller. */
+  readonly key: Buffer;
+}
+
+/** Input of {@link Signer.verifyCookieMac}: a signed cookie value's parts. */
+export interface VerifyCookieMacRequest {
+  readonly realmId: string;
+  /** The cookie's name. */
+  readonly cookieName: string;
+  /** The cookie key the value names. */
+  readonly kid: string;
+  /** The value's content. */
+  readonly payload: string;
+  /** The value's MAC, base64url. */
+  readonly mac: string;
+}
+
 /** Input of {@link Signer.encrypt}. */
 export interface EncryptRequest {
   readonly realmId: string;
@@ -370,6 +431,8 @@ export const SIGNER_OPERATIONS = Object.freeze([
   'signClientAssertion',
   'signRequestObject',
   'getCookieSecrets',
+  'getCookieDerivedKey',
+  'verifyCookieMac',
   'encrypt',
   'decrypt',
   'getVerificationKeys',

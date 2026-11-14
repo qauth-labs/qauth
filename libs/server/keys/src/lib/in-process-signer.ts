@@ -1,4 +1,10 @@
-import { createPrivateKey, createPublicKey, X509Certificate } from 'node:crypto';
+import {
+  createHmac,
+  createPrivateKey,
+  createPublicKey,
+  timingSafeEqual,
+  X509Certificate,
+} from 'node:crypto';
 
 import {
   extractJwsSigningInput,
@@ -15,6 +21,15 @@ import { type JWTPayload, SignJWT } from 'jose';
 
 import type { KeyIdentity } from './aad';
 import { BoundedCache } from './bounded-cache';
+import {
+  COOKIE_KID_PATTERN,
+  COOKIE_MAC_PATTERN,
+  COOKIE_NAME_PATTERN,
+  cookieMacInput,
+  deriveCookieKey,
+  isCookieDerivedKeyLabel,
+  MAX_COOKIE_PAYLOAD_LENGTH,
+} from './cookie-derivation';
 import {
   bufferSource,
   isDataKid,
@@ -42,6 +57,8 @@ import {
   verificationKeysOf,
 } from './published-keys';
 import type {
+  CookieDerivedKey,
+  CookieDerivedKeyRequest,
   CookieSecret,
   CookieSecrets,
   CookieSecretsOptions,
@@ -57,6 +74,7 @@ import type {
   SignRequestObjectRequest,
   SignWebhookRequest,
   VerificationKey,
+  VerifyCookieMacRequest,
 } from './signer';
 import {
   RealmIssuerNotFoundError,
@@ -218,6 +236,8 @@ const REQUEST_FIELDS = {
   signRequestObject: ['realmId', 'certificateChain', 'claims'],
   encrypt: ['realmId', 'plaintext', 'context'],
   decrypt: ['realmId', 'ciphertext', 'context'],
+  getCookieDerivedKey: ['realmId', 'label'],
+  verifyCookieMac: ['realmId', 'cookieName', 'kid', 'payload', 'mac'],
 } as const satisfies Partial<Record<SignerOperation, readonly string[]>>;
 
 /** The algorithms `signJws` signs with, and their WebCrypto import parameters. */
@@ -612,6 +632,32 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     return Object.freeze({ kid: record.kid, secret: ownCopy(loaded.secret) });
   }
 
+  /**
+   * The realm's current and previous cookie keys. A `wanted` key neither of
+   * them is makes the store be read again: another node may sign with a key
+   * this one has not read yet, or read only while it was still `next`
+   * (#493). The read is skipped when one for a missing key already ran within
+   * the last second.
+   *
+   * @throws SignerKeyNotFoundError when the realm has no active cookie key
+   */
+  async function cookieKeyRecords(
+    realmId: string,
+    wanted?: string
+  ): Promise<{ current: SignerKeyRecord; previous: SignerKeyRecord | undefined }> {
+    let { current, previous } = cookieKeysOf(await listKeys(realmId, 'cookie_hmac', null), now());
+    if (wanted !== undefined && current?.kid !== wanted && previous?.kid !== wanted) {
+      ({ current, previous } = cookieKeysOf(
+        await listKeys(realmId, 'cookie_hmac', null, true),
+        now()
+      ));
+    }
+    if (current === undefined) {
+      throw new SignerKeyNotFoundError(realmId, 'cookie_hmac', { algorithm: 'HS256' });
+    }
+    return { current, previous };
+  }
+
   function authorize(caller: unknown, operation: SignerOperation, purpose?: string): void {
     if (!isSignerCallAllowed(caller, operation, purpose)) {
       throw new SignerAccessDeniedError(
@@ -934,26 +980,75 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       if (wanted !== undefined && typeof wanted !== 'string') {
         throw new SignerRequestRefusedError('INVALID_KID', 'A cookie key id is a string');
       }
-      let { current, previous } = cookieKeysOf(await listKeys(realmId, 'cookie_hmac', null), now());
-      // A cookie names a key that is neither the current nor the previous key
-      // of this list: another node may sign with a key this one has not read
-      // yet, or read only while it was still `next` (#493). Read the store
-      // again, unless a read for a missing key already did within the last
-      // second.
-      if (wanted !== undefined && current?.kid !== wanted && previous?.kid !== wanted) {
-        ({ current, previous } = cookieKeysOf(
-          await listKeys(realmId, 'cookie_hmac', null, true),
-          now()
-        ));
-      }
-      if (current === undefined) {
-        throw new SignerKeyNotFoundError(realmId, 'cookie_hmac', { algorithm: 'HS256' });
-      }
-
+      const { current, previous } = await cookieKeyRecords(realmId, wanted);
       return Object.freeze({
         current: await secretOf(realmId, current),
         previous: previous === undefined ? null : await secretOf(realmId, previous),
       });
+    },
+
+    async getCookieDerivedKey(
+      caller: SignerCaller,
+      request: CookieDerivedKeyRequest
+    ): Promise<CookieDerivedKey> {
+      const fields = readRequest(request, REQUEST_FIELDS.getCookieDerivedKey);
+      authorize(caller, 'getCookieDerivedKey');
+      const realmId = resolveRealmId(fields['realmId']);
+      const label = fields['label'];
+      if (!isCookieDerivedKeyLabel(label)) {
+        throw new SignerRequestRefusedError(
+          'INVALID_LABEL',
+          'The label is not one a key is derived for from the cookie key'
+        );
+      }
+      const { current } = await cookieKeyRecords(realmId);
+      const secret = await secretOf(realmId, current);
+      try {
+        return Object.freeze({ kid: secret.kid, key: deriveCookieKey(secret.secret, label) });
+      } finally {
+        secret.secret.fill(0);
+      }
+    },
+
+    async verifyCookieMac(caller: SignerCaller, request: VerifyCookieMacRequest): Promise<boolean> {
+      const fields = readRequest(request, REQUEST_FIELDS.verifyCookieMac);
+      authorize(caller, 'verifyCookieMac');
+      const realmId = resolveRealmId(fields['realmId']);
+      const { cookieName, kid, payload, mac } = fields;
+      if (
+        typeof cookieName !== 'string' ||
+        !COOKIE_NAME_PATTERN.test(cookieName) ||
+        typeof kid !== 'string' ||
+        !COOKIE_KID_PATTERN.test(kid) ||
+        typeof payload !== 'string' ||
+        payload.length === 0 ||
+        payload.length > MAX_COOKIE_PAYLOAD_LENGTH ||
+        payload.includes('.') ||
+        payload.includes('\u0000') ||
+        typeof mac !== 'string' ||
+        !COOKIE_MAC_PATTERN.test(mac)
+      ) {
+        throw new SignerRequestRefusedError(
+          'INVALID_COOKIE',
+          'The cookie is not of the signed cookie format'
+        );
+      }
+      const presented = Buffer.from(mac, 'base64url');
+      // The last of 43 characters carries two unused bits: only the canonical
+      // spelling of a MAC is accepted, so a signed value has one form.
+      if (presented.toString('base64url') !== mac) return false;
+      const { current, previous } = await cookieKeyRecords(realmId, kid);
+      const record = current.kid === kid ? current : previous?.kid === kid ? previous : undefined;
+      if (record === undefined) return false;
+      const secret = await secretOf(realmId, record);
+      try {
+        const expected = createHmac('sha256', secret.secret)
+          .update(cookieMacInput({ cookieName, realmId, kid, payload }))
+          .digest();
+        return timingSafeEqual(presented, expected);
+      } finally {
+        secret.secret.fill(0);
+      }
     },
 
     async encrypt(caller: SignerCaller, request: EncryptRequest): Promise<string> {

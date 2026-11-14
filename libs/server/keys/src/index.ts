@@ -104,6 +104,21 @@ export {
   type SignerTransportResponse,
 } from './lib/remote-signer';
 export {
+  COOKIE_DERIVED_KEY_BYTES,
+  COOKIE_DERIVED_KEY_LABELS,
+  COOKIE_KID_PATTERN,
+  COOKIE_MAC_LABEL,
+  COOKIE_MAC_PATTERN,
+  type CookieDerivedKeyLabel,
+  type CookieMacFields,
+  cookieMacInput,
+  deriveCookieKey,
+  isCookieDerivedKeyLabel,
+  MAX_COOKIE_PAYLOAD_LENGTH,
+} from './lib/cookie-derivation';
+export {
+  type CookieDerivedKey,
+  type CookieDerivedKeyRequest,
   type CookieSecret,
   type CookieSecrets,
   type CookieSecretsOptions,
@@ -119,6 +134,7 @@ export {
   type SignJwsRequest,
   type SignWebhookRequest,
   type VerificationKey,
+  type VerifyCookieMacRequest,
 } from './lib/signer';
 export {
   DATA_DECRYPTION_ERROR_MESSAGE,
