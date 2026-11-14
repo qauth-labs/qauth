@@ -94,9 +94,9 @@ export async function importRs256PublicKey(pem: string): Promise<KeyLike> {
  * NON-extractable WebCrypto `CryptoKey`s, from which the public key cannot be
  * re-exported; `createPublicKey` derives it directly from the PEM.
  *
- * Algorithm-agnostic (works for RSA and Ed25519), but its purpose here is to
- * let the JWT plugin publish the RS256 public JWK from a private-key-only
- * configuration, mirroring how the EdDSA key can supply its own public half.
+ * Algorithm-agnostic (works for RSA and Ed25519). The key boot step derives
+ * the public halves of `JWT_PRIVATE_KEY` and `JWT_RS256_PRIVATE_KEY` the same
+ * way (`@qauth-labs/server-keys`, #359).
  *
  * @param privatePem - PKCS#8 private-key PEM.
  * @returns SPKI PEM of the corresponding public key.

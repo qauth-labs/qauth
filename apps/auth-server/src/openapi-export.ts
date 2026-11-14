@@ -139,23 +139,17 @@ function parseFlagSurface(argv: readonly string[]): FlagSurface {
 const MIN_EXPECTED_PATHS = 20;
 
 /**
- * Generate a fresh EdDSA (Ed25519) key pair (PKCS#8 private / SPKI public PEM).
- *
- * Both halves are generated and set explicitly (`JWT_PRIVATE_KEY` AND
- * `JWT_PUBLIC_KEY`) rather than leaning on `fastify-plugin-jwt`'s "derive the
- * public key from the private key" fallback: that fallback calls jose's
- * `exportSPKI` directly on the imported PRIVATE `KeyLike`
- * (`libs/server/jwt/src/lib/jose-utils.ts`), which jose rejects — it throws
- * `'Failed to derive public key from private key. Please provide
- * JWT_PUBLIC_KEY in environment variables.'` for every EdDSA key, not just an
- * edge case. Generating the pair up front sidesteps that path entirely.
+ * Generate a fresh Ed25519 private key, PKCS#8 PEM. No `JWT_PUBLIC_KEY` is set:
+ * the key boot step, which would derive it (#359), is off in this export
+ * (`defaultRealmBoot: false`), so the key variables only have to pass the
+ * configuration's parsing, and nothing reads a public key.
  */
-function generateEd25519KeyPairPem(): { privateKeyPem: string; publicKeyPem: string } {
-  const { privateKey, publicKey } = generateKeyPairSync('ed25519', {
+function generateEd25519PrivateKeyPem(): string {
+  const { privateKey } = generateKeyPairSync('ed25519', {
     publicKeyEncoding: { type: 'spki', format: 'pem' },
     privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
   });
-  return { privateKeyPem: privateKey, publicKeyPem: publicKey };
+  return privateKey;
 }
 
 /** Generate a fresh RS256-capable RSA private key (>=2048-bit), PKCS#8 PEM. */
@@ -179,8 +173,6 @@ function generateMlDsaSeedBase64Url(): string {
  * (see the module doc comment).
  */
 function setEphemeralEnv(surface: FlagSurface): void {
-  const ed25519 = generateEd25519KeyPairPem();
-
   Object.assign(process.env, {
     NODE_ENV: 'development',
 
@@ -195,8 +187,7 @@ function setEphemeralEnv(surface: FlagSurface): void {
     REDIS_CONNECTION_TIMEOUT: '200',
 
     JWT_ISSUER: 'https://auth.qauth.dev',
-    JWT_PRIVATE_KEY: ed25519.privateKeyPem,
-    JWT_PUBLIC_KEY: ed25519.publicKeyPem,
+    JWT_PRIVATE_KEY: generateEd25519PrivateKeyPem(),
     JWT_RS256_PRIVATE_KEY: generateRsaPrivateKeyPem(),
     JWT_MLDSA_PRIVATE_KEY: generateMlDsaSeedBase64Url(),
 
