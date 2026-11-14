@@ -373,7 +373,9 @@ It fails while the process cannot mark itself seen in the database, and the
 log says so. It also fails when the process's row was removed while it ran,
 it wrote the row back, and a node of its release whose settings differ had
 joined meanwhile: the error log names the keys, and the check passes again
-once the process restarts with the same values.
+once the process restarts with the same values. Until the process could
+compare with the running nodes after it wrote its row back, the check fails
+too.
 
 The signer service is not a check of the processes that call it: while it is
 down they stay ready, so their JWKS, token verification, `/userinfo` and

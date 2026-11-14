@@ -329,6 +329,43 @@ describe('the node list of a booting node', () => {
     await list.stop();
   });
 
+  it('keeps the comparison owed while it cannot list the nodes after its row is written again', async () => {
+    vi.useFakeTimers();
+    const memory = memoryList();
+    let listDown = false;
+    const repository: DeploymentNodesRepository = {
+      ...memory.repository,
+      listLive: async (windowMs) => {
+        if (listDown) throw new Error('connection reset');
+        return memory.repository.listLive(windowMs);
+      },
+    };
+    const { log, warnings } = recordingLog();
+    const list = createDeploymentNodeList({ repository, log, node: SELF, rollout: false });
+    await list.register();
+    const cannotCompare = () =>
+      warnings.filter((warning) => /cannot compare its configuration/.test(warning.message));
+
+    // The row went as stale, and the list fails right after the beat that
+    // writes it again: the comparison stays owed, and the node unready.
+    memory.set([]);
+    listDown = true;
+    await vi.advanceTimersByTimeAsync(DEPLOYMENT_NODE_HEARTBEAT_MS);
+    expect(memory.rows().map((row) => row.nodeId)).toEqual([SELF.nodeId]);
+    expect(cannotCompare()).toHaveLength(1);
+    await expect(list.assertListed()).rejects.toThrow('has not compared its configuration');
+
+    // The next beat finds its row, and still owes the comparison.
+    await vi.advanceTimersByTimeAsync(DEPLOYMENT_NODE_HEARTBEAT_MS);
+    expect(cannotCompare()).toHaveLength(1);
+    await expect(list.assertListed()).rejects.toThrow('has not compared its configuration');
+
+    listDown = false;
+    await vi.advanceTimersByTimeAsync(DEPLOYMENT_NODE_HEARTBEAT_MS);
+    await expect(list.assertListed()).resolves.toBeUndefined();
+    await list.stop();
+  });
+
   it('warns when another database user holds its id, as when it cannot mark itself seen', async () => {
     vi.useFakeTimers();
     const memory = memoryList();

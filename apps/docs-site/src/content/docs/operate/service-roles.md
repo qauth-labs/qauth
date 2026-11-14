@@ -324,7 +324,9 @@ node's row was removed while it ran, as after two minutes without the
 database, its next mark as seen writes the row back and compares once more:
 if a node of its release whose settings differ joined meanwhile, the node
 logs an error naming the keys, and `config_digest` fails until it restarts
-with the same values.
+with the same values. It writes the row back under the list's lock, as a
+booting node registers, so whichever of the two comes second compares with
+the other; until its comparison succeeds, `config_digest` fails.
 
 No role's database user reads or writes the `deployment_nodes` table: every
 role calls the four `SECURITY DEFINER` functions of migration 0076, which take

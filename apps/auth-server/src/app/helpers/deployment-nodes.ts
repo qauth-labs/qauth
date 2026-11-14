@@ -187,6 +187,10 @@ export function createDeploymentNodeList(options: DeploymentNodeListOptions): De
   let stopped = false;
   /** The keys a node of the release differs in, found when the row was written again. */
   let conflict: readonly string[] | undefined;
+  // A comparison owed since the row was written again, until one succeeds: a
+  // failed list leaves it owed, and the next heartbeats try it again.
+  let recheckPending = false;
+  let recheckFailing = false;
 
   /**
    * Refuse a mismatch with a node of this release, or with the rollout
@@ -261,7 +265,7 @@ export function createDeploymentNodeList(options: DeploymentNodeListOptions): De
           { nodeId: node.nodeId },
           'This node was missing from the node list, removed while it could not mark itself seen, and is listed again'
         );
-        await recheck();
+        recheckPending = true;
       } else if (failing) {
         log.info({ nodeId: node.nodeId }, 'This node marks itself seen in the node list again');
       }
@@ -274,6 +278,21 @@ export function createDeploymentNodeList(options: DeploymentNodeListOptions): De
         );
       }
       failing = true;
+      return;
+    }
+    if (!recheckPending) return;
+    try {
+      await recheck();
+      recheckPending = false;
+      recheckFailing = false;
+    } catch (error) {
+      if (!recheckFailing) {
+        log.warn(
+          { nodeId: node.nodeId, err: describeError(error) },
+          'This node is listed again but cannot compare its configuration with the running nodes: the config_digest readiness check fails until a later heartbeat compares'
+        );
+      }
+      recheckFailing = true;
     }
   }
 
@@ -326,6 +345,11 @@ export function createDeploymentNodeList(options: DeploymentNodeListOptions): De
       if (conflict !== undefined) {
         throw new Error(
           `This node's configuration differs from a running node of its release in ${conflict.join(', ')}`
+        );
+      }
+      if (recheckPending) {
+        throw new Error(
+          'This node has not compared its configuration with the running nodes since its row was written again'
         );
       }
       if (!(await repository.isLive(node.nodeId, DEPLOYMENT_NODE_LIVE_WINDOW_MS))) {
