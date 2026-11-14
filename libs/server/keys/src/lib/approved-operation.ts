@@ -21,9 +21,21 @@ import { isScopeId } from './scope-id';
  * ({@link keyRotationOperation}), and hands the SHA-256 of the record's RFC
  * 8785 form ({@link operationDigest}) to {@link ApprovedOperation.consume},
  * inside the transaction that changes the keys. The approval consumes itself
- * only when that digest is the one it was filed for, which is the digest its
- * approver's passkey challenge was derived from. So an approval of one
- * realm, purpose, scope or requester approves no other, and is used once.
+ * only for the digest of the record it rebuilds from what its approver
+ * approved. The admin API's approval (#512) is filed for its own canonical
+ * request of the operation, which holds the same realm, purpose, requester
+ * and nonce, and its approver's passkey challenge is derived from that
+ * request's hash; its `consume`, which the admin route that files a
+ * `keys.rotate` approval implements, rebuilds this record from the request
+ * filed. So the passkey that approved the request approved this rotation and
+ * no other: an approval of one realm, purpose, scope or requester approves no
+ * other, and is used once.
+ *
+ * The interface is structural: the type refuses no approval and an approval of
+ * another operation, and the operation checks the members at run time, but it
+ * cannot tell a real approval from an object shaped like one. The guarantee
+ * lies in `consume`, which only the approvals module and the break-glass CLI
+ * implement.
  *
  * Nothing here touches a KEK or key material: the admin API computes the
  * same digest when it files the approval, from this public entry point.
@@ -88,11 +100,24 @@ export interface ApprovedOperation<Op extends string = string, Tx = unknown> {
   /**
    * Use the approval up for the operation whose canonical record hashes to
    * `digest` ({@link operationDigest}), inside the operation's transaction
-   * `tx`: the approval is open, approved by every approval its realm asks for,
-   * not expired, filed for exactly that digest, and not used before. It
-   * resolves once it has recorded the use in `tx`, so the use commits with
-   * the operation or not at all. It rejects otherwise, and the operation then
-   * rolls back with nothing changed.
+   * `tx`, which is a transaction of the database the approval lives in. It
+   * resolves only when, read and written in `tx`:
+   *
+   * - `digest` is the digest of the record it rebuilds from what it was filed
+   *   for (the realm, purpose, scope, requester and nonce its approver saw),
+   *   compared in constant time;
+   * - the approval is open, not expired, and approved by every approver its
+   *   realm asks for at that moment (a second admin, where the realm makes one
+   *   mandatory for the operation);
+   * - and it recorded the use with a conditional write that an approval used
+   *   before matches nothing, so a second use, concurrent or not, fails.
+   *
+   * The use then commits with the operation, or not at all. To refuse, it
+   * rejects with an {@link OperationApprovalError} (or another error whose
+   * `code` is `OPERATION_APPROVAL_REFUSED`): the operation rolls back and
+   * throws an `OperationApprovalError` of reason `refused`. Any other
+   * rejection is a fault, which the operation passes on as it is after
+   * rolling back.
    */
   consume(digest: Buffer, tx: Tx): Promise<void>;
 }
@@ -126,6 +151,18 @@ export class OperationApprovalError extends Error {
       Error.captureStackTrace(this, OperationApprovalError);
     }
   }
+}
+
+/**
+ * Whether `error` is a refusal of an approval: an {@link OperationApprovalError},
+ * or an error of its code from another copy of this module.
+ */
+export function isOperationApprovalRefusal(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { readonly code?: unknown }).code === 'OPERATION_APPROVAL_REFUSED'
+  );
 }
 
 /** The canonical record of a manual key rotation: what its approval is bound to. */
