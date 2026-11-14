@@ -75,13 +75,13 @@ export {
   MAX_REFRESH_TOKEN_LIFESPAN_SECONDS,
 } from './jwt';
 export { type KekEnv, kekEnvSchema } from './kek';
-export { type KeyRotationEnv, keyRotationEnvSchema, keyRotationProblems } from './key-rotation';
 export {
   type AttestedKeyStorageGrade,
   type AttestingIssuerMap,
   type KeyAttestationEnv,
   keyAttestationEnvSchema,
 } from './key-attestation';
+export { type KeyRotationEnv, keyRotationEnvSchema, keyRotationProblems } from './key-rotation';
 export {
   MAX_FAILED_LOGIN_LOCKOUT_SECONDS,
   MAX_FAILED_LOGIN_WINDOW_SECONDS,

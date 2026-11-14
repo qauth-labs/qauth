@@ -68,15 +68,6 @@ export {
   type ScopedKeyInput,
 } from './lib/key-factory';
 export {
-  createKeyRotation,
-  type KeyRotation,
-  type KeyRotationFailure,
-  type KeyRotationOptions,
-  type KeyRotationReport,
-  type KeyRotationRunOptions,
-  type KeyRotationStore,
-} from './lib/key-rotation';
-export {
   assertAllowedBySigningMode,
   type GeneratedKeyMaterial,
   generateKeyMaterial,
@@ -86,6 +77,15 @@ export {
   RANDOM_KID_BYTES,
   SYMMETRIC_KEY_BYTES,
 } from './lib/key-generation';
+export {
+  createKeyRotation,
+  type KeyRotation,
+  type KeyRotationFailure,
+  type KeyRotationOptions,
+  type KeyRotationReport,
+  type KeyRotationRunOptions,
+  type KeyRotationStore,
+} from './lib/key-rotation';
 export type {
   NewKeyStatus,
   NewStoredKey,

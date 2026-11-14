@@ -1,3 +1,4 @@
+import type { KeyRotationStore } from '../lib/key-rotation';
 import type {
   NewStoredKey,
   NewStoredKeyRow,
@@ -5,7 +6,6 @@ import type {
   StoredKeyStatus,
   StoredKeySummary,
 } from '../lib/key-store';
-import type { KeyRotationStore } from '../lib/key-rotation';
 import type { RealmKeyBootStore, StoredPublicKey } from '../lib/realm-key-boot';
 import type { WrappedSignerKey } from '../lib/signer-key-store';
 

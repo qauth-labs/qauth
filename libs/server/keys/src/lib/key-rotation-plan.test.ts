@@ -1,5 +1,5 @@
-import { ROTATING_KEY_ALGORITHMS, ROTATING_KEY_PURPOSES } from '@qauth-labs/shared-events';
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
+import { ROTATING_KEY_ALGORITHMS, ROTATING_KEY_PURPOSES } from '@qauth-labs/shared-events';
 import { describe, expect, it } from 'vitest';
 
 import {
