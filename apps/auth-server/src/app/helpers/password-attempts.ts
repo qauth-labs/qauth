@@ -1,7 +1,6 @@
 import {
-  type CookieSecretSource as DigestSecretSource,
-  createCookieSecretEmailCodeDigest,
-  createCookieSecretIdentifierDigest,
+  createDerivedKeyEmailCodeDigest,
+  createDerivedKeyIdentifierDigest,
   createHardActionArming,
   createPasswordAttempts,
   createPasswordHardAction,
@@ -23,7 +22,7 @@ import {
   type ClientAddressSource,
   UNKNOWN_CLIENT_ADDRESS,
 } from './client-address';
-import { cookieKeyRing } from './cookie-keys';
+import { cookieDerivedKeyRing } from './cookie-derived-keys';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -58,22 +57,6 @@ export function ladderEndUserIp(request: ClientAddressSource): { readonly endUse
   return key === UNKNOWN_CLIENT_ADDRESS ? {} : { endUserIp: key };
 }
 
-/**
- * The realm's current cookie HMAC secret through the process's cookie key
- * ring: the identifier and end-user IP digests derive their keys from it
- * (no new secret, ADR-017 Decision 7), and the ring reads the signer at most
- * once a minute per realm, so a login costs no signer call. The ring hands out
- * a copy of the secret, which the digest zeroes once used.
- */
-function cookieRingSecrets(fastify: FastifyInstance): DigestSecretSource {
-  return {
-    async getCookieSecrets(_caller, realmId) {
-      const { current } = await cookieKeyRing(fastify).keys(realmId);
-      return { current: { kid: current.kid, secret: current.key.export() }, previous: null };
-    },
-  };
-}
-
 /** The keyed HMACs of a process, under the realm's cookie key (ADR-017 Decision 7). */
 export interface ServerDigests {
   /** The identifier's HMAC: the ladder's and the send caps' account key. */
@@ -83,26 +66,29 @@ export interface ServerDigests {
 }
 
 /**
- * The identifier and end-user IP digests of this process, over its cookie
- * key ring: the failure ladder (#615) and the send caps (#637) key the same
- * account by the same HMAC, so a known IP the ladder recorded is the one a
- * send cap exempts.
+ * The identifier and end-user IP digests of this process, under keys the
+ * signer derives from the realm's cookie key (`cookie-derived-keys.ts`; no new
+ * secret, ADR-017 Decision 7): the failure ladder (#615) and the send caps
+ * (#637) key the same account by the same HMAC, so a known IP the ladder
+ * recorded is the one a send cap exempts. A process that may not hold the
+ * cookie secret, `api` (#497), makes the same digests, and a sign-in with a
+ * warm cache makes no signer call.
  */
 export function createServerDigests(fastify: FastifyInstance): ServerDigests {
-  const secrets = cookieRingSecrets(fastify);
+  const keys = cookieDerivedKeyRing(fastify);
   return {
-    identifierDigest: createCookieSecretIdentifierDigest(secrets, 'local'),
-    ipDigest: createCookieSecretIdentifierDigest(secrets, 'local', END_USER_IP_HMAC_LABEL),
+    identifierDigest: createDerivedKeyIdentifierDigest(keys),
+    ipDigest: createDerivedKeyIdentifierDigest(keys, END_USER_IP_HMAC_LABEL),
   };
 }
 
 /**
- * The email-code digest of this process (#638), over its cookie key ring as
- * the identifier's: the sign-in transaction holds an emailed code only as
- * this keyed HMAC, under a label of its own.
+ * The email-code digest of this process (#638), under a key derived from the
+ * realm's cookie key as the identifier's: the sign-in transaction holds an
+ * emailed code only as this keyed HMAC, under a label of its own.
  */
 export function createServerEmailCodeDigest(fastify: FastifyInstance): EmailCodeDigest {
-  return createCookieSecretEmailCodeDigest(cookieRingSecrets(fastify), 'local');
+  return createDerivedKeyEmailCodeDigest(cookieDerivedKeyRing(fastify));
 }
 
 /** The parts of the per-account failure ladder (#615) every password route of a process shares. */

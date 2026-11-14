@@ -11,6 +11,7 @@ import {
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
+  E2E_PASSWORD,
   E2E_REALM_NAME,
   type E2eInfrastructure,
   generateJwtPem,
@@ -370,12 +371,12 @@ describe('the signer service over mutual TLS, between processes (#497)', () => {
   });
 
   it('answers 503 to token issuance while the signer is stopped, keeps the JWKS, userinfo and introspection, and recovers when it is back', async () => {
-    // A person signs in on web (its cookies signed with the cookie key from
-    // the signer) and the api role redeems the code: both through the signer.
-    // The address is verified on web too: `POST /auth/verify` on api reads
-    // the cookie key for its failure ladder, which api may not.
+    // A person registers and verifies the address on api (its failure ladder
+    // keyed with a key the signer derives from the cookie key, which api may
+    // not hold), signs in on web (its cookies signed with the cookie key from
+    // the signer) and the api role redeems the code: all through the signer.
     const web = app('web');
-    await registerPasswordAccount(app('api'), EMAIL, undefined, { verifyOn: web });
+    await registerPasswordAccount(app('api'), EMAIL);
     const jar = await signInWithPassword(web, EMAIL);
     const pkce = pkcePair();
     const authorize = await web.inject({
@@ -451,5 +452,25 @@ describe('the signer service over mutual TLS, between processes (#497)', () => {
     await eventually(async () => (await issueMachineToken()).statusCode === 200, 20_000, 250);
     const secrets = await app('web').signer.getCookieSecrets('web', realm.id);
     expect(secrets.current.secret.length).toBeGreaterThanOrEqual(32);
+
+    // api signs the person in and out: the login's failure ladder through a
+    // derived key, and the browser's session cookie checked by the signer,
+    // so the logout clears it.
+    const login = await api.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: EMAIL, password: E2E_PASSWORD },
+    });
+    expect(login.statusCode, login.body).toBe(200);
+    const logout = await api.inject({
+      method: 'POST',
+      url: '/auth/logout',
+      headers: {
+        authorization: `Bearer ${login.json<{ access_token: string }>().access_token}`,
+        cookie: jar.header() as string,
+      },
+    });
+    expect(logout.statusCode, logout.body).toBe(200);
+    expect(String(logout.headers['set-cookie'])).toMatch(/__Host-qauth_session=;[^,]*Max-Age=0/);
   }, 120_000);
 });

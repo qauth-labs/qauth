@@ -15,7 +15,7 @@ import {
   clearSessionCookie,
   readCookie,
   SESSION_COOKIE_NAME,
-  verifySessionCookie,
+  verifySessionCookieAtSigner,
 } from '../../helpers/session-cookie';
 import { revokeJti } from '../../helpers/token-revocation';
 import { inactiveSubjectError } from '../../helpers/token-subject';
@@ -152,13 +152,14 @@ export default async function (fastify: FastifyInstance) {
         // found by the user in Postgres, never through a cookie or Redis
         // (#912); the request's own cookie is cleared when it names one.
         const endedSessions = await endBrowserSessions(fastify, user.realmId, userId);
-        // Best effort (#493): the cookie verifies only with the realm's cookie
-        // keys, and a process that cannot read them (no signer role, a signer
-        // outage) must still end everything below. The cookie then names an
-        // ended session, and the next page that reads it clears it.
+        // The signer checks the cookie's MAC (#497): this route is the `api`
+        // role's, which does not hold the realm's cookie keys. Best effort
+        // (#493): a signer outage must still end everything below. The cookie
+        // then names an ended session, and the next page that reads it clears
+        // it.
         let requestSessionId: string | null = null;
         try {
-          requestSessionId = await verifySessionCookie(
+          requestSessionId = await verifySessionCookieAtSigner(
             fastify,
             user.realmId,
             readCookie(request, SESSION_COOKIE_NAME)

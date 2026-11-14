@@ -43,6 +43,8 @@ export function createUnavailableSigner(
     signClientAssertion: refuse('signClientAssertion'),
     signRequestObject: refuse('signRequestObject'),
     getCookieSecrets: refuse('getCookieSecrets'),
+    getCookieDerivedKey: refuse('getCookieDerivedKey'),
+    verifyCookieMac: refuse('verifyCookieMac'),
     encrypt: refuse('encrypt'),
     decrypt: refuse('decrypt'),
     getVerificationKeys:
