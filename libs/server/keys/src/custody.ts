@@ -98,6 +98,7 @@ export {
 } from './lib/key-generation';
 export {
   createKeyRotation,
+  type KeyRetirementRecord,
   type KeyRotation,
   type KeyRotationFailure,
   type KeyRotationNowRecord,
@@ -105,6 +106,8 @@ export {
   type KeyRotationReport,
   type KeyRotationRunOptions,
   type KeyRotationStore,
+  type RetiredNowKey,
+  type RetireNowInput,
   type RotatedNowKeys,
   type RotateNowInput,
 } from './lib/key-rotation';

@@ -114,7 +114,8 @@ export function createRepositoryPublishedKeyReader(
  * can be created together, and a subscription or provider deleted with its
  * keys (`deleteScopedKeys`). `lockRealm` is the repository's advisory lock on
  * a realm's keys. The key rotation job (#542) writes through it too, and
- * pages through the realms with `listRealmIds`.
+ * pages through the realms with `listRealmIds`; an emergency retirement
+ * (#551) marks a key compromised with `markCompromised`.
  */
 export function createRepositoryKeyStore(
   db: DbClient
@@ -127,6 +128,7 @@ export function createRepositoryKeyStore(
     listByRealm: keys.listByRealm,
     create: keys.create,
     updateStatus: keys.updateStatus,
+    markCompromised: keys.markCompromised,
     deleteByScope: keys.deleteByScope,
     lockRealm: keys.lockRealm,
     listRealmIds: (afterRealmId: string | null, limit: number) =>

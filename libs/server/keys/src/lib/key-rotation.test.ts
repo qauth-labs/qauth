@@ -13,7 +13,10 @@ import {
 import { createMemorySignerStore, type MemorySignerStore } from '../testing/memory-signer-store';
 import {
   type ApprovedOperation,
+  KEY_RETIRE_OPERATION,
   KEY_ROTATE_OPERATION,
+  keyRetirementOperation,
+  type KeyRetireOperation,
   type KeyRotateOperation,
   keyRotationOperation,
   newOperationNonce,
@@ -28,10 +31,12 @@ import { createKeyFactory } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
 import {
   createKeyRotation,
+  type KeyRetirementRecord,
   type KeyRotation,
   type KeyRotationNowRecord,
   type KeyRotationReport,
   type KeyRotationRunOptions,
+  type RetireNowInput,
   type RotateNowInput,
 } from './key-rotation';
 import {
@@ -41,6 +46,8 @@ import {
   type KeysRotatedStep,
   type NextKeyCreatedStep,
 } from './key-rotation-plan';
+import { createKidDenylist, type KidDenylistView } from './kid-denylist';
+import { createPublishedKeyReader } from './published-keys';
 import type { Signer } from './signer';
 import type { SignerKeyRecord } from './signer-key-store';
 import * as policy from './signer-policy';
@@ -76,7 +83,7 @@ interface World {
   /** One run of the job at the clock's time. */
   run(overrides?: Partial<KeyRotationRunOptions<MemoryTx>>): Promise<KeyRotationReport>;
   /** A signer of its own, with its own key caches, as on another node. */
-  signer(refreshIntervalMs?: number): Signer;
+  signer(refreshIntervalMs?: number, keyDenylist?: KidDenylistView): Signer;
 }
 
 async function world(options: WorldOptions = {}): Promise<World> {
@@ -118,13 +125,14 @@ async function world(options: WorldOptions = {}): Promise<World> {
         },
         ...overrides,
       }),
-    signer: (refreshIntervalMs = REFRESH_MS) =>
+    signer: (refreshIntervalMs = REFRESH_MS, keyDenylist?: KidDenylistView) =>
       createInProcessSigner({
         store,
         kekProvider,
         enabledSignatureAlgorithms: enabled,
         hybridSigning: hybrid,
         refreshIntervalMs,
+        ...(keyDenylist === undefined ? {} : { keyDenylist }),
         now: () => clock.now,
       }),
   };
@@ -1056,6 +1064,425 @@ describe('rotateNow: a manual rotation under an approval (#544)', () => {
     await expect(
       rotateNow(w, purpose as KeyPurpose, { approval, ...overrides })
     ).rejects.toMatchObject({ name: 'KeyChangeRefusedError', reason });
+    expect(approval.uses).toEqual([]);
+    expect(snapshot(w)).toEqual(before);
+  });
+});
+
+describe('retireNow: an emergency retirement under an approval (#551)', () => {
+  const OPERATOR: SecurityOperationActor = Object.freeze({
+    kind: 'break_glass',
+    operatingSystemUser: 'qauth-ops',
+  });
+
+  /** An approval of a test, single use, filed for the retirement of one kid. */
+  interface TestApproval extends ApprovedOperation<KeyRetireOperation, MemoryTx> {
+    readonly uses: { readonly digest: Buffer; readonly tx: MemoryTx }[];
+  }
+
+  function approvalOf(
+    filedFor: { readonly realmId: string; readonly kid: string },
+    requester: SecurityOperationActor = OPERATOR
+  ): TestApproval {
+    const nonce = newOperationNonce();
+    const filed = operationDigest(
+      keyRetirementOperation({ realmId: filedFor.realmId, kid: filedFor.kid, requester, nonce })
+    );
+    const uses: { digest: Buffer; tx: MemoryTx }[] = [];
+    return {
+      id: randomUUID(),
+      operation: KEY_RETIRE_OPERATION,
+      requester,
+      nonce,
+      uses,
+      async consume(digest, tx) {
+        if (uses.length > 0) throw new OperationApprovalError('refused', 'used already');
+        if (!digest.equals(filed)) {
+          throw new OperationApprovalError('refused', 'filed for another operation');
+        }
+        uses.push({ digest, tx });
+      },
+    };
+  }
+
+  /** Retire `kid` at the clock's time, with an approval of it. */
+  function retireNow(
+    w: World,
+    kid: string,
+    overrides: Partial<RetireNowInput<MemoryTx>> = {}
+  ): Promise<KeyRetirementRecord> {
+    return w.rotation.retireNow({
+      realmId: REALM,
+      kid,
+      now: () => w.clock.now,
+      onRetired: async () => undefined,
+      ...overrides,
+      approval: overrides.approval ?? approvalOf({ realmId: REALM, kid }),
+    });
+  }
+
+  function snapshot(w: World) {
+    return {
+      rows: w.keys.rows.map((row) => ({
+        kid: row.key.kid,
+        status: row.key.status,
+        retireAt: row.key.retireAt,
+        unpublishAt: row.key.unpublishAt,
+      })),
+      denied: [...w.keys.denied],
+    };
+  }
+
+  /** The realm's `token_signing` keys of `status`. */
+  function tokenKeys(w: World, status: string) {
+    return w.keys.rows
+      .filter(
+        (row) =>
+          row.key.realmId === REALM &&
+          row.key.purpose === 'token_signing' &&
+          row.key.status === status
+      )
+      .map((row) => row.key);
+  }
+
+  function activeKid(w: World, algorithm = 'EdDSA'): string {
+    const [key] = tokenKeys(w, 'active').filter((each) => each.algorithm === algorithm);
+    if (key === undefined) throw new Error(`no active ${algorithm} key`);
+    return key.kid;
+  }
+
+  it('fails without an approval, or with one of another operation, and changes nothing', async () => {
+    const w = await world();
+    const kid = activeKid(w);
+    const before = snapshot(w);
+    const base = { realmId: REALM, kid, onRetired: async () => undefined };
+
+    // @ts-expect-error -- an emergency retirement does not compile without an approval
+    await expect(w.rotation.retireNow(base)).rejects.toMatchObject({
+      name: 'OperationApprovalError',
+      reason: 'missing',
+      statusCode: 403,
+    });
+    const rotation: ApprovedOperation<KeyRotateOperation, MemoryTx> = {
+      ...approvalOf({ realmId: REALM, kid }),
+      operation: KEY_ROTATE_OPERATION,
+    };
+    // @ts-expect-error -- nor with the approval of a manual rotation
+    await expect(w.rotation.retireNow({ ...base, approval: rotation })).rejects.toMatchObject({
+      reason: 'other_operation',
+    });
+    const valid = approvalOf({ realmId: REALM, kid });
+    for (const malformed of [
+      'approved',
+      { ...valid, id: 'approval-1' },
+      { ...valid, nonce: 'short' },
+      { ...valid, consume: undefined },
+    ]) {
+      await expect(
+        w.rotation.retireNow({ ...base, approval: malformed as never }),
+        JSON.stringify(malformed)
+      ).rejects.toMatchObject({ name: 'OperationApprovalError', reason: 'malformed' });
+    }
+    const noHook = { ...base, approval: valid, onRetired: undefined };
+    // @ts-expect-error -- nor without its hook
+    await expect(w.rotation.retireNow(noHook)).rejects.toThrow(TypeError);
+    expect(valid.uses).toEqual([]);
+    expect(snapshot(w)).toEqual(before);
+  });
+
+  it('refuses an approval filed for another realm, kid or requester, or used already', async () => {
+    const w = await world();
+    const kid = activeKid(w);
+    const before = snapshot(w);
+    for (const approval of [
+      approvalOf({ realmId: OTHER_REALM, kid }),
+      approvalOf({ realmId: REALM, kid: `${kid}x` }),
+      {
+        ...approvalOf({ realmId: REALM, kid }),
+        requester: { ...OPERATOR, operatingSystemUser: 'root' },
+      },
+    ]) {
+      await expect(retireNow(w, kid, { approval })).rejects.toMatchObject({
+        name: 'OperationApprovalError',
+        reason: 'refused',
+      });
+    }
+    expect(snapshot(w)).toEqual(before);
+
+    const once = approvalOf({ realmId: REALM, kid });
+    await retireNow(w, kid, { approval: once });
+    const newKid = activeKid(w);
+    // The used approval retires nothing more, not even the replacement.
+    await expect(retireNow(w, newKid, { approval: once })).rejects.toMatchObject({
+      reason: 'refused',
+    });
+    expect(tokenKeys(w, 'active').map((key) => key.kid)).toEqual([newKid]);
+  });
+
+  it('retires the active key at once: out of the JWKS, denied, and a new key signs', async () => {
+    const w = await world();
+    const signer = w.signer(0);
+    w.clock.now = T0 + 10 * DAY;
+    const oldToken = await signer.signJws('local', accessToken(w.clock.now));
+    const oldKid = await kidOf(oldToken);
+    expect(await verifies(signer, oldToken)).toBe(true);
+
+    const record = await retireNow(w, oldKid);
+    expect(record).toMatchObject({
+      operation: KEY_RETIRE_OPERATION,
+      actor: OPERATOR,
+      realmId: REALM,
+      purpose: 'token_signing',
+      kid: oldKid,
+      retiredAt: T0 + 10 * DAY,
+      retired: [{ kid: oldKid, algorithm: 'EdDSA', previousStatus: 'active', activateAt: T0 }],
+      replacements: [{ kid: expect.any(String), algorithm: 'EdDSA' }],
+      // Every session and family since the key began to sign is to be revoked.
+      signedSince: T0,
+    });
+    const [compromised] = tokenKeys(w, 'compromised');
+    expect(compromised).toMatchObject({
+      kid: oldKid,
+      compromisedAt: T0 + 10 * DAY,
+      retireAt: T0 + 10 * DAY,
+      unpublishAt: T0 + 10 * DAY,
+    });
+    expect(w.keys.denied).toEqual([`${REALM} ${oldKid}`]);
+
+    // The new key signs at once, with no pre-publication.
+    const [replacement] = record.replacements;
+    expect(tokenKeys(w, 'active')).toMatchObject([
+      { kid: replacement.kid, activateAt: T0 + 10 * DAY, publishAt: T0 + 10 * DAY },
+    ]);
+    expect(await kidOf(await signer.signJws('local', accessToken(w.clock.now)))).toBe(
+      replacement.kid
+    );
+    expect(await jwksKids(signer)).not.toContain(oldKid);
+    expect(await jwksKids(signer)).toContain(replacement.kid);
+    expect(await verifies(signer, oldToken)).toBe(false);
+
+    // Retiring it again changes nothing, and leaves that approval unused.
+    const again = approvalOf({ realmId: REALM, kid: oldKid });
+    await expect(retireNow(w, oldKid, { approval: again })).rejects.toMatchObject({
+      name: 'KeyChangeRefusedError',
+      reason: 'ALREADY_COMPROMISED',
+      statusCode: 409,
+    });
+    expect(again.uses).toEqual([]);
+  });
+
+  it('reaches a running signer and published-key reader at once through the denylist, not a refresh later', async () => {
+    const w = await world();
+    w.clock.now = T0 + 10 * DAY;
+    const denylist = createKidDenylist({
+      load: async () =>
+        w.keys.denied.map((entry) => {
+          const [realmId, kid] = entry.split(' ');
+          return { realmId, kid };
+        }),
+      now: () => w.clock.now,
+    });
+    await denylist.refresh();
+    // Two nodes that have served the realm already: their key lists are warm.
+    const signer = w.signer(REFRESH_MS, denylist);
+    const reader = createPublishedKeyReader(w.store, {
+      keyDenylist: denylist,
+      now: () => w.clock.now,
+    });
+    const stale = w.signer(REFRESH_MS);
+    const oldToken = await signer.signJws('local', accessToken(w.clock.now));
+    const oldKid = await kidOf(oldToken);
+    expect(await verifies(signer, oldToken)).toBe(true);
+    expect(await verifies(stale, oldToken)).toBe(true);
+    expect((await reader.getJwks('local', REALM)).keys.map((key) => key.kid)).toContain(oldKid);
+
+    const record = await retireNow(w, oldKid);
+    // The writer's node reads its denylist again after the commit; the clock has not moved.
+    await denylist.refresh();
+    expect(await verifies(signer, oldToken)).toBe(false);
+    expect(await jwksKids(signer)).not.toContain(oldKid);
+    expect(await kidOf(await signer.signJws('local', accessToken(w.clock.now)))).toBe(
+      record.replacements[0].kid
+    );
+    const readerKids = (await reader.getJwks('local', REALM)).keys.map((key) => key.kid);
+    expect(readerKids).not.toContain(oldKid);
+    expect(readerKids).toContain(record.replacements[0].kid);
+    const verification = await reader.getVerificationKeys('local', REALM, 'token_signing');
+    expect(verification.map((key) => key.kid)).toEqual([record.replacements[0].kid]);
+    // A node without the denylist holds the key until its next refresh.
+    expect(await verifies(stale, oldToken)).toBe(true);
+    w.clock.now += REFRESH_MS;
+    expect(await verifies(stale, oldToken)).toBe(false);
+  });
+
+  it('retires a hybrid pair as a pair, whichever key it names, and replaces it with a pair', async () => {
+    const w = await world({ hybrid: true });
+    w.clock.now = T0 + DAY;
+    const lead = activeKid(w, 'EdDSA');
+    const companion = activeKid(w, 'ML-DSA-65');
+
+    const record = await retireNow(w, companion);
+    expect(record.retired.map((key) => [key.kid, key.previousStatus])).toEqual([
+      [companion, 'active'],
+      [lead, 'active'],
+    ]);
+    expect(record.replacements.map((key) => key.algorithm)).toEqual(['EdDSA', 'ML-DSA-65']);
+    expect(
+      tokenKeys(w, 'compromised')
+        .map((key) => key.kid)
+        .sort()
+    ).toEqual([lead, companion].sort());
+    expect([...w.keys.denied].sort()).toEqual([`${REALM} ${companion}`, `${REALM} ${lead}`].sort());
+    const active = tokenKeys(w, 'active');
+    expect(active.map((key) => key.kid).sort()).toEqual(
+      record.replacements.map((key) => key.kid).sort()
+    );
+    expect(active[0].pairId).not.toBeNull();
+    expect(active[0].pairId).toBe(active[1].pairId);
+    const signer = w.signer(0);
+    expect(await jwksKids(signer)).not.toContain(lead);
+    expect(await jwksKids(signer)).not.toContain(companion);
+  });
+
+  it('retires a next key with no replacement, and nothing to revoke', async () => {
+    const w = await world();
+    w.clock.now = T0 + 10 * DAY;
+    const active = activeKid(w);
+    const factory = createKeyFactory({
+      store: w.keys,
+      kekProvider: localProvider({ KEK: KEK_A }),
+      enabledSignatureAlgorithms: ED25519_ONLY,
+      hybridSigning: false,
+      now: () => w.clock.now,
+    });
+    const [next] = await factory.createKey({
+      realmId: REALM,
+      purpose: 'token_signing',
+      status: 'next',
+    });
+
+    const record = await retireNow(w, next.kid);
+    expect(record).toMatchObject({
+      retired: [{ kid: next.kid, previousStatus: 'next', activateAt: null }],
+      replacements: [],
+      signedSince: null,
+    });
+    expect(activeKid(w)).toBe(active);
+    expect(await jwksKids(w.signer(0))).not.toContain(next.kid);
+  });
+
+  it('retires a retired key with no replacement, revoking since it began to sign', async () => {
+    const w = await world();
+    w.clock.now = T0 + 83 * DAY;
+    await w.run();
+    w.clock.now = T0 + 90 * DAY;
+    const step = rotatedStep((await w.run()).steps, 'token_signing');
+    const [old] = step.retired;
+    w.clock.now = step.switchAt + DAY;
+    const current = activeKid(w);
+
+    const record = await retireNow(w, old.kid);
+    expect(record).toMatchObject({
+      retired: [{ kid: old.kid, previousStatus: 'retired', activateAt: T0 }],
+      replacements: [],
+      signedSince: T0,
+    });
+    expect(activeKid(w)).toBe(current);
+    const signer = w.signer(0);
+    expect(await kidOf(await signer.signJws('local', accessToken(w.clock.now)))).toBe(current);
+    expect(await jwksKids(signer)).not.toContain(old.kid);
+  });
+
+  it('hands signing to the incoming key when it retires the key that still signs through a switch', async () => {
+    const w = await world();
+    w.clock.now = T0 + 83 * DAY;
+    await w.run();
+    w.clock.now = T0 + 90 * DAY;
+    const step = rotatedStep((await w.run()).steps, 'token_signing');
+    const signer = w.signer(0);
+    // Until the switch takes effect, the retired key signs.
+    expect(await kidOf(await signer.signJws('local', accessToken(w.clock.now)))).toBe(
+      step.retired[0].kid
+    );
+
+    const record = await retireNow(w, step.retired[0].kid);
+    expect(record.replacements).toEqual([]);
+    expect(await kidOf(await signer.signJws('local', accessToken(w.clock.now)))).toBe(
+      step.activated[0].kid
+    );
+  });
+
+  it('leaves a waiting next key to the scheduled rotation, which goes on', async () => {
+    const w = await world();
+    w.clock.now = T0 + 83 * DAY;
+    await w.run();
+    const [waiting] = tokenKeys(w, 'next');
+    const record = await retireNow(w, activeKid(w));
+    expect(tokenKeys(w, 'next').map((key) => key.kid)).toEqual([waiting.kid]);
+    // The replacement starts a period of its own; the waiting key switches in after it.
+    w.clock.now = T0 + 90 * DAY;
+    const report = await w.run();
+    expect(report.failures).toEqual([]);
+    expect(stepOf(report.steps, 'token_signing', 'rotated')).toEqual([]);
+    expect(activeKid(w)).toBe(record.replacements[0].kid);
+  });
+
+  it('calls its hook once, in its transaction, and rolls everything back when the hook fails', async () => {
+    const w = await world();
+    const kid = activeKid(w);
+    const approval = approvalOf({ realmId: REALM, kid });
+    const hooked: { record: KeyRetirementRecord; tx: MemoryTx }[] = [];
+    const record = await retireNow(w, kid, {
+      approval,
+      onRetired: async (entry, tx) => {
+        hooked.push({ record: entry, tx });
+      },
+    });
+    expect(hooked).toHaveLength(1);
+    expect(hooked[0].record).toBe(record);
+    expect(approval.uses).toEqual([{ digest: record.operationDigest, tx: hooked[0].tx }]);
+    expect(record.approvalId).toBe(approval.id);
+
+    const other = await world();
+    const before = snapshot(other);
+    await expect(
+      retireNow(other, activeKid(other), {
+        onRetired: async () => {
+          throw new Error('audit write failed');
+        },
+      })
+    ).rejects.toThrow('audit write failed');
+    expect(snapshot(other)).toEqual(before);
+  });
+
+  it.each([
+    ['a malformed realm id', { realmId: 'realm-1' }, 'INVALID_REALM_ID'],
+    ['an empty kid', { kid: '' }, 'INVALID_KID'],
+    ['a kid the realm holds no key of', { kid: 'no-such-kid' }, 'UNKNOWN_KEY'],
+  ] as const)('refuses %s, with the approval unused', async (_name, overrides, reason) => {
+    const w = await world();
+    const kid = 'kid' in overrides ? overrides.kid : activeKid(w);
+    const before = snapshot(w);
+    const approval = approvalOf({ realmId: REALM, kid: kid === '' ? 'k' : kid });
+    await expect(retireNow(w, kid, { approval, ...overrides })).rejects.toMatchObject({
+      name: 'KeyChangeRefusedError',
+      reason,
+    });
+    expect(approval.uses).toEqual([]);
+    expect(snapshot(w)).toEqual(before);
+  });
+
+  it('refuses a key of another purpose, with the approval unused', async () => {
+    const w = await world();
+    const [eventKey] = w.keys.rows.filter(
+      (row) => row.key.purpose === 'event_signing' && row.key.status === 'active'
+    );
+    const before = snapshot(w);
+    const approval = approvalOf({ realmId: REALM, kid: eventKey.key.kid });
+    await expect(retireNow(w, eventKey.key.kid, { approval })).rejects.toMatchObject({
+      reason: 'NOT_A_RETIRABLE_PURPOSE',
+      statusCode: 400,
+    });
     expect(approval.uses).toEqual([]);
     expect(snapshot(w)).toEqual(before);
   });

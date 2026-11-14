@@ -29,7 +29,10 @@ import { createPgKeyStore } from '../testing/pg-key-store';
 import { createPgSignerStore } from '../testing/pg-signer-store';
 import {
   type ApprovedOperation,
+  KEY_RETIRE_OPERATION,
   KEY_ROTATE_OPERATION,
+  keyRetirementOperation,
+  type KeyRetireOperation,
   type KeyRotateOperation,
   keyRotationOperation,
   newOperationNonce,
@@ -41,6 +44,7 @@ import { createKeyFactory } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
 import {
   createKeyRotation,
+  type KeyRetirementRecord,
   type KeyRotationNowRecord,
   type KeyRotationReport,
   type KeyRotationRunOptions,
@@ -585,6 +589,131 @@ describe('scheduled key rotation (real Postgres, fake clock)', () => {
       ).rejects.toThrow('the audit row failed');
       const after = await db().query(keysOf, [w.realmId]);
       expect(after.rows).toEqual(before.rows);
+    });
+  });
+  describe('retireNow, an emergency retirement under an approval (#551)', () => {
+    const OPERATOR = Object.freeze({
+      kind: 'break_glass' as const,
+      operatingSystemUser: 'qauth-ops',
+    });
+
+    function retirementOf(realmId: string, kid: string) {
+      const nonce = newOperationNonce();
+      const filed = operationDigest(
+        keyRetirementOperation({ realmId, kid, requester: OPERATOR, nonce })
+      );
+      let used = 0;
+      const approval: ApprovedOperation<KeyRetireOperation, PoolClient> = {
+        id: randomUUID(),
+        operation: KEY_RETIRE_OPERATION,
+        requester: OPERATOR,
+        nonce,
+        async consume(digest) {
+          if (used > 0 || !digest.equals(filed)) {
+            throw new OperationApprovalError('refused', 'not approved');
+          }
+          used += 1;
+        },
+      };
+      return approval;
+    }
+
+    function retireNow(
+      w: Awaited<ReturnType<typeof world>>,
+      kid: string,
+      onRetired: (record: KeyRetirementRecord, tx: PoolClient) => Promise<void> = async () =>
+        undefined
+    ): Promise<KeyRetirementRecord> {
+      return w.node().retireNow({
+        realmId: w.realmId,
+        kid,
+        approval: retirementOf(w.realmId, kid),
+        now: () => w.clock.now,
+        onRetired,
+      });
+    }
+
+    async function deniedKids(realmId: string): Promise<string[]> {
+      const { rows } = await db().query<{ kid: string; denied_at: string }>(
+        'SELECT kid, denied_at FROM realm_key_denylist WHERE realm_id = $1 ORDER BY kid',
+        [realmId]
+      );
+      return rows.map((row) => row.kid);
+    }
+
+    it('marks the hybrid pair compromised, unpublishes it, denies both kids and a new pair signs', async () => {
+      const w = await world(true);
+      w.clock.now = T0 + 10 * DAY;
+      const [lead, companion] = (await tokenKeyRows(w.realmId)).map((row) => row.kid);
+      const oldToken = await w.sign();
+      expect(await w.verifies(oldToken)).toBe(true);
+
+      const record = await retireNow(w, lead);
+      expect(record.retired.map((key) => key.kid)).toEqual([lead, companion]);
+      expect(record.replacements.map((key) => key.algorithm)).toEqual(['EdDSA', 'ML-DSA-65']);
+      expect(record.signedSince).toBe(T0);
+
+      const at = String(T0 + 10 * DAY);
+      const rows = await tokenKeyRows(w.realmId);
+      expect(rows.filter((row) => row.status === 'compromised')).toEqual([
+        expect.objectContaining({
+          kid: lead,
+          retire_at: at,
+          unpublish_at: at,
+          public_unpublish_at: at,
+        }),
+        expect.objectContaining({
+          kid: companion,
+          retire_at: at,
+          unpublish_at: at,
+          public_unpublish_at: at,
+        }),
+      ]);
+      const active = rows.filter((row) => row.status === 'active');
+      expect(active.map((row) => row.kid).sort()).toEqual(
+        record.replacements.map((key) => key.kid).sort()
+      );
+      // No pre-publication: the new keys sign from the moment they were stored.
+      expect(active.every((row) => row.activate_at === at)).toBe(true);
+      expect(await deniedKids(w.realmId)).toEqual([lead, companion].sort());
+      // The public row's status followed through its foreign key.
+      const { rows: publicRows } = await db().query<{ kid: string; status: string }>(
+        `SELECT kid, status FROM realm_public_keys WHERE realm_id = $1 AND kid = ANY($2)`,
+        [w.realmId, [lead, companion]]
+      );
+      expect(publicRows.map((row) => row.status)).toEqual(['compromised', 'compromised']);
+
+      expect(await w.jwksKids()).not.toEqual(expect.arrayContaining([lead]));
+      expect(await w.jwksKids()).not.toEqual(expect.arrayContaining([companion]));
+      expect(await w.verifies(oldToken)).toBe(false);
+      const newToken = await w.sign();
+      expect(await kidOf(newToken)).toBe(record.replacements[0].kid);
+      expect(await w.verifies(newToken)).toBe(true);
+    });
+
+    it('rolls the keys and the denylist back when its hook fails, and retires once when two nodes race', async () => {
+      const w = await world();
+      const [{ kid }] = await tokenKeyRows(w.realmId);
+      const before = await tokenKeyRows(w.realmId);
+      await expect(
+        retireNow(w, kid, async (_record, tx) => {
+          expect(
+            (await tx.query('SELECT 1 FROM realm_key_denylist WHERE kid = $1', [kid])).rows
+          ).toHaveLength(1);
+          throw new Error('the audit row failed');
+        })
+      ).rejects.toThrow('the audit row failed');
+      expect(await tokenKeyRows(w.realmId)).toEqual(before);
+      expect(await deniedKids(w.realmId)).toEqual([]);
+
+      const results = await Promise.allSettled([retireNow(w, kid), retireNow(w, kid)]);
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+        reason: { reason: 'ALREADY_COMPROMISED' },
+      });
+      const after = await tokenKeyRows(w.realmId);
+      expect(after.filter((row) => row.status === 'active')).toHaveLength(1);
+      expect(await deniedKids(w.realmId)).toEqual([kid]);
     });
   });
 });

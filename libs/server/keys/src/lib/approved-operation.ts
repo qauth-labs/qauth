@@ -40,7 +40,9 @@ import { isScopeId } from './scope-id';
  * A KEK rotation (#545) is bound the same way, to its own record
  * ({@link kekRotationOperation}): the KEK reference its keys move from, the
  * one they move to, the requester and the nonce. A KEK has no realm, so its
- * record names none.
+ * record names none. An emergency retirement (#551) is bound to the realm,
+ * the `kid` it retires, the requester and the nonce
+ * ({@link keyRetirementOperation}).
  *
  * Nothing here touches a KEK or key material: the admin API computes the
  * same digest when it files the approval, from this public entry point.
@@ -61,6 +63,19 @@ export const KEK_ROTATE_OPERATION = 'kek.rotate';
 
 /** The operation id of a KEK rotation. */
 export type KekRotateOperation = typeof KEK_ROTATE_OPERATION;
+
+/**
+ * The operation id of an emergency key retirement, which marks a key
+ * compromised and takes it out of the JWKS at once, as the admin operation
+ * registry reserves it (#508, #551).
+ */
+export const KEY_RETIRE_OPERATION = 'keys.retire';
+
+/** The operation id of an emergency key retirement. */
+export type KeyRetireOperation = typeof KEY_RETIRE_OPERATION;
+
+/** The longest `kid` a record names: `realm_keys.kid` is a `varchar(255)`. */
+export const MAX_KID_LENGTH = 255;
 
 /**
  * The longest KEK reference a record holds. A local KEK's is 16 hex
@@ -406,8 +421,69 @@ export interface KekRotationOperationInput {
   readonly nonce: string;
 }
 
+/** The canonical record of an emergency key retirement (#551): what its approval is bound to. */
+export interface KeyRetirementOperationRecord {
+  readonly op: KeyRetireOperation;
+  /** The realm whose key retires: its id, in lower case. */
+  readonly realm: string;
+  /**
+   * The `kid` of the key that retires. Both keys of a hybrid pair retire
+   * together, so the record names the one the operator named.
+   */
+  readonly kid: string;
+  /** Who asked (ADR-019 Decision 7 binds the requester). */
+  readonly requester: SecurityOperationActor;
+  /** The approval's nonce. */
+  readonly nonce: string;
+}
+
+/** What {@link keyRetirementOperation} builds a record from. */
+export interface KeyRetirementOperationInput {
+  readonly realmId: string;
+  readonly kid: string;
+  readonly requester: SecurityOperationActor;
+  readonly nonce: string;
+}
+
+/** Whether `value` can be a stored `kid`: non-empty, at most {@link MAX_KID_LENGTH} characters, no control character. */
+export function isKid(value: unknown): value is string {
+  return isBoundedText(value, MAX_KID_LENGTH);
+}
+
+/**
+ * The canonical record of the emergency retirement of the realm's key
+ * `kid`, asked for by `requester` under the approval whose nonce is `nonce`.
+ * The `kid` is held as given: a `kid` is compared byte for byte.
+ *
+ * @throws TypeError when the realm id is not a UUID, the `kid` could not be
+ *   stored ({@link isKid}), the requester is not an actor, or the nonce is
+ *   not one
+ */
+export function keyRetirementOperation(
+  input: KeyRetirementOperationInput
+): KeyRetirementOperationRecord {
+  if (!isRealmId(input.realmId)) throw new TypeError('A realm id is a UUID');
+  if (!isKid(input.kid)) throw new TypeError('A kid is not well formed');
+  if (!isSecurityOperationActor(input.requester)) {
+    throw new TypeError('The requester is not a security operation actor');
+  }
+  if (!isOperationNonce(input.nonce)) {
+    throw new TypeError(`A nonce is ${OPERATION_NONCE_BYTES} bytes in base64url`);
+  }
+  return Object.freeze({
+    op: KEY_RETIRE_OPERATION,
+    realm: input.realmId.toLowerCase(),
+    kid: input.kid,
+    requester: canonicalActor(input.requester),
+    nonce: input.nonce,
+  });
+}
+
 /** The canonical record of any security operation the key library runs. */
-export type SecurityOperationRecord = KeyRotationOperationRecord | KekRotationOperationRecord;
+export type SecurityOperationRecord =
+  | KeyRotationOperationRecord
+  | KekRotationOperationRecord
+  | KeyRetirementOperationRecord;
 
 /**
  * The canonical record of a KEK rotation that re-wraps the stored keys' data
@@ -463,10 +539,26 @@ function canonicalJson(value: RecordValue): string {
  * UTF-8, built from the record's own members only. A golden test pins them.
  *
  * @throws TypeError for a record of another operation, or one its own
- *   builder ({@link keyRotationOperation}, {@link kekRotationOperation})
- *   refuses
+ *   builder ({@link keyRotationOperation}, {@link kekRotationOperation},
+ *   {@link keyRetirementOperation}) refuses
  */
 export function canonicalOperationBytes(record: SecurityOperationRecord): Buffer {
+  if (record.op === KEY_RETIRE_OPERATION) {
+    const built = keyRetirementOperation({
+      realmId: record.realm,
+      kid: record.kid,
+      requester: record.requester,
+      nonce: record.nonce,
+    });
+    const value: RecordValue = {
+      op: built.op,
+      realm: built.realm,
+      kid: built.kid,
+      requester: { ...built.requester },
+      nonce: built.nonce,
+    };
+    return Buffer.from(canonicalJson(value), 'utf8');
+  }
   if (record.op === KEK_ROTATE_OPERATION) {
     const built = kekRotationOperation({
       from: record.from,
@@ -484,7 +576,9 @@ export function canonicalOperationBytes(record: SecurityOperationRecord): Buffer
     return Buffer.from(canonicalJson(value), 'utf8');
   }
   if (record.op !== KEY_ROTATE_OPERATION) {
-    throw new TypeError(`A record is for '${KEY_ROTATE_OPERATION}' or '${KEK_ROTATE_OPERATION}'`);
+    throw new TypeError(
+      `A record is for '${KEY_ROTATE_OPERATION}', '${KEK_ROTATE_OPERATION}' or '${KEY_RETIRE_OPERATION}'`
+    );
   }
   const built = keyRotationOperation({
     realmId: record.realm,

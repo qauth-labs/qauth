@@ -2,6 +2,7 @@ import type { JWK } from 'jose';
 
 import { BoundedCache } from './bounded-cache';
 import { KEY_PURPOSES } from './key-purposes';
+import type { KidDenylistView } from './kid-denylist';
 import { isRealmId } from './realm-id';
 import type { RealmJwks, Signer, VerificationKey } from './signer';
 import { SignerAccessDeniedError, SignerRequestRefusedError } from './signer-errors';
@@ -210,6 +211,13 @@ export interface PublishedKeyReaderOptions {
   readonly cacheSize?: number;
   /** The clock, in epoch ms. */
   readonly now?: () => number;
+  /**
+   * The node's copy of the `kid` denylist (#551). When its revision changes,
+   * every realm's list cached before is read again on the next call, and a
+   * denied `kid` is left out of every list. Without it, a compromised key
+   * goes at the next refresh.
+   */
+  readonly keyDenylist?: KidDenylistView;
 }
 
 /**
@@ -218,7 +226,8 @@ export interface PublishedKeyReaderOptions {
  * that does not hold the signer role. Each realm's list is read at most once
  * per refresh interval, as the in-process signer reads it, so a key the signer
  * starts to sign with reaches this process within one interval of its
- * publication, which precedes its activation.
+ * publication, which precedes its activation. A key an emergency retirement
+ * denies leaves both at the next call after the node's denylist sees it.
  *
  * It holds and returns public material only.
  */
@@ -228,9 +237,11 @@ export function createPublishedKeyReader(
 ): PublishedKeyReader {
   const now = options.now ?? Date.now;
   const refreshIntervalMs = options.refreshIntervalMs ?? DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS;
-  const lists = new BoundedCache<string, { value: readonly PublicKeyRecord[]; readAt: number }>(
-    options.cacheSize ?? DEFAULT_PUBLISHED_KEY_CACHE_SIZE
-  );
+  const keyDenylist = options.keyDenylist;
+  const lists = new BoundedCache<
+    string,
+    { value: readonly PublicKeyRecord[]; readAt: number; revision: number }
+  >(options.cacheSize ?? DEFAULT_PUBLISHED_KEY_CACHE_SIZE);
   const pending = new Map<string, Promise<readonly PublicKeyRecord[]>>();
 
   function authorize(caller: unknown, operation: 'getVerificationKeys' | 'getJwks'): void {
@@ -240,22 +251,41 @@ export function createPublishedKeyReader(
   }
 
   function listPublicKeys(realmId: string): Promise<readonly PublicKeyRecord[]> {
+    const revision = keyDenylist?.revision() ?? 0;
     const cached = lists.get(realmId);
-    if (cached !== undefined && now() - cached.readAt < refreshIntervalMs) {
+    if (
+      cached !== undefined &&
+      cached.revision === revision &&
+      now() - cached.readAt < refreshIntervalMs
+    ) {
       return Promise.resolve(cached.value);
     }
-    let read = pending.get(realmId);
+    // A read shared across a denylist change would hand a caller after the
+    // change a list read before it.
+    const slot = `${realmId}\u0000${revision}`;
+    let read = pending.get(slot);
     if (read === undefined) {
       const readAt = now();
       read = store
         .listPublicKeys(realmId)
         .then((records) => {
-          const value = Object.freeze([...records]);
-          lists.set(realmId, { value, readAt });
+          const value = Object.freeze(
+            keyDenylist === undefined
+              ? [...records]
+              : records.filter((record) => !keyDenylist.isDenied(realmId, record.kid))
+          );
+          const current = lists.get(realmId);
+          if (
+            current === undefined ||
+            current.revision < revision ||
+            (current.revision === revision && current.readAt <= readAt)
+          ) {
+            lists.set(realmId, { value, readAt, revision });
+          }
           return value;
         })
-        .finally(() => pending.delete(realmId));
-      pending.set(realmId, read);
+        .finally(() => pending.delete(slot));
+      pending.set(slot, read);
     }
     return read;
   }

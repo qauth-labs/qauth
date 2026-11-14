@@ -44,6 +44,7 @@ import { eventTokenClaimsProblem, isEventTokenTyp } from './event-token-claims';
 import type { KekProvider } from './kek-provider';
 import { isScopeId, MAX_SCOPE_ID_LENGTH } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
+import type { KidDenylistView } from './kid-denylist';
 import {
   DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS,
   describePurpose,
@@ -132,9 +133,12 @@ import {
  * own verification set does not list. Two nodes can still disagree for up to
  * one interval, which the rotation's schedule must allow for. A key marked
  * `compromised` likewise stops signing, decrypting and appearing in the JWKS
- * at each node's next read; emergency retirement (#551) needs an invalidation
- * that reaches every node at once. The realm's issuer never changes once set,
- * so it is read once.
+ * at each node's next read. An emergency retirement (#551) does not wait for
+ * it: with the node's copy of the `kid` denylist ({@link
+ * InProcessSignerOptions.keyDenylist}), every list cached before the
+ * denylist changed is read again on the next call, and a denied `kid` never
+ * signs, verifies or is published. The realm's issuer never changes once
+ * set, so it is read once.
  *
  * ## What it never does
  *
@@ -194,6 +198,13 @@ export interface InProcessSignerOptions {
    * call.
    */
   readonly refreshIntervalMs?: number;
+  /**
+   * The node's copy of the `kid` denylist (#551). When its revision changes,
+   * every key list cached before is read again on the next call, and a
+   * denied `kid` is left out of every list. Without it, a compromised key
+   * goes at the next refresh.
+   */
+  readonly keyDenylist?: KidDenylistView;
   /** The clock, in epoch ms. Defaults to `Date.now`. */
   readonly now?: () => number;
 }
@@ -216,14 +227,33 @@ type LoadedKey =
   | { readonly kind: 'hmac-key'; readonly key: CryptoKey }
   | { readonly kind: 'aes'; readonly key: CryptoKey };
 
-/** A store answer and when it was read. */
+/**
+ * A store answer, when it was read, and, for a key list, the denylist
+ * revision it was read under.
+ */
 interface Timed<T> {
   readonly value: T;
   readonly readAt: number;
+  readonly revision?: number;
+}
+
+/** A realm's key list, as the cache holds it: read under a denylist revision. */
+interface RevisedTimed<T> extends Timed<T> {
+  readonly revision: number;
+}
+
+/**
+ * Whether an answer read at `readAt` under `revision` may replace `current`:
+ * a newer revision always does, an older one never, and within one revision
+ * the later read does.
+ */
+function replaces(current: RevisedTimed<unknown> | undefined, readAt: number, revision: number) {
+  if (current === undefined || current.revision < revision) return true;
+  return current.revision === revision && current.readAt <= readAt;
 }
 
 /** A realm's key list, and whether a forced read (a miss on a named key) read it. */
-interface KeyList extends Timed<readonly SignerKeyRecord[]> {
+interface KeyList extends RevisedTimed<readonly SignerKeyRecord[]> {
   readonly forced: boolean;
 }
 
@@ -303,7 +333,9 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   const keys = new BoundedCache<string, LoadedKey>(keyCacheSize);
   const pendingKeys = new Map<string, Promise<LoadedKey>>();
   const keyLists = new BoundedCache<string, KeyList>(keyCacheSize);
-  const publicLists = new BoundedCache<string, Timed<readonly PublicKeyRecord[]>>(keyCacheSize);
+  const publicLists = new BoundedCache<string, RevisedTimed<readonly PublicKeyRecord[]>>(
+    keyCacheSize
+  );
   // Raised each time a key-list read drops a realm's published keys, so a
   // published-key read already running cannot store its older answer. A plain
   // map: an evicted count would restart at 0 and let that read in. An entry
@@ -314,8 +346,28 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   const issuers = new BoundedCache<string, string>(keyCacheSize);
   const upstreamClients = new BoundedCache<string, Timed<UpstreamClientRecord>>(keyCacheSize);
 
+  const keyDenylist = options.keyDenylist;
+
+  /** The denylist revision now: a list read under another is not trusted. */
+  function denylistRevision(): number {
+    return keyDenylist?.revision() ?? 0;
+  }
+
+  /** `records` without a `kid` the realm denies. */
+  function withoutDenied<T extends { readonly kid: string }>(
+    realmId: string,
+    records: readonly T[]
+  ): readonly T[] {
+    if (keyDenylist === undefined) return Object.freeze([...records]);
+    return Object.freeze(records.filter((record) => !keyDenylist.isDenied(realmId, record.kid)));
+  }
+
   function isFresh(entry: Timed<unknown> | undefined): boolean {
-    return entry !== undefined && now() - entry.readAt < refreshIntervalMs;
+    return (
+      entry !== undefined &&
+      (entry.revision === undefined || entry.revision === denylistRevision()) &&
+      now() - entry.readAt < refreshIntervalMs
+    );
   }
 
   /** The realm's issuer, read once. */
@@ -358,8 +410,9 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     forceRead = false
   ): Promise<readonly SignerKeyRecord[]> {
     const slot = `keys\u0000${realmId}\u0000${purpose}\u0000${scopeId ?? ''}`;
+    const revision = denylistRevision();
     const cached = keyLists.get(slot);
-    if (cached !== undefined) {
+    if (cached !== undefined && cached.revision === revision) {
       const age = now() - cached.readAt;
       const trusted = !forceRead
         ? refreshIntervalMs
@@ -370,10 +423,12 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         return cached.value;
       }
     }
-    return sharedRead(slot, async (readAt) => {
-      const value = Object.freeze([...(await store.listKeys(realmId, { purpose, scopeId }))]);
+    // A read shared across a denylist change would hand a caller after the
+    // change a list read before it.
+    return sharedRead(`${slot}\u0000${revision}`, async (readAt) => {
+      const value = withoutDenied(realmId, await store.listKeys(realmId, { purpose, scopeId }));
       const current = keyLists.get(slot);
-      if (current === undefined || current.readAt <= readAt) {
+      if (replaces(current, readAt, revision)) {
         // A key changed status, or there is no earlier list to compare (a
         // first read, or one evicted): the published keys this node holds may
         // be older than this list, so read them again too. Otherwise this node
@@ -382,7 +437,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
           publicLists.delete(realmId);
           publicGenerations.set(realmId, (publicGenerations.get(realmId) ?? 0) + 1);
         }
-        keyLists.set(slot, { value, readAt, forced: forceRead });
+        keyLists.set(slot, { value, readAt, revision, forced: forceRead });
       }
       return value;
     });
@@ -429,17 +484,18 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   async function listPublicKeys(realmId: string): Promise<readonly PublicKeyRecord[]> {
     const cached = publicLists.get(realmId);
     if (cached !== undefined && isFresh(cached)) return cached.value;
-    return sharedRead(`public\u0000${realmId}`, async (readAt) => {
+    const revision = denylistRevision();
+    return sharedRead(`public\u0000${realmId}\u0000${revision}`, async (readAt) => {
       const generation = publicGenerations.get(realmId) ?? 0;
-      const value = Object.freeze([...(await store.listPublicKeys(realmId))]);
+      const value = withoutDenied(realmId, await store.listPublicKeys(realmId));
       const current = publicLists.get(realmId);
-      // One read per realm runs at a time, so removing the count after a store
-      // cannot make an older read match it.
+      // One read per realm and revision runs at a time, so removing the count
+      // after a store cannot make an older read match it.
       if (
         (publicGenerations.get(realmId) ?? 0) === generation &&
-        (current === undefined || current.readAt <= readAt)
+        replaces(current, readAt, revision)
       ) {
-        publicLists.set(realmId, { value, readAt });
+        publicLists.set(realmId, { value, readAt, revision });
         publicGenerations.delete(realmId);
       }
       return value;
