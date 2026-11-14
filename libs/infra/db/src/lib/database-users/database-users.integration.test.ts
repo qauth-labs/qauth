@@ -431,4 +431,99 @@ describe('the roles’ database users (real Postgres, #498)', () => {
       await expect(checkDatabaseUserGrants(target(), USERS)).resolves.toEqual([]);
     });
   });
+
+  it('lets every role keep its node in the list through the functions alone, and only its own (#499)', async () => {
+    const node = {
+      id: '00000000-0000-4000-8000-000000000499',
+      roles: ['delivery'],
+      digest: 'a'.repeat(64),
+      keys: JSON.stringify({ JWT_ISSUER: 'b'.repeat(64) }),
+    };
+    const args = [node.id, node.roles, '0.3.0', node.digest, node.keys];
+    try {
+      // The table itself is no role's.
+      for (const role of DATABASE_ROLES) {
+        expect(await sqlState(roleUser(role).query('SELECT 1 FROM deployment_nodes')), role).toBe(
+          '42501'
+        );
+      }
+      expect(
+        await sqlState(
+          roleUser('web').query(
+            `INSERT INTO deployment_nodes (node_id, roles, version, config_digest, config_keys, last_seen_at)
+             VALUES (gen_random_uuid(), ARRAY['web'], '0.3.0', $1, '{}', 9000000000000000)`,
+            [node.digest]
+          )
+        )
+      ).toBe('42501');
+
+      const { rows: registered } = await roleUser('delivery').query(
+        'SELECT * FROM deployment_nodes_register($1::uuid, $2::text[], $3, $4, $5::jsonb, 120000)',
+        args
+      );
+      expect(registered).toEqual([
+        expect.objectContaining({ node_id: node.id, registered_by: USERS.delivery }),
+      ]);
+      const { rows: listed } = await roleUser('api').query(
+        'SELECT node_id FROM deployment_nodes_live(120000)'
+      );
+      expect(listed).toEqual([{ node_id: node.id }]);
+
+      // Another role's user neither marks it seen nor removes it.
+      const heartbeat =
+        'SELECT deployment_nodes_heartbeat($1::uuid, $2::text[], $3, $4, $5::jsonb, 0) AS seen';
+      expect((await roleUser('web').query(heartbeat, args)).rows).toEqual([{ seen: null }]);
+      expect(
+        (
+          await roleUser('web').query('SELECT deployment_nodes_remove($1::uuid) AS removed', [
+            node.id,
+          ])
+        ).rows
+      ).toEqual([{ removed: 0 }]);
+      // Its own does.
+      expect((await roleUser('delivery').query(heartbeat, args)).rows).toEqual([{ seen: 'seen' }]);
+      expect(
+        (
+          await roleUser('delivery').query('SELECT deployment_nodes_remove($1::uuid) AS removed', [
+            node.id,
+          ])
+        ).rows
+      ).toEqual([{ removed: 1 }]);
+      // A heartbeat writes a removed row again, never dated after now.
+      expect(
+        (
+          await roleUser('delivery').query(
+            'SELECT deployment_nodes_heartbeat($1::uuid, $2::text[], $3, $4, $5::jsonb, 9000000000000000) AS seen',
+            args
+          )
+        ).rows
+      ).toEqual([{ seen: 'restored' }]);
+      const { rows: times } = await owner().query<{ future: boolean }>(
+        `SELECT started_at > (extract(epoch FROM now()) * 1000)::bigint + 1000 AS future
+           FROM deployment_nodes WHERE node_id = $1`,
+        [node.id]
+      );
+      expect(times).toEqual([{ future: false }]);
+
+      // A forged value is refused: an unknown role, a key digest that is none.
+      expect(
+        await sqlState(
+          roleUser('web').query(
+            'SELECT * FROM deployment_nodes_register(gen_random_uuid(), ARRAY[$1::text], $2, $3, $4::jsonb, 120000)',
+            ['web\nset CONFIG_DIGEST_ROLLOUT', '0.3.0', node.digest, node.keys]
+          )
+        )
+      ).toBe('23514');
+      expect(
+        await sqlState(
+          roleUser('web').query(
+            'SELECT * FROM deployment_nodes_register(gen_random_uuid(), ARRAY[$1::text], $2, $3, $4::jsonb, 120000)',
+            ['web', '0.3.0', node.digest, JSON.stringify({ JWT_ISSUER: 'not a digest' })]
+          )
+        )
+      ).toBe('23514');
+    } finally {
+      await owner().query('DELETE FROM deployment_nodes');
+    }
+  });
 });

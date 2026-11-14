@@ -15,6 +15,7 @@ import {
   createAuthorizationCodesRepository,
   createBackchannelLogoutClientsRepository,
   createDatabase,
+  createDeploymentNodesRepository,
   createEmailVerificationTokensRepository,
   createEventDeliveriesRepository,
   createEventRetentionRepository,
@@ -35,10 +36,10 @@ import {
   createUserRecoveryCodesRepository,
   createUserRequiredActionsRepository,
   createUserSessionEpochsRepository,
-  createDeploymentNodesRepository,
   createUsersRepository,
   type Database,
   type DatabasePool,
+  type DeploymentNodesRepository,
   type EmailVerificationTokensRepository,
   type EventDeliveriesRepository,
   type EventRetentionRepository,
@@ -59,7 +60,6 @@ import {
   type UserRecoveryCodesRepository,
   type UserRequiredActionsRepository,
   type UserSessionEpochsRepository,
-  type DeploymentNodesRepository,
   type UsersRepository,
 } from '@qauth-labs/infra-db';
 import type { FastifyInstance } from 'fastify';

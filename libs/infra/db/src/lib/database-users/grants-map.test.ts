@@ -11,7 +11,12 @@ import { EVENTS_WRITER_FUNCTIONS, EVENTS_WRITER_GRANTS } from '../events/grants'
 import { EVENT_RETENTION_GRANTS, EVENT_RETENTION_REALM_COLUMNS } from '../events/retention-grants';
 import type { TablePrivilege } from '../role-grants';
 import * as schema from '../schema';
-import { COLUMN_GRANTS, FUNCTION_GRANTS, TABLE_GRANTS } from './grants-map';
+import {
+  COLUMN_GRANTS,
+  DEPLOYMENT_NODE_FUNCTIONS,
+  FUNCTION_GRANTS,
+  TABLE_GRANTS,
+} from './grants-map';
 import { DATABASE_ROLES, type DatabaseRole } from './roles';
 
 /**
@@ -119,14 +124,12 @@ describe('the grants map (#498)', () => {
     }
   });
 
-  it('lets every role keep its own row of the node list and read the others (#499)', () => {
-    for (const role of DATABASE_ROLES) {
-      expect(privilegesOf(role, 'deployment_nodes'), role).toEqual([
-        'SELECT',
-        'INSERT',
-        'UPDATE',
-        'DELETE',
-      ]);
+  it('lets every role keep its node in the list through its functions alone, never the table (#499)', () => {
+    expect(TABLE_GRANTS['deployment_nodes']).toEqual({});
+    expect(COLUMN_GRANTS['deployment_nodes']).toBeUndefined();
+    expect(DEPLOYMENT_NODE_FUNCTIONS).toHaveLength(4);
+    for (const signature of DEPLOYMENT_NODE_FUNCTIONS) {
+      expect(FUNCTION_GRANTS[signature], signature).toEqual(DATABASE_ROLES);
     }
   });
 
@@ -161,10 +164,6 @@ describe('the grants map (#498)', () => {
     }
     expected.set('realm_public_keys', new Set<TablePrivilege>(['SELECT']));
     expected.set('realm_key_denylist', new Set<TablePrivilege>(['SELECT']));
-    expected.set(
-      'deployment_nodes',
-      new Set<TablePrivilege>(['SELECT', 'INSERT', 'UPDATE', 'DELETE'])
-    );
     expect(tablesOf('delivery').sort()).toEqual([...expected.keys()].sort());
     for (const [table, privileges] of expected) {
       expect(new Set(privilegesOf('delivery', table)), table).toEqual(privileges);

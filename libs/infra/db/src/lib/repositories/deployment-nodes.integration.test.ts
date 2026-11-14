@@ -1,11 +1,14 @@
 /**
  * Real-DB integration tests for the node list repository (#499).
  *
- * Exercises what a unit test cannot: the database's clock deciding which
- * nodes are live, the removal of the stale ones at a registration, the
- * advisory lock that makes two registrations at once run one after the other,
- * the heartbeat that writes a removed row again, and the CHECKs that keep a
- * value out of the digest columns.
+ * Exercises what a unit test cannot: the functions of migration 0076 the
+ * repository calls, the database's clock deciding which nodes are live, the
+ * removal of the stale ones at a registration, never of a node seen within
+ * two minutes, the advisory lock that makes two registrations at once run one
+ * after the other, the heartbeat that writes a removed row again, and the
+ * CHECKs that keep anything but digests, role names and a release out of a
+ * row. What another role's database user may do is held by
+ * `database-users/database-users.integration.test.ts`.
  *
  * Requires Docker; self-skips without it and fails on CI
  * (`requireDockerOrSkip`).
@@ -85,10 +88,12 @@ describe('deployment nodes repository integration (real Postgres, #499)', () => 
     const second = node({ roles: ['signer'] });
     await repository.register(second, WINDOW_MS, (live) => seen.push(live));
     expect(seen[1]?.map((entry) => entry.nodeId)).toEqual([first.nodeId]);
-    expect((await repository.listLive(WINDOW_MS)).map((entry) => entry.nodeId)).toEqual([
-      first.nodeId,
-      second.nodeId,
-    ]);
+    // Both registered within the second: the order falls to their ids.
+    expect(new Set((await repository.listLive(WINDOW_MS)).map((entry) => entry.nodeId))).toEqual(
+      new Set([first.nodeId, second.nodeId])
+    );
+    await expect(repository.isLive(second.nodeId, WINDOW_MS)).resolves.toBe(true);
+    await expect(repository.isLive(randomUUID(), WINDOW_MS)).resolves.toBe(false);
   });
 
   it('writes nothing when the check refuses', async () => {
@@ -119,6 +124,17 @@ describe('deployment nodes repository integration (real Postgres, #499)', () => 
     expect(rows).toEqual([]);
   });
 
+  it('removes no row seen within two minutes, whatever window a registration names', async () => {
+    const recent = node();
+    await repository.register(recent, WINDOW_MS, () => undefined);
+    await age(recent.nodeId, 60_000);
+    await repository.register(node(), 1_000, () => undefined);
+    const { rows } = await pool().query('SELECT node_id FROM deployment_nodes WHERE node_id = $1', [
+      recent.nodeId,
+    ]);
+    expect(rows).toEqual([{ node_id: recent.nodeId }]);
+  });
+
   it('runs two registrations at once one after the other, so the second sees the first', async () => {
     const seen: string[][] = [];
     await Promise.all(
@@ -145,11 +161,15 @@ describe('deployment nodes repository integration (real Postgres, #499)', () => 
     expect(restored).toMatchObject({ nodeId: stored.nodeId, startedAt: stored.startedAt });
   });
 
-  it('refuses a digest that is not one, an array of key digests, and an empty role list', async () => {
+  it('refuses a digest that is not one, key digests that are not, and roles and releases it does not know', async () => {
     for (const bad of [
       node({ configDigest: 'not-a-digest' }),
       node({ configKeys: ['a'] as unknown as Record<string, string> }),
+      node({ configKeys: { JWT_ISSUER: 'true' } }),
+      node({ configKeys: { 'lower case': 'b'.repeat(64) } }),
       node({ roles: [] }),
+      node({ roles: ['web', 'operator'] }),
+      node({ version: '0.3.0\nset CONFIG_DIGEST_ROLLOUT=true' }),
     ]) {
       await expect(repository.register(bad, WINDOW_MS, () => undefined)).rejects.toThrow();
     }
