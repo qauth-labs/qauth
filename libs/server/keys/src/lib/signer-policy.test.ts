@@ -9,6 +9,7 @@ import {
   isSignerCaller,
   OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
   REALM_MAIL_SECRET_CONTEXT_PREFIX,
+  SIGN_IN_SECRET_CONTEXT_PREFIXES,
   SIGNER_CALLERS,
   SIGNER_POLICY,
   type SignerCaller,
@@ -57,6 +58,7 @@ describe('SIGNER_POLICY', () => {
         'getUpstreamJwks',
       ],
       web: [
+        'signClientAssertion',
         'signRequestObject',
         'getCookieSecrets',
         'getCookieDerivedKey',
@@ -120,22 +122,23 @@ describe('SIGNER_POLICY', () => {
     }
   });
 
-  it('lets delivery sign webhooks and api sign client assertions, and no other role but local', () => {
+  it('lets delivery sign webhooks, and the roles that serve sign-in sign client assertions (#497)', () => {
     expect(SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'signWebhook'))).toEqual([
       'local',
       'delivery',
     ]);
     expect(
       SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'signClientAssertion'))
-    ).toEqual(['local', 'api']);
+    ).toEqual(['local', 'web', 'api']);
   });
 
   it('lets local call every operation', () => {
     expect(grantsOf('local')).toHaveLength(SIGNER_OPERATIONS.length - 1 + JWS_TYPS.length);
   });
 
-  it('lets web sign request objects and nothing else (#546)', () => {
+  it('lets web sign request objects and client assertions, and no token (#546, #497)', () => {
     expect(grantsOf('web').filter((grant) => grant.startsWith('sign'))).toEqual([
+      'signClientAssertion',
       'signRequestObject',
     ]);
     expect(
@@ -147,8 +150,10 @@ describe('SIGNER_POLICY', () => {
     // Pinned as a string: the auth server builds its contexts from it, and the
     // rows it seals name it.
     expect(OID4VP_RESPONSE_KEY_CONTEXT_PREFIX).toBe('oid4vp-response-key:');
-    expect(SIGNER_POLICY.web.encrypt).toEqual([OID4VP_RESPONSE_KEY_CONTEXT_PREFIX]);
-    expect(SIGNER_POLICY.web.decrypt).toBe(false);
+    expect(SIGNER_POLICY.web.encrypt).toEqual([
+      OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
+      TOTP_SECRET_CONTEXT_PREFIX,
+    ]);
     const context = 'oid4vp-response-key:ephemeral-kid';
     expect(isSignerCallAllowed('web', 'encrypt', context)).toBe(true);
     expect(isSignerCallAllowed('api', 'decrypt', context)).toBe(true);
@@ -240,9 +245,9 @@ describe('SIGNER_POLICY', () => {
     ]) {
       expect(isSignerCallAllowed('api', 'decrypt', context), String(context)).toBe(false);
     }
-    // Neither the browser-facing role nor delivery opens a provider's, a
-    // plugin's or an account's TOTP secret, nor makes a TOTP ciphertext.
-    for (const caller of ['web', 'delivery', 'admin'] as const) {
+    // Neither delivery nor admin opens a provider's, a plugin's or an
+    // account's TOTP secret, nor makes a TOTP ciphertext.
+    for (const caller of ['delivery', 'admin'] as const) {
       expect(isSignerCallAllowed(caller, 'encrypt', 'totp-secret:realm-1:user-1'), caller).toBe(
         false
       );
@@ -256,16 +261,63 @@ describe('SIGNER_POLICY', () => {
     }
   });
 
-  it("grants no role a decrypt prefix that is the start of another role's", () => {
+  it('lets web open what sign-in opens, as api does, and no other secret (#497)', () => {
+    expect(SIGN_IN_SECRET_CONTEXT_PREFIXES).toEqual([
+      REALM_MAIL_SECRET_CONTEXT_PREFIX,
+      UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
+      AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
+      TOTP_SECRET_CONTEXT_PREFIX,
+    ]);
+    expect(SIGNER_POLICY.web.decrypt).toEqual([...SIGN_IN_SECRET_CONTEXT_PREFIXES]);
+    for (const context of [
+      'realm_secrets:mail.smtp.password',
+      `upstream-oidc:client-secret:realm-1:oidc_corp:${'ab'.repeat(32)}`,
+      'auth-method-plugin:corp:@example/qauth-plugin-corp-sso:corp_sso:clientSecret',
+      'totp-secret:realm-1:user-1',
+    ]) {
+      expect(
+        SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'decrypt', context)),
+        context
+      ).toEqual(['local', 'web', 'api']);
+    }
+    // It seals a TOTP secret when an authenticator app is bound, and nothing
+    // else of sign-in's.
+    expect(isSignerCallAllowed('web', 'encrypt', 'totp-secret:realm-1:user-1')).toBe(true);
+    for (const context of [
+      undefined,
+      '',
+      'oid4vp-response-key:ephemeral-kid',
+      'delivery:ssf_streams.x:1',
+      'admin-sealed-value:plugins.update:/secrets/clientSecret',
+      'realm_secrets:admin.x',
+      'totp-secretx:realm-1:user-1',
+    ]) {
+      expect(isSignerCallAllowed('web', 'decrypt', context), String(context)).toBe(false);
+    }
+    for (const context of [
+      'realm_secrets:mail.smtp.password',
+      'upstream-oidc:client-secret:realm-1:oidc_corp',
+      'auth-method-plugin:corp:clientSecret',
+      'delivery:ssf_streams.x:1',
+    ]) {
+      expect(isSignerCallAllowed('web', 'encrypt', context), context).toBe(false);
+    }
+  });
+
+  it("grants no role a decrypt prefix that is the start of another role's, but sign-in's to api and web", () => {
     const granted = SIGNER_CALLERS.flatMap((caller) => {
       const { decrypt } = SIGNER_POLICY[caller];
       return Array.isArray(decrypt) ? decrypt.map((prefix: string) => ({ caller, prefix })) : [];
     });
+    const signIn = (entry: { caller: string; prefix: string }) =>
+      (entry.caller === 'api' || entry.caller === 'web') &&
+      SIGN_IN_SECRET_CONTEXT_PREFIXES.includes(entry.prefix);
     expect(granted.length).toBeGreaterThan(0);
     for (const one of granted) {
       expect(one.prefix, one.caller).not.toBe('');
       for (const other of granted) {
         if (other.caller === one.caller) continue;
+        if (signIn(one) && signIn(other) && one.prefix === other.prefix) continue;
         expect(
           other.prefix.startsWith(one.prefix),
           `${one.caller}'s ${one.prefix} starts ${other.caller}'s ${other.prefix}`

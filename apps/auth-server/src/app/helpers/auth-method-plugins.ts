@@ -83,12 +83,14 @@ export const FIRST_PARTY_AUTH_METHOD_PLUGINS: readonly string[] = Object.freeze(
 /**
  * The signer caller a plugin's context signs as, and a plugin secret
  * decrypts as: `api`, whose grant holds `signClientAssertion` and the
- * `auth-method-plugin:` contexts among the three kinds of stored secret it
- * may decrypt (`AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX`), as it opens an
- * upstream OpenID Connect client's secret (#601). `web`, which serves a
- * plugin's routes, may neither decrypt nor sign a client assertion, and
- * `local` would open every stored secret. The admin API's configure and
- * enable open a stored or sealed secret as `api` too.
+ * `auth-method-plugin:` contexts among the kinds of stored secret it may
+ * decrypt (`AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX`), as it opens an
+ * upstream OpenID Connect client's secret (#601); `local` would open every
+ * stored secret. Where the signer runs apart, the signer service holds the
+ * call to the role of the process's certificate: `web`, which serves a
+ * plugin's routes, has the same grants for sign-in's secrets (#497). The
+ * admin API's configure and enable open a stored or sealed secret as `api`
+ * too.
  *
  * In a single deployment every role shares the signer's process. The signer
  * service (#497) takes the role from the caller's certificate and never

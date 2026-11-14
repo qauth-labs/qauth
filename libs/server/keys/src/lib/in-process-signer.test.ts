@@ -2381,17 +2381,20 @@ describe('caller policy', () => {
     expect(unwrap).not.toHaveBeenCalled();
   });
 
-  it('lets delivery sign webhooks and not client assertions; api the other way round', async () => {
+  it('lets delivery sign webhooks and not client assertions; api and web the other way round', async () => {
     const { signer } = await setup({ scoped: true });
 
     await expect(signer.signWebhook('delivery', webhook())).resolves.toMatch(/^v1,/);
-    await expect(signer.signClientAssertion('api', assertion())).resolves.toEqual(
-      expect.any(String)
-    );
-    await expect(signer.signWebhook('api', webhook())).rejects.toBeInstanceOf(
-      SignerAccessDeniedError
-    );
-    for (const caller of ['delivery', 'web', 'admin'] as const) {
+    // The two roles that serve sign-in sign a client assertion toward an upstream provider (#497).
+    for (const caller of ['api', 'web'] as const) {
+      await expect(signer.signClientAssertion(caller, assertion())).resolves.toEqual(
+        expect.any(String)
+      );
+      await expect(signer.signWebhook(caller, webhook())).rejects.toBeInstanceOf(
+        SignerAccessDeniedError
+      );
+    }
+    for (const caller of ['delivery', 'admin'] as const) {
       await expect(signer.signClientAssertion(caller, assertion())).rejects.toBeInstanceOf(
         SignerAccessDeniedError
       );

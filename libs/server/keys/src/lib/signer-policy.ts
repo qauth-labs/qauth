@@ -161,8 +161,15 @@ const NOTHING_ELSE = {
  *   digests (`getCookieDerivedKey`, #497). It never signs a token. It serves the wallet
  *   sign-in pages, so it signs OID4VP request objects with the
  *   `oid4vp_request_signing` key and seals each request's ephemeral response
- *   key with the `data_at_rest` key (#546): it may encrypt only with an
- *   {@link OID4VP_RESPONSE_KEY_CONTEXT_PREFIX} context, and decrypts nothing.
+ *   key with the `data_at_rest` key (#546). It serves the sign-in itself (the
+ *   Interaction API, the hosted pages, the upstream and plugin sign-ins), so
+ *   it opens what those need, as `api` does where the same code runs (#497):
+ *   an account's TOTP secret, which it also seals when an authenticator app
+ *   is bound ({@link TOTP_SECRET_CONTEXT_PREFIX}); an upstream provider's
+ *   client secret and an AuthMethod plugin's secret, which its code exchange
+ *   sends, and a client assertion toward that provider; and a realm's mail
+ *   transport secret, which its mail sender sends with. It encrypts nothing
+ *   else, and decrypts no other kind of secret.
  * - `api` signs access tokens, ID tokens and ID-JAGs (`token_signing`, hybrid
  *   included), but no logout token. It never gets the cookie secrets, which
  *   would let it make a browser session cookie: it gets the keys derived from
@@ -182,8 +189,11 @@ const NOTHING_ELSE = {
  *   account's TOTP secret ({@link TOTP_SECRET_CONTEXT_PREFIX}), which the
  *   sign-in engine checks a code with (#653). Nothing
  *   else of the role decrypts, and it signs no request object: the request is
- *   signed when the `web` role builds it. No granted prefix is the start of
- *   another role's, so no grant reaches another role's secrets.
+ *   signed when the `web` role builds it. The two roles that serve sign-in,
+ *   `api` and `web`, share the prefixes of the secrets sign-in opens
+ *   ({@link SIGN_IN_SECRET_CONTEXT_PREFIXES}); apart from those, no granted
+ *   prefix is the start of another role's, so no grant reaches another role's
+ *   secrets.
  * - `delivery` signs Security Event Tokens (`event_signing`), logout tokens
  *   (`logout+jwt`, with the `token_signing` key that signs the ID tokens, as
  *   OpenID Connect Back-Channel Logout 1.0 §2.4 asks, #624) and webhook
@@ -205,6 +215,19 @@ const NOTHING_ELSE = {
  *
  * A role that is not in this table may call nothing.
  */
+/**
+ * The kinds of stored secret sign-in opens, wherever it runs: `api` and `web`
+ * both decrypt them (#497), and no other role but `local` does. A realm's mail
+ * transport secret, an upstream provider's client secret, an AuthMethod
+ * plugin's secret member and an account's TOTP secret.
+ */
+export const SIGN_IN_SECRET_CONTEXT_PREFIXES: readonly string[] = Object.freeze([
+  REALM_MAIL_SECRET_CONTEXT_PREFIX,
+  UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
+  AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
+  TOTP_SECRET_CONTEXT_PREFIX,
+]);
+
 export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freezePolicy({
   local: {
     signJws: JWS_TYPS,
@@ -221,10 +244,12 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
   },
   web: {
     ...NOTHING_ELSE,
+    signClientAssertion: true,
     signRequestObject: true,
     getCookieSecrets: true,
     getCookieDerivedKey: true,
-    encrypt: [OID4VP_RESPONSE_KEY_CONTEXT_PREFIX],
+    encrypt: [OID4VP_RESPONSE_KEY_CONTEXT_PREFIX, TOTP_SECRET_CONTEXT_PREFIX],
+    decrypt: [...SIGN_IN_SECRET_CONTEXT_PREFIXES],
     ...PUBLIC_READS,
   },
   api: {

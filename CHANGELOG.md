@@ -62,7 +62,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets the cookie keys, and `api` gets what it needs of them without them,
   keys derived from the cookie key for its failure ladder and emailed-code
   digests and a signer-side check of the session cookie at `/auth/logout`, so
-  `api` signs in, verifies and signs out with no cookie key. Each refusal is
+  `api` signs in, verifies and signs out with no cookie key; `web` opens the
+  secrets sign-in needs (TOTP, upstream and plugin client secrets, mail
+  transport secrets) and signs upstream client assertions, so every sign-in
+  works on a split deployment. Each refusal is
   logged and counted in the new
   `qauth_signer_refusals_total{role,operation,reason}`. Calls are capped at
   64 KiB, or 2 MiB for claims, messages and data (`413`); each peer

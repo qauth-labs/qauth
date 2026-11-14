@@ -160,7 +160,10 @@ never calls it.
   from the SAN of its client certificate, as `INTERNAL_PEER_ROLES` maps it,
   never from the request, and holds each call to that role's grant. `api`
   signs access tokens, ID tokens, ID-JAGs and client assertions; `web` gets
-  the cookie keys and signs the wallet sign-in's request objects; `delivery`
+  the cookie keys and signs the wallet sign-in's request objects; both open
+  what sign-in needs, an account's TOTP secret, an upstream provider's or a
+  plugin's client secret and the realm's mail transport secret, and sign
+  client assertions toward an upstream provider; `delivery`
   signs Security Event Tokens, logout tokens and webhook messages; `admin`
   reads public keys and seals the values of its own operations. The signer
   sets each token's `iss` and `kid` itself. A call the role may not make gets
@@ -264,13 +267,7 @@ method. The pages' stylesheet and fonts, under `/assets/ui/`, are `api`'s too,
 like the discovery documents: they are not browser paths, and the pages on the
 `web` nodes link them.
 
-### What a process without the signer cannot do
-
-The signer decrypts a realm's mail secret for `api` only (ADR-019 Decision 9):
-a mail the `web` role sends, such as an emailed sign-in code, is not sent for
-a realm whose transport needs a stored secret (`mail.smtp.password` or
-`mail.resend.apiKey`). The request answers as it would otherwise, and the log
-names the realm. The `api` role's mail goes out.
+### Settings of a process without the signer
 
 `SESSION_COOKIE_SECRET` is optional on every process: only the key boot step,
 on a process that holds the signer, reads it, to import it into the default

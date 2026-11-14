@@ -261,8 +261,8 @@ not give is yours to revoke, and the run names it.
 A process whose only role is `delivery` skips the default realm's boot step,
 which writes `realms`: on a new database, start another role's process first.
 A process without the signer signs through the signer service:
-[Service roles](/operate/service-roles/#what-a-process-without-the-signer-cannot-do)
-says what it still cannot do.
+[Service roles](/operate/service-roles/#the-signer-service) says how it calls
+it and what each role may ask of it.
 
 The statements for some roles are also in `@qauth-labs/infra-db`, for an
 operator who grants by hand; the map gives each role these and more:
