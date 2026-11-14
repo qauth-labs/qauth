@@ -3,7 +3,7 @@ title: Testing
 description: The five tiers — unit, testcontainers integration, the repo-wide coverage gate, the documentation invariants, and the black-box wire suite — what each can and cannot catch, how to run them, and the two caching lessons this repo learned the hard way.
 sidebar:
   order: 4
-lastVerified: '2026-11-08'
+lastVerified: '2026-11-14'
 ---
 
 QAuth has three test tiers, a fourth that guards this documentation site, and a fifth that tests
@@ -11,15 +11,16 @@ the built server from outside, over HTTP. Knowing what each one **cannot** catch
 worst incidents in this repo's history came from: a suite that passed while running zero tests,
 and a schema change no unit test could see.
 
-| Tier                 | Command                                      | Runs in CI                | Catches                                                       |
-| -------------------- | -------------------------------------------- | ------------------------- | ------------------------------------------------------------- |
-| Unit                 | `pnpm exec nx run-many -t test --all`        | the `affected (test)` job | Handler and helper logic, in isolation                        |
-| Integration          | `pnpm exec nx run infra-db:test-integration` | the `integration` job     | Real Postgres DDL, migrations, repositories                   |
-| Repo-wide coverage   | `pnpm exec vitest run --coverage`            | the `coverage` job        | Coverage regression across the whole fast suite               |
-| Documentation guards | `pnpm exec nx test docs-site`                | part of the unit tier     | Drift between this site and the tree it describes             |
-| Docs checks          | `pnpm exec nx test docs-checks`              | part of the unit tier     | Generated pages and docs links out of step with the libraries |
-| Wire suite           | `pnpm nx run wire-suite:run`                 | the `wire-suite` job      | What a client sees over HTTP from the built image             |
-| Stable surface       | `pnpm stable-surface`                        | the `stable-surface` job  | A surface out of step with the code or the last release       |
+| Tier                 | Command                                      | Runs in CI                     | Catches                                                                 |
+| -------------------- | -------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------- |
+| Unit                 | `pnpm exec nx run-many -t test --all`        | the `affected (test)` job      | Handler and helper logic, in isolation                                  |
+| Integration          | `pnpm exec nx run infra-db:test-integration` | the `integration` job          | Real Postgres DDL, migrations, repositories                             |
+| Repo-wide coverage   | `pnpm exec vitest run --coverage`            | the `coverage` job             | Coverage regression across the whole fast suite                         |
+| Documentation guards | `pnpm exec nx test docs-site`                | part of the unit tier          | Drift between this site and the tree it describes                       |
+| Docs checks          | `pnpm exec nx test docs-checks`              | part of the unit tier          | Generated pages and docs links out of step with the libraries           |
+| Wire suite           | `pnpm nx run wire-suite:run`                 | the `wire-suite` job           | What a client sees over HTTP from the built image                       |
+| Stable surface       | `pnpm stable-surface`                        | the `stable-surface` job       | A surface out of step with the code or the last release                 |
+| Migration policy     | `pnpm exec nx run infra-db:migration-policy` | the `affected (typecheck)` job | A destructive or edited migration ([policy](/extend/migration-policy/)) |
 
 ## Tier 1 — unit
 

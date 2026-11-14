@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A migration policy check** ([#473], ADR-018 §5). CI now refuses a
+  migration added since the last release tag that drops a table, column or
+  constraint, changes a column's type, renames, truncates or deletes rows,
+  sets or adds a `NOT NULL` column with no default, drops with `CASCADE`, runs
+  SQL it cannot read, or raises an exception at migration time, the
+  precondition that made migration 0011 a manual step. It
+  also refuses any change to a migration a release has shipped, and a journal
+  that does not only grow, with each new entry dated after the one before.
+  Until 1.0 a refused statement passes when
+  `libs/infra/db/drizzle/policy-exceptions.json` lists it with a reason and
+  an issue; the list starts empty, and once its `frozen` flag is set, by the
+  1.0 release candidate, it may not grow. The target is
+  `infra-db:migration-policy`, which the affected typecheck leg runs, with
+  the exceptions in the job summary. The new
+  [migration policy](https://docs.qauth.dev/extend/migration-policy/) page
+  says how to write a change as expand, then switch, with no drop within
+  1.x.
+
 ## [0.2.5] - 2026-11-14
 
 A patch release with no breaking change. A deployment can now seed each
@@ -4346,6 +4366,7 @@ It adds migrations 0068 and 0069.
 [#468]: https://github.com/qauth-labs/qauth/issues/468
 [#469]: https://github.com/qauth-labs/qauth/issues/469
 [#470]: https://github.com/qauth-labs/qauth/issues/470
+[#473]: https://github.com/qauth-labs/qauth/issues/473
 [#474]: https://github.com/qauth-labs/qauth/issues/474
 [#475]: https://github.com/qauth-labs/qauth/issues/475
 [#476]: https://github.com/qauth-labs/qauth/issues/476

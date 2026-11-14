@@ -1483,6 +1483,13 @@ still there, and passwords still sign in. It then starts the old release again
 on the migrated database and runs the same smoke tests. Until the 1.0 release
 candidate, a failure of that last check is reported but does not fail CI.
 
+A second check holds every new migration to the promise. It refuses a
+destructive statement or a manual-step precondition in a migration added since
+the last release, and any change to a migration a release has shipped. Until
+1.0, a destructive statement passes only when the exceptions file lists it with
+a reason; the 1.0 release candidate freezes that list. The
+[migration policy](/extend/migration-policy/) describes both.
+
 ## History: the migration 0011 runbook (ADR-002)
 
 This runbook predates the migration runner: where it says
@@ -1756,6 +1763,8 @@ of that release's migrations — nothing to sequence around.
 
 ## See also
 
+- [Migration policy](/extend/migration-policy/) — how a migration keeps the
+  previous release working, and the CI check that refuses one that does not.
 - [Docker](/operate/docker/) — the `migration-runner` service; its
   Troubleshooting section points back here for a migration 0011 failure.
 - [Configuration](/operate/configuration/) — `DB_MIGRATION_WAIT_MS`, the auth
