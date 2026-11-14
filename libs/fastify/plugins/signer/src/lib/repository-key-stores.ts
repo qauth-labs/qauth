@@ -4,14 +4,17 @@ import {
   createRealmsRepository,
   createRealmUpstreamProvidersRepository,
   type DbClient,
+  type DbTransaction,
   type RealmPublicKeysRepository,
 } from '@qauth-labs/infra-db';
 import { createPublishedKeyReader, type PublishedKeyReader } from '@qauth-labs/server-keys';
 import type {
+  KekRewrapStore,
   KeyRotationStore,
   RealmKeyBootStore,
   SignerKeyStore,
   StoredPublicKey,
+  WrappedDekChange,
 } from '@qauth-labs/server-keys/custody';
 
 import type { KekCanaryStore } from './key-custody-check';
@@ -145,4 +148,24 @@ export function createRepositoryKeyStore(
       }));
     },
   } satisfies RealmKeyBootStore<DbClient> & KeyRotationStore<DbClient>);
+}
+
+/**
+ * The store the KEK rotation (#545) works through: the keys per KEK
+ * reference, a page of one reference's keys, a key's sealed row through the
+ * one read that returns wrapped material, and the conditional write of a
+ * key's new wrap. The approval is consumed in a transaction on `db`.
+ */
+export function createRepositoryKekRewrapStore(db: DbClient): KekRewrapStore<DbTransaction> {
+  const keys = createRealmKeysRepository(db);
+  return Object.freeze({
+    transaction: <T>(work: (tx: DbTransaction) => Promise<T>) => db.transaction(work),
+    countByKekRef: () => keys.countByKekRef(),
+    listByKekRef: (kekRef: string, afterId: string | null, limit: number) =>
+      keys.listByKekRef(kekRef, afterId, limit),
+    getWrappedKey: (realmId: string, kid: string) => keys.getWrappedForSigner(realmId, kid),
+    async replaceWrappedDek(realmId: string, kid: string, change: WrappedDekChange) {
+      return (await keys.replaceWrappedDek(realmId, kid, change)) !== undefined;
+    },
+  } satisfies KekRewrapStore<DbTransaction>);
 }

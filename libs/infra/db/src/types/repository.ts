@@ -1317,6 +1317,34 @@ export type RealmKeyStatusChange =
   | { status: 'active'; activateAt: number }
   | { status: 'retired'; retireAt: number; unpublishAt: number | null };
 
+/** How many `realm_keys` rows one KEK reference wraps (#545). */
+export interface RealmKeyKekRefCount {
+  kekRef: string;
+  rows: number;
+}
+
+/** A key the KEK rotation re-wraps (#545): its row id, realm and `kid`. */
+export interface RealmKeyRewrapCandidate {
+  id: string;
+  realmId: string;
+  kid: string;
+}
+
+/**
+ * A key's new wrapped data key for {@link RealmKeysRepository.replaceWrappedDek}
+ * (#545), and the wrap the row must still hold for the write to happen.
+ */
+export interface RealmKeyWrappedDekChange {
+  /** The `kek_ref` the row must still hold. */
+  fromKekRef: string;
+  /** The `wrapped_dek` the row must still hold, byte for byte. */
+  fromWrappedDek: Buffer;
+  /** The new `wrapped_dek`: the same data key, wrapped under the new KEK. */
+  wrappedDek: Buffer;
+  /** The new `kek_ref`. */
+  kekRef: string;
+}
+
 /**
  * The published keys of each realm (`realm_public_keys`): public material that
  * every service role reads (#491, #495), unlike `realm_keys`.
@@ -1436,6 +1464,41 @@ export interface RealmKeysRepository {
    * nodes that boot together do that one at a time.
    */
   lockRealm(realmId: string, tx: DbClient): Promise<void>;
+  /**
+   * How many keys of any status, in every realm, each KEK reference wraps,
+   * ordered by reference: what the KEK rotation (#545) reports, and finishes
+   * only when no key is left on the old reference.
+   */
+  countByKekRef(tx?: DbClient): Promise<RealmKeyKekRefCount[]>;
+  /**
+   * Up to `limit` keys of any status, in every realm, whose data key the KEK
+   * reference `kekRef` wraps, by row id in ascending order, after the row
+   * `afterId` (from the first when `null`): the pages the KEK rotation (#545)
+   * reads. No wrapped columns.
+   */
+  listByKekRef(
+    kekRef: string,
+    afterId: string | null,
+    limit: number,
+    tx?: DbClient
+  ): Promise<RealmKeyRewrapCandidate[]>;
+  /**
+   * Write a key's data key wrapped under a new KEK (#545): `wrapped_dek` and
+   * `kek_ref` only, in one statement, and only when the row still holds
+   * `change.fromKekRef` and `change.fromWrappedDek`, so a key another writer
+   * moved or replaced first is left as it is. `ciphertext`, `iv` and
+   * `aad_version` are not touched. It writes wrapped material and reads none
+   * back.
+   *
+   * @returns the updated key without its wrapped material, or `undefined` when
+   *   the row no longer held that wrap
+   */
+  replaceWrappedDek(
+    realmId: string,
+    kid: string,
+    change: RealmKeyWrappedDekChange,
+    tx?: DbClient
+  ): Promise<RealmKey | undefined>;
 }
 
 /**

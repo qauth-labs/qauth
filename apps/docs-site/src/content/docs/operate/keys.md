@@ -102,9 +102,10 @@ under it in every environment: the development KEK would protect nothing.
 
 **A previous KEK.** `KEK_PREVIOUS` (or `KEK_PREVIOUS_PATH`) holds the KEK in
 use before a change of KEK. Keys wrapped under it still open; every new key is
-wrapped under `KEK`. Nothing re-wraps a stored key yet: the KEK rotation
-([#545](https://github.com/qauth-labs/qauth/issues/545)) will. Until then a
-key wrapped under the previous KEK opens only while `KEK_PREVIOUS` holds it.
+wrapped under `KEK`. A key wrapped under the previous KEK opens only while
+`KEK_PREVIOUS` holds it, until
+[`auth-server:keys:rewrap`](#rotating-the-kek-auth-serverkeysrewrap) moves it
+to the new KEK.
 
 **A key management service.** An optional adapter package can keep the KEK
 in a key service instead. Two ship. For example, `KEK_PROVIDER=aws-kms` with
@@ -474,6 +475,101 @@ A realm has one active key per purpose and algorithm, so the command cannot
 replace one: a second active key is refused. A `next` key is published, and
 [the scheduled rotation](#the-scheduled-rotation) makes it active when it is
 due.
+
+## Rotating the KEK: `auth-server:keys:rewrap`
+
+A KEK rotation moves every stored key from the old KEK to a new one without an
+outage ([#545](https://github.com/qauth-labs/qauth/issues/545)). Each key's
+material stays encrypted under its own data key; only the data key is
+unwrapped under the old KEK and wrapped again under the new one, so a store of
+hundreds of keys moves in seconds. It is a security operation (ADR-019
+Decision 9).
+
+1. **Give every signer node the new KEK before any node wraps under it.**
+   Make a new KEK ([above](#the-kek)). A node wraps new keys under its `KEK`
+   and opens only its `KEK` and `KEK_PREVIOUS`, so switch in two rolling
+   passes, with no earlier rotation still in progress:
+   - Pass 1: keep the old KEK as `KEK` (or `KEK_PATH`), set the new one as
+     `KEK_PREVIOUS` (or `KEK_PREVIOUS_PATH`), and restart the signer nodes one
+     at a time. Every node now opens keys wrapped under the new KEK, and none
+     wraps under it yet.
+   - Pass 2: set the new KEK as `KEK` and the old one as `KEK_PREVIOUS`, and
+     restart the signer nodes one at a time. New keys are wrapped under the
+     new KEK from then on, and every stored key still opens on every node, so
+     signing goes on.
+
+   Go on to the next steps only once pass 2 is done on every node. A single
+   deployment, one process, can skip pass 1.
+
+2. **Find the old KEK's reference.** Each stored key names its KEK in
+   `kek_ref`: for the default provider, the first 8 bytes of the KEK's
+   SHA-256 in hex. On a host with both KEKs and the server's environment:
+
+   ```bash
+   pnpm nx run auth-server:keys:rewrap --status
+   ```
+
+   It prints the stored keys per `kek_ref` and changes nothing. The line that
+   says `wraps new keys` is the new KEK; the other is the old one.
+
+3. **Re-wrap.** On the same host:
+
+   ```bash
+   # From a checkout, with the server's environment:
+   pnpm nx run auth-server:keys:rewrap --from=<the old kek_ref>
+
+   # In the auth-server image, from /app:
+   tsx src/keys-rewrap.ts --from <the old kek_ref>
+   ```
+
+   It moves every key, of every realm and status, from `--from` to the KEK
+   the host wraps under (`--to` names it, and must be that KEK). One key moves
+   per write, so a run that stops leaves each key under one KEK or the other:
+   run it again and it moves the rest. Two hosts running it at once never
+   write over each other.
+
+4. **Remove the old KEK.** The command prints the stored keys per `kek_ref`
+   again, with whether the host opens each one. When every stored key is on
+   the new reference and opens, it says that it is safe to remove
+   `KEK_PREVIOUS`, and exits `0`. Remove it from every signer node and restart
+   them. If a node still had the old KEK as `KEK` and wrapped a new key under
+   it in the meantime, run the command again first; a signer node that cannot
+   open a key in use fails its `/ready` `kek` check.
+
+| Flag       | Default                      | Meaning                                                    |
+| ---------- | ---------------------------- | ---------------------------------------------------------- |
+| `--from`   | required                     | The `kek_ref` the keys move from: the old KEK.             |
+| `--to`     | the KEK the host wraps under | The `kek_ref` the keys move to.                            |
+| `--status` | off                          | Print the stored keys per `kek_ref` alone; change nothing. |
+
+It exits `3`, and does not say the old KEK can go, while any key is on a
+reference other than the new one (the old reference, a third KEK, or one the
+host cannot open) or a key did not open under the old one: the report lists
+them. A `--from` that names no stored key moves nothing and exits `3` while
+keys remain on another reference. A usage error exits `2`. Any other error,
+such as a `--from` the host holds no KEK for, exits `1` with a message on
+stderr and the stored keys per `kek_ref`. Nothing is moved before the command
+has checked that the host wraps under the new KEK and opens the old one.
+
+The command records the rotation as a `kek.rotate` operation by the
+operating-system user that ran it: before any key moves, in one transaction,
+it writes a row in the admin audit log of every realm that holds a key (actor
+`break_glass_operator`, the two references, the operation digest and the
+approval id), and prints that record. If the row cannot be written, for
+example because the database user lacks the grant, nothing moves and the
+command exits `1`. It runs where both KEKs are, so it needs no admin's
+approval: whoever holds the host and both KEKs can open every stored key
+anyway, and ADR-019 Decision 7 puts that holder outside the approval rule on
+the condition that each use is recorded. Started from the admin
+API, the rotation will run only under an approval of exactly that rotation
+(the two references, who asked, and a nonce); no admin API route starts it
+yet.
+
+A key service adapter rotates the same way. Its `kek_ref` names the key and
+its version, so once the key service has rotated its key, `--from` names the
+old version, the command moves every key to the version the adapter wraps
+under now, and the old version can be retired in the key service once the
+command says it is safe.
 
 ## A provider-issued client-assertion key
 

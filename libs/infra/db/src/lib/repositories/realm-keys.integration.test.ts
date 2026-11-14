@@ -626,6 +626,68 @@ describe('realm_keys integration (real Postgres)', () => {
       await expect(keys.listKekCanaries(1)).resolves.toHaveLength(1);
     });
 
+    it('counts and pages the keys per KEK reference, any status, in every realm (#545)', async () => {
+      const realmA = await seedRealm();
+      const realmB = await seedRealm();
+      const first = await keys.create({ key: keyRow(realmA, { kekRef: 'kek-old' }) });
+      const second = await keys.create({
+        key: keyRow(realmB, { kekRef: 'kek-old', status: 'next' }),
+      });
+      await keys.create({ key: keyRow(realmB, { kekRef: 'kek-new' }) });
+      const retired = await keys.create({
+        key: keyRow(realmA, { kekRef: 'kek-old', purpose: 'data_at_rest', algorithm: 'A256GCM' }),
+      });
+      await pool().query(`UPDATE realm_keys SET status = 'retired', retire_at = 1 WHERE kid = $1`, [
+        retired.kid,
+      ]);
+
+      await expect(keys.countByKekRef()).resolves.toEqual([
+        { kekRef: 'kek-new', rows: 1 },
+        { kekRef: 'kek-old', rows: 3 },
+      ]);
+      const page = await keys.listByKekRef('kek-old', null, 2);
+      const byId = [first, second, retired].sort((a, b) => (a.id < b.id ? -1 : 1));
+      expect(page).toEqual(byId.slice(0, 2).map(({ id, realmId, kid }) => ({ id, realmId, kid })));
+      await expect(keys.listByKekRef('kek-old', page[1].id, 2)).resolves.toEqual([
+        { id: byId[2].id, realmId: byId[2].realmId, kid: byId[2].kid },
+      ]);
+    });
+
+    it('replaceWrappedDek writes only a row that still holds the wrap it was read with (#545)', async () => {
+      const realmId = await seedRealm();
+      const row = keyRow(realmId, { kekRef: 'kek-old' });
+      await keys.create({ key: row });
+      const change = {
+        fromKekRef: 'kek-old',
+        fromWrappedDek: row.wrappedDek,
+        wrappedDek: Buffer.alloc(40, 0x42),
+        kekRef: 'kek-new',
+      };
+
+      // Another wrap than the one read, or another reference: nothing changes.
+      await expect(
+        keys.replaceWrappedDek(realmId, row.kid, { ...change, fromWrappedDek: Buffer.alloc(40, 1) })
+      ).resolves.toBeUndefined();
+      await expect(
+        keys.replaceWrappedDek(realmId, row.kid, { ...change, fromKekRef: 'kek-other' })
+      ).resolves.toBeUndefined();
+
+      const updated = await keys.replaceWrappedDek(realmId, row.kid, change);
+      expect(updated).toMatchObject({ kid: row.kid, kekRef: 'kek-new', aadVersion: 1 });
+      for (const column of ['ciphertext', 'iv', 'wrappedDek']) {
+        expect(updated).not.toHaveProperty(column);
+      }
+      const stored = await keys.getWrappedForSigner(realmId, row.kid);
+      expect(stored).toMatchObject({ kekRef: 'kek-new', aadVersion: 1 });
+      expect(stored?.wrappedDek).toEqual(change.wrappedDek);
+      // The material is not touched.
+      expect(stored?.ciphertext).toEqual(row.ciphertext);
+      expect(stored?.iv).toEqual(row.iv);
+
+      // The same write again finds the row moved.
+      await expect(keys.replaceWrappedDek(realmId, row.kid, change)).resolves.toBeUndefined();
+    });
+
     it("never opens another realm's key by kid", async () => {
       const realmA = await seedRealm();
       const realmB = await seedRealm();

@@ -84,8 +84,22 @@ chmod 600 /run/secrets/qauth-kek
   as `KEK_PREVIOUS`.
 
 During a KEK rotation, set the new KEK as `KEK` and the old one as `KEK_PREVIOUS`. New data keys are
-wrapped under the new KEK, and keys wrapped under the old one still open until they are re-wrapped
-(#545).
+wrapped under the new KEK, and keys wrapped under the old one still open until they are re-wrapped.
+
+## KEK rotation
+
+`createKekRewrap({ store, kekProvider })` (custody) moves the stored keys from one KEK to another
+(#545). `rewrapAll({ from, to, approval, onAudit })` unwraps each key's data key under the KEK
+reference `from` and wraps it under `to`, which must be the KEK the provider wraps under; the
+material, its IV and `aadVersion` stay as they are, and each new wrap must open to the same data key
+before it is written. It refuses a `to` the provider does not wrap under and a `from` it holds no KEK
+for before it uses its approval, an `ApprovedOperation` of `kek.rotate` bound to the canonical record
+`{ op, from, to, requester, nonce }` (`kekRotationOperation`, on the public entry point). One key
+moves per write, which matches only the row as it was read, so a run that stops resumes when run
+again. The report counts the keys per KEK reference and says whether the node opens each one;
+`complete` is true only when every key is on `to`, none failed and `to` opens: a key left under
+any other reference, a mistyped `from` included, keeps it false.
+`census()` counts alone. The auth server's operator command `auth-server:keys:rewrap` runs it.
 
 ## Usage
 

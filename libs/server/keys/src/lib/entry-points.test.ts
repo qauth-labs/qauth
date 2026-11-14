@@ -25,6 +25,9 @@ describe('package entry points', () => {
     'prepareEnvironmentKeys',
     'bootRealmKeys',
     'createKeyRotation',
+    'createKekRewrap',
+    'rewrapDataKey',
+    'unwrapDataKey',
   ])('keeps %s out of the public entry point and in custody', (name) => {
     expect(publicEntry).not.toHaveProperty(name);
     expect(custody).toHaveProperty(name);

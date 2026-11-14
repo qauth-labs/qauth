@@ -32,6 +32,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps replacing the stored key at boot until emergency retirement ([#551])
   ships too.
 
+- **KEK rotation: re-wrap every stored key under a new KEK** ([#545],
+  ADR-019 Decisions 7 and 9). The operator command `auth-server:keys:rewrap`
+  moves the stored keys from the old key-encryption key to the new one without
+  an outage. On a host that holds both, the new KEK as `KEK` and the old one as
+  `KEK_PREVIOUS` (or a key service adapter that opens both), `keys:rewrap
+  --from=<old kek_ref>` unwraps each key's data key under the old reference and
+  wraps it under the KEK the host wraps under (or `--to`); the encrypted
+  material, its IV and `aad_version` are not touched, and each new wrap is
+  checked to open to the same data key before it is written. One key moves per
+  write, which matches only the row as it was read, so a run that stops can be
+  run again and resumes, and two hosts at once never write over each other.
+  Signing and verification go on throughout on signer nodes that hold both
+  KEKs. The command prints the stored keys per `kek_ref`, with whether the host
+  opens a key of each one; it says when it is safe to remove `KEK_PREVIOUS`,
+  and exits `3` without saying so while any key is on a reference other than
+  the new one (a mistyped `--from` included) or did not open. `--status` prints the counts
+  alone. In the key library, `rewrapAll({ from, to })` runs only under an
+  `ApprovedOperation` of `kek.rotate`, consumed with the audit hook before any
+  key moves, for the SHA-256 of the canonical record `{ op, from, to,
+  requester, nonce }`: the admin API's start will need its approvers'
+  approval, and the command, on a host that already holds both KEKs, makes one
+  of its own by the operating-system user, and records the run in the admin
+  audit log of every realm that holds a key (actor `break_glass_operator`), in
+  that transaction, so nothing moves unrecorded. No admin API route starts it
+  yet.
+  The realm keys repository gains `countByKekRef`, `listByKekRef` and
+  `replaceWrappedDek`; none of them reads wrapped material.
+
 - **A migration policy check** ([#473], ADR-018 §5). CI now refuses a
   migration added since the last release tag that drops a table, column or
   constraint, changes a column's type, renames, truncates or deletes rows,
