@@ -39,7 +39,7 @@ import {
 import { sandboxPairingOf } from '../../helpers/sandbox-realm';
 import { requestClassification } from '../../plugins/admin-operations';
 import { eligibleApproverCount } from '../approvals/eligibility';
-import { approvalRequirement } from '../approvals/engine';
+import { requestApprovalRequirement } from '../approvals/two-admin';
 import { callerAccount } from '../approvals/standing';
 import { changePreview, changePreviewSchema } from '../change-preview';
 import {
@@ -504,7 +504,11 @@ export const realmRoutes: FastifyPluginAsync = async (fastify) => {
       const approval =
         preview.classification.class === 'security'
           ? {
-              twoAdmin: approvalRequirement().twoAdmin,
+              twoAdmin: requestApprovalRequirement(request.server, {
+                operation: operations.updatePolicies,
+                realm: caller.targetRealm,
+                body: request.body,
+              }).twoAdmin,
               eligibleApprovers: await eligibleApproverCount(request.server, {
                 targetRealm: caller.targetRealm,
                 requester: callerAccount(caller),

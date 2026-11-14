@@ -77,9 +77,14 @@ const BODY_OPTIONAL_KEY = 'x-qauth-body-optional';
  */
 function documentedErrorStatuses(
   declared: readonly number[] | undefined,
-  config: { surface?: string; rateLimit?: unknown } | undefined
+  config: { surface?: string; rateLimit?: unknown } | undefined,
+  securityOperation = false
 ): number[] {
   const statuses = new Set(declared ?? []);
+  // A security operation of the admin API (`x-qauth-two-admin`) answers 409
+  // `approval_unavailable` where its realm requires a second admin no one can
+  // be now (#521).
+  if (securityOperation) statuses.add(409);
   if (config?.rateLimit !== false) statuses.add(429);
   if (config?.surface !== 'none') {
     statuses.add(421);
@@ -229,7 +234,11 @@ const transformRoute: SwaggerPlugin.SwaggerTransform = (input) => {
     url,
     schema: {
       ...rest,
-      [ERROR_STATUSES_KEY]: documentedErrorStatuses(declared, config),
+      [ERROR_STATUSES_KEY]: documentedErrorStatuses(
+        declared,
+        config,
+        (rest as Record<string, unknown>)['x-qauth-two-admin'] !== undefined
+      ),
       [ERROR_FORMAT_KEY]: config?.errorFormat === 'oauth' ? 'oauth' : 'problem',
       ...(acceptsNoBody(input.schema?.body) ? { [BODY_OPTIONAL_KEY]: true } : {}),
     },
