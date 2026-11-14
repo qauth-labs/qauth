@@ -14,16 +14,28 @@
  * tsx src/keys-rewrap.ts --from <the old kek_ref>
  * ```
  *
- * It prints the stored keys per `kek_ref` and whether `KEK_PREVIOUS` may be
- * removed. No key material, data key or KEK is ever printed.
+ * It records the run in the admin audit log of every realm that holds a key,
+ * before any key moves, and prints the stored keys per `kek_ref` and whether
+ * `KEK_PREVIOUS` may be removed. No key material, data key or KEK is ever
+ * printed.
  */
 import { userInfo } from 'node:os';
 
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
-import { countKeysPerKek, rotateKek } from '@qauth-labs/fastify-plugin-signer';
+import {
+  countKeysPerKek,
+  listRealmIdsWithKeys,
+  rotateKek,
+} from '@qauth-labs/fastify-plugin-signer';
 import Fastify from 'fastify';
 
-import { runKeysRewrap } from './app/helpers/keys-rewrap';
+import {
+  describeKeysRewrapError,
+  KeysRewrapUsageError,
+  parseKeysRewrapArguments,
+  recordHostKekRotation,
+  runKeysRewrap,
+} from './app/helpers/keys-rewrap';
 import { env } from './config/env';
 
 /** The user the command runs as, as the audit record names it. */
@@ -36,6 +48,15 @@ function operatingSystemUser(): string {
 }
 
 async function main(): Promise<number> {
+  const argv = process.argv.slice(2);
+  // A usage error exits 2 before anything connects.
+  try {
+    parseKeysRewrapArguments(argv);
+  } catch (error) {
+    if (!(error instanceof KeysRewrapUsageError)) throw error;
+    process.stderr.write(`${error.message}\n`);
+    return 2;
+  }
   // Only the database: no route, no cache, no listening port.
   const server = Fastify({ logger: { level: 'warn' } });
   try {
@@ -49,8 +70,19 @@ async function main(): Promise<number> {
       warn: ({ variable, message }: { variable: string; message: string }) =>
         server.log.warn({ variable }, message),
     };
-    return await runKeysRewrap(process.argv.slice(2), {
+    const { adminAuditLog } = server.repositories;
+    return await runKeysRewrap(argv, {
       rotateKek: (input) => rotateKek(deps, input),
+      recordRotation: (record, tx) =>
+        recordHostKekRotation(
+          {
+            listRealmIds: (afterRealmId, limit, client) =>
+              listRealmIdsWithKeys(client, afterRealmId, limit),
+            appendAdminAudit: (client, entry) => adminAuditLog.appendAdminAudit(client, entry),
+          },
+          record,
+          tx
+        ),
       countKeysPerKek: () => countKeysPerKek(deps),
       operatingSystemUser,
       out: (line) => process.stdout.write(`${line}\n`),
@@ -66,9 +98,7 @@ main().then(
     process.exitCode = code;
   },
   (error: unknown) => {
-    process.stderr.write(
-      `keys:rewrap: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}\n`
-    );
+    process.stderr.write(`keys:rewrap: ${describeKeysRewrapError(error)}\n`);
     process.exitCode = 1;
   }
 );

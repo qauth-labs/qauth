@@ -518,8 +518,8 @@ Decision 9).
    write over each other.
 
 4. **Remove the old KEK.** The command prints the stored keys per `kek_ref`
-   again, with whether the host opens each one. When no key is left on the old
-   reference and every key opens, it says that it is safe to remove
+   again, with whether the host opens each one. When every stored key is on
+   the new reference and opens, it says that it is safe to remove
    `KEK_PREVIOUS`, and exits `0`. Remove it from every signer node and restart
    them. If a node still had the old KEK as `KEK` and wrapped a new key under
    it in the meantime, run the command again first; a signer node that cannot
@@ -531,17 +531,25 @@ Decision 9).
 | `--to`     | the KEK the host wraps under | The `kek_ref` the keys move to.                            |
 | `--status` | off                          | Print the stored keys per `kek_ref` alone; change nothing. |
 
-It exits `3`, and does not say the old KEK can go, while a key is still on the
-old reference, a key did not open under it, or a key names a KEK the host
-cannot open: the report lists them. A usage error exits `2`. Any other error,
+It exits `3`, and does not say the old KEK can go, while any key is on a
+reference other than the new one (the old reference, a third KEK, or one the
+host cannot open) or a key did not open under the old one: the report lists
+them. A `--from` that names no stored key moves nothing and exits `3` while
+keys remain on another reference. A usage error exits `2`. Any other error,
 such as a `--from` the host holds no KEK for, exits `1` with a message on
 stderr and the stored keys per `kek_ref`. Nothing is moved before the command
 has checked that the host wraps under the new KEK and opens the old one.
 
 The command records the rotation as a `kek.rotate` operation by the
-operating-system user that ran it, and prints that record when it starts. It
-runs where both KEKs are, so it needs no admin's approval: whoever holds the
-host and both KEKs can open every stored key anyway. Started from the admin
+operating-system user that ran it: before any key moves, in one transaction,
+it writes a row in the admin audit log of every realm that holds a key (actor
+`break_glass_operator`, the two references, the operation digest and the
+approval id), and prints that record. If the row cannot be written, for
+example because the database user lacks the grant, nothing moves and the
+command exits `1`. It runs where both KEKs are, so it needs no admin's
+approval: whoever holds the host and both KEKs can open every stored key
+anyway, and ADR-019 Decision 7 puts that holder outside the approval rule on
+the condition that each use is recorded. Started from the admin
 API, the rotation will run only under an approval of exactly that rotation
 (the two references, who asked, and a nonce); no admin API route starts it
 yet.

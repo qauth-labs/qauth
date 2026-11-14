@@ -45,15 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run again and resumes, and two hosts at once never write over each other.
   Signing and verification go on throughout on signer nodes that hold both
   KEKs. The command prints the stored keys per `kek_ref`, with whether the host
-  opens each one; it says when it is safe to remove `KEK_PREVIOUS`, and exits
-  `3` without saying so while a key is still on the old reference, did not
-  open, or names a KEK the host cannot open. `--status` prints the counts
+  opens a key of each one; it says when it is safe to remove `KEK_PREVIOUS`,
+  and exits `3` without saying so while any key is on a reference other than
+  the new one (a mistyped `--from` included) or did not open. `--status` prints the counts
   alone. In the key library, `rewrapAll({ from, to })` runs only under an
   `ApprovedOperation` of `kek.rotate`, consumed with the audit hook before any
   key moves, for the SHA-256 of the canonical record `{ op, from, to,
   requester, nonce }`: the admin API's start will need its approvers'
   approval, and the command, on a host that already holds both KEKs, makes one
-  of its own by the operating-system user. No admin API route starts it yet.
+  of its own by the operating-system user, and records the run in the admin
+  audit log of every realm that holds a key (actor `break_glass_operator`), in
+  that transaction, so nothing moves unrecorded. No admin API route starts it
+  yet.
   The realm keys repository gains `countByKekRef`, `listByKekRef` and
   `replaceWrappedDek`; none of them reads wrapped material.
 

@@ -10,6 +10,9 @@ import {
   newOperationNonce,
   type RotateKekInput,
 } from '@qauth-labs/fastify-plugin-signer';
+import type { FastifyInstance } from 'fastify';
+
+import { RESERVED_OPERATIONS } from './admin-operations-reserved';
 
 /**
  * The operator command `auth-server:keys:rewrap` (ADR-019 Decision 9, issue
@@ -121,10 +124,106 @@ export function hostKekRotationApproval(operatingSystemUser: string): RotateKekI
   });
 }
 
+type AdminAuditLog = FastifyInstance['repositories']['adminAuditLog'];
+
+/** One row of the admin audit log, as the repository takes it. */
+type AdminAuditEntry = Parameters<AdminAuditLog['appendAdminAudit']>[1];
+
+/** The transaction the rotation uses its approval up in, which the audit rows commit in. */
+type DbTransaction = Parameters<AdminAuditLog['appendAdminAudit']>[0];
+
+/** Where the command records a run: the admin audit log, and the realms whose keys it moves. */
+export interface KekRotationAuditLog {
+  /**
+   * The realms that hold a stored key, after `afterRealmId`, in realm id
+   * order (`listRealmIdsWithKeys` of the signer's wiring).
+   */
+  readonly listRealmIds: (
+    afterRealmId: string | null,
+    limit: number,
+    tx: DbTransaction
+  ) => Promise<readonly string[]>;
+  /** `appendAdminAudit` of the admin audit log repository. */
+  readonly appendAdminAudit: (tx: DbTransaction, entry: AdminAuditEntry) => Promise<unknown>;
+}
+
+/** How many realms the audit write lists at a time. */
+const AUDIT_REALM_PAGE = 500;
+
+/** The effects of `kek.rotate`, as the reserved operation ids name them. */
+const KEK_ROTATE_EFFECTS = (() => {
+  const reserved = RESERVED_OPERATIONS.find((entry) => entry.id === KEK_ROTATE_OPERATION);
+  if (reserved === undefined) throw new Error(`'${KEK_ROTATE_OPERATION}' is not reserved`);
+  return reserved.effects;
+})();
+
+/**
+ * Record a host run of the KEK rotation in the admin audit log, inside the
+ * transaction that uses its approval up, before any key moves: one row in the
+ * chain of every realm that holds a stored key, as the realms' keys are what
+ * it re-wraps. Each row names the operating-system user (actor
+ * `break_glass_operator`), the operation `kek.rotate` with its effects, the
+ * two KEK references, the operation digest and the approval id, so the rows
+ * of one run are found together. ADR-019 Decision 7: a run that stands
+ * outside the approval rule is recorded, and a failed write stops the run
+ * with nothing moved.
+ *
+ * The rows record that the rotation started under the approval; where the
+ * keys stand afterwards is what the command prints.
+ *
+ * @returns how many realms' logs recorded it
+ * @throws TypeError when the record's actor is not this host's operator
+ */
+export async function recordHostKekRotation(
+  log: KekRotationAuditLog,
+  record: KekRotationRecord,
+  tx: DbTransaction
+): Promise<number> {
+  const { actor } = record;
+  if (actor.kind !== 'break_glass') {
+    throw new TypeError("The host command records only its own run, by this host's operator");
+  }
+  let written = 0;
+  let after: string | null = null;
+  for (;;) {
+    const page = await log.listRealmIds(after, AUDIT_REALM_PAGE, tx);
+    // In realm id order, the order appends to several realms take their locks in.
+    for (const realmId of page) {
+      await log.appendAdminAudit(tx, {
+        realmId,
+        actorKind: 'break_glass_operator',
+        actorId: actor.operatingSystemUser,
+        actorRealmId: null,
+        actChain: null,
+        operationId: KEK_ROTATE_OPERATION,
+        operationClass: 'security',
+        effects: KEK_ROTATE_EFFECTS,
+        outcome: 'succeeded',
+        diff: {
+          change: { before: { kekRef: record.from }, after: { kekRef: record.to } },
+          annotations: {},
+        },
+        approvals: [],
+        requestDigest: Buffer.from(record.operationDigest),
+        traceId: record.approvalId,
+      });
+      written += 1;
+    }
+    if (page.length < AUDIT_REALM_PAGE) return written;
+    after = page[page.length - 1];
+  }
+}
+
 /** What the command reads and writes, besides its arguments. */
 export interface KeysRewrapDependencies {
   /** `rotateKek` of the signer's wiring, over the database and this host's KEK settings. */
   readonly rotateKek: (input: RotateKekInput) => Promise<KekRewrapReport>;
+  /**
+   * Records the run in the admin audit log, in the transaction that uses its
+   * approval up ({@link recordHostKekRotation}). Returns how many realms'
+   * logs recorded it.
+   */
+  readonly recordRotation: (record: KekRotationRecord, tx: DbTransaction) => Promise<number>;
   /** `countKeysPerKek` of the signer's wiring, likewise. */
   readonly countKeysPerKek: () => Promise<readonly KekRefCensus[]>;
   /** The user the command runs as, as the operating system names it. */
@@ -198,7 +297,7 @@ export function formatKekRewrapReport(report: KekRewrapReport): {
 
   if (report.complete) {
     lines.push(
-      `No stored key is wrapped under ${report.from} any more, and this host opens every stored key.`,
+      `Every stored key is wrapped under ${report.to}, and this host opened a key of it.`,
       `It is safe to remove KEK_PREVIOUS (or KEK_PREVIOUS_PATH), or to retire ${report.from} in ` +
         'your key service, once every signer node runs with the new KEK as KEK. If a node wrapped ' +
         'a key under the old KEK since, run keys:rewrap again first.'
@@ -212,7 +311,15 @@ export function formatKekRewrapReport(report: KekRewrapReport): {
     lines.push(`- ${left.rows} stored keys are still wrapped under ${report.from}.`);
   }
   for (const entry of report.kekRefs) {
-    if (entry.kekRef !== report.from && entry.opens !== true) {
+    if (entry.kekRef === report.from || (entry.kekRef === report.to && entry.opens === true)) {
+      continue;
+    }
+    if (entry.opens === true) {
+      lines.push(
+        `- ${entry.rows} stored keys are wrapped under ${entry.kekRef}, another old KEK: ` +
+          `re-wrap them with --from=${entry.kekRef}.`
+      );
+    } else {
       lines.push(
         `- ${entry.rows} stored keys are wrapped under ${entry.kekRef}, which this host cannot open: ` +
           'set that KEK on this host and re-wrap them, or find where they came from.'
@@ -254,7 +361,7 @@ export async function runKeysRewrap(
       for (const line of formatKekRefCounts(census)) deps.out(line);
       return 0;
     } catch (error) {
-      deps.err(`keys:rewrap: ${describe(error)}`);
+      deps.err(`keys:rewrap: ${describeKeysRewrapError(error)}`);
       return 1;
     }
   }
@@ -265,12 +372,14 @@ export async function runKeysRewrap(
       from: command.from,
       ...(command.to === undefined ? {} : { to: command.to }),
       approval: hostKekRotationApproval(deps.operatingSystemUser()),
-      onAudit: async (record) => {
+      onAudit: async (record, tx) => {
+        const realms = await deps.recordRotation(record, tx);
         deps.out(formatKekRotationStart(record));
+        deps.out(`Recorded in the admin audit log of ${realms} realms.`);
       },
     });
   } catch (error) {
-    deps.err(`keys:rewrap: ${describe(error)}`);
+    deps.err(`keys:rewrap: ${describeKeysRewrapError(error)}`);
     // Where the keys stand: a run that stopped halfway left each key under
     // one KEK or the other, and a second run moves the rest.
     try {
@@ -288,7 +397,19 @@ export async function runKeysRewrap(
   return exitCode;
 }
 
-function describe(error: unknown): string {
+/**
+ * An error as the command prints it. A failed query's message carries the
+ * query's parameters, among them a key's wrapped data key, so only the
+ * database's own error under it is printed.
+ */
+export function describeKeysRewrapError(error: unknown): string {
   if (error instanceof KekRewrapRefusedError) return error.message;
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  if (!(error instanceof Error)) return String(error);
+  if (error.constructor.name === 'DrizzleQueryError' || 'params' in error) {
+    const { cause } = error;
+    return cause instanceof Error
+      ? `the database refused a query: ${cause.name}: ${cause.message}`
+      : 'the database refused a query';
+  }
+  return `${error.name}: ${error.message}`;
 }
