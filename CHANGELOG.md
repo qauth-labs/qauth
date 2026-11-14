@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A configuration digest check at boot** ([#499], ADR-019 Decision 8).
+  Every node takes a SHA-256 digest of its deployment-wide settings, per key
+  and over all of them, and compares it with every node seen in the last two
+  minutes in the new node list, the `deployment_nodes` table (migration
+  0076). A node of the same release whose digest differs refuses to boot,
+  and the error names the keys that differ and the running nodes, never a
+  value. A node of another release, as during a rolling upgrade, is only
+  warned of, and `CONFIG_DIGEST_ROLLOUT=true` turns the refusal into a
+  warning for the window of a planned change. Each key of the configuration
+  key registry now has a digest class (`shared`, `node`, `secret` or
+  `realm-seed`), and a unit test fails when one has none: only `shared` keys
+  are compared, never a secret, and `KEK_PROVIDER` only between nodes that
+  hold `signer`. The configuration page lists the shared keys. The node
+  compares read-only before any other boot step writes, and again when it
+  joins the list once its boot succeeded, under a lock so that two nodes
+  booting at once compare with each other. It marks itself seen every 30
+  seconds and leaves the list when it shuts down cleanly; a row not seen for
+  two minutes stops counting and is removed at the next boot. Every role
+  gains the readiness check `config_digest`, which fails while the node is
+  not in the list, and every role's database user may read and write the
+  list.
 - **Emergency key retirement, with a `kid` denylist** ([#551], ADR-019
   Decisions 7 and 9). The operator command `auth-server:keys:retire
   --kid=<kid> --yes` retires a token-signing key that may be compromised at
@@ -4504,6 +4525,7 @@ It adds migrations 0068 and 0069.
 [#496]: https://github.com/qauth-labs/qauth/issues/496
 [#497]: https://github.com/qauth-labs/qauth/issues/497
 [#498]: https://github.com/qauth-labs/qauth/issues/498
+[#499]: https://github.com/qauth-labs/qauth/issues/499
 [#500]: https://github.com/qauth-labs/qauth/issues/500
 [#501]: https://github.com/qauth-labs/qauth/issues/501
 [#507]: https://github.com/qauth-labs/qauth/issues/507

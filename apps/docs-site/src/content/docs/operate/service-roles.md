@@ -3,7 +3,7 @@ title: Service roles
 description: Run the auth server as one process, or split it into web, api, admin, signer and delivery processes with SERVICE_ROLES, and keep keys on the signer only.
 sidebar:
   order: 12
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-14'
 ---
 
 The auth server is one codebase that starts as one or more **service roles**
@@ -277,6 +277,39 @@ process.
 
 With `ENABLE_SWAGGER` on, only a process holding `api` serves the Swagger UI
 and its spec under `/docs`.
+
+## Settings every node shares
+
+Every node of a deployment must serve the same discovery documents and behave
+the same way, so the deployment-wide settings must be equal on every node: the
+issuer, the default realm, the signing mode, the trust proxy list, the feature
+switches and the other keys the
+[configuration page](/operate/configuration/#settings-every-node-shares)
+lists. At boot, each node takes a digest of those keys (SHA-256, per key and
+over all of them, never the values) and compares it with every node seen in
+the node list during the last two minutes (the `deployment_nodes` table).
+
+- A node of the same release whose digest differs refuses to boot. The error
+  names the keys that differ and the nodes it differs from, never a value:
+  give every node the same value of those keys.
+- A node of another release, as during a rolling upgrade, is only warned of.
+- `CONFIG_DIGEST_ROLLOUT=true` turns the refusal into a warning, for the window
+  of a planned change of one of those keys: set it on the nodes that start
+  with the new value, and remove it once every node runs the new value.
+- `KEK_PROVIDER` is compared only between nodes that hold `signer`, since no
+  other node may name a KEK provider. Each node's own settings, such as
+  `SERVICE_ROLES`, `PORT`, its TLS files and its pool sizes, may differ, and so
+  may a secret or a key that seeds a realm, whose row owns its policies.
+
+The node compares read-only before any other boot step writes to the database,
+and again when it joins the list, once every boot step succeeded, under a lock
+that makes two nodes booting at once compare with each other. It marks itself
+seen every 30 seconds and leaves the list when it shuts down cleanly; a node
+that stops without shutting down stops counting two minutes after it was last
+seen. The readiness check `config_digest` fails while the node is not in the
+list ([Observability](/operate/observability/#health-and-readiness)). A setting held in a
+file, such as `EGRESS_ALLOWLIST_PATH`, is compared by its path's class, not
+its contents: the path may differ by node, and the file is not read.
 
 ## The admin listener
 

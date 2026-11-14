@@ -119,8 +119,8 @@ service roles the process runs.
 ### `GET /ready`
 
 Readiness probe. Answers on any host and runs the checks the process's roles
-need: `database` on every role, `redis` on `web`, `api` and `admin`, `kek` on
-`signer` and `outbox` on `delivery`.
+need: `database` and `config_digest` on every role, `redis` on `web`, `api` and
+`admin`, `kek` on `signer` and `outbox` on `delivery`.
 
 **`200 OK`** (every check passed):
 
