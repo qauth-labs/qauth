@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The account API lists the sessions and signs out everywhere** ([#1110],
+  ADR-017 Decision 8, ADR-019 Decisions 3 and 7, ADR-020 §3). A backend that
+  draws its own account pages can now call `GET /account/v1-rc.0/sessions`
+  (the user's live sessions, most recently used first, each with a device
+  label read from its user agent, when it started and was last used, and
+  `current` on the one the token's `sid` names),
+  `DELETE /account/v1-rc.0/sessions/{sessionId}` and
+  `POST /account/v1-rc.0/sessions/end-all` (an optional `keepCurrent` keeps
+  the token's own session), as the account contract states them, on the
+  session service and the hosted account page's logic. Ending a session
+  stops its cookie, ends the refresh-token families its sign-in opened and
+  sends a back-channel logout token to each app it signed in to; signing out
+  everywhere ends every session and revokes every unredeemed code and
+  refresh-token family of the user. None needs a fresh sign-in, and each
+  takes an act-chain token. Another user's session is `404`. Ending one
+  session on the hosted account page now ends its refresh-token families too.
+  The OpenAPI document marks a request body optional where the route takes
+  none, as on this operation and the wallet link start.
 - **The account API manages the authenticator app and the recovery codes**
   ([#1109], ADR-017 Decision 8, ADR-020 §3, ADR-019 Decision 7). A backend
   that draws its own account pages can now call
@@ -4362,6 +4380,7 @@ It adds migrations 0068 and 0069.
 [#1107]: https://github.com/qauth-labs/qauth/issues/1107
 [#1108]: https://github.com/qauth-labs/qauth/issues/1108
 [#1109]: https://github.com/qauth-labs/qauth/issues/1109
+[#1110]: https://github.com/qauth-labs/qauth/issues/1110
 
 ### Deprecated
 

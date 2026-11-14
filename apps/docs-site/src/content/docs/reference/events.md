@@ -334,7 +334,7 @@ QAuth could not check a password against the realm's breach list (the local list
 
 ### user.signed_out v1-rc.0
 
-A person signed out, and QAuth ended their browser sessions: the one session the relying party named at the end-session endpoint (OpenID Connect RP-Initiated Logout 1.0), one session the person ended on the hosted account page, or every session of the user at `POST /auth/logout` or at "sign out everywhere" on the hosted account page.
+A person signed out, and QAuth ended their browser sessions: the one session the relying party named at the end-session endpoint (OpenID Connect RP-Initiated Logout 1.0), one session the person ended on the hosted account page or through the account API, or every session of the user at `POST /auth/logout` or at "sign out everywhere" on the hosted account page or the account API. A "sign out everywhere" that kept the session the person was using records one event per session it ended.
 
 - Identifier: `urn:qauth:event:user.signed_out:v1-rc.0`
 - Category: `user` · Severity: `info` · Since: v0.2.0
@@ -342,9 +342,9 @@ A person signed out, and QAuth ended their browser sessions: the one session the
 - Schema: [user.signed_out.v1-rc.0.json](/schemas/events/user.signed_out.v1-rc.0.json)
 - Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/session-revoked` ([SSF events](/reference/ssf-events/))
 
-| Member | Type | Required | Meaning                                                                                                                                                                                                          |
-| ------ | ---- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sid`  | UUID | no       | The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` and "sign out everywhere" do. |
+| Member | Type | Required | Meaning                                                                                                                                                                                                                                                                                  |
+| ------ | ---- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sid`  | UUID | no       | The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` and "sign out everywhere" do; present on each event of a "sign out everywhere" that kept one session. |
 
 ### user.client_session_ended v1-rc.0
 

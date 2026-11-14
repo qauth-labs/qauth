@@ -1130,6 +1130,34 @@ set stops working. Needs a fresh sign-in with the account's strongest factor and
 token. An account with no second factor or passkey is `409` `conflict`. The owner gets the "recovery
 codes regenerated" notice. Errors: `400`, `401`, `403`, `409`.
 
+### `GET /account/v1-rc.0/sessions`
+
+The user's live browser sessions (#1110), most recently used first, a page at a time: each with its
+`id`, `current` (`true` on the session the token names in `sid`; a refreshed token names none, so
+no session is marked), `createdAt`, `lastSeenAt` and `device.label`, read from the browser's user
+agent, such as `Firefox on Linux` (`Unknown device` when it names nothing known). Never the
+session's address or cookie. A session that has ended, expired or sat idle past the realm's limit is
+not listed. Takes an act-chain token. Errors: `400`, `401`, `403`.
+
+### `DELETE /account/v1-rc.0/sessions/{sessionId}`
+
+End one of the user's sessions, on the hosted account page's logic: its cookie stops working, its
+unredeemed authorization codes and the refresh-token families its sign-in opened end, every app it
+signed in to with a back-channel logout URI gets a logout token, and `user.signed_out` is recorded
+with its `sid`. Access tokens already issued stay valid until they expire. Ending a session only
+takes access away, so it needs no fresh sign-in and takes an act-chain token. A session of another
+user, or one that has ended, is the same `404` as one that does not exist. **`204 No Content`**.
+Errors: `400`, `401`, `403`, `404`.
+
+### `POST /account/v1-rc.0/sessions/end-all`
+
+Sign out everywhere: every session of the user ends, each app a session signed in to with a
+back-channel logout URI gets a logout token, and every unredeemed authorization code and
+refresh-token family of the user is revoked. The body is optional: `{"keepCurrent":true}` keeps the
+session the token names in `sid`, whose refresh tokens are revoked all the same; no body, or
+`keepCurrent` `false`, ends that session too. Needs no fresh sign-in and takes an act-chain token.
+**`204 No Content`**. Errors: `400`, `401`, `403`.
+
 ---
 
 ## Consents (`/consents/`)

@@ -168,6 +168,25 @@ answers a new set of ten once and stops every code of the old one. It needs a fr
 strongest factor itself (a recovery code does not do), and answers `409` `conflict` for an account
 with no second factor or passkey.
 
+## Sessions
+
+`GET /account/v1-rc.0/sessions` lists where the person is signed in, most recently used first: each
+session's device label, read from its user agent, when it started and when it was last used.
+`current` marks the session your token came through, found by its `sid`; a refreshed token names
+none, so the list then marks none. Ending a session only takes access away, so none of the three
+operations needs a fresh sign-in, and each takes an act-chain token.
+
+- `DELETE /account/v1-rc.0/sessions/{sessionId}` ends one: its cookie stops working, the
+  refresh-token families its sign-in opened end, and each app it signed in to with a back-channel
+  logout URI gets a logout token. A session of another user, or one that has ended, is `404`.
+- `POST /account/v1-rc.0/sessions/end-all` signs out everywhere: every session, unredeemed code and
+  refresh-token family of the person ends, and each app with a session gets a logout token. Send
+  `{"keepCurrent":true}` to keep the session your token came through. Your refresh token is revoked
+  all the same, since a refresh-token family names no session: get a new token with an
+  authorization request in the browser whose session you kept.
+
+Access tokens already issued stay valid until they expire, on every path above.
+
 ## Refusals a step-up cannot lift
 
 - **403 `delegated_token_refused`**: the token is an act-chain token (RFC 8693 `act`), held by an
