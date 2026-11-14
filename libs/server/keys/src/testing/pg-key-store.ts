@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 
+import type { KekRewrapStore, WrappedDekChange } from '../lib/kek-rewrap';
 import type { KeyRotationStore } from '../lib/key-rotation';
 import type {
   NewStoredKey,
@@ -266,6 +267,52 @@ export function createPgKeyStore(
         [realmId, purpose, scopeId]
       );
       return rows.map((row) => row.kid);
+    },
+  };
+}
+
+/**
+ * A {@link KekRewrapStore} over a node-postgres pool, for the KEK rotation's
+ * integration tests (#545): the statements of the realm keys repository's
+ * `countByKekRef`, `listByKekRef` and `replaceWrappedDek`, in plain SQL.
+ */
+export function createPgKekRewrapStore(pool: Pool): KekRewrapStore<PoolClient> {
+  const keys = createPgKeyStore(pool);
+  return {
+    transaction: (work) => keys.transaction(work),
+
+    async countByKekRef() {
+      const { rows } = await pool.query<{ kek_ref: string; rows: string }>(
+        'SELECT kek_ref, count(*) AS rows FROM realm_keys GROUP BY kek_ref ORDER BY kek_ref'
+      );
+      return rows.map((row) => ({ kekRef: row.kek_ref, rows: Number(row.rows) }));
+    },
+
+    async listByKekRef(kekRef: string, afterId: string | null, limit: number) {
+      const { rows } = await pool.query<{ id: string; realm_id: string; kid: string }>(
+        `SELECT id, realm_id, kid FROM realm_keys
+          WHERE kek_ref = $1 AND ($2::uuid IS NULL OR id > $2::uuid) ORDER BY id LIMIT $3`,
+        [kekRef, afterId, limit]
+      );
+      return rows.map((row) => ({ id: row.id, realmId: row.realm_id, kid: row.kid }));
+    },
+
+    async getWrappedKey(realmId: string, kid: string) {
+      const client = await pool.connect();
+      try {
+        return await keys.getWrappedKey(realmId, kid, client);
+      } finally {
+        client.release();
+      }
+    },
+
+    async replaceWrappedDek(realmId: string, kid: string, change: WrappedDekChange) {
+      const { rowCount } = await pool.query(
+        `UPDATE realm_keys SET wrapped_dek = $5, kek_ref = $6
+          WHERE realm_id = $1 AND kid = $2 AND kek_ref = $3 AND wrapped_dek = $4`,
+        [realmId, kid, change.fromKekRef, change.fromWrappedDek, change.wrappedDek, change.kekRef]
+      );
+      return rowCount === 1;
     },
   };
 }
