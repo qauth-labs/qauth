@@ -4,6 +4,8 @@
  * - `1-rc.0`: the first stored documents (#516).
  * - `1-rc.1`: `bruteForce.windowSeconds` and `bruteForce.lockoutSeconds` are
  *   at most 86400 (a day, #517).
+ * - `1-rc.2`: the same fields; a stored `ceremonyApp.errorPage` of `null` is
+ *   filled once from `CEREMONY_APP_ERROR_PAGE` (#1118).
  *
  * The admin API's realm representation carries it as `policySchemaVersion`,
  * the realm row stores it beside the policies, and the realm file names it
@@ -64,7 +66,7 @@
  *    release boots; only a change the previous release reads as strictly
  *    may roll.
  */
-export const REALM_POLICY_SCHEMA_VERSION = '1-rc.1';
+export const REALM_POLICY_SCHEMA_VERSION = '1-rc.2';
 
 /**
  * The schema version of the first stored policy documents (migration 0046,

@@ -7,6 +7,7 @@ import {
   diffPolicies,
   diffPolicyPatch,
   parseRealmPolicies,
+  REALM_POLICY_ENV,
   REALM_POLICY_REGISTRY,
   type RealmPolicies,
   type RealmPoliciesRepresentation,
@@ -768,6 +769,74 @@ describe('defaultsFromEnv', () => {
     });
     expect(policies.tokens.adminAccessTokenLifespanSeconds).toBe(600);
     expect(policies.posture.maxEnvironmentLaxity).toBe('production');
+  });
+});
+
+/**
+ * `CEREMONY_APP_ERROR_PAGE` seeds `ceremonyApp.errorPage` (#1118). The auth
+ * server's boot reads the seeds from the environment its env schema parsed
+ * (`defaultsFromEnv(env)` in `app.ts`) and from the raw one (the secret
+ * seed's settings, `defaultsFromEnv(process.env)`), so each case runs on
+ * both: the env schema passes the value through as written, and the field's
+ * rule judges it.
+ */
+describe('CEREMONY_APP_ERROR_PAGE (#1118)', () => {
+  const KEY = 'CEREMONY_APP_ERROR_PAGE';
+  const serverParser = REALM_POLICY_ENV.parserOf(KEY);
+
+  /** The page `raw` seeds, read raw and through the server's parser. */
+  function seeded(raw: string | undefined): [unknown, unknown] {
+    const env = raw === undefined ? {} : { [KEY]: raw };
+    return [
+      defaultsFromEnv(env).ceremonyApp.errorPage,
+      defaultsFromEnv({ [KEY]: serverParser?.parse(raw) }).ceremonyApp.errorPage,
+    ];
+  }
+
+  it('is read with the server’s own parser', () => {
+    expect(serverParser).toBeDefined();
+  });
+
+  it('seeds a path under /ui/ as it is', () => {
+    for (const page of ['/ui/error', '/ui/sign-in/error', '/ui/a.b_c~d-e']) {
+      expect(seeded(page), page).toEqual([page, page]);
+    }
+  });
+
+  it('seeds null, the auth server’s own pages, when unset or blank', () => {
+    for (const raw of [undefined, '', ' ', '\t\n']) {
+      expect(seeded(raw), JSON.stringify(raw)).toEqual([null, null]);
+    }
+  });
+
+  it('refuses a value that is not a path under /ui/, naming the key and the field but not the value', () => {
+    for (const value of [
+      'https://example.com/x',
+      '/ui/../x',
+      '/other',
+      '/ui/x?y',
+      '//ui/x',
+      '/ui/x#y',
+      '/ui/%2e%2e',
+      ' /ui/error',
+      '/ui/error ',
+      // A segment of 65 characters, one more than the rule takes.
+      `/ui/${'a'.repeat(65)}`,
+    ]) {
+      for (const read of [value, serverParser?.parse(value)]) {
+        let caught: unknown;
+        try {
+          defaultsFromEnv({ [KEY]: read });
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught, value).toBeInstanceOf(PolicySeedError);
+        expect((caught as PolicySeedError).key, value).toBe(KEY);
+        expect((caught as PolicySeedError).path, value).toBe('ceremonyApp.errorPage');
+        expect((caught as Error).message, value).toContain(KEY);
+        expect((caught as Error).message, value).not.toContain(value.trim());
+      }
+    }
   });
 });
 

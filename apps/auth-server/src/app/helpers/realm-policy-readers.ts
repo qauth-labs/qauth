@@ -79,9 +79,9 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // binding.
   'accounts.newFactorWindowDays',
   // The ceremony app's error page (`ceremonyErrorPageOf` in
-  // `helpers/ceremony-error-page.ts`, #1106), which no environment key
-  // seeds: read by an upstream provider's callback that finds no interaction
-  // left, and by the logout's endings.
+  // `helpers/ceremony-error-page.ts`, #1106), seeded by
+  // `CEREMONY_APP_ERROR_PAGE` (#1118): read by an upstream provider's
+  // callback that finds no interaction left, and by the logout's endings.
   'ceremonyApp.errorPage',
   // The two-admin rule (`admin/approvals/two-admin.ts`, #521), which no
   // environment key seeds: the operations that need a second admin's
