@@ -36,9 +36,9 @@ import type { ApprovalAccount } from './standing';
  *    contact address did not change, whoever changed them. A change moves
  *    `admin_grants.last_security_change_at` of its live grants
  *    (`recordAdminSecurityChange`); a change of what a grant's custom role
- *    gives must move it too, once roles can change (`adminRoles.update`,
- *    #679, is self-protecting). The automatic password disable of ADR-017
- *    Decision 7 moves nothing.
+ *    gives moves it too (the admin roles repository), and the operation that
+ *    makes one, `adminRoles.update`, is self-protecting. The automatic
+ *    password disable of ADR-017 Decision 7 moves nothing.
  * 4. The credential it approves with is not registered to the requester's
  *    account, did not give the same request an earlier approval and is not
  *    registered to an account that did.
