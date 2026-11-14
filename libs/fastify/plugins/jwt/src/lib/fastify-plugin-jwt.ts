@@ -333,6 +333,26 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       throw failure;
     }
 
+    const keyDenylist = options.keyDenylist;
+
+    /**
+     * Refuse a token whose signature `kid`'s key gave, when an emergency
+     * retirement denied that key (#551), or when this node cannot tell: its
+     * copy of the denylist is not current. Checked after the signature, so
+     * the `kid` is the verifying key's, a token without one included.
+     *
+     * @throws JWTInvalidError
+     */
+    function refuseDeniedKey(realm: Pick<TokenRealm, 'id'>, kid: string): void {
+      if (keyDenylist === undefined) return;
+      if (!keyDenylist.isCurrent()) {
+        throw new JWTInvalidError('Invalid token: its signing key cannot be checked now');
+      }
+      if (keyDenylist.isDenied(realm.id, kid)) {
+        throw new JWTInvalidError('Invalid token: its signing key was retired');
+      }
+    }
+
     /** Verify an access token of `realm`: its keys, its issuer unless `pinIssuer` is false. */
     async function verifyRealmAccessToken(
       realm: TokenRealm,
@@ -340,13 +360,14 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       verifyOptions: { audience?: string | string[]; pinIssuer: boolean; requireTyp: boolean }
     ): Promise<JWTPayload> {
       const { keys } = await accessTokenKeys(realm, token);
-      const { value } = await withEachKey(keys, (key) =>
+      const { value, kid } = await withEachKey(keys, (key) =>
         verifyAccessToken(token, key, {
           ...(verifyOptions.pinIssuer ? { issuer: realm.issuer } : {}),
           ...(verifyOptions.audience !== undefined ? { audience: verifyOptions.audience } : {}),
           requireTyp: verifyOptions.requireTyp,
         })
       );
+      refuseDeniedKey(realm, kid);
       return value;
     }
 
@@ -436,7 +457,7 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         };
         // `requirePqc` is a FLOOR, not the downgrade control: verifyHybrid
         // treats the issuer-signed `pqc_alg` as binding on its own (#248 F1).
-        const { value: claims } = await withEachKey(keys, (ed) =>
+        const { value: claims, kid } = await withEachKey(keys, (ed) =>
           verifyHybridAccessToken(
             hybrid,
             { ed, mlDsa },
@@ -451,6 +472,10 @@ export const jwtPlugin = fp<JwtPluginOptions>(
             }
           )
         );
+        // Both keys of a hybrid pair retire together, so the Ed25519 key's
+        // `kid` stands for the pair; a denied ML-DSA key is out of the
+        // verification set already.
+        refuseDeniedKey(realm, kid);
         return claims as unknown as JWTPayload;
       },
       async signIdToken(realm, payload) {
@@ -506,9 +531,10 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         if (keys.length === 0) {
           throw new JWTInvalidError('Invalid ID token hint: no key of this realm verifies it');
         }
-        const { value } = await withEachKey(keys, (key) =>
+        const { value, kid: verifiedKid } = await withEachKey(keys, (key) =>
           verifyIdTokenHint(token, key, { issuer: realm.issuer, algorithms: [alg] })
         );
+        refuseDeniedKey(realm, verifiedKid);
         return value;
       },
       async verifyAccessToken(realm, token, verifyOptions = {}) {

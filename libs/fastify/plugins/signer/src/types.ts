@@ -1,6 +1,6 @@
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import type { DbClient } from '@qauth-labs/infra-db';
-import type { KeyRotationDays } from '@qauth-labs/server-keys';
+import type { KeyRotationDays, KidDenylistView } from '@qauth-labs/server-keys';
 import type { KekEnv } from '@qauth-labs/server-keys/custody';
 import type { FastifyPluginOptions } from 'fastify';
 
@@ -43,4 +43,12 @@ export interface SignerPluginOptions extends FastifyPluginOptions {
    * `KEY_RETIRED_RETENTION_DAYS`. Defaults to 90, 7 and 14.
    */
   keyRotation?: KeyRotationDays;
+  /**
+   * The node's copy of the `kid` denylist (#551, `createKidDenylist`). The
+   * signer then drops every key list it cached when the denylist changes,
+   * and never signs with, verifies with or publishes a denied key, so an
+   * emergency retirement reaches it on the next call rather than a refresh
+   * interval later.
+   */
+  keyDenylist?: KidDenylistView;
 }

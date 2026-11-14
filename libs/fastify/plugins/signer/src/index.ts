@@ -1,6 +1,7 @@
 export * from './lib/fastify-plugin-signer';
 export * from './lib/kek-rotation';
 export * from './lib/key-custody-check';
+export * from './lib/key-retirement';
 export * from './lib/realm-keys';
 export * from './lib/repository-key-stores';
 export * from './lib/scheduled-key-rotation';
@@ -88,6 +89,31 @@ export {
   MAX_KEK_REF_LENGTH,
   type SecurityOperationRecord,
 } from '@qauth-labs/server-keys';
+// The emergency key retirement (#551): its approval's operation and canonical
+// record, what it returns, its refusals (KeyChangeRefusedError above), and the
+// `kid` denylist every verify site checks, for the auth server's wiring, its
+// break-glass command and the admin API, which may not import server-keys.
+export {
+  createKidDenylist,
+  DEFAULT_KID_DENYLIST_REFRESH_INTERVAL_MS,
+  type DeniedKid,
+  isKid,
+  KEY_RETIRE_OPERATION,
+  keyRetirementOperation,
+  type KeyRetirementOperationInput,
+  type KeyRetirementOperationRecord,
+  type KeyRetireOperation,
+  KID_DENYLIST_MAX_STALENESS_MS,
+  type KidDenylist,
+  type KidDenylistOptions,
+  type KidDenylistView,
+  MAX_KID_LENGTH,
+} from '@qauth-labs/server-keys';
+export type {
+  KeyRetirementRecord,
+  RetiredNowKey,
+  RetireNowInput,
+} from '@qauth-labs/server-keys/custody';
 export {
   type KekRefCensus,
   type KekRewrapFailure,

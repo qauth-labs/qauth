@@ -7,7 +7,11 @@ import {
   type DbTransaction,
   type RealmPublicKeysRepository,
 } from '@qauth-labs/infra-db';
-import { createPublishedKeyReader, type PublishedKeyReader } from '@qauth-labs/server-keys';
+import {
+  createPublishedKeyReader,
+  type KidDenylistView,
+  type PublishedKeyReader,
+} from '@qauth-labs/server-keys';
 import type {
   KekRewrapStore,
   KeyRotationStore,
@@ -100,11 +104,13 @@ export function createRepositoryKekCanaryStore(db: DbClient): KekCanaryStore {
  * @param realmPublicKeys - the database plugin's `realmPublicKeys` repository
  */
 export function createRepositoryPublishedKeyReader(
-  realmPublicKeys: Pick<RealmPublicKeysRepository, 'listByRealm'>
+  realmPublicKeys: Pick<RealmPublicKeysRepository, 'listByRealm'>,
+  options: { readonly keyDenylist?: KidDenylistView } = {}
 ): PublishedKeyReader {
-  return createPublishedKeyReader({
-    listPublicKeys: (realmId: string) => realmPublicKeys.listByRealm(realmId),
-  });
+  return createPublishedKeyReader(
+    { listPublicKeys: (realmId: string) => realmPublicKeys.listByRealm(realmId) },
+    options.keyDenylist === undefined ? {} : { keyDenylist: options.keyDenylist }
+  );
 }
 
 /**
