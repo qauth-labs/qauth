@@ -221,6 +221,20 @@ describe('migration-policy check CLI', () => {
     expect(check(repo.root, '--base-ref', '').status).toBe(1);
   });
 
+  it('with frozen: true, fails a statement added to a migration an exception covers', () => {
+    const repo = repository();
+    const name = repo.addMigration('drop_name', 'ALTER TABLE "users" DROP COLUMN "name";');
+    repo.exceptions(true, [dropColumnException]);
+    repo.commit('freeze with an exception for an unreleased migration');
+    repo.write(
+      name,
+      'ALTER TABLE "users" DROP COLUMN "name";\nALTER TABLE "users" DROP COLUMN "bio";'
+    );
+    const result = check(repo.root, '--base-ref', 'HEAD');
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('0002_drop_name.sql changed since HEAD');
+  });
+
   it('takes the highest release tag, a release candidate included, as the baseline', () => {
     const repo = repository();
     repo.addMigration('drop_name', 'ALTER TABLE "users" DROP COLUMN "name";');

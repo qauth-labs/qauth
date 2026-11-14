@@ -17,7 +17,8 @@
  *     `policy-exceptions.json` lists that kind for that migration with a
  *     reason and an issue. Older migrations are not checked;
  *   - once that file says `frozen: true`, it holds no exception the list at
- *     the reference ref lacks, and once the reference is frozen, it stays
+ *     the reference ref lacks, no migration an exception covers differs from
+ *     its copy at the reference, and once the reference is frozen, it stays
  *     frozen. The reference is `--base-ref` when given (CI passes the pull
  *     request's base), else the baseline.
  *
@@ -47,6 +48,7 @@ import {
   applyExceptions,
   checkBaselineFiles,
   checkFreeze,
+  checkFrozenMigrations,
   checkJournal,
   EXCEPTIONS_PATH,
   JOURNAL_PATH,
@@ -241,6 +243,10 @@ function run(opts) {
   );
   errors.push(...checkJournal(baselineJournal, journal, baseline));
   errors.push(...checkFreeze(exceptions, reference, freezeRef));
+  if (exceptions.frozen) {
+    const referenceFiles = freezeRef === baseline ? baselineFiles : git.migrationBlobs(freezeRef);
+    errors.push(...checkFrozenMigrations(exceptions, referenceFiles, currentFiles, freezeRef));
+  }
 
   const checked = present.filter((name) => !baselineFiles.has(name));
   const findings = [];

@@ -14,6 +14,7 @@ import {
   applyExceptions,
   checkBaselineFiles,
   checkFreeze,
+  checkFrozenMigrations,
   checkJournal,
   EXCEPTIONS_PATH,
   parseExceptions,
@@ -32,9 +33,9 @@ const kindsOf = (sql: string) => scanMigration('0075_example.sql', sql).findings
 const reviewsOf = (sql: string) => scanMigration('0075_example.sql', sql).reviews;
 
 describe('splitStatements', () => {
-  it('splits on semicolons and on the statement-breakpoint marker', () => {
+  it('splits on top-level semicolons, each statement with its line', () => {
     const statements = splitStatements(
-      'CREATE TABLE "a" ("id" uuid);--> statement-breakpoint\nCREATE INDEX "i" ON "a" ("id")\n--> statement-breakpoint\nSELECT 1;'
+      'CREATE TABLE "a" ("id" uuid);\nCREATE INDEX "i" ON "a" ("id");\n\nSELECT 1'
     );
     expect(statements.map((s) => s.code)).toEqual([
       'CREATE TABLE "_" ("_" UUID)',
@@ -42,6 +43,12 @@ describe('splitStatements', () => {
       'SELECT 1',
     ]);
     expect(statements.map((s) => s.line)).toEqual([1, 2, 4]);
+  });
+
+  it('closes up whitespace around a dot, so a spaced name still parses', () => {
+    expect(splitStatements('ALTER TABLE public .users DROP COLUMN email;')[0].code).toBe(
+      'ALTER TABLE PUBLIC.USERS DROP COLUMN EMAIL'
+    );
   });
 
   it('masks strings, identifiers and comments, so their words match nothing', () => {
@@ -98,6 +105,19 @@ describe('scanMigration: refused statements', () => {
     ['raise-exception', "DO $$ BEGIN RAISE 'level-less RAISE is an EXCEPTION'; END $$;"],
     ['raise-exception', "DO $$ BEGIN RAISE SQLSTATE 'P0001'; END $$;"],
     ['raise-exception', 'DO $$ BEGIN ASSERT (SELECT count(*) FROM users) = 0; END $$;'],
+    ['drop-cascade', 'DROP TYPE "status" CASCADE;'],
+    ['drop-cascade', 'DROP EXTENSION citext CASCADE;'],
+    ['dynamic-sql', "DO $$ BEGIN EXECUTE format('DROP TABLE %I', 'a'); END $$;"],
+    ['set-not-null', 'ALTER TABLE "t" ADD CONSTRAINT "t_c_not_null" NOT NULL "c";'],
+    ['add-column-not-null', 'ALTER TABLE "t" ADD COLUMN "c" text DEFAULT NULL NOT NULL;'],
+    [
+      'add-column-not-null',
+      'ALTER TABLE "t" ADD COLUMN "c" uuid NOT NULL REFERENCES "u"("id") ON DELETE SET DEFAULT;',
+    ],
+    ['drop-column', 'ALTER TABLE public .users DROP COLUMN email;'],
+    ['drop-table', "DO 'BEGIN DROP TABLE users; END';"],
+    ['drop-table', "DO LANGUAGE plpgsql E'BEGIN DROP TABLE users; END';"],
+    ['drop-table', "CREATE DOMAIN éE AS text; SELECT éE'\\'; DROP TABLE users; SELECT '';"],
   ];
 
   it.each(REFUSED)('refuses %s: %s', (kind, sql) => {
@@ -134,6 +154,52 @@ END $$;`;
         statement: 'ALTER TABLE "b" DROP COLUMN "c"',
       },
     ]);
+  });
+
+  it('cuts the file where drizzle does, even inside a comment', () => {
+    // drizzle's migrator splits on the raw marker text: Postgres receives the
+    // DROP as a statement of its own.
+    expect(kindsOf('SELECT 1; -- note --> statement-breakpoint DROP TABLE users;')).toEqual([
+      'drop-table',
+    ]);
+    const sql = 'DO $$ BEGIN PERFORM 1; END $$\n--> statement-breakpoint\nTRUNCATE "a";';
+    expect(scanMigration('0075_example.sql', sql).findings).toEqual([
+      expect.objectContaining({ kind: 'truncate', line: 3 }),
+    ]);
+  });
+
+  it('reads the body of a pg_temp helper, which only this migration runs', () => {
+    const sql = `CREATE FUNCTION pg_temp.require_backfill() RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM users WHERE email IS NOT NULL) THEN
+    RAISE EXCEPTION 'run the backfill first';
+  END IF;
+  DELETE FROM sessions;
+END $$;
+--> statement-breakpoint
+SELECT pg_temp.require_backfill();`;
+    expect(kindsOf(sql)).toEqual(['raise-exception', 'delete-from']);
+  });
+
+  it('reads the body of a routine the migration calls itself', () => {
+    const sql = `CREATE OR REPLACE FUNCTION "public"."purge"() RETURNS void LANGUAGE sql AS $$ DELETE FROM "x" $$;
+SELECT purge();
+CREATE PROCEDURE rewrite() LANGUAGE sql AS 'ALTER TABLE "y" DROP COLUMN "z"';
+CALL rewrite();`;
+    expect(kindsOf(sql)).toEqual(['delete-from', 'drop-column']);
+    expect(reviewsOf(sql)).toEqual([]);
+  });
+
+  it('does not read a trigger function, which runs on a later write', () => {
+    const sql = `CREATE FUNCTION "refuse_update"() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'append-only';
+END $$;
+--> statement-breakpoint
+CREATE TRIGGER "t" BEFORE UPDATE ON "events" FOR EACH ROW EXECUTE FUNCTION "refuse_update"();
+--> statement-breakpoint
+REVOKE ALL ON FUNCTION "refuse_update"() FROM PUBLIC;`;
+    expect(kindsOf(sql)).toEqual([]);
   });
 
   it('finds what migrations 0011 and 0012 did (ADR-002)', () => {
@@ -195,9 +261,14 @@ BEGIN
 END $$;`,
     ],
     ['a DO block that only notices', "DO $$ BEGIN RAISE NOTICE 'backfilled % rows', 3; END $$;"],
+    ['a word in a string', "SELECT 'DROP TABLE users; TRUNCATE x' AS note;"],
     [
-      'a word in a string',
-      'COMMENT ON COLUMN "a"."b" IS \'DROP TABLE and RENAME happen elsewhere\';',
+      'a word in dollar-quoted text',
+      'COMMENT ON TABLE "t" IS $c$ we no longer DELETE FROM it $c$;',
+    ],
+    [
+      'the drop of a temporary table the migration made',
+      'CREATE TEMP TABLE "moved" ("id" uuid);\nDROP TABLE "moved";\nDROP TABLE IF EXISTS pg_temp.other;',
     ],
     [
       'a word in a quoted identifier',
@@ -229,23 +300,21 @@ describe('scanMigration: statements for review', () => {
     expect(reviewsOf('ALTER TABLE "a" SET SCHEMA "b";')).toHaveLength(1);
   });
 
-  it('prints a DROP of anything but a table, and says what CASCADE does', () => {
+  it('prints a DROP of anything but a table, without CASCADE', () => {
     expect(reviewsOf('DROP INDEX "idx_a";').map((r) => r.note)).toEqual([
       expect.stringMatching(/^DROP INDEX/),
     ]);
-    expect(reviewsOf('DROP TYPE "status" CASCADE;').map((r) => r.note)).toEqual([
-      expect.stringMatching(/^DROP TYPE.*CASCADE also drops/),
-    ]);
+    expect(kindsOf('DROP TYPE "status";')).toEqual([]);
   });
 
   it('does not print the drop of a pg_temp helper', () => {
     expect(reviewsOf('DROP FUNCTION pg_temp.qauth_ip(text);')).toEqual([]);
   });
 
-  it('prints dynamic SQL in a DO block', () => {
-    expect(
-      reviewsOf("DO $$ BEGIN EXECUTE format('DROP TABLE %I', 'a'); END $$;").map((r) => r.note)
-    ).toEqual(['dynamic SQL in a DO block: the check cannot read it']);
+  it('prints a CALL of a procedure the migration does not define', () => {
+    expect(reviewsOf('CALL backfill_sessions();').map((r) => r.note)).toEqual([
+      'calls a procedure this migration does not define: the check cannot read it',
+    ]);
   });
 });
 
@@ -385,6 +454,43 @@ describe('checkFreeze', () => {
     expect(checkFreeze(open([]), frozen([]), 'origin/main')).toEqual([
       'the exception list is frozen at origin/main: "frozen" cannot go back to false',
     ]);
+  });
+});
+
+describe('checkFrozenMigrations', () => {
+  const frozen = (exceptions: object[]) => parseExceptions(file(true, exceptions));
+  const at = (blob: string) => new Map([['0075_example.sql', blob]]);
+
+  it('with frozen: true, refuses a change to a migration an exception covers', () => {
+    expect(
+      checkFrozenMigrations(
+        frozen([entry('0075_example.sql')]),
+        at('aaa'),
+        at('bbb'),
+        'origin/main'
+      )
+    ).toEqual([
+      '0075_example.sql changed since origin/main, and the frozen exception list covers it: once the list is frozen, a migration an exception covers keeps its contents',
+    ]);
+  });
+
+  it('accepts it unchanged, and any change while the list is open', () => {
+    expect(
+      checkFrozenMigrations(
+        frozen([entry('0075_example.sql')]),
+        at('aaa'),
+        at('aaa'),
+        'origin/main'
+      )
+    ).toEqual([]);
+    expect(
+      checkFrozenMigrations(
+        parseExceptions(file(false, [entry('0075_example.sql')])),
+        at('aaa'),
+        at('bbb'),
+        'origin/main'
+      )
+    ).toEqual([]);
   });
 });
 
