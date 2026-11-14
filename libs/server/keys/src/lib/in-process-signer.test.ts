@@ -23,11 +23,11 @@ import { KEK_A, KEK_B, localProvider } from '../testing/keks';
 import { createMemoryKeyStore, type MemoryKeyStore } from '../testing/memory-key-store';
 import { createMemorySignerStore, type MemorySignerStore } from '../testing/memory-signer-store';
 import { testCertificateFor } from '../testing/test-certificate';
+import { COOKIE_DERIVED_KEY_LABELS, cookieMacInput, deriveCookieKey } from './cookie-derivation';
 import { openKeyMaterial, sealKeyMaterial } from './envelope';
 import { isKeyCustodyError } from './errors';
 import { createInProcessSigner, type InProcessSignerOptions } from './in-process-signer';
 import type { KekProvider } from './kek-provider';
-import { COOKIE_DERIVED_KEY_LABELS, cookieMacInput, deriveCookieKey } from './cookie-derivation';
 import { createKeyFactory, type KeyFactory } from './key-factory';
 import {
   type RealmJwks,

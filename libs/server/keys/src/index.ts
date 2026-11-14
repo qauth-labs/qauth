@@ -22,6 +22,19 @@ export {
   type SecurityOperationActor,
 } from './lib/approved-operation';
 export {
+  COOKIE_DERIVED_KEY_BYTES,
+  COOKIE_DERIVED_KEY_LABELS,
+  COOKIE_KID_PATTERN,
+  COOKIE_MAC_LABEL,
+  COOKIE_MAC_PATTERN,
+  type CookieDerivedKeyLabel,
+  type CookieMacFields,
+  cookieMacInput,
+  deriveCookieKey,
+  isCookieDerivedKeyLabel,
+  MAX_COOKIE_PAYLOAD_LENGTH,
+} from './lib/cookie-derivation';
+export {
   DATA_AT_REST_CONSUMERS,
   type DataAtRestConsumer,
   dataAtRestLifetimeMs,
@@ -103,19 +116,6 @@ export {
   type SignerTransportRequest,
   type SignerTransportResponse,
 } from './lib/remote-signer';
-export {
-  COOKIE_DERIVED_KEY_BYTES,
-  COOKIE_DERIVED_KEY_LABELS,
-  COOKIE_KID_PATTERN,
-  COOKIE_MAC_LABEL,
-  COOKIE_MAC_PATTERN,
-  type CookieDerivedKeyLabel,
-  type CookieMacFields,
-  cookieMacInput,
-  deriveCookieKey,
-  isCookieDerivedKeyLabel,
-  MAX_COOKIE_PAYLOAD_LENGTH,
-} from './lib/cookie-derivation';
 export {
   type CookieDerivedKey,
   type CookieDerivedKeyRequest,

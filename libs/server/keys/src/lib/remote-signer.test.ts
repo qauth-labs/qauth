@@ -13,6 +13,7 @@ import {
   SERVICE_SUBSCRIPTION,
   type ServiceSigner,
 } from '../testing/service-signer';
+import { COOKIE_DERIVED_KEY_LABELS, cookieMacInput, deriveCookieKey } from './cookie-derivation';
 import {
   createRemoteSigner,
   IDEMPOTENT_SIGNER_OPERATIONS,
@@ -22,7 +23,6 @@ import {
   type SignerTransportRequest,
   type SignerTransportResponse,
 } from './remote-signer';
-import { COOKIE_DERIVED_KEY_LABELS, cookieMacInput, deriveCookieKey } from './cookie-derivation';
 import { type Signer, SIGNER_OPERATIONS, type SignerOperation } from './signer';
 import { isSignerError, SignerAccessDeniedError, SignerRequestRefusedError } from './signer-errors';
 import type { SignerCaller } from './signer-policy';
