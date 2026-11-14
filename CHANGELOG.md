@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A realm can make a second admin's approval mandatory** ([#521], ADR-019
+  Decision 7, ADR-020 §4). The operations a realm lists in its
+  `admin.twoAdminMandatoryOperations` policy now need two approvals: the
+  requester's own step-up and one from another admin. While that list is not
+  empty, so do the self-protecting operations (creating an admin, granting or
+  removing an admin role, changing or deleting a custom role, changing an
+  admin's credentials, identifier or contact address, and a realm import;
+  reserved, registered by the admin console work) and every change to the
+  list but an addition: one admin can add an operation, never remove one. On
+  the operator realm a self-protecting operation needs a second admin while
+  any realm's list is not empty. The second approver must be a different
+  human account that held `approvals.approve` on the realm before the
+  request, was not created or granted a role and had no credential,
+  identifier or contact address change in the 7 days before it, whoever made
+  the change, and approves with a credential not registered to the requester.
+  The automatic password disable does not count as a change. Filing an approval answers `twoAdmin`
+  (`recommended` or `mandatory`) and `eligibleApprovers`. Where the second
+  approval is mandatory and no admin is eligible, filing and the call answer
+  `409 approval_unavailable`, a new problem code, and nothing runs; the
+  [security operations](https://docs.qauth.dev/reference/security-operations/#when-no-admin-can-approve)
+  page has the runbook. Every approval in the admin events names the account
+  that made its approver an admin. Migration 0074 adds the database function
+  that records a change; it rewrites nothing.
+
 ## [0.2.4] - 2026-11-14
 
 A patch release that carries a breaking change, as a 0.x release may (see the
@@ -24,29 +50,6 @@ database users get new grants; see the upgrade notes.
 
 ### Added
 
-- **A realm can make a second admin's approval mandatory** ([#521], ADR-019
-  Decision 7, ADR-020 §4). The operations a realm lists in its
-  `admin.twoAdminMandatoryOperations` policy now need two approvals: the
-  requester's own step-up and one from another admin. While that list is not
-  empty, so do the self-protecting operations (creating an admin, granting or
-  removing an admin role, changing or deleting a custom role, changing an
-  admin's credentials, identifier or contact address, and a realm import;
-  reserved, registered by the admin console work) and every change to the
-  list but an addition: one admin can add an operation, never remove one. On
-  the operator realm a self-protecting operation needs a second admin while
-  any realm's list is not empty. The second approver must be a different human account that held
-  `approvals.approve` on the realm before the request, was not created or
-  granted a role and had no credential, identifier or contact address change
-  in the 7 days before it, whoever made the change, and approves with a
-  credential not registered to the requester. The automatic password disable
-  does not count as a change. Filing an approval answers `twoAdmin`
-  (`recommended` or `mandatory`) and `eligibleApprovers`. Where the second
-  approval is mandatory and no admin is eligible, filing and the call answer
-  `409 approval_unavailable`, a new problem code, and nothing runs; the
-  [security operations](https://docs.qauth.dev/reference/security-operations/#when-no-admin-can-approve)
-  page has the runbook. Every approval in the admin events names the account
-  that made its approver an admin. Migration 0074 adds the database function
-  that records a change; it rewrites nothing.
 - **The account API lists the sessions and signs out everywhere** ([#1110],
   ADR-017 Decision 8, ADR-019 Decisions 3 and 7, ADR-020 §3). A backend that
   draws its own account pages can now call `GET /account/v1-rc.0/sessions`
