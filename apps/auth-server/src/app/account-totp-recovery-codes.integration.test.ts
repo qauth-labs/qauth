@@ -541,7 +541,7 @@ describe('the account API’s authenticator app and recovery codes (#1109, real 
     );
     policy = POLICY_REQUIRED;
     // The app is lost: the person signs in with a recovery code in its place.
-    const { bearer, sessionId } = await signedIn(userId, ['pwd'], { recoveryCodeUsed: true });
+    const { bearer } = await signedIn(userId, ['pwd'], { recoveryCodeUsed: true });
 
     const removal = await call('DELETE', '/totp', bearer);
     expect(removal.statusCode, removal.body).toBe(409);
@@ -558,19 +558,32 @@ describe('the account API’s authenticator app and recovery codes (#1109, real 
     );
     expect(after).toHaveLength(1);
     expect(after[0]?.secret).not.toBe(before?.secret);
+  });
 
-    // Rebound again under the same sign-in (into another device, say): the
-    // app keeps its id, which the session names already, and names it once.
-    const again = await startEnrolment(bearer);
-    const reboundAgain = await call('POST', '/totp/enrollment/confirm', bearer, {
-      code: codeAt(base32Decode(again.secret), Date.now()),
-    });
-    expect(reboundAgain.statusCode, reboundAgain.body).toBe(200);
-    const [app] = await query<{ id: string; secret: string }>(
-      "SELECT id, credential_data->>'secret' AS secret FROM user_credentials WHERE user_id = $1 AND provider_type = 'totp'",
-      [userId]
-    );
-    expect(app?.secret).not.toBe(after[0]?.secret);
+  it('rebinds a new app twice under one recovery-code sign-in, whose session names it once', async () => {
+    const userId = await account();
+    // Bound after a password-only sign-in, and lost while still new: the
+    // recovery code proves nothing beyond the password, so each rebind is new.
+    await enrol(userId);
+    const { bearer, sessionId } = await signedIn(userId, ['pwd'], { recoveryCodeUsed: true });
+    const secrets: string[] = [];
+    // The second into another device, say: the app keeps its id, which the
+    // session names already.
+    for (const attempt of [1, 2]) {
+      const enrolment = await startEnrolment(bearer);
+      const rebound = await call('POST', '/totp/enrollment/confirm', bearer, {
+        code: codeAt(base32Decode(enrolment.secret), Date.now()),
+      });
+      expect(rebound.statusCode, `rebind ${attempt}: ${rebound.body}`).toBe(200);
+      const [app] = await query<{ secret: string; new_until: string | null }>(
+        "SELECT credential_data->>'secret' AS secret, new_until FROM user_credentials WHERE user_id = $1 AND provider_type = 'totp'",
+        [userId]
+      );
+      expect(app?.new_until).not.toBeNull();
+      secrets.push(app?.secret ?? '');
+    }
+    expect(secrets[1]).not.toBe(secrets[0]);
+    const [app] = await totpRows(userId);
     const [named] = await query<{ new_credential_ids: string[] }>(
       'SELECT new_credential_ids FROM sessions WHERE id = $1',
       [sessionId]
