@@ -309,9 +309,15 @@ describe('emergency key retirement (#551)', () => {
     );
   }
 
-  /** Poll `check` every 100 ms until it holds, for at most `limitMs`; the time it took. */
-  async function within(limitMs: number, check: () => Promise<boolean>): Promise<number> {
-    const started = Date.now();
+  /**
+   * Poll `check` every 100 ms until it holds, at most `limitMs` after
+   * `started` (by default, now); the time it took since `started`.
+   */
+  async function within(
+    limitMs: number,
+    check: () => Promise<boolean>,
+    started = Date.now()
+  ): Promise<number> {
     for (;;) {
       if (await check()) return Date.now() - started;
       if (Date.now() - started > limitMs) {
@@ -337,6 +343,8 @@ describe('emergency key retirement (#551)', () => {
     expect((await userinfo(b, accessToken)).statusCode).toBe(200);
     expect(await jwksKids(b)).toContain(kid);
 
+    // The bound counts from before the retirement began, its own run included.
+    const retiredAt = Date.now();
     const { record } = await retireOnNode(a, kid);
     expect(record.retired).toEqual([expect.objectContaining({ kid, previousStatus: 'active' })]);
     const [replacement] = record.replacements;
@@ -354,7 +362,8 @@ describe('emergency key retirement (#551)', () => {
     // The other running node: within the bound, without the key refresh.
     const tookMs = await within(
       OTHER_NODE_BOUND_MS,
-      async () => (await introspect(b, machine))['active'] === false
+      async () => (await introspect(b, machine))['active'] === false,
+      retiredAt
     );
     expect(tookMs).toBeLessThan(OTHER_NODE_BOUND_MS);
     expect((await userinfo(b, accessToken)).statusCode).toBe(401);
@@ -517,16 +526,19 @@ describe('emergency key retirement (#551)', () => {
       err: (line) => err.push(line),
     });
 
+    const ranAt = Date.now();
     expect(await runKeysRetire(['--kid', kid, '--yes'], E2E_REALM_NAME, deps)).toBe(0);
     expect(err).toEqual([]);
     expect(out).toContain(`Retired ${kid} (EdDSA, was active): compromised.`);
 
     // The command told no node: the server's own copy reads the change.
+    // Both within the bound of the run's start.
     await within(
       OTHER_NODE_BOUND_MS,
-      async () => (await introspect(app, machine))['active'] === false
+      async () => (await introspect(app, machine))['active'] === false,
+      ranAt
     );
-    await within(OTHER_NODE_BOUND_MS, async () => !(await jwksKids(app)).includes(kid));
+    await within(OTHER_NODE_BOUND_MS, async () => !(await jwksKids(app)).includes(kid), ranAt);
     expect(decodeProtectedHeader(await machineToken(app))['kid']).not.toBe(kid);
 
     // Recorded in the admin audit log by the operating-system user, and
