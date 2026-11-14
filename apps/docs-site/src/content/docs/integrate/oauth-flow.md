@@ -462,8 +462,13 @@ verifies tokens locally follows three rules:
 - **Drop every key the JWKS no longer lists.** A key leaves the JWKS when its
   retention ends, or when it is retired as compromised; a token it signed must
   stop verifying then. A compromised key is not gone everywhere at once: QAuth's
-  own servers stop using it within their 60-second key refresh, and your JWKS
-  cache adds its own lifetime before your verifier stops.
+  own servers refuse its tokens, and drop it from the JWKS and from signing,
+  within 10 seconds of its
+  [emergency retirement](/operate/keys/#emergency-retirement) (each node reads
+  the `kid` denylist every 2 seconds, through a shared cache that lives 5), and
+  your JWKS cache adds its own lifetime before your verifier stops. A receiver
+  of QAuth's security events can drop the key at once, on the
+  [`key.emergency_retired`](/reference/ssf-events/) event.
 
 Pick the key by `kid` and `alg` together, never by `kid` alone: the JWKS of a
 realm with hybrid signing holds an `OKP` and an `AKP` key, and retired keys sit

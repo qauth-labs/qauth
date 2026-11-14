@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Emergency key retirement, with a `kid` denylist** ([#551], ADR-019
+  Decisions 7 and 9). The operator command `auth-server:keys:retire
+  --kid=<kid> --yes` retires a token-signing key that may be compromised at
+  once, on a host that holds the database credentials and the KEK. In one
+  transaction the key, and its hybrid partner, are marked `compromised` and
+  leave the JWKS, their `kid`s go on the new `realm_key_denylist` table
+  (migration 0075), a new key signs in place of an active one with no
+  pre-publication, every refresh-token family of the realm created or used
+  since the key began to sign is revoked, a critical `key.emergency_retired`
+  event names each `kid` (an admin event and an SSF security event), and the
+  run is recorded in the realm's admin audit log as `keys.retire` by the
+  operating-system user. Then the realm's browser sessions used since then are
+  ended, with back-channel logout; running the command again for a key
+  retired already ends them again, and changes nothing else. Every node keeps
+  a copy of the denylist, read every 2 seconds through a 5-second Redis
+  snapshot, and from the database when Redis has none or does not answer.
+  Every token verification checks it once the signature verified, so
+  introspection answers `active: false` and userinfo `401`, and the signer and
+  the JWKS drop the key, within 10 seconds on every node rather than after the
+  60-second key refresh. A node that cannot read the denylist for 30 seconds
+  refuses every token. In the key library, `retireNow({ realmId, kid,
+  approval })` runs only under an `ApprovedOperation` of `keys.retire`, for
+  the SHA-256 of the canonical record `{ op, realm, kid, requester, nonce }`;
+  only `token_signing` keys are retired this way. No admin API route starts it
+  yet.
+
 - **Manual key rotation, as a security operation** ([#544], ADR-019
   Decisions 7 and 9). The key library's `rotateNow` starts a rotation of one
   of a realm's rotating key purposes before it is due: it creates the `next`

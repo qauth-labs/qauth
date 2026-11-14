@@ -100,7 +100,7 @@ Notes on the mapping:
 - [`client.secret_rotated`](/reference/events/#clientsecret_rotated-v1-rc0): Sent only to the stream of the client whose credential changed, never to another receiver that added that client: a receiver learns of its own credentials only. A developer managing a client acts as its administrator, so `initiating_entity` is `admin`.
 - [`api_key.created`](/reference/events/#api_keycreated-v1-rc0): Sent only to the stream of the client whose credential changed, never to another receiver that added that client: a receiver learns of its own credentials only. A developer managing a client acts as its administrator, so `initiating_entity` is `admin`.
 - [`api_key.revoked`](/reference/events/#api_keyrevoked-v1-rc0): Sent only to the stream of the client whose credential changed, never to another receiver that added that client: a receiver learns of its own credentials only. A developer managing a client acts as its administrator, so `initiating_entity` is `admin`.
-- [`key.emergency_retired`](/reference/events/#keyemergency_retired-v1-rc0): Defined ahead of emergency retirement itself (#551), which emits it; nothing emits it before then.
+- [`key.emergency_retired`](/reference/events/#keyemergency_retired-v1-rc0): Recorded once per retired `kid` by the emergency retirement (`auth-server:keys:retire`, #551): retiring one key of a hybrid pair retires both, and sends two events. A receiver that caches the realm's JWKS drops the key on it, without waiting for its cache to expire.
 
 ## Security events with no SSF event
 
