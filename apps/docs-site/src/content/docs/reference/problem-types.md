@@ -3,7 +3,7 @@ title: Problem types
 description: Every problem type, code and status a QAuth route that is not an OAuth protocol endpoint answers an error with.
 sidebar:
   order: 3
-lastVerified: '2026-11-08'
+lastVerified: '2026-11-14'
 ---
 
 Every route that is not an OAuth protocol endpoint answers an error with an RFC 9457 problem
@@ -216,6 +216,12 @@ The resource does not support the method.
 **Code** `conflict` · **Status** 409 · **Title** Conflict
 
 The request conflicts with the current state of the resource.
+
+## `approval-unavailable`
+
+**Code** `approval_unavailable` · **Status** 409 · **Title** Approval unavailable
+
+The security operation needs another admin's approval, a second admin's where the realm makes it mandatory, and no other admin can give one now: none is eligible (ADR-019 Decision 7). Nothing was filed and the operation did not run. The detail points at the break-glass runbook.
 
 ## `already-exists`
 

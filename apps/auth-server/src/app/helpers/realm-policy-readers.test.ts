@@ -32,10 +32,11 @@ describe('POLICIES_READ_FROM_REALM_ROW (#516)', () => {
     }
   });
 
-  it('holds the two policies the server read from the row before #516, the token lifetimes (#527), the account policies (#528), the mail transport and sender (#529), CIMD (#534), the minimum password length (#634), the bot challenge (#643), the passkey offer (#1083), the new-factor window (#1064) and the ceremony app’s error page (#1106)', () => {
+  it('holds the two policies the server read from the row before #516, the token lifetimes (#527), the account policies (#528), the mail transport and sender (#529), CIMD (#534), the minimum password length (#634), the bot challenge (#643), the passkey offer (#1083), the new-factor window (#1064), the ceremony app’s error page (#1106) and the two-admin set (#521)', () => {
     expect([...POLICIES_READ_FROM_REALM_ROW].sort()).toEqual([
       'accounts.newFactorWindowDays',
       'accounts.requireVerifiedAccount',
+      'admin.twoAdminMandatoryOperations',
       'botChallenge.difficulty',
       'botChallenge.requiredAtSignUp',
       'bruteForce.enabled',

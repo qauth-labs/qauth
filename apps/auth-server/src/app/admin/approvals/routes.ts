@@ -15,7 +15,7 @@ import {
   operationSchemaExtensions,
   operationStateVersion,
 } from '../../helpers/admin-operations';
-import { ApprovalStateError } from '../../helpers/approval-required';
+import { ApprovalStateError, ApprovalUnavailableError } from '../../helpers/approval-required';
 import { requestClassification } from '../../plugins/admin-operations';
 import {
   ADMIN_SECURITY_SCHEME,
@@ -33,15 +33,16 @@ import {
   opHashOf,
 } from './canonical-request';
 import { renderOperation } from './display';
+import { eligibleApprovers } from './eligibility';
 import {
   APPROVAL_LIFETIME_MS,
   approvalResource,
-  approvalsRequiredFor,
   approvalUrlOf,
   openApprovalDisplay,
 } from './engine';
 import { APPROVAL_OPERATION_IDS, isApprovalEngineOperation } from './operations';
 import { approvalStanding, approvalVersion, callerAccount, parseApprovalVersion } from './standing';
+import { approvalsFromOthers, operationApprovalRequirement } from './two-admin';
 
 /**
  * THE APPROVAL ROUTES OF THE ADMIN API (ADR-019 Decision 7, issue #512).
@@ -142,6 +143,23 @@ const approvalSchema = z
       }),
   })
   .meta({ description: 'An approval request for one request of a security operation.' });
+
+/** A filed approval: the approval, and what the two-admin rule makes of it (#521). */
+const filedApprovalSchema = approvalSchema
+  .extend({
+    twoAdmin: z.enum(['recommended', 'mandatory']).meta({
+      description:
+        "Whether a second admin's approval is recommended, as for every security operation, or mandatory, where the realm requires it for this request (`admin.twoAdminMandatoryOperations`). `approvalsRequired` is 2 exactly when it is mandatory.",
+    }),
+    eligibleApprovers: z.int().min(0).meta({
+      description:
+        'How many admins other than the requester could give a second approval now: those with a live grant holding approvals.approve on the realm made before the request, none created, granted a role or changed in the last 7 days. It counts the grants the caller’s realm sees: for a caller of another realm than the operator realm, none on every realm. Zero is the admin console’s cue for its single-admin warning.',
+    }),
+  })
+  .meta({
+    description:
+      'An approval request for one request of a security operation, as filed, with what the two-admin rule makes of it.',
+  });
 
 /** The audit diff of an approval: what was filed, never the body it was filed with. */
 function approvalSummary(approval: AdminApproval): NonNullable<AdminChange['change']['after']> {
@@ -285,10 +303,12 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
         // 409: the state an operation's request reads refuses it before
         // anything is filed (users.verify: a disabled account, or one an
         // operator already verified, #1052).
+        // 409 too: the realm requires a second admin and no other admin can
+        // give the approval (`approval_unavailable`, #521).
         'x-qauth-errors': [400, 401, 403, 404, 409, 422],
         params: realmParams,
         body: createBody,
-        response: { 201: approvalSchema },
+        response: { 201: filedApprovalSchema },
       },
     },
     async (request, reply) => {
@@ -357,8 +377,31 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
         },
         registry
       );
-      const nonce = newApprovalNonce();
+      // The two-admin rule (#521): how many approvals this request needs on
+      // the realm as it stands, and who besides the requester could give a
+      // second one now. Where the realm requires a second admin and no one
+      // could give it, the request fails closed: nothing is filed.
       const now = Date.now();
+      const requirement = await operationApprovalRequirement(
+        request.server,
+        { operation, realm: caller.targetRealm, body: filed.body },
+        adminTransaction(request)
+      );
+      const approvers = await eligibleApprovers(request.server, {
+        targetRealm: caller.targetRealm,
+        requester: callerAccount(caller),
+        callerRealm: caller.issuerRealm,
+        tx: adminTransaction(request),
+        now,
+      });
+      if (
+        approvalsFromOthers(requirement.approvalsRequired, callerAccount(caller).kind) >
+        approvers.total
+      ) {
+        throw new ApprovalUnavailableError();
+      }
+
+      const nonce = newApprovalNonce();
       const approval = await request.server.repositories.adminApprovals.create(
         {
           realmId,
@@ -378,7 +421,7 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
             effects: [...operation.effects],
             permissions: [...operation.permissions],
           },
-          approvalsRequired: approvalsRequiredFor(),
+          approvalsRequired: requirement.approvalsRequired,
           createdAt: now,
           expiresAt: now + APPROVAL_LIFETIME_MS,
         },
@@ -392,11 +435,15 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
         .code(201)
         .header('etag', `"${approvalVersion(approval)}"`)
         .header('location', `/admin/v1-rc.0/realms/${realmId}/approvals/${approval.id}`);
-      return approvalResource(approval, {
-        now,
-        approvalUrl: approvalUrlOf(caller.issuerRealm, approval),
-        display: openApprovalDisplay(approval, now),
-      });
+      return {
+        ...approvalResource(approval, {
+          now,
+          approvalUrl: approvalUrlOf(caller.issuerRealm, approval),
+          display: openApprovalDisplay(approval, now),
+        }),
+        twoAdmin: requirement.twoAdmin,
+        eligibleApprovers: approvers.visible,
+      };
     }
   );
 

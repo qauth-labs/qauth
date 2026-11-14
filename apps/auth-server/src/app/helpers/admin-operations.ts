@@ -257,6 +257,17 @@ export interface AdminOperationDefinition<State = unknown> {
    * name only.
    */
   readonly secretMembers?: readonly string[];
+  /**
+   * `true` on an operation that guards the two-admin rule itself (ADR-019
+   * Decision 7, #521): creating an admin, granting or removing an admin
+   * role, and changing an admin's credentials, identifier or contact
+   * address. Once a realm makes any operation mandatory
+   * (`admin.twoAdminMandatoryOperations` is not empty), such an operation
+   * needs a second admin there too, so one admin cannot make or arm a second
+   * account to approve with. Only a security operation is self-protecting;
+   * the reserved table names the ids that must be.
+   */
+  readonly selfProtecting?: true;
 }
 
 /** A registered operation: a definition that {@link defineOperation} accepted, frozen. */
@@ -274,6 +285,7 @@ const DEFINITION_KEYS: ReadonlySet<string> = new Set([
   'stateVersion',
   'render',
   'secretMembers',
+  'selfProtecting',
 ]);
 
 /** A definition refused by {@link defineOperation} or {@link createOperationRegistry}. */
@@ -340,6 +352,7 @@ function assertOperation(operation: AdminOperationDefinition): void {
     stateVersion,
     render,
     secretMembers,
+    selfProtecting,
   } = operation;
   if (typeof id !== 'string' || !OPERATION_ID_PATTERN.test(id)) {
     throw new OperationDefinitionError(
@@ -443,6 +456,16 @@ function assertOperation(operation: AdminOperationDefinition): void {
       );
     }
   }
+  if (selfProtecting !== undefined && selfProtecting !== true) {
+    throw new OperationDefinitionError(`${where}: selfProtecting is true or absent`);
+  }
+  // Only a security operation is approved, so only one can need a second
+  // admin (#521).
+  if (selfProtecting === true && operation.class !== 'security') {
+    throw new OperationDefinitionError(
+      `${where}: only a security operation is self-protecting; it is the two-admin rule's own guard`
+    );
+  }
   // A request whose classification fails closed gets the declaration, which
   // must therefore be a security classification: otherwise a broken
   // `classify` would hand a request that may be a security operation the
@@ -505,6 +528,7 @@ const RESERVED_KEYS: ReadonlySet<string> = new Set([
   'id',
   'effects',
   'requestDependent',
+  'selfProtecting',
   'vectors',
   'source',
   'description',
@@ -574,6 +598,9 @@ function assertReservedTable(reserved: readonly ReservedOperation[]): void {
     }
     if (entry.requestDependent !== undefined && entry.requestDependent !== true) {
       throw new OperationDefinitionError(`${where}: requestDependent is true or absent`);
+    }
+    if (entry.selfProtecting !== undefined && entry.selfProtecting !== true) {
+      throw new OperationDefinitionError(`${where}: selfProtecting is true or absent`);
     }
     if (typeof entry.id !== 'string' || !OPERATION_ID_PATTERN.test(entry.id)) {
       throw new OperationDefinitionError(`${where}: a reserved id is <resource>.<verb>`);
@@ -698,6 +725,13 @@ export function createOperationRegistry(
       if (operation.class !== 'security' || missing.length > 0) {
         throw new OperationDefinitionError(
           `${where} is reserved as a security operation with the effects ${reservation.effects.join(', ')} (${reservation.source}); it is registered as ${operation.class}${operation.effects.length > 0 ? ` with ${operation.effects.join(', ')}` : ' with no effect'}`
+        );
+      }
+      // The two-admin rule's own guard (#521): registered without the flag,
+      // one admin could create or arm the second account the rule asks for.
+      if (reservation.selfProtecting === true && operation.selfProtecting !== true) {
+        throw new OperationDefinitionError(
+          `${where} is reserved as self-protecting (${reservation.source}); it guards the two-admin rule, and registers with selfProtecting: true`
         );
       }
       // Its declaration is what every request needs, unless the table says

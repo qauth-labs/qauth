@@ -206,6 +206,14 @@ describe('the grants map (#498)', () => {
     expect(privilegesOf('admin', 'refresh_tokens')).toEqual(['SELECT', 'UPDATE']);
   });
 
+  it("lets web, api and admin move an account's security-change time through one function alone (#521)", () => {
+    expect(FUNCTION_GRANTS['"admin_grants_record_security_change"(uuid, uuid)']).toEqual([
+      'web',
+      'api',
+      'admin',
+    ]);
+  });
+
   it('lets no role write who administers, nor delete a realm or a user', () => {
     for (const role of DATABASE_ROLES) {
       for (const table of ['admin_grants', 'admin_roles']) {

@@ -61,6 +61,8 @@ export interface TargetAdminGrant extends LiveAdminGrant {
     readonly enabled: boolean;
     /** When the account was last disabled, in epoch ms; `null` when it never was. */
     readonly notValidBefore: number | null;
+    /** When the account was created, in epoch ms: the two-admin rule reads it (#521). */
+    readonly createdAt: number;
   };
 }
 
@@ -142,6 +144,24 @@ export interface AdminGrantsRepository {
    *   account of `realmId` has this id
    */
   revoke(realmId: string, grantId: string, tx?: DbClient): Promise<AdminGrant | undefined>;
+
+  /**
+   * Record that the account's credentials, identifier or contact address
+   * changed (ADR-019 Decision 7, #521): `last_security_change_at` of each of
+   * its live grants moves to now, by the database's clock, never back. The
+   * two-admin rule refuses an approver whose grants moved in the 7 days
+   * before a request.
+   *
+   * It runs through `admin_grants_record_security_change` (migration 0074),
+   * since no role holds `UPDATE` on the table: the function touches that one
+   * column alone. Call it in the transaction of the change, so the window and
+   * the change commit together.
+   *
+   * @param realmId - the realm the account lives in: an account of another
+   *   realm is not touched
+   * @returns how many grants moved: zero for an account that administers nothing
+   */
+  recordSecurityChange(realmId: string, userId: string, tx?: DbClient): Promise<number>;
 }
 
 /**
@@ -335,6 +355,7 @@ export function createAdminGrantsRepository(
             realmId: users.realmId,
             enabled: users.enabled,
             notValidBefore: users.notValidBefore,
+            createdAt: users.createdAt,
           },
         })
         .from(adminGrants)
@@ -374,6 +395,15 @@ export function createAdminGrantsRepository(
         )
         .returning();
       return row;
+    },
+
+    async recordSecurityChange(realmId, userId, tx) {
+      if (!isAdminRecordId(realmId) || !isAdminRecordId(userId)) return 0;
+      const db = tx ?? defaultDb;
+      const { rows } = await db.execute<{ moved: number | string }>(
+        sql`select "admin_grants_record_security_change"(${realmId}::uuid, ${userId}::uuid) as moved`
+      );
+      return Number(rows[0]?.moved ?? 0);
     },
   };
 }

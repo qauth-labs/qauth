@@ -66,6 +66,13 @@ export interface ApprovalFactor {
    * @throws {ApprovalFactorError} when the answer does not verify
    */
   verify(assertion: ApprovalAssertion): Promise<string>;
+  /**
+   * Whether the credential `credentialId`, as {@link verify} names one, is
+   * registered to `account` (#521): the two-admin rule refuses a second
+   * approval given with a credential the requester's account holds too, such
+   * as one passkey registered to two accounts.
+   */
+  isRegisteredTo(credentialId: string, account: Approver): Promise<boolean>;
 }
 
 /** An answer a factor refused. Its message is logged, never sent. */

@@ -36,10 +36,23 @@ export interface TestApprovalResponse {
 /** The test factor and the authenticator that answers its challenges. */
 export interface TestApprovalFactor {
   readonly factor: ApprovalFactor;
-  /** Answer `challenge` with `approver`'s credential, as its authenticator would. */
-  answer(challenge: ApprovalChallenge, approver: Approver): TestApprovalResponse;
+  /**
+   * Answer `challenge` with `approver`'s credential, as its authenticator
+   * would: its own, or `credentialId`, one {@link register} gave it too.
+   */
+  answer(
+    challenge: ApprovalChallenge,
+    approver: Approver,
+    credentialId?: string
+  ): TestApprovalResponse;
   /** The credential id the authenticator holds for `approver`. */
   credentialOf(approver: Approver): string;
+  /**
+   * Register `credentialId` to `account` too, as one passkey can be
+   * registered to two accounts (#521): `account` may answer with it, and the
+   * factor says it is registered to both.
+   */
+  register(account: Approver, credentialId: string): void;
 }
 
 /** Build a test factor with a key of its own. */
@@ -55,6 +68,11 @@ export function createTestApprovalFactor(): TestApprovalFactor {
   const slot = (approval: ApprovalForFactor, approver: Approver) =>
     JSON.stringify([approval.id, approver.realmId, approver.accountId]);
   const credentialOf = (approver: Approver) => `test-credential:${approver.accountId}`;
+  const accountKey = (account: Approver) => JSON.stringify([account.realmId, account.accountId]);
+  const registered = new Map<string, Set<string>>();
+  const holds = (account: Approver, credentialId: string) =>
+    credentialId === credentialOf(account) ||
+    (registered.get(accountKey(account))?.has(credentialId) ?? false);
   const sign = (challenge: string, credentialId: string) =>
     createHmac('sha256', key).update(`${challenge}.${credentialId}`).digest('base64url');
 
@@ -76,7 +94,7 @@ export function createTestApprovalFactor(): TestApprovalFactor {
         typeof response?.challenge !== 'string' ||
         response.challenge !== stored.challenge ||
         typeof response.credentialId !== 'string' ||
-        response.credentialId !== credentialOf(assertion.approver) ||
+        !holds(assertion.approver, response.credentialId) ||
         typeof response.signature !== 'string'
       ) {
         throw new ApprovalFactorError('the answer is not for a challenge of this approval');
@@ -89,13 +107,19 @@ export function createTestApprovalFactor(): TestApprovalFactor {
       stored.used = true;
       return response.credentialId;
     },
+    async isRegisteredTo(credentialId, account) {
+      return holds(account, credentialId);
+    },
   };
 
   return {
     factor,
     credentialOf,
-    answer(challenge, approver) {
-      const credentialId = credentialOf(approver);
+    register(account, credentialId) {
+      const key = accountKey(account);
+      registered.set(key, new Set([...(registered.get(key) ?? []), credentialId]));
+    },
+    answer(challenge, approver, credentialId = credentialOf(approver)) {
       return {
         challenge: challenge.challenge,
         credentialId,

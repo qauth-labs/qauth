@@ -37,7 +37,7 @@ import {
 } from '../helpers/admin-operations';
 import type { PermissionRegistry } from '../helpers/admin-permissions';
 import { ADMIN_SCOPES, tokenScopeSet } from '../helpers/admin-scopes';
-import { ApprovalRequiredError } from '../helpers/approval-required';
+import { ApprovalRequiredError, ApprovalUnavailableError } from '../helpers/approval-required';
 import { verifyResourceRequestProof } from '../helpers/dpop';
 import { requireFamilyToken } from '../helpers/family-token';
 import {
@@ -47,6 +47,7 @@ import {
 } from '../plugins/admin-operations';
 import { intendedStatusCode } from '../plugins/error-handler';
 import { type CanonicalRequest, canonicalRequest, opHashOf } from './approvals/canonical-request';
+import { eligibleApprovers } from './approvals/eligibility';
 import { auditApproval } from './approvals/engine';
 import {
   APPROVAL_HEADER,
@@ -56,6 +57,7 @@ import {
 } from './approvals/gate';
 import { isApprovalEngineOperation } from './approvals/operations';
 import { callerAccount } from './approvals/standing';
+import { approvalsFromOthers, operationApprovalRequirement } from './approvals/two-admin';
 import { runInAdminHandler } from './handler-scope';
 import { adminRealmRouteProblem } from './route-placement';
 import { secretMemberSchemaProblem } from './secrets/secret-members';
@@ -746,13 +748,41 @@ function approvalGate(registry: OperationRegistry) {
     const classification = requestClassification(request);
     if (classification.class !== 'security') return;
     if (isApprovalEngineRoute(request, registry, classification.operationId)) return;
-    const header = request.headers[APPROVAL_HEADER];
-    if (header === undefined) throw new ApprovalRequiredError();
-
     const { operationId } = classification;
+    const caller = requestAdminCaller(request);
+    // What this request needs on its realm as it stands (the two-admin rule,
+    // #521): an approval filed for fewer approvals does not approve it.
+    const operation = registry.get(operationId);
+    if (operation === undefined) throw new Error(`${operationId} is not a registered operation`);
+    const { approvalsRequired } = await operationApprovalRequirement(request.server, {
+      operation,
+      realm: caller.targetRealm,
+      body: request.body,
+    });
+    const header = request.headers[APPROVAL_HEADER];
+    if (header === undefined) {
+      // Where the request needs another admin's approval and none could
+      // give it, the call fails closed with what it is waiting for: the
+      // same check as the filing's.
+      const requester = callerAccount(caller);
+      const fromOthers = approvalsFromOthers(approvalsRequired, requester.kind);
+      if (fromOthers > 0) {
+        const { total } = await eligibleApprovers(request.server, {
+          targetRealm: caller.targetRealm,
+          requester,
+          callerRealm: caller.issuerRealm,
+          // The gate runs before the operation's transaction opens: there is
+          // none to read in, and the operation's own consume re-checks the
+          // approval it was given.
+          tx: undefined,
+        });
+        if (fromOthers > total) throw new ApprovalUnavailableError();
+      }
+      throw new ApprovalRequiredError();
+    }
+
     const approvalId = approvalIdOf(header);
     if (approvalId === null) throw refusedApproval(request, operationId, null, 'malformed-header');
-    const caller = requestAdminCaller(request);
     let canonical: CanonicalRequest;
     try {
       canonical = canonicalRequest({
@@ -774,7 +804,7 @@ function approvalGate(registry: OperationRegistry) {
       caller.targetRealm.id,
       approvalId
     );
-    const refusal = approvalRefusal(approval, canonical, Date.now());
+    const refusal = approvalRefusal(approval, canonical, Date.now(), approvalsRequired);
     if (approval === undefined || refusal !== null) {
       throw refusedApproval(request, operationId, approvalId, refusal ?? 'not-found');
     }

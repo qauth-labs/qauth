@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
-import { eligibleApproverCount } from './eligibility';
+import { eligibleApproverCount, eligibleApprovers } from './eligibility';
 
 /**
- * Who may approve a request on a realm, counted (#589), over fake
+ * Who may approve a request on a realm, counted (#589, #521), over fake
  * repositories: the grants on the realm and the operator realm's grants on
- * every realm, read in the handler's transaction.
+ * every realm, read in the handler's transaction, and each candidate's
+ * grants for the two-admin rule's 7-day window.
  */
 
 const OPERATOR = '00000000-0000-4000-8000-00000000000a';
@@ -14,6 +15,9 @@ const TENANT = '00000000-0000-4000-8000-00000000000b';
 const OTHER = '00000000-0000-4000-8000-00000000000c';
 const TX = { tx: true };
 const NOW = 1_800_000_000_000;
+const DAY = 86_400_000;
+/** Long before the request: outside the two-admin rule's 7-day window. */
+const OLD = NOW - 30 * DAY;
 
 interface RealmFixture {
   id: string;
@@ -30,6 +34,12 @@ interface GrantFixture {
   role?: { permissionIds: string[] } | null;
   enabled?: boolean;
   notValidBefore?: number | null;
+  /** When the account was created; {@link OLD} when absent. */
+  accountCreatedAt?: number;
+  /** When the grant was made; {@link OLD} when absent. */
+  createdAt?: number;
+  /** When the account's credentials last changed, as the grant records it. */
+  lastSecurityChangeAt?: number;
 }
 
 let grantSeq = 0;
@@ -46,7 +56,10 @@ function liveGrant(fixture: GrantFixture) {
       builtInRole: fixture.role ? null : (fixture.builtInRole ?? 'security-admin'),
       roleId,
       targetRealmId: fixture.target,
+      createdAt: fixture.createdAt ?? OLD,
+      createdBy: null,
       revokedAt: null,
+      lastSecurityChangeAt: fixture.lastSecurityChangeAt ?? fixture.createdAt ?? OLD,
     },
     role: fixture.role
       ? {
@@ -60,6 +73,7 @@ function liveGrant(fixture: GrantFixture) {
       realmId: fixture.accountRealmId,
       enabled: fixture.enabled ?? true,
       notValidBefore: fixture.notValidBefore ?? null,
+      createdAt: fixture.accountCreatedAt ?? OLD,
     },
   };
 }
@@ -83,9 +97,15 @@ function serverWith(realms: RealmFixture[], grants: GrantFixture[]) {
           (realmId === target || entry.account.realmId === realmId)
     );
   });
+  const listByUser = vi.fn(async (realmId: string, userId: string, tx: unknown) => {
+    expect(tx).toBe(TX);
+    return live
+      .filter((entry) => entry.account.realmId === realmId && entry.grant.userId === userId)
+      .map((entry) => entry.grant);
+  });
   const fastify = {
     repositories: {
-      adminGrants: { listLiveOnTarget },
+      adminGrants: { listLiveOnTarget, listByUser },
       realms: {
         findOperator: vi.fn(async (tx: unknown) => {
           expect(tx).toBe(TX);
@@ -98,7 +118,7 @@ function serverWith(realms: RealmFixture[], grants: GrantFixture[]) {
       },
     },
   } as unknown as FastifyInstance;
-  return { fastify, listLiveOnTarget };
+  return { fastify, listLiveOnTarget, listByUser };
 }
 
 const REALMS: RealmFixture[] = [
@@ -202,7 +222,7 @@ describe('eligibleApproverCount (#589)', () => {
   });
 
   // A realm-local caller sees no grant on every realm (#489), so the count
-  // it is shown leaves them out.
+  // it is shown leaves them out; the fail-closed check counts them (#521).
   it('counts no grant on every realm for a caller of another realm than the operator realm', async () => {
     const { fastify, listLiveOnTarget } = serverWith(REALMS, [
       { userId: 'local-admin', accountRealmId: TENANT, target: TENANT },
@@ -212,9 +232,56 @@ describe('eligibleApproverCount (#589)', () => {
     expect(await count(fastify, TENANT, false, { isOperator: false })).toBe(2);
     expect(listLiveOnTarget.mock.calls.map(([realmId, target]) => [realmId, target])).toEqual([
       [TENANT, TENANT],
+      [OPERATOR, null],
     ]);
-    expect(fastify.repositories.realms.findOperator).not.toHaveBeenCalled();
+    expect(
+      await eligibleApprovers(fastify, {
+        targetRealm: { id: TENANT, isOperator: false },
+        requester,
+        callerRealm: { isOperator: false },
+        tx: TX as never,
+        now: NOW,
+      })
+    ).toEqual({ visible: 2, total: 3 });
     expect(await count(fastify)).toBe(3);
+  });
+
+  // The two-admin rule (#521): an admin created, granted a role or changed
+  // in the 7 days before the request is not one it could come from.
+  it('counts no admin created, granted a role or changed in the last 7 days', async () => {
+    const { fastify, listByUser } = serverWith(REALMS, [
+      { userId: 'eligible', accountRealmId: TENANT, target: TENANT },
+      {
+        userId: 'created-6-days-ago',
+        accountRealmId: TENANT,
+        target: TENANT,
+        accountCreatedAt: NOW - 6 * DAY,
+      },
+      {
+        userId: 'created-7-days-ago',
+        accountRealmId: TENANT,
+        target: TENANT,
+        accountCreatedAt: NOW - 7 * DAY,
+      },
+      { userId: 'granted-yesterday', accountRealmId: TENANT, target: TENANT, createdAt: NOW - DAY },
+      // An old grant, and a second role granted yesterday.
+      { userId: 'regranted', accountRealmId: TENANT, target: TENANT },
+      {
+        userId: 'regranted',
+        accountRealmId: TENANT,
+        target: TENANT,
+        builtInRole: 'viewer',
+        createdAt: NOW - DAY,
+      },
+      {
+        userId: 'changed-2-days-ago',
+        accountRealmId: TENANT,
+        target: TENANT,
+        lastSecurityChangeAt: NOW - 2 * DAY,
+      },
+    ]);
+    expect(await count(fastify)).toBe(2);
+    expect(listByUser).toHaveBeenCalledWith(TENANT, 'regranted', TX);
   });
 
   it('reads the grants on the realm alone where no operator realm exists', async () => {

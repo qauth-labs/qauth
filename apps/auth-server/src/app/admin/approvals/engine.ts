@@ -15,6 +15,12 @@ import {
   type Approver,
 } from './factor';
 import { approvalStanding, shownStatus } from './standing';
+import {
+  type ApproverRefusal,
+  approverRefusal,
+  loadApprover,
+  sharedWithAnEarlierApprover,
+} from './two-admin';
 
 /**
  * THE APPROVAL ENGINE (ADR-019 Decision 7, ADR-014 §14, issue #512).
@@ -75,37 +81,6 @@ export function approvalUrlOf(
     requesterRealm,
     `${APPROVAL_PAGE_PATH_PREFIX}${approval.realmId}/${approval.id}`
   );
-}
-
-/**
- * How many approvals one request of an operation needs: one, the
- * requester's own fresh step-up, or a human admin's in a service account's
- * place. The two-admin rule (#521) raises it to two where the realm makes a
- * second admin mandatory.
- */
-export function approvalsRequiredFor(): number {
-  return 1;
-}
-
-/**
- * Whether a second admin's approval is `recommended` or `mandatory`
- * (ADR-019 Decision 7, ADR-020 §4).
- */
-export type TwoAdmin = 'recommended' | 'mandatory';
-
-/**
- * What an approval of a security operation will need, as it is filed
- * ({@link approvalsRequiredFor}): how many approvals, and so whether a second
- * admin is mandatory or only recommended, as it is for every security
- * operation. The policy preview (#589) announces it from here, so it says
- * what the filing will store; the two-admin rule (#521) changes both at once.
- */
-export function approvalRequirement(): {
-  readonly approvalsRequired: number;
-  readonly twoAdmin: TwoAdmin;
-} {
-  const approvalsRequired = approvalsRequiredFor();
-  return { approvalsRequired, twoAdmin: approvalsRequired > 1 ? 'mandatory' : 'recommended' };
 }
 
 /**
@@ -223,9 +198,9 @@ export function auditApproval(
   return {
     approverId: given.approverId,
     credentialId: given.credentialId,
-    // Who created the approver's account is recorded once admin accounts
-    // record their creator (#521, #679).
-    approverCreatedBy: null,
+    // Who made the approver an admin of the realm, as read when it approved
+    // (#521): the rule binds accounts, not people.
+    approverCreatedBy: given.approverCreatedBy ?? null,
     approvedAt: given.approvedAt,
   };
 }
@@ -342,7 +317,8 @@ export async function approverAuthority(
 async function approvalTheApproverMayDecide(
   fastify: FastifyInstance,
   decision: ApprovalDecision,
-  now: number
+  now: number,
+  options: { readonly auditRefusal?: boolean } = {}
 ): Promise<{ readonly approval: AdminApproval; readonly approver: Approver }> {
   const notFound = () => new NotFoundError('Approval', decision.approvalId);
   const approval = await fastify.repositories.adminApprovals.findById(
@@ -368,7 +344,98 @@ async function approvalTheApproverMayDecide(
   if (!standing.mayApprove) {
     throw new ForbiddenError('This account cannot give this approval an approval');
   }
+  // The requester's own step-up is the first approval; every other one comes
+  // from an eligible admin (the two-admin rule, #521).
+  if (!standing.isRequester) {
+    const refusal = await secondApprovalRefusal(fastify, approval, approver, null, now);
+    if (refusal !== null) {
+      fastify.log.info(
+        { approvalId: approval.id, reason: refusal },
+        'The two-admin rule refused an approver'
+      );
+      // An answer the rule refuses is audited as the factor's refusal is;
+      // the page asking for a challenge is not an answer.
+      if (options.auditRefusal === true) {
+        await auditRefusedApproval(fastify, approval, { ...decision, approver });
+      }
+      throw new ForbiddenError(NOT_ELIGIBLE);
+    }
+  }
   return { approval, approver };
+}
+
+/** What an approver the two-admin rule refuses is told; the reason is logged. */
+const NOT_ELIGIBLE =
+  'This account cannot approve this request yet: an approver held its approval right before the request, and was not created, granted a role or changed in the 7 days before it';
+
+/** The realm an approval acts on, as the two-admin rule reads it. */
+async function approvalRealm(fastify: FastifyInstance, approval: AdminApproval) {
+  const realm = await fastify.repositories.realms.findById(approval.realmId);
+  if (realm === undefined) throw new NotFoundError('Approval', approval.id);
+  return realm;
+}
+
+/**
+ * Why the two-admin rule refuses `approver`'s approval of `approval`, or
+ * `null` when it may give it: rules 1 to 3, and rule 4 once `credentialId`
+ * is known (`./two-admin.ts`).
+ */
+async function secondApprovalRefusal(
+  fastify: FastifyInstance,
+  approval: AdminApproval,
+  approver: Approver,
+  credential: { readonly registeredToRequester: boolean } | null,
+  now: number
+): Promise<ApproverRefusal | null> {
+  const realm = await approvalRealm(fastify, approval);
+  // Every admin account is a person's until service accounts exist (#522):
+  // rule 1 must then read the account's kind.
+  const loaded = await loadApprover(
+    fastify,
+    { ...approver, kind: 'human' },
+    realm,
+    credential === null ? {} : { credential }
+  );
+  if (loaded === undefined) return 'no-approval-right';
+  return approverRefusal(loaded.record, requestRecordOf(approval), realm, now);
+}
+
+/**
+ * Write the `denied` row of an approval the factor or the two-admin rule
+ * refused. A row that cannot be written is logged: the refusal stands.
+ */
+async function auditRefusedApproval(
+  fastify: FastifyInstance,
+  approval: AdminApproval,
+  decided: ApprovalDecision
+): Promise<void> {
+  try {
+    await fastify.db.transaction((tx) =>
+      appendAudit(
+        fastify,
+        tx,
+        decisionEntry(approval, decided, 'approvals.approve', 'denied', null, null)
+      )
+    );
+  } catch (auditError) {
+    fastify.log.error(
+      { err: auditError, approvalId: approval.id },
+      'The audit row of a refused approval could not be written'
+    );
+  }
+}
+
+/** The request `approval` is for, as the two-admin rule reads it. */
+function requestRecordOf(approval: AdminApproval) {
+  return {
+    realmId: approval.realmId,
+    requester: {
+      realmId: approval.requesterRealmId,
+      accountId: approval.requesterId,
+      kind: approval.requesterKind,
+    },
+    createdAt: approval.createdAt,
+  };
 }
 
 /**
@@ -416,7 +483,9 @@ export async function completeApproval(
   options: ApprovalEngineOptions = {}
 ): Promise<AdminApproval> {
   const clock = options.now ?? Date.now;
-  const { approval, approver } = await approvalTheApproverMayDecide(fastify, decision, clock());
+  const { approval, approver } = await approvalTheApproverMayDecide(fastify, decision, clock(), {
+    auditRefusal: true,
+  });
   const decided = { ...decision, approver };
 
   let credentialId: string;
@@ -432,20 +501,7 @@ export async function completeApproval(
       { err: error, approvalId: approval.id, factor: factor.name },
       'An approval factor refused an answer: nothing was approved'
     );
-    try {
-      await fastify.db.transaction((tx) =>
-        appendAudit(
-          fastify,
-          tx,
-          decisionEntry(approval, decided, 'approvals.approve', 'denied', null, null)
-        )
-      );
-    } catch (auditError) {
-      fastify.log.error(
-        { err: auditError, approvalId: approval.id },
-        'The audit row of a refused approval could not be written'
-      );
-    }
+    await auditRefusedApproval(fastify, approval, decided);
     throw new ForbiddenError('The approval was not given: the factor did not verify the answer');
   }
   if (typeof credentialId !== 'string' || credentialId === '') {
@@ -455,12 +511,61 @@ export async function completeApproval(
   }
 
   const now = clock();
+  const isRequester =
+    approval.requesterKind === 'human' &&
+    approval.requesterRealmId === approver.realmId &&
+    approval.requesterId === approver.accountId;
+  const realm = await approvalRealm(fastify, approval);
+  // Rule 4 of the two-admin rule (#521): a second approval never comes from a
+  // credential registered to the requester's account, nor from one an
+  // earlier approval of the request was given with or whose account gave
+  // one. The rules before it are judged again, at this moment.
+  const credential = isRequester
+    ? null
+    : {
+        registeredToRequester: await factor.isRegisteredTo(credentialId, {
+          realmId: approval.requesterRealmId,
+          accountId: approval.requesterId,
+        }),
+        sharedWithAnEarlierApprover: await sharedWithAnEarlierApprover(
+          factor,
+          credentialId,
+          approval.approvals
+        ),
+      };
+  const loaded = await loadApprover(
+    fastify,
+    { ...approver, kind: 'human' },
+    realm,
+    credential === null ? {} : { credential }
+  );
+  const refusal = isRequester
+    ? null
+    : loaded === undefined
+      ? 'no-approval-right'
+      : approverRefusal(loaded.record, requestRecordOf(approval), realm, now);
+  if (refusal !== null) {
+    fastify.log.info(
+      { approvalId: approval.id, reason: refusal, factor: factor.name },
+      'The two-admin rule refused an approval: nothing was approved'
+    );
+    await auditRefusedApproval(fastify, approval, decided);
+    throw new ForbiddenError(
+      refusal === 'requester-credential'
+        ? "The approval was not given: its credential is registered to the requester's account"
+        : refusal === 'approver-credential'
+          ? 'The approval was not given: its credential gave this request an approval already, or is registered to an account that did'
+          : NOT_ELIGIBLE
+    );
+  }
+
   const given: AdminApprovalEntry = {
     approverRealmId: approver.realmId,
     approverId: approver.accountId,
     credentialId,
     factor: factor.name,
     approvedAt: now,
+    approverCreatedBy: loaded?.createdBy ?? null,
   };
   return fastify.db.transaction(async (tx) => {
     const updated = await fastify.repositories.adminApprovals.addApproval(

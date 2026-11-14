@@ -69,6 +69,7 @@
               "not_found",
               "method_not_allowed",
               "conflict",
+              "approval_unavailable",
               "already_exists",
               "email_already_verified",
               "verification_token_used",
