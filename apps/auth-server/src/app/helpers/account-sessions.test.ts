@@ -156,17 +156,12 @@ describe('endAccountSession (#1110)', () => {
     );
   });
 
-  it('answers another account’s session, another realm’s or an ended one as not found, and touches nothing', async () => {
+  it('answers another account’s session, another realm’s or an unknown one as not found, and touches nothing', async () => {
     const { fastify, sessions, repositories, signIn } = server();
     const theirs = signIn({ userId: OTHER_USER_ID });
     const elsewhere = signIn({ realmId: OTHER_REALM_ID });
-    const ended = signIn({});
-    await endAccountSession(fastify, REQUEST, OWNER, ended);
-    emitUserEvent.mockClear();
-    repositories.refreshTokens.revokeFamiliesOfSignIns.mockClear();
-    deleteSessionSideRecord.mockClear();
 
-    for (const sid of [theirs, elsewhere, ended, '00000000-0000-4000-8000-0000000000ff']) {
+    for (const sid of [theirs, elsewhere, '00000000-0000-4000-8000-0000000000ff']) {
       expect(await endAccountSession(fastify, REQUEST, OWNER, sid)).toEqual({
         kind: 'not_found',
       });
@@ -175,6 +170,27 @@ describe('endAccountSession (#1110)', () => {
     expect(sessions.service.sessions.has(theirs)).toBe(true);
     expect(sessions.service.sessions.has(elsewhere)).toBe(true);
     expect(repositories.refreshTokens.revokeFamiliesOfSignIns).not.toHaveBeenCalled();
+    expect(deleteSessionSideRecord).not.toHaveBeenCalled();
+    expect(emitUserEvent).not.toHaveBeenCalled();
+  });
+
+  it('answers an ended session of the account as not found, but sweeps its families again: the retry of an end whose sweep failed', async () => {
+    const { fastify, repositories, signIn } = server();
+    const authTime = Date.now() - 60_000;
+    const sid = signIn({ authTime });
+    repositories.refreshTokens.revokeFamiliesOfSignIns.mockRejectedValueOnce(new Error('pool'));
+    await expect(endAccountSession(fastify, REQUEST, OWNER, sid)).rejects.toThrow('pool');
+    expect(emitUserEvent).not.toHaveBeenCalled();
+
+    expect(await endAccountSession(fastify, REQUEST, OWNER, sid)).toEqual({ kind: 'not_found' });
+
+    expect(repositories.refreshTokens.revokeFamiliesOfSignIns).toHaveBeenCalledTimes(2);
+    expect(repositories.refreshTokens.revokeFamiliesOfSignIns).toHaveBeenLastCalledWith(
+      USER_ID,
+      [authTime],
+      'session_ended'
+    );
+    // The end already happened: no second sign-out is recorded for it.
     expect(emitUserEvent).not.toHaveBeenCalled();
   });
 });

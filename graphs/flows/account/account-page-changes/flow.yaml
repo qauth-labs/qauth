@@ -779,7 +779,7 @@ states:
       Its cookie stops working, its side record is dropped, and every relying party it signed in to with a
       back-channel logout URI is queued a logout token in the same revocation (#624). Then the refresh-token families
       its sign-in opened end (#1110), and user.signed_out is recorded with its sid.
-    source: apps/auth-server/src/app/helpers/account-sessions.ts:149
+    source: apps/auth-server/src/app/helpers/account-sessions.ts:152
     invoke: { external: browserSessionStore }
     on:
       DONE:
@@ -809,7 +809,7 @@ states:
     description: >-
       Every session ends, each queues its back-channel logout tokens, every unredeemed authorization code and then every
       refresh token of the account is revoked, and user.signed_out is recorded without a sid.
-    source: apps/auth-server/src/app/helpers/account-sessions.ts:189
+    source: apps/auth-server/src/app/helpers/account-sessions.ts:198
     invoke: { external: browserSessionStore }
     on:
       DONE:

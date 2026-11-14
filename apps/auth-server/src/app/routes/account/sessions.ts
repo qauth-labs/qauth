@@ -174,7 +174,8 @@ export function registerAccountSessionRoutes(fastify: FastifyInstance): void {
     },
     config: { surface: 'api' },
     handler: async (request, reply) => {
-      const { sessionId } = request.params;
+      // The id as the list sends it, lowercase, whatever case the path took.
+      const sessionId = request.params.sessionId.toLowerCase();
       const result = await endAccountSession(fastify, request, ownerOf(request), sessionId);
       if (result.kind === 'not_found') throw new NotFoundError('Session', sessionId);
       reply.code(204);
@@ -186,7 +187,7 @@ export function registerAccountSessionRoutes(fastify: FastifyInstance): void {
     preValidation: endAll.guard,
     schema: {
       description:
-        "Sign out everywhere: every session of the token's user ends, each app a session signed in to with a back-channel logout URI is sent a logout token, and every unredeemed code and refresh-token family of the user is revoked. The session the token came through stays only when `keepCurrent` is true. Needs no fresh sign-in and takes an act-chain token.",
+        "Sign out everywhere: every session of the token's user ends, each app a session signed in to with a back-channel logout URI is sent a logout token, and every unredeemed code and refresh-token family of the user is revoked. The session the token came through stays only when `keepCurrent` is true and the token names it in `sid`, which a refreshed token does not. Needs no fresh sign-in and takes an act-chain token.",
       tags,
       security: [{ bearerAuth: [] }],
       'x-qauth-stability': 'stable',

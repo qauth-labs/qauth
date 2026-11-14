@@ -137,7 +137,10 @@ function recordSignedOut(
  * stops working, every client it signed in to is queued a back-channel
  * logout by the revocation itself (#624), and the refresh-token families its
  * sign-in opened end. Recorded as `user.signed_out` with its `sid`. A session
- * of another account, or one already ended, is `not_found`, untouched.
+ * of another account is `not_found`, untouched. One of the account's that has
+ * already ended is `not_found` too, but its families are swept again: a call
+ * that ended the session and failed before the sweep leaves them to its
+ * retry, which the session service answers `already_ended`.
  */
 export async function endAccountSession(
   fastify: FastifyInstance,
@@ -154,17 +157,23 @@ export async function endAccountSession(
     { type: 'user', id: userId },
     userId
   );
-  if (result.outcome !== 'ended') return { kind: 'not_found' };
+  // With `userId` given, the service answers another user's session as not
+  // found, so an ended one here is the account's own.
+  if (result.outcome === 'not_found') return { kind: 'not_found' };
   // A refresh family names no session: the families its sign-in opened carry
   // its `auth_time` (#662), as a removed new credential finds them (#1064).
   // The revocation spent the session's codes already, so none redeemed
-  // after it opens a family this sweep misses.
+  // after it opens a family this sweep misses. The sweep revokes only live
+  // families, so running it again ends nothing twice.
   await fastify.repositories.refreshTokens.revokeFamiliesOfSignIns(
     userId,
     [result.session.authTime],
     'session_ended'
   );
-  await recordSignedOut(request, owner, sid);
+  if (result.outcome === 'already_ended') return { kind: 'not_found' };
+  // The stored id, lowercase as the ID tokens' `sid` is, which a Shared
+  // Signals receiver matches on.
+  await recordSignedOut(request, owner, result.session.id);
   return { kind: 'ended' };
 }
 

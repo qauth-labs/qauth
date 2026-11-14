@@ -181,9 +181,10 @@ operations needs a fresh sign-in, and each takes an act-chain token.
   logout URI gets a logout token. A session of another user, or one that has ended, is `404`.
 - `POST /account/v1-rc.0/sessions/end-all` signs out everywhere: every session, unredeemed code and
   refresh-token family of the person ends, and each app with a session gets a logout token. Send
-  `{"keepCurrent":true}` to keep the session your token came through. Your refresh token is revoked
-  all the same, since a refresh-token family names no session: get a new token with an
-  authorization request in the browser whose session you kept.
+  `{"keepCurrent":true}` to keep the session your token came through; with a refreshed token,
+  which names none, every session ends. Your refresh token is revoked all the same, since a
+  refresh-token family names no session: get a new token with an authorization request in the
+  browser whose session you kept.
 
 Access tokens already issued stay valid until they expire, on every path above.
 

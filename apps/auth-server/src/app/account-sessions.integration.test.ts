@@ -455,7 +455,7 @@ describe('the account API’s sessions (#1110, real containers)', () => {
     const theirs = await signedIn(otherId);
     const bearer = await token(userId, mine);
 
-    for (const sid of [theirs.sid, randomUUID()]) {
+    for (const sid of [theirs.sid, theirs.sid.toUpperCase(), randomUUID()]) {
       const response = await call('DELETE', `/sessions/${sid}`, bearer);
       expect(response.statusCode, response.body).toBe(404);
       expect(response.json()).toMatchObject({ code: 'not_found' });
@@ -473,6 +473,13 @@ describe('the account API’s sessions (#1110, real containers)', () => {
     );
     expect(readOnly.statusCode, readOnly.body).toBe(403);
     expect(await liveSessionsOf(userId)).toEqual([mine.sid]);
+
+    // The path may name the session in capitals; the event names it as its
+    // ID tokens' `sid` does, which a Shared Signals receiver matches on.
+    const upper = await call('DELETE', `/sessions/${mine.sid.toUpperCase()}`, bearer);
+    expect(upper.statusCode, upper.body).toBe(204);
+    expect(await liveSessionsOf(userId)).toEqual([]);
+    expect(await signedOutEventsOf(userId)).toEqual([{ sid: mine.sid }]);
   });
 
   it('signs out everywhere: every session ends, every refresh family is revoked, and the apps get back-channel logouts', async () => {

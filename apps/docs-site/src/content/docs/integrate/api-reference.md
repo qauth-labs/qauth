@@ -1155,7 +1155,8 @@ Sign out everywhere: every session of the user ends, each app a session signed i
 back-channel logout URI gets a logout token, and every unredeemed authorization code and
 refresh-token family of the user is revoked. The body is optional: `{"keepCurrent":true}` keeps the
 session the token names in `sid`, whose refresh tokens are revoked all the same; no body, or
-`keepCurrent` `false`, ends that session too. Needs no fresh sign-in and takes an act-chain token.
+`keepCurrent` `false`, ends that session too, and so does a token that names none, such as a
+refreshed one. Needs no fresh sign-in and takes an act-chain token.
 **`204 No Content`**. Errors: `400`, `401`, `403`.
 
 ---

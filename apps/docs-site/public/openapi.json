@@ -3609,7 +3609,7 @@
         "tags": [
           "Account API"
         ],
-        "description": "Sign out everywhere: every session of the token's user ends, each app a session signed in to with a back-channel logout URI is sent a logout token, and every unredeemed code and refresh-token family of the user is revoked. The session the token came through stays only when `keepCurrent` is true. Needs no fresh sign-in and takes an act-chain token.",
+        "description": "Sign out everywhere: every session of the token's user ends, each app a session signed in to with a back-channel logout URI is sent a logout token, and every unredeemed code and refresh-token family of the user is revoked. The session the token came through stays only when `keepCurrent` is true and the token names it in `sid`, which a refreshed token does not. Needs no fresh sign-in and takes an act-chain token.",
         "requestBody": {
           "required": false,
           "content": {
