@@ -236,14 +236,59 @@ it has not seen, and nobody signs in again:
   data-at-rest key rotate the same way: the new key signs or encrypts, and the
   old one only verifies or decrypts until it is retired.
 
-The key library carries these defaults (`DEFAULT_KEY_PREPUBLISH_DAYS`,
-`DEFAULT_KEY_RETIRED_RETENTION_DAYS` and `DEFAULT_KEY_ROTATION_PERIOD_DAYS` in
-`libs/server/keys/src/lib/key-purposes.ts`). In this release nothing rotates a
-token signing key on a schedule: automatic rotation is
-[#542](https://github.com/qauth-labs/qauth/issues/542). Until it ships, a key
-changes only when you [replace it through its variable](#replacing-a-signing-key),
-which is not a rotation: the new key signs at once, and the old key leaves the
-JWKS at once.
+`KEY_ROTATION_PERIOD_DAYS`, `KEY_PREPUBLISH_DAYS` and
+`KEY_RETIRED_RETENTION_DAYS` change the three windows for the whole deployment
+(advanced keys of [the configuration](/operate/configuration/)). A period
+shorter than the pre-publication window is refused at boot.
+
+### The scheduled rotation
+
+The `key-rotation` job rotates every realm's keys on these windows
+([#542](https://github.com/qauth-labs/qauth/issues/542)). It runs every hour on
+the nodes of the `signer` role, the only role that holds the KEK, for the token
+signing, event signing, cookie, data-at-rest, OID4VP response and agent
+wrapping keys of each realm:
+
+- Once the active key has served the period less the pre-publication window
+  (day 83 by default), the job creates the `next` key, and the event
+  `key.next_created` records it. A token signing key is in the realm JWKS from
+  then on, an event signing key in the SSF transmitter's (`/ssf/jwks.json`); a
+  cookie or data-at-rest key is never published.
+- Once the period has run and the `next` key has been published for the whole
+  window (day 90), the job switches: the `next` key becomes `active` and the
+  old key `retired`, and the event `key.rotated` records both. A hybrid pair
+  moves together, in one transaction, so the JWKS never shows half of it.
+- The retired key stays published and verifying for the retention (until day
+  104), and longer when a token, cookie or ciphertext it made may live longer.
+- A job that was down past a due date creates the `next` key when it runs
+  again and waits the whole window before the switch: a missed run never
+  shortens the overlap.
+
+Every process reads a realm's key list at most once a minute, so the switch is
+written two refresh intervals ahead (two minutes by default): every process
+lists the new key as `active`, and verifies with it, before any signer uses it.
+Until that moment the old key signs on.
+
+The job takes the job runner's advisory lock and each realm's key lock, and
+plans each step again from what is stored, so many nodes and repeated runs
+rotate once. A step and its audit event commit together. A step that fails is
+logged and left as it was, and the next run retries it.
+
+How long a retired key is kept:
+
+| Key                                      | Kept after the switch                                                                                          |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Token and event signing, OID4VP response | The retention, at least a day: no access or ID token lives longer (`ACCESS_TOKEN_LIFESPAN` is capped at 86400) |
+| Cookie                                   | The retention, or the realm's longest browser session (`sso_max_lifespan` or `SESSION_COOKIE_TTL`) if longer   |
+| Data at rest, agent wrapping             | For good: a stored secret has no end, and nothing re-seals it under the new key yet                            |
+
+A cookie key's switch waits, too, until the cookie key before it has left its
+retention: a process verifies the cookies of one previous cookie key only.
+
+A key variable such as `JWT_PRIVATE_KEY` or `SESSION_COOKIE_SECRET` that still
+holds a key the job has retired changes nothing, and each boot warns about it.
+Remove the key variables once the store holds the keys
+([Upgrades](/operate/upgrades/#upgrading-from-01-to-02)).
 
 ### Manual rotation
 
@@ -254,8 +299,9 @@ windows above. In this release the admin API rotates one kind of key only: a
 provider plugin's client-assertion key, which the provider issued
 ([below](#a-provider-issued-client-assertion-key)), and whose switch waits for
 no window, since the provider holds the key's public half already. For every other key,
-`auth-server:keys:create --status next` publishes a next key, but nothing makes
-a next key active yet.
+`auth-server:keys:create --status next` publishes a next key, and the scheduled
+rotation activates it when it is due: once the active key's period has run and
+the next key has been published for the whole window.
 
 ### Emergency retirement
 
@@ -288,8 +334,8 @@ leaked cookie secret, see [Replacing the cookie key](#replacing-the-cookie-key).
 
 ### Replacing a signing key
 
-Until rotation through the key store ships, you replace a signing key as
-before the key store: put the new key in its variable and restart. At boot, a
+The scheduled rotation replaces a signing key with an overlap. To replace one
+at once, as before the key store, put the new key in its variable and restart. At boot, a
 key variable that holds a key the store lacks replaces the store's active key
 of that algorithm. The old key is retired and leaves the JWKS at once, so
 tokens it signed stop verifying. Each node logs a warning with the new and the
@@ -313,8 +359,10 @@ role. Each value is `<kid>.<payload>.<mac>`: it names the key that signed it,
 and its HMAC-SHA256 covers the cookie's name, the realm id, the `kid` and the
 payload, so a value never passes for another cookie or for a cookie of another
 realm, even if two realms held the same key. A new cookie is signed with the
-realm's current key. A cookie of the previous key, the one the last
-replacement retired, still verifies until the next replacement. A cookie that
+realm's current key. A cookie of the previous key, the one the last rotation
+retired, still verifies until its retention ends, or, for a key a replacement
+retired, until the next replacement. During the two minutes before a rotation
+takes effect, a cookie of the new key verifies already. A cookie that
 does not verify is cleared; one that names a key the process has not read yet
 is left for the next request.
 
@@ -401,9 +449,9 @@ in `id_token_signing_alg_values_supported`. Leave `JWT_RS256_PRIVATE_KEY` unset
 afterwards: a key in it would replace the one you created at the next boot.
 
 A realm has one active key per purpose and algorithm, so the command cannot
-replace one: a second active key is refused, and a `next` key is published but
-never made active until rotation ships (#542). Replace a signing key through its
-variable meanwhile.
+replace one: a second active key is refused. A `next` key is published, and
+[the scheduled rotation](#the-scheduled-rotation) makes it active when it is
+due.
 
 ## A provider-issued client-assertion key
 
@@ -675,7 +723,8 @@ the reviewed behavior and the pre-default-on checklist.
 ## Environment variables
 
 Verified against `libs/server/config/src/lib/schemas/jwt.ts`,
-`libs/server/config/src/lib/schemas/crypto.ts`, the KEK keys of the
+`libs/server/config/src/lib/schemas/crypto.ts`,
+`libs/server/config/src/lib/schemas/key-rotation.ts`, the KEK keys of the
 configuration registry and the two adapters' settings.
 
 | Variable                          | Default                                               | What it is                                                                       |
@@ -703,6 +752,9 @@ configuration registry and the two adapters' settings.
 | `JWT_MLDSA_KID`                   | the key's thumbprint                                  | ML-DSA: the imported key's `kid`                                                 |
 | `HYBRID_SIGNING_ENABLED`          | `false`                                               | Signs hybrid access tokens                                                       |
 | `SIGNING_ALGORITHM_MODE`          | `ed25519`                                             | Must be `ed25519+ml-dsa-65` for hybrid signing                                   |
+| `KEY_ROTATION_PERIOD_DAYS`        | `90`                                                  | The days a key serves before the scheduled rotation replaces it                  |
+| `KEY_PREPUBLISH_DAYS`             | `7`                                                   | The days a `next` key is published before it signs; at most the period           |
+| `KEY_RETIRED_RETENTION_DAYS`      | `14`                                                  | The days a retired key is kept at least                                          |
 
 ## See also
 

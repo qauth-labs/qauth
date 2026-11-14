@@ -11,6 +11,7 @@ import { EVENT_TELEMETRY_KEYS } from './event-telemetry';
 import { FEDERATION_KEYS } from './federation';
 import { INTERNAL_LISTENER_KEYS } from './internal-listener';
 import { KEK_KEYS } from './kek';
+import { KEY_ROTATION_KEYS } from './key-rotation';
 import { PASSKEY_KEYS } from './passkeys';
 import { PLUGIN_KEYS } from './plugins';
 import { RATE_LIMIT_KEYS } from './rate-limits';
@@ -41,6 +42,7 @@ export const SERVER_CONFIG_KEYS: readonly ConfigKey[] = [
   ...TOKEN_KEYS,
   ...DPOP_KEYS,
   ...KEK_KEYS,
+  ...KEY_ROTATION_KEYS,
   ...ACCOUNT_KEYS,
   ...REGISTRATION_KEYS,
   ...RATE_LIMIT_KEYS,

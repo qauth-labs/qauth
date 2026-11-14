@@ -157,13 +157,25 @@ export type KeyChangeRefusalReason =
   /** The `next` key has not been published, or handed out, for the whole window yet. */
   | 'OVERLAP_NOT_ELAPSED'
   /** Another writer moved one of the keys while the rotation ran. Nothing changed. */
-  | 'KEY_CHANGED';
+  | 'KEY_CHANGED'
+  /**
+   * The scheduled rotation (#542) found two `active` or two `next` keys of one
+   * algorithm, which it cannot choose between. Nothing changed.
+   */
+  | 'AMBIGUOUS_KEYS'
+  /**
+   * Activating the `next` key would split a hybrid pair (ADR-005): with hybrid
+   * signing on, the next EdDSA key has no ML-DSA-65 partner. Nothing changed.
+   */
+  | 'SPLIT_HYBRID_PAIR';
 
 /** The reasons that describe the stored keys rather than the request. */
 const KEY_STATE_REASONS: readonly KeyChangeRefusalReason[] = [
   'NO_NEXT_KEY',
   'OVERLAP_NOT_ELAPSED',
   'KEY_CHANGED',
+  'AMBIGUOUS_KEYS',
+  'SPLIT_HYBRID_PAIR',
 ];
 
 /**

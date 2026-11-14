@@ -33,6 +33,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that made its approver an admin. Migration 0074 adds the database function
   that records a change; it rewrites nothing.
 
+- **Keys rotate on a schedule, with an overlap** ([#542], ADR-019 Decision 9).
+  A new `key-rotation` job on the `signer` role rotates every realm's token
+  signing, event signing, cookie, data-at-rest, OID4VP response and agent
+  wrapping keys. Once the active key has served `KEY_ROTATION_PERIOD_DAYS`
+  (90) less `KEY_PREPUBLISH_DAYS` (7), it creates and publishes the `next`
+  key; once the period has run and the `next` key has been published for the
+  whole window, it switches. A retired key stays published and verifying for
+  `KEY_RETIRED_RETENTION_DAYS` (14), or longer while a token, cookie or
+  ciphertext it made may live: a cookie key for the realm's longest browser
+  session, a data-at-rest key for good. A hybrid pair switches in one
+  transaction. The switch is written two key-cache refresh intervals ahead,
+  so every process verifies with a new key before any signs with it. A job
+  that was down creates the `next` key and waits the whole window; many nodes
+  rotate once. Each step writes a `key.next_created` or `key.rotated` admin
+  event. The three settings are advanced keys of the configuration registry,
+  and a period shorter than the pre-publication window refuses the boot. The
+  signer's database user may now write events; the grants map applies it at
+  deploy.
+
 ## [0.2.4] - 2026-11-14
 
 A patch release that carries a breaking change, as a 0.x release may (see the

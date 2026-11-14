@@ -60,6 +60,9 @@ describe('createPublishedKeyReader (#491, #495)', () => {
       expect(await reader.getJwks('local', realmId)).toEqual(
         await signer.getJwks('local', realmId)
       );
+      expect(await reader.getJwks('local', realmId, 'event_signing')).toEqual(
+        await signer.getJwks('local', realmId, 'event_signing')
+      );
     }
     // Public material only: no JWK carries a private member.
     const jwks = await reader.getJwks('local', REALM_A);

@@ -33,20 +33,17 @@ afterEach(async () => {
 async function buildApp(
   options: {
     switchOn?: boolean;
-    getVerificationKeys?: (...args: unknown[]) => Promise<unknown>;
+    getJwks?: (...args: unknown[]) => Promise<unknown>;
   } = {}
 ) {
   const app = Fastify({ logger: false });
   apps.push(app);
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
-  const getVerificationKeys = vi.fn(
-    options.getVerificationKeys ??
-      (async () => [{ kid: 'event', status: 'active', publicJwk: EVENT_KEY }])
-  );
+  const getJwks = vi.fn(options.getJwks ?? (async () => ({ keys: [EVENT_KEY] })));
   const requireJwt = vi.fn();
   app.decorate('ssf', {} as never);
-  app.decorate('signer', { getVerificationKeys } as unknown as never);
+  app.decorate('signer', { getJwks } as unknown as never);
   app.decorate('repositories', { ssfStreams: {} } as unknown as never);
   app.decorate('requireJwt', requireJwt as never);
   app.decorateRequest('realm', null);
@@ -59,12 +56,12 @@ async function buildApp(
   });
   await app.register(ssfRoutes, { prefix: '/ssf' });
   await app.ready();
-  return { app, getVerificationKeys, requireJwt };
+  return { app, getJwks, requireJwt };
 }
 
 describe('GET /ssf/jwks.json', () => {
   it("serves the realm's SET keys to anyone, cacheable for five minutes", async () => {
-    const { app, getVerificationKeys, requireJwt } = await buildApp();
+    const { app, getJwks, requireJwt } = await buildApp();
 
     const res = await app.inject({ method: 'GET', url: '/ssf/jwks.json' });
 
@@ -72,13 +69,14 @@ describe('GET /ssf/jwks.json', () => {
     expect(res.headers['content-type']).toBe('application/jwk-set+json; charset=utf-8');
     expect(res.headers['cache-control']).toBe('public, max-age=300');
     expect(res.json()).toEqual({ keys: [EVENT_KEY] });
-    expect(getVerificationKeys).toHaveBeenCalledWith('api', REALM_ID, 'event_signing');
+    // The published SET keys, a next key included (#542).
+    expect(getJwks).toHaveBeenCalledWith('api', REALM_ID, 'event_signing');
     // No receiver token is asked for.
     expect(requireJwt).not.toHaveBeenCalled();
   });
 
   it('answers as an unknown route does for a realm that does not run the transmitter', async () => {
-    const { app, getVerificationKeys } = await buildApp({ switchOn: false });
+    const { app, getJwks } = await buildApp({ switchOn: false });
 
     const res = await app.inject({ method: 'GET', url: '/ssf/jwks.json' });
 
@@ -94,12 +92,12 @@ describe('GET /ssf/jwks.json', () => {
       code: 'not_found',
       trace_id: expect.any(String),
     });
-    expect(getVerificationKeys).not.toHaveBeenCalled();
+    expect(getJwks).not.toHaveBeenCalled();
   });
 
   it('fails when the key store cannot be read, rather than serve no key', async () => {
     const { app } = await buildApp({
-      getVerificationKeys: async () => {
+      getJwks: async () => {
         throw new Error('the key store is down');
       },
     });

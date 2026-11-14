@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 
+import type { KeyRotationStore } from '../lib/key-rotation';
 import type {
   NewStoredKey,
   StoredKeyFilter,
@@ -10,14 +11,17 @@ import type { RealmKeyBootStore, StoredPublicKey } from '../lib/realm-key-boot';
 import type { WrappedSignerKey } from '../lib/signer-key-store';
 
 /**
- * A {@link RealmKeyBootStore} over a node-postgres pool, for this library's
- * integration tests. Never exported from the package entry point.
+ * A {@link RealmKeyBootStore} and {@link KeyRotationStore} over a node-postgres
+ * pool, for this library's integration tests. Never exported from the package
+ * entry point.
  *
  * This library may not import `@qauth-labs/infra-db`, so the tests write the
  * two tables with plain SQL against the real migrated schema. The repository
  * the signer's wiring passes in production (#461) writes the same columns.
  */
-export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
+export function createPgKeyStore(
+  pool: Pool
+): RealmKeyBootStore<PoolClient> & KeyRotationStore<PoolClient> {
   let savepoints = 0;
 
   return {
@@ -84,9 +88,13 @@ export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
         status: StoredKeyStatus;
         pair_id: string | null;
         publish_at: string | null;
+        activate_at: string | null;
+        retire_at: string | null;
+        unpublish_at: string | null;
         created_at: string;
       }>(
-        `SELECT kid, algorithm, status, pair_id, publish_at, created_at FROM realm_keys
+        `SELECT kid, algorithm, status, pair_id, publish_at, activate_at, retire_at, unpublish_at,
+                created_at FROM realm_keys
          WHERE ${conditions.join(' AND ')} ORDER BY created_at, id`,
         values
       );
@@ -97,6 +105,9 @@ export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
         status: row.status,
         pairId: row.pair_id,
         publishAt: row.publish_at === null ? null : Number(row.publish_at),
+        activateAt: row.activate_at === null ? null : Number(row.activate_at),
+        retireAt: row.retire_at === null ? null : Number(row.retire_at),
+        unpublishAt: row.unpublish_at === null ? null : Number(row.unpublish_at),
         createdAt: Number(row.created_at),
       }));
     },
@@ -145,6 +156,16 @@ export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
       await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
         `qauth:realm-keys:${realmId}`,
       ]);
+    },
+
+    async listRealmIds(afterRealmId: string | null, limit: number): Promise<readonly string[]> {
+      // The query of the realm keys repository's `listRealmIds` (#542).
+      const { rows } = await pool.query<{ realm_id: string }>(
+        `SELECT DISTINCT realm_id FROM realm_keys
+          WHERE $1::uuid IS NULL OR realm_id > $1::uuid ORDER BY realm_id LIMIT $2`,
+        [afterRealmId, limit]
+      );
+      return rows.map((row) => row.realm_id);
     },
 
     async anotherRealmPublishes(

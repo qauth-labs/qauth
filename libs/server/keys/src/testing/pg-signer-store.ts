@@ -61,10 +61,13 @@ export function createPgSignerStore(pool: Pool): PgSignerStore {
         algorithm: string;
         status: SignerKeyRecord['status'];
         pair_id: string | null;
+        activate_at: string | null;
         retire_at: string | null;
+        unpublish_at: string | null;
         created_at: string;
       }>(
-        `SELECT kid, algorithm, status, pair_id, retire_at, created_at FROM realm_keys
+        `SELECT kid, algorithm, status, pair_id, activate_at, retire_at, unpublish_at, created_at
+         FROM realm_keys
          WHERE realm_id = $1 AND purpose = $2 AND scope_id IS NOT DISTINCT FROM $3
          ORDER BY created_at, id`,
         [realmId, filter.purpose, filter.scopeId]
@@ -74,7 +77,9 @@ export function createPgSignerStore(pool: Pool): PgSignerStore {
         algorithm: row.algorithm,
         status: row.status,
         pairId: row.pair_id,
+        activateAt: epochMs(row.activate_at),
         retireAt: epochMs(row.retire_at),
+        unpublishAt: epochMs(row.unpublish_at),
         createdAt: Number(row.created_at),
       }));
     },

@@ -83,14 +83,33 @@ export interface StoredKeySummary {
   readonly pairId: string | null;
   /** Epoch ms; `null` for a purpose that is never published. */
   readonly publishAt: number | null;
+  /**
+   * Epoch ms. When the key starts, or started, to sign or encrypt; `null` for
+   * a `next` key. A rotation sets it a little ahead of the switch (#542).
+   */
+  readonly activateAt: number | null;
+  /** Epoch ms. When the key stops, or stopped, signing; `null` until it is retired. */
+  readonly retireAt: number | null;
+  /**
+   * Epoch ms. When a retired key's retention ends: a published key leaves its
+   * JWKS and its verification set, an unpublished one (the cookie HMAC, data
+   * at rest) stops verifying or decrypting. `null` until it is retired; on a
+   * retired published key, out at once; on a retired unpublished key, kept
+   * with no end (`StoredKeyStatusChange`).
+   */
+  readonly unpublishAt: number | null;
   /** Epoch ms. */
   readonly createdAt: number;
 }
 
 /**
  * One rotation step (#547): a `next` key becomes `active`, or an `active` key
- * becomes `retired`. A retired key that is published leaves its JWKS at
- * `unpublishAt`; an unpublished one passes `null`.
+ * becomes `retired`. `unpublishAt` ends a retired key's retention: a
+ * published key leaves its JWKS and its verification set then, and an
+ * unpublished one (the cookie HMAC, data at rest) stops verifying or
+ * decrypting then (#542). An unpublished key retired with `null` is kept with
+ * no end, as a data-at-rest key whose ciphertexts may live for ever is; a
+ * published one retired with `null` leaves its JWKS at once.
  */
 export type StoredKeyStatusChange =
   | { readonly status: 'active'; readonly activateAt: number }

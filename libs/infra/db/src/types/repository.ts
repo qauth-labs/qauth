@@ -1358,6 +1358,12 @@ export interface RealmKeysRepository {
    */
   listByRealm(realmId: string, filter?: RealmKeyFilter, tx?: DbClient): Promise<RealmKey[]>;
   /**
+   * Up to `limit` ids of the realms that hold at least one key, in ascending
+   * order, after `afterRealmId` (from the first when `null`): the realms the
+   * key rotation job (#542) pages through.
+   */
+  listRealmIds(afterRealmId: string | null, limit: number, tx?: DbClient): Promise<string[]>;
+  /**
    * The keys the signer's readiness check unwraps (#500), without their
    * wrapped material: for each KEK reference that a key in use (`active` or
    * `next`) is wrapped under, in any realm, the newest such key. At most

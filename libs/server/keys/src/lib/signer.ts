@@ -2,7 +2,7 @@ import type { HybridSignedToken } from '@qauth-labs/core-crypto';
 import type { JWK } from 'jose';
 
 import type { SignerCaller } from './signer-policy';
-import type { JwsSigningPurpose, VerificationKeyPurpose } from './signer-typ';
+import type { JwksPurpose, JwsSigningPurpose, VerificationKeyPurpose } from './signer-typ';
 
 /**
  * The signer: the one component that uses a realm's private keys (ADR-019
@@ -194,8 +194,15 @@ export interface Signer {
    * `REALM_JWKS_PURPOSES` inside its publication window, `next` keys included,
    * so relying parties learn a key before it signs. Never a `compromised` key.
    * The order is fixed, so every node returns the same document.
+   *
+   * With `purpose`, the key set of that purpose alone, by the same rules:
+   * `event_signing` is the SSF transmitter's JWKS, which SET receivers read
+   * (`JWKS_PURPOSES`).
+   *
+   * @throws SignerRequestRefusedError (`PURPOSE_NOT_ALLOWED`) for a purpose
+   *   no JWKS is served for
    */
-  getJwks(caller: SignerCaller, realmId: string): Promise<RealmJwks>;
+  getJwks(caller: SignerCaller, realmId: string, purpose?: JwksPurpose): Promise<RealmJwks>;
 
   /**
    * The JWKS of the keys QAuth signs client assertions with toward one

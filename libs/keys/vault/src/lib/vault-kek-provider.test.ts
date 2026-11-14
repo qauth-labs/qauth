@@ -791,7 +791,9 @@ describe('a refused token', () => {
                 algorithm: 'EdDSA',
                 status: 'active',
                 pairId: null,
+                activateAt: null,
                 retireAt: null,
+                unpublishAt: null,
                 createdAt: START,
               },
             ]
