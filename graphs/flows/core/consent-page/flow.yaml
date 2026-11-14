@@ -383,13 +383,13 @@ states:
       - guard: staleSession
         target: parkingRequest
         say: 'the cookie does not verify, or names a session that has ended, and is cleared'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:129
+        source: apps/auth-server/src/app/helpers/browser-session.ts:130
       - guard: accountDisabled
         target: parkingRequest
         say: >-
           the session's user is gone or disabled, or was disabled after the session began; the session is ended and
           its cookie cleared
-        source: apps/auth-server/src/app/helpers/browser-session.ts:144
+        source: apps/auth-server/src/app/helpers/browser-session.ts:145
       - target: showCheckingClient
         say: 'the session is live'
         source: apps/auth-server/src/app/routes/ui/consent.ts:458
@@ -677,13 +677,13 @@ states:
       - guard: staleSession
         target: parkingRequest
         say: 'the cookie does not verify, or names a session that has ended, and is cleared'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:129
+        source: apps/auth-server/src/app/helpers/browser-session.ts:130
       - guard: accountDisabled
         target: parkingRequest
         say: >-
           the session's user is gone or disabled, or was disabled after the session began; the session is ended and
           its cookie cleared
-        source: apps/auth-server/src/app/helpers/browser-session.ts:144
+        source: apps/auth-server/src/app/helpers/browser-session.ts:145
       - target: checkingCsrf
         say: 'the session is live'
         source: apps/auth-server/src/app/routes/ui/consent.ts:704
@@ -1067,7 +1067,7 @@ states:
     type: final
     title: Clear the stale session cookie and send the browser to sign in
     redirect: never
-    source: apps/auth-server/src/app/helpers/browser-session.ts:129
+    source: apps/auth-server/src/app/helpers/browser-session.ts:130
     response:
       status: 302
       headers:
@@ -1081,7 +1081,7 @@ states:
     title: End the session of a disabled or deleted user and send the browser to sign in
     description: The session is revoked and its side record deleted before the cookie is cleared.
     redirect: never
-    source: apps/auth-server/src/app/helpers/browser-session.ts:144
+    source: apps/auth-server/src/app/helpers/browser-session.ts:145
     response:
       status: 302
       headers:
