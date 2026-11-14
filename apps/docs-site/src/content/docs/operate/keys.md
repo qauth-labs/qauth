@@ -254,11 +254,10 @@ wrapping keys of each realm:
   `key.next_created` records it. A token signing key is in the realm JWKS from
   then on, an event signing key in the SSF transmitter's (`/ssf/jwks.json`); a
   cookie or data-at-rest key is never published.
-- Once the `next` key has been published for the whole window (day 90 for the
-  key the job created on day 83), the job switches: the `next` key becomes
-  `active` and the old key `retired`, and the event `key.rotated` records
-  both. A hybrid pair moves together, in one transaction, so the JWKS never
-  shows half of it.
+- Once the period has run and the `next` key has been published for the whole
+  window (day 90), the job switches: the `next` key becomes `active` and the
+  old key `retired`, and the event `key.rotated` records both. A hybrid pair
+  moves together, in one transaction, so the JWKS never shows half of it.
 - The retired key stays published and verifying for the retention (until day
   104), and longer when a token, cookie or ciphertext it made may live longer.
 - A job that was down past a due date creates the `next` key when it runs
@@ -295,19 +294,21 @@ Remove the key variables once the store holds the keys
 
 A manual rotation starts a key's rotation before it is due
 ([#544](https://github.com/qauth-labs/qauth/issues/544)). It is a security
-operation: it needs the `qauth:admin:security` scope and a fresh passkey
-approval bound to that exact rotation (the realm, the key's purpose, the admin
-who asks and a nonce), and a second admin's approval where the realm lists
-`keys.rotate` in its `admin.twoAdminMandatoryOperations` policy. It keeps the
-windows above:
+operation, so it runs only under an approval of that exact rotation (the
+realm, the key's purpose, who asks, and a nonce). Through the admin API, that
+will be the `qauth:admin:security` scope and a fresh passkey approval, and a
+second admin's approval where the realm lists `keys.rotate` in its
+`admin.twoAdminMandatoryOperations` policy. It keeps the windows above:
 
 - The `next` key is created and published at once, and signs nothing yet. Both
   keys of a hybrid pair are created together.
 - The scheduled rotation switches to it once it has been published for the
   whole pre-publication window (7 days), however much of the active key's
   period is left. The old key stays published for the retention after that.
-- If a `next` key waits already, it is the rotation's key: a second manual
-  rotation returns it and creates none.
+- If a `next` key waits already, it is the rotation's key: a manual rotation
+  returns it and creates none, and it keeps its own schedule. A `next` key
+  that the job or `auth-server:keys:create` made switches once the active
+  key's period has run, as the scheduled rotation does.
 
 It covers the keys the scheduled rotation rotates (token signing, event
 signing, cookie, data-at-rest, OID4VP response and agent wrapping keys). A key
@@ -319,9 +320,10 @@ the break-glass CLI come later. Until then, in this release the admin API
 rotates one kind of key only: a provider plugin's client-assertion key, which
 the provider issued ([below](#a-provider-issued-client-assertion-key)), and
 whose switch waits for no window, since the provider holds the key's public
-half already. For every other key, `auth-server:keys:create --status next` on
-a host that holds the KEK publishes a next key, and the scheduled rotation
-switches to it once it has been published for the whole window.
+half already. For every other key, `auth-server:keys:create --status next`
+publishes a next key, and the scheduled rotation activates it when it is due:
+once the active key's period has run and the next key has been published for
+the whole window.
 
 ### Emergency retirement
 
@@ -470,8 +472,8 @@ afterwards: a key in it would replace the one you created at the next boot.
 
 A realm has one active key per purpose and algorithm, so the command cannot
 replace one: a second active key is refused. A `next` key is published, and
-[the scheduled rotation](#the-scheduled-rotation) makes it active once it has
-been published for the whole pre-publication window.
+[the scheduled rotation](#the-scheduled-rotation) makes it active when it is
+due.
 
 ## A provider-issued client-assertion key
 

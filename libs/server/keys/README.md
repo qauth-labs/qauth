@@ -287,21 +287,30 @@ const record = await rotation.rotateNow({
 - It is a security operation (ADR-019 Decision 7), so it runs only under an `ApprovedOperation`: the
   approval of exactly this rotation. The type is required, so a call without one, or with the
   approval of another operation, does not compile; at run time a missing or malformed approval is
-  refused with an `OperationApprovalError` before anything is read. The admin API's approvals (#512)
-  implement it, and the break-glass CLI may on a key-holding host.
+  refused with an `OperationApprovalError` before anything is read. The interface is structural, so
+  the type cannot tell a real approval from an object shaped like one: the guarantee lies in
+  `consume`, which the admin API's approvals (#512) implement, and the break-glass CLI may on a
+  key-holding host.
 - The binding: `rotateNow` builds the canonical record `{ op: 'keys.rotate', realm, purpose, scope,
   requester, nonce }` from its own arguments, the approval's requester and its nonce
   (`keyRotationOperation`), and hands the SHA-256 of its RFC 8785 form (`operationDigest`) to
-  `approval.consume(digest, tx)`. The approval is filed for that digest, and the approver's passkey
-  challenge is derived from it, so it approves this realm, purpose, scope and requester only. A
-  golden test pins the record's bytes.
+  `approval.consume(digest, tx)`. A golden test pins the record's bytes. `consume` resolves only for
+  the digest of the record it rebuilds from what its approver approved, compared in constant time,
+  and records the use with a conditional write in `tx`, a transaction of the database the approval
+  lives in. The admin API's approval is filed for its own canonical request, which holds the same
+  realm, purpose, requester and nonce and whose hash the passkey challenge is derived from; the
+  admin route rebuilds this record from that request. To refuse, `consume` rejects with an
+  `OperationApprovalError`; any other error is a fault, passed on as it is.
 - For each algorithm the realm holds an active key of, it creates the `next` key at once (both keys
   of a hybrid pair together), which is published at once and signs nothing. The windows hold: the
-  scheduled rotation switches to it once it has been published for `prepublishMs`, however much of
-  the active key's period is left, and keeps the old key for the retention after that. A key that
+  new key carries the moment it may sign as its `activateAt`, and the scheduled rotation switches
+  to it then, once it has been published for `prepublishMs`, however much of the active key's
+  period is left; the old key stays for the retention after that. Any other `next` key (the job's
+  own, or one made with `createKey({ status: 'next' })`) waits for the period as well: only the
+  rotation's own factory call (`createPlannedNextKey`, not exported) writes the moment. A key that
   must go at once is retired in an emergency instead (#551).
-- A `next` key that waits already is the rotation's key: it is returned (`created: false`) and no
-  second one is made. The approval is consumed either way, and `onAudit` is called once per
+- A `next` key that waits already is the rotation's key: it is returned (`created: false`), on its
+  own schedule, and no second one is made. The approval is consumed either way, and `onAudit` is called once per
   operation, with the actor and the approval id, after the keys changed. Everything runs in one
   transaction under the realm's key lock: a refusal of `consume`, or a throw of either hook, leaves
   the keys as they were.

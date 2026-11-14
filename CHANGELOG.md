@@ -38,8 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signing, event signing, cookie, data-at-rest, OID4VP response and agent
   wrapping keys. Once the active key has served `KEY_ROTATION_PERIOD_DAYS`
   (90) less `KEY_PREPUBLISH_DAYS` (7), it creates and publishes the `next`
-  key; once the `next` key has been published for the whole window, it
-  switches. A retired key stays published and verifying for
+  key; once the period has run and the `next` key has been published for the
+  whole window, it switches. A retired key stays published and verifying for
   `KEY_RETIRED_RETENTION_DAYS` (14), or longer while a token, cookie or
   ciphertext it made may live: a cookie key for the realm's longest browser
   session, a data-at-rest key for good. A hybrid pair switches in one
@@ -56,22 +56,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Decisions 7 and 9). The key library's `rotateNow` starts a rotation of one
   of a realm's rotating key purposes before it is due: it creates the `next`
   key at once, published at once, with its hybrid companion when hybrid
-  signing is on, and the scheduled rotation switches to it once it has been
-  published for `KEY_PREPUBLISH_DAYS`, however much of the active key's
-  period is left. A `next` key that waits already is returned, and no second
-  one is made. It runs only under an `ApprovedOperation` of `keys.rotate`, an
-  interface the admin API's approvals implement: a call without one does not
-  compile and is refused at run time. The approval is consumed in the
-  transaction that creates the key, for the SHA-256 of the canonical record
-  `{ op, realm, purpose, scope, requester, nonce }` in its RFC 8785 form, to
-  which the approver's passkey challenge is bound. An audit hook is called
-  once per operation with the actor and the approval id, and an event hook
-  for each key created. No route calls it yet: the admin API route and the
-  break-glass CLI come later, and a key variable that holds a new signing
-  key keeps replacing the stored key at boot until emergency retirement
-  ([#551]) ships too. A `next` key made with `auth-server:keys:create
-  --status next` now also signs once its window has run, rather than at the
-  end of the active key's period.
+  signing is on. The key carries the moment it may sign as its `activate_at`,
+  and the scheduled rotation switches to it then: once it has been published
+  for `KEY_PREPUBLISH_DAYS`, however much of the active key's period is left.
+  Any other `next` key (the job's own, or one `auth-server:keys:create
+  --status next` made) still waits for the period too. A `next` key that waits
+  already is returned, on its own schedule, and no second one is made. It
+  runs only under an `ApprovedOperation` of `keys.rotate`, an interface the
+  admin API's approvals implement: a call without one does not compile and is
+  refused at run time. The approval is consumed in the transaction that
+  creates the key, for the SHA-256 of the canonical record `{ op, realm,
+  purpose, scope, requester, nonce }` in its RFC 8785 form, and consumes
+  itself only for the record it rebuilds from what its approver approved. An
+  audit hook is called once per operation with the actor and the approval
+  id, and an event hook for each key created. No route calls it yet: the
+  admin API route, whose approval implements the interface, and the
+  break-glass CLI come later, and a key variable that holds a new signing key
+  keeps replacing the stored key at boot until emergency retirement ([#551])
+  ships too.
 
 - **A migration policy check** ([#473], ADR-018 §5). CI now refuses a
   migration added since the last release tag that drops a table, column or
