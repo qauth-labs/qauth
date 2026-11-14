@@ -79,6 +79,7 @@ interface Fakes {
     readonly findSession: ReturnType<typeof vi.fn>;
     readonly currentSet: ReturnType<typeof vi.fn>;
     readonly findAllByUserId: ReturnType<typeof vi.fn>;
+    readonly recordSecurityChange: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -117,6 +118,7 @@ function fakes(
         (row) => ({ ...row, realmId: REALM_ID, userId: USER_ID })
       )
     ),
+    recordSecurityChange: vi.fn(async () => 1),
   };
   const fastify = {
     log: { error, warn: vi.fn(), info: vi.fn() },
@@ -138,6 +140,7 @@ function fakes(
       sessions: { nameNewCredential: ports.nameNewCredential, findById: ports.findSession },
       userRecoveryCodes: { currentSet: ports.currentSet },
       userCredentials: { findAllByUserId: ports.findAllByUserId },
+      adminGrants: { recordSecurityChange: ports.recordSecurityChange },
     },
   } as unknown as FastifyInstance;
   const request = {
@@ -437,6 +440,25 @@ describe('the recovery codes (#1109)', () => {
       {},
       { realmId: REALM_ID, userId: USER_ID, clientId: 'account-console', actor: 'user' }
     );
+  });
+
+  // The two-admin rule (#521): a new set stops an admin approving for 7
+  // days. The store keeps its own transaction, so the record comes first,
+  // and one that fails refuses the regeneration instead of being logged.
+  it('records the security change before the set, and regenerates nothing when it fails', async () => {
+    const f = fakes();
+    await regenerateAnsweredRecoveryCodes(f.fastify, f.request, f.factors, OWNER);
+    expect(f.ports.recordSecurityChange).toHaveBeenCalledWith(REALM_ID, USER_ID, undefined);
+    expect(f.ports.recordSecurityChange.mock.invocationCallOrder[0]).toBeLessThan(
+      f.ports.regenerate.mock.invocationCallOrder[0] ?? 0
+    );
+
+    const failing = fakes();
+    failing.ports.recordSecurityChange.mockRejectedValue(new Error('ECONNRESET'));
+    await expect(
+      regenerateAnsweredRecoveryCodes(failing.fastify, failing.request, failing.factors, OWNER)
+    ).rejects.toThrow('ECONNRESET');
+    expect(failing.ports.regenerate).not.toHaveBeenCalled();
   });
 
   it('is a conflict without a second factor, or when another set replaced the new one', async () => {

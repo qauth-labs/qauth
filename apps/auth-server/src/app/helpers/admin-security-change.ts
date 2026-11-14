@@ -16,7 +16,9 @@ import type { FastifyInstance } from 'fastify';
  * the event is where the change is recorded too ({@link SECURITY_CHANGE_EVENTS},
  * called by `emitUserEvent`): the account API, the hosted pages, the sign-in
  * flows and the admin API alike, and a later path that makes the change
- * records it by recording its event. The automatic disable of a password or
+ * records it by recording its event. The one change whose store keeps its
+ * own transaction, a new set of recovery codes, records it before the set
+ * is written (`regenerateRecoveryCodes`). The automatic disable of a password or
  * an authenticator app after too many wrong attempts (ADR-017 Decision 7) is
  * not a change of the account's credentials, and records nothing.
  */
@@ -29,7 +31,7 @@ export type SecurityChangeKind = 'credentials' | 'identifier' | 'contact-address
  * changed. They are the sources of the account security log's entries for a
  * changed password, a credential added or removed, new recovery codes and an
  * account linked or unlinked (`SECURITY_LOG_KINDS` of the account contract),
- * and `admin-security-change.test.ts` keeps the two in step: a source added
+ * and `admin/approvals/two-admin.test.ts` keeps the two in step: a source added
  * to one of those entries, `identifier_changed`'s once #690 registers it,
  * fails the test until it is listed here.
  */
