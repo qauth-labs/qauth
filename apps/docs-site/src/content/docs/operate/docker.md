@@ -741,8 +741,9 @@ Two client columns hold resource identifiers, and each does one job:
   `POST /api/clients`, a CIMD metadata document and the manifest's `cimd_clients`
   entries cannot, and a client created by one of them has an empty list.
 - The seed skips a client that already exists. To change the list of an existing
-  client, re-run its entry with `--rotate`, which also issues a new secret, or set
-  `oauth_clients.id_jag_targets` with an `UPDATE` by hand.
+  client, re-run its entry with `--rotate`, which also issues a new secret to a
+  client that authenticates with one, or set `oauth_clients.id_jag_targets` with
+  an `UPDATE` by hand.
 - Before migration 0027 the targets were read from `audience`. The migration
   copies nothing, so a client set up that way mints and redeems nothing until its
   targets are listed here.
@@ -797,8 +798,8 @@ client on `/oauth/authorize`. Set the profile on the client's entry in the
 - With `pkce_required: false` the seed prints a warning naming the client. PKCE
   stays required on the redirect flow for every client.
 - A `--rotate` entry that sets a profile on a client a developer, dynamic
-  registration or a CIMD document created is refused by name before a secret
-  is issued for it, and that client is left unchanged. The other entries run
+  registration or a CIMD document created is refused by name before anything
+  is written for it, and that client is left unchanged. The other entries run
   as usual, and the seed exits `1`.
 - The system client is provisioned only through `system_client` (or the
   migration runner): a `clients` entry with its id is refused before anything
@@ -811,10 +812,15 @@ client on `/oauth/authorize`. Set the profile on the client's entry in the
   `authorization_code` grant, and a written reason of at most 1000 characters
   exactly with a profile. Dynamic registration, `POST /api/clients` and a
   CIMD document can never set one.
+- A first-party client authenticates with `private_key_jwt`, so the seed
+  issues and prints no secret for it, on creation or on `--rotate`: the row
+  holds a hash no secret matches. QAuth 0.2.5 and earlier printed a secret
+  for every `clients` entry, a `private_key_jwt` or `none` one too; running
+  that entry once more with `--rotate` replaces its hash, and the printed
+  secret then verifies nowhere, whatever the client's method becomes later.
 - The seed skips a client that already exists. Changing or removing a profile
-  goes through `--rotate`, which also issues a new secret. Removing it revokes
-  every refresh token of the client not already revoked, in every family and
-  for every user.
+  goes through `--rotate`. Removing it revokes every refresh token of the
+  client not already revoked, in every family and for every user.
   Each change of the profile, its policy or its reason is recorded as a
   `client.first_party_changed` event (see [Events](/reference/events/)).
 

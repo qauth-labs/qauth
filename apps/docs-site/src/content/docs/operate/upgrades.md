@@ -1456,6 +1456,56 @@ change of the key changes no realm.
   realm a 0.2.4 node creates stores `null` under `1-rc.1`: 0.2.5 nodes read it
   as the key's page, and the next 0.2.5 boot stores it so.
 
+### Sign-up and reset sessions need migration 0075's table
+
+A sign-up or a password reset that finishes an authorization request now
+leaves a logout-only session, so the app's ID token carries a `sid` that
+back-channel logout can name
+([#1144](https://github.com/qauth-labs/qauth/issues/1144)). Migration 0075
+adds `sessions.kind` (`browser` by default, its CHECK added `NOT VALID`) and
+the `session_refresh_families` table, which links such a session to the refresh
+families its code started. It rewrites no row and reads no table; it locks
+`sessions` for a catalog change only, which takes moments. A node of the
+previous release keeps writing sessions during a rolling upgrade: they get the
+`browser` default.
+
+A deployment whose migration runner grants the roles' database users
+([above](#each-role-can-connect-as-a-database-user-of-its-own)), or whose roles
+connect as the one user that owns the tables, needs nothing. One that applies
+the grants by hand applies the statements of `databaseUserGrantStatements`
+from `@qauth-labs/infra-db` again, or these, before the new version starts:
+
+```sql
+GRANT SELECT, INSERT ON TABLE "session_refresh_families" TO <api_role>;
+GRANT SELECT ON TABLE "session_refresh_families" TO <web_role>;
+```
+
+Without them every authorization-code exchange fails on the `api` role, with
+`permission denied for table session_refresh_families` in the log: the
+exchange that starts a refresh family writes its link in the same statement,
+whatever the session's kind.
+
+### The kid denylist needs migration 0076's table
+
+Emergency key retirement keeps a per-realm denylist of retired key ids that
+every node reads ([#551](https://github.com/qauth-labs/qauth/issues/551)).
+Migration 0076 adds its table, `realm_key_denylist`, empty; it rewrites and
+locks no existing table.
+
+A deployment whose migration runner grants the roles' database users, or whose
+roles connect as the one user that owns the tables, needs nothing. One that
+applies the grants by hand gives every role's user the new table before the new
+version starts:
+
+```sql
+GRANT SELECT ON TABLE "realm_key_denylist" TO <web_role>, <api_role>, <admin_role>, <delivery_role>;
+GRANT SELECT, INSERT ON TABLE "realm_key_denylist" TO <signer_role>;
+```
+
+Without them a node cannot read the denylist, and it fails closed: it refuses
+every token it verifies, at once after it boots (its copy was never read), or
+30 seconds after its last good read. The deployment stops accepting tokens.
+
 ### Every node registers in the node list
 
 From this release on, a node compares its deployment-wide settings with every

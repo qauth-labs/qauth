@@ -13,6 +13,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { ownershipRefusalOf, recordFirstPartyChange } from '../lib/first-party/first-party-change';
 import { oauthClients, serviceAccounts } from '../lib/schema';
+import { unusableSecretHash } from '../lib/unusable-secret-hash';
 import type { Database, DbTransaction } from '../types';
 import {
   type ClientSpec,
@@ -29,11 +30,48 @@ function generateClientSecret(): string {
   return randomBytes(32).toString('hex');
 }
 
+/** A method that authenticates a client without a client secret. */
+export type SecretlessMethod = Exclude<
+  NonNullable<ClientSpec['token_endpoint_auth_method']>,
+  'client_secret_basic' | 'client_secret_post'
+>;
+
+/**
+ * The method of an entry that authenticates without a client secret, or
+ * `undefined` for one that authenticates with a secret (#1138):
+ * `client_secret_basic`, `client_secret_post`, or no method, which the seed
+ * writes as `client_secret_basic`. The same split as the auth server's
+ * `acceptsClientSecret`: any other method, `private_key_jwt`, `none` or one
+ * added later, gets no secret.
+ */
+export function secretlessMethodOf(spec: ClientSpec): SecretlessMethod | undefined {
+  const method = spec.token_endpoint_auth_method;
+  switch (method) {
+    case undefined:
+    case 'client_secret_basic':
+    case 'client_secret_post':
+      return undefined;
+    default:
+      return method;
+  }
+}
+
 export type Action = 'created' | 'rotated' | 'skipped' | 'refused';
 export type Issued = {
   clientId: string;
-  secret: string;
   action: Action;
+  /**
+   * The plaintext secret, printed once and never stored: only for a created
+   * or rotated entry that authenticates with a secret.
+   */
+  secret?: string;
+  /**
+   * The method of a created or rotated entry that authenticates without a
+   * secret (#1138). It was written with an unusable hash, so no secret is
+   * issued or printed for it, and a rotation replaces the hash of any secret
+   * an earlier release printed for it.
+   */
+  authenticatesWith?: SecretlessMethod;
   /**
    * Why a `--rotate` entry was refused. Nothing was written.
    * - `developer_owned`, `dynamic`, `cimd` (#631): the entry sets a
@@ -73,6 +111,8 @@ type OperatorDb = NodePgDatabase<any>;
  *
  * argon2 hashing is deliberately done *inside* the transaction only after
  * we've decided we need a new hash — so the skip path incurs no CPU cost.
+ * Only an entry that authenticates with a secret gets one
+ * ({@link secretlessMethodOf}); any other is written with an unusable hash.
  */
 export async function provisionClient(
   db: OperatorDb,
@@ -105,13 +145,13 @@ export async function provisionClient(
       .for('no key update');
 
     if (existing && !rotate) {
-      return { clientId: spec.client_id, secret: '', action: 'skipped' as const };
+      return { clientId: spec.client_id, action: 'skipped' as const };
     }
 
     // #522: a service account's client is written whole by the host's
     // `service-accounts` command, `private_key_jwt` with no secret anyone
-    // holds; a rotation from an entry would issue it a secret. Refused, by
-    // name, before one is made.
+    // holds; a rotation from an entry would rewrite it, a secret included
+    // for a secret-based entry. Refused, by name, before anything is made.
     if (existing) {
       const [owner] = await tx
         .select({ id: serviceAccounts.id })
@@ -121,7 +161,6 @@ export async function provisionClient(
       if (owner !== undefined) {
         return {
           clientId: spec.client_id,
-          secret: '',
           action: 'refused' as const,
           refusal: 'service_account' as const,
         };
@@ -134,7 +173,7 @@ export async function provisionClient(
     const refusal =
       existing && spec.first_party_profile !== undefined ? ownershipRefusalOf(existing) : null;
     if (refusal !== null) {
-      return { clientId: spec.client_id, secret: '', action: 'refused' as const, refusal };
+      return { clientId: spec.client_id, action: 'refused' as const, refusal };
     }
 
     // #891: a rotation rewrites every column from the entry, and an entry
@@ -145,14 +184,22 @@ export async function provisionClient(
     if (existing && dropsClientCredentialsScopes(existing, spec)) {
       return {
         clientId: spec.client_id,
-        secret: '',
         action: 'refused' as const,
         refusal: 'client_credentials_scopes_dropped' as const,
       };
     }
 
-    const plaintextSecret = generateClientSecret();
-    const clientSecretHash = await hash(plaintextSecret, ARGON2_OPTS);
+    // #1138: only an entry that authenticates with a secret gets one. Any
+    // other gets the unusable hash the other operator paths store, so no
+    // secret exists that a later change of its method to a secret-based one
+    // would let in, and a rotation replaces the hash of a secret an earlier
+    // release printed for it.
+    const authenticatesWith = secretlessMethodOf(spec);
+    const plaintextSecret = authenticatesWith === undefined ? generateClientSecret() : undefined;
+    const clientSecretHash =
+      plaintextSecret === undefined
+        ? unusableSecretHash()
+        : await hash(plaintextSecret, ARGON2_OPTS);
     const after = firstPartyColumnsOf(spec);
 
     let id: string;
@@ -197,8 +244,8 @@ export async function provisionClient(
     );
     return {
       clientId: spec.client_id,
-      secret: plaintextSecret,
       action,
+      ...(plaintextSecret === undefined ? { authenticatesWith } : { secret: plaintextSecret }),
       firstPartyChanged: change.changed,
       revokedTokenCount: change.revokedTokenCount,
     };

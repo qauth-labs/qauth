@@ -31,8 +31,6 @@
  * shared validation rules, so the migration runner bundles it
  * (`@qauth-labs/infra-db/system-client`).
  */
-import { randomBytes } from 'node:crypto';
-
 import {
   DEVELOPER_API_AUDIENCE,
   isLoopbackHost,
@@ -52,6 +50,7 @@ import {
   recordFirstPartyChange,
 } from '../first-party/first-party-change';
 import { oauthClients, realms } from '../schema/core';
+import { unusableSecretHash } from '../unusable-secret-hash';
 import { publicJwkSchema } from './public-jwk';
 
 /** The `client_id` the auth server uses when `SYSTEM_CLIENT_ID` is unset. */
@@ -139,18 +138,6 @@ const READ_COMMITTED = { isolationLevel: 'read committed' } as const;
 /** Any drizzle node-postgres database, whatever schema generic it was built with. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type OperatorDb = NodePgDatabase<any>;
-
-/**
- * A value for the NOT NULL `client_secret_hash` that no secret can match,
- * shaped like an argon2id hash as the CIMD sentinel is. The client
- * authenticates with `private_key_jwt`, which the auth server checks before
- * any secret, so no secret exists for it.
- */
-function unusableSecretHash(): string {
-  const salt = randomBytes(16).toString('base64').replace(/=+$/, '');
-  const digest = randomBytes(32).toString('base64').replace(/=+$/, '');
-  return `$argon2id$v=19$m=65536,t=3,p=4$${salt}$${digest}`;
-}
 
 /** The columns this provisioner owns, as the spec sets them. */
 function ownedColumns(spec: SystemClientSpec) {

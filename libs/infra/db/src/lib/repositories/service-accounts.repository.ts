@@ -1,5 +1,3 @@
-import { randomBytes } from 'node:crypto';
-
 import {
   BadRequestError,
   extractConstraintName,
@@ -18,6 +16,7 @@ import {
   serviceAccounts,
 } from '../schema/service-accounts';
 import { publicJwkSchema } from '../system-client/public-jwk';
+import { unusableSecretHash } from '../unusable-secret-hash';
 
 /** A stored service account (issue #522). */
 export type ServiceAccount = InferSelectModel<typeof serviceAccounts>;
@@ -147,18 +146,6 @@ const keysSchema = z
     message:
       "a service account's client authenticates with private_key_jwt: give exactly one of jwks and jwksUri, its public keys",
   });
-
-/**
- * A value for the NOT NULL `client_secret_hash` that no secret can match,
- * shaped like an argon2id hash, as the system client's provisioner writes
- * one. The client authenticates with `private_key_jwt`, which the auth server
- * checks before any secret, and refuses a secret for (`client-auth.ts`).
- */
-function unusableSecretHash(): string {
-  const salt = randomBytes(16).toString('base64').replace(/=+$/, '');
-  const digest = randomBytes(32).toString('base64').replace(/=+$/, '');
-  return `$argon2id$v=19$m=65536,t=3,p=4$${salt}$${digest}`;
-}
 
 /** Check `input` before anything is read, and return its keys in their stored form. */
 function checkedInput(input: NewServiceAccount): {
