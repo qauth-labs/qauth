@@ -42,14 +42,26 @@ or the database holds no key yet. A first server boot creates the keys, so
 start the server once before you enrol the first admin.
 
 The process registers no route and opens no listening port. It makes no HTTP
-call: it connects to the database, and for `retire-key` to Redis.
+call of its own: it connects to the database, for `retire-key` to Redis, and
+to the key service when a KEK adapter holds the KEK there.
 
 Run it once every node runs the release that ships it. A node of an earlier
 release does not know the `admin.break_glass_used` event.
 
+Run it with `tsx` directly, in an interactive shell. `enrol-admin` prints a
+live token, so keep its output out of everything that stores it:
+
+- **Not as an Nx task.** Nx keeps every task's terminal output on disk, so
+  there is no Nx target for the CLI, and `enrol-admin` refuses to run under
+  one (exit code 2).
+- **Not as a one-off container or job** whose output goes to a log driver or
+  a log store: `docker exec -it` into a running container, or a shell on the
+  host, prints only to your terminal.
+- **Not through `script`, `tee`** or a terminal that records its session.
+
 ```console
-# From a checkout, with the server's environment:
-pnpm nx run auth-server:break-glass -- enrol-admin --realm=operator --role=security-admin
+# From apps/auth-server in a checkout, with the server's environment:
+pnpm exec tsx src/break-glass.ts enrol-admin --realm operator --role security-admin
 
 # In the auth-server image, from /app:
 tsx src/break-glass.ts enrol-admin --realm operator --role security-admin
@@ -63,7 +75,7 @@ Enrol the first in the operator realm
 administers:
 
 ```console
-pnpm nx run auth-server:break-glass -- enrol-admin --realm=operator --role=security-admin
+tsx src/break-glass.ts enrol-admin --realm operator --role security-admin
 ```
 
 | Flag           | What it sets                                                                                                        |
@@ -91,9 +103,21 @@ random bytes. The database keeps only their SHA-256 hash, the token works
 once and expires after an hour by default, and it travels in the URL's
 fragment, which a browser sends to no server, proxy log or `Referer`. Whoever
 opens the URL first registers the account's first passkey, so hand it to the
-new admin only, and run the command again if it leaks or expires: each run
-creates a new account. An account whose URL expired unused cannot sign in, as
-it holds no credential.
+new admin only.
+
+A URL that expired unused leaves an account that cannot sign in, as it holds
+no credential: run the command again for a new account and URL. **A URL that
+leaked stays valid until it expires**, and running the command again does
+not change that: delete its account at once, before anyone uses the URL. As
+the database owner, with the account id the command printed:
+
+```sql
+DELETE FROM users WHERE id = '<account id>';
+```
+
+The enrolment and the grant go with the account. This deletion is not a
+break-glass run and writes no audit row: note it with the incident. Then
+enrol again.
 
 :::caution[The enrolment page ships separately]
 The page that turns the URL into the account's first passkey is the
@@ -113,7 +137,7 @@ credentials, identifier or contact address approves once 7 days have passed;
 or the host's holder enrols a new admin with this command.
 
 ```console
-pnpm nx run auth-server:break-glass -- enrol-admin --realm=acme --role=security-admin
+tsx src/break-glass.ts enrol-admin --realm acme --role security-admin
 ```
 
 The new admin approves only after [the 7-day wait](#the-7-day-wait). Until
@@ -127,7 +151,7 @@ from this command.
 ## Retire a key in an emergency
 
 ```console
-pnpm nx run auth-server:break-glass -- retire-key --realm=acme --kid=<kid> --confirm
+tsx src/break-glass.ts retire-key --realm acme --kid <kid> --confirm
 ```
 
 It runs the emergency retirement of
@@ -159,19 +183,26 @@ writes:
   operation `breakGlass.enrolAdmin` or `breakGlass.retireKey`, the class
   `security`, and a diff whose `after` holds the run: the command, its
   arguments (a secret one masked; no option of the two commands is one), the
-  operating-system user's name and uid, and the host name. For
+  operating-system user's name and uid, the process's audit login uid
+  (`/proc/self/loginuid` on Linux, which `sudo` and `su` keep, or `null`),
+  the user `sudo` reports it ran the command for (`SUDO_USER`, as the
+  environment reports it, or `null`), and the host name. For
   `enrol-admin` it names the account, the role and the realm of the grant
   and the enrolment's expiry; for `retire-key` the kid and the digest of the
   retirement, which is the row's request digest too. The row's trace id is
-  the run id the command prints;
+  the run id each command prints first;
 - **a critical `admin.break_glass_used` event**
   ([Events](/reference/events/#adminbreak_glass_used-v1-rc0)), naming the
   command, with the operating-system user as its `operator_cli` actor. It is
-  an admin event of the realm, in the realm's admin chain, and every event
-  route of the realm carries it, as it carries every admin event: among them
-  every SSF stream of the realm that requested
+  an admin event of the realm's event store, in its admin chain, and every
+  route that reads the store sends it: the event API, webhooks, and every
+  SSF stream of the realm that requested
   `urn:qauth:secevent:break-glass-used:v1-rc.0`
-  ([SSF events](/reference/ssf-events/)).
+  ([SSF events](/reference/ssf-events/)). OpenTelemetry export does not:
+  a server node exports the events it writes itself, after their commit,
+  and the CLI exports nothing, as it makes no outbound call. Watch the
+  event API, a webhook or an SSF stream for it, not only an OpenTelemetry
+  pipeline.
 
 If either cannot be written, the run aborts with nothing changed. The change
 then writes its own record: `retire-key` the `keys.retire` row and a
