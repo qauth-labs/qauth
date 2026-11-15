@@ -59,6 +59,11 @@ import {
 } from '../../helpers/id-jag';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import {
+  registeredResourcesOf,
+  scopeCeilingAt,
+  withoutUngrantedResourceScopes,
+} from '../../helpers/protected-resources';
+import {
   ADMIN_ACCESS_TOKEN_MAX_LIFESPAN_SECONDS,
   type TokenLifetimes,
   tokenLifetimesOf,
@@ -73,11 +78,6 @@ import {
   refreshTokenExpiresAt,
   rotatedRefreshTokenExpiresAt,
 } from '../../helpers/refresh-family';
-import {
-  registeredResourcesOf,
-  scopeCeilingAt,
-  withoutUngrantedResourceScopes,
-} from '../../helpers/protected-resources';
 import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
