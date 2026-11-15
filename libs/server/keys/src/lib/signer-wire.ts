@@ -89,6 +89,14 @@ const SMALL_REQUEST_BYTES = 64 * 1024;
 const LARGE_REQUEST_BYTES = 2 * 1024 * 1024;
 
 /**
+ * What a sealed ciphertext adds to the plaintext it holds: the version, the
+ * `kid` (at most 255 characters), the IV and the GCM tag, each in base64url.
+ * A `decrypt` carries the ciphertext where an `encrypt` carried the plaintext,
+ * so the largest value an `encrypt` takes must still open.
+ */
+const DATA_ENVELOPE_OVERHEAD_BYTES = 1024;
+
+/**
  * The largest request body, in bytes of its JSON, the signer service takes
  * for each operation. A remote signer refuses a larger request before it is
  * sent (`REQUEST_TOO_LARGE`), and the service answers `413` to one that
@@ -104,7 +112,7 @@ export const SIGNER_REQUEST_BODY_LIMITS: Readonly<Record<SignerOperation, number
   getCookieDerivedKey: SMALL_REQUEST_BYTES,
   verifyCookieMac: SMALL_REQUEST_BYTES,
   encrypt: LARGE_REQUEST_BYTES,
-  decrypt: LARGE_REQUEST_BYTES,
+  decrypt: LARGE_REQUEST_BYTES + DATA_ENVELOPE_OVERHEAD_BYTES,
   getVerificationKeys: SMALL_REQUEST_BYTES,
   getJwks: SMALL_REQUEST_BYTES,
   getUpstreamJwks: SMALL_REQUEST_BYTES,
