@@ -398,3 +398,83 @@ describe('ResourceGuard.assertScopes', () => {
     expect(() => guard.assertScopes(claims, ['mcp:admin'])).toThrow(InsufficientScopeError);
   });
 });
+
+// #1088 — a guard that does not set `scopesSupported` must answer exactly as
+// 0.2.2 does. The literals below are what 0.2.2 gives; the 401 and 403 of each
+// configuration, the `DPoP` scheme's 401 and the scopes each error carries.
+describe('ResourceGuard — challenges without scopesSupported are those of 0.2.2', () => {
+  const METADATA = `resource_metadata="${RESOURCE}/.well-known/oauth-protected-resource"`;
+  const unscoped: ValidatedToken = { scopes: [], audience: [RESOURCE], raw: {} };
+
+  const cases: {
+    requiredScopes?: string[];
+    scopes: string[];
+    named: string[];
+    unauthenticated: string;
+    insufficient: string | null;
+  }[] = [
+    { scopes: [], named: [], unauthenticated: `Bearer ${METADATA}`, insufficient: null },
+    {
+      scopes: ['mcp:admin'],
+      named: ['mcp:admin'],
+      unauthenticated: `Bearer scope="mcp:admin", ${METADATA}`,
+      insufficient: `Bearer error="insufficient_scope", scope="mcp:admin", ${METADATA}`,
+    },
+    {
+      requiredScopes: ['mcp:read'],
+      scopes: [],
+      named: ['mcp:read'],
+      unauthenticated: `Bearer scope="mcp:read", ${METADATA}`,
+      insufficient: `Bearer error="insufficient_scope", scope="mcp:read", ${METADATA}`,
+    },
+    {
+      requiredScopes: ['mcp:read', 'offline_access', 'mcp:read'],
+      scopes: [],
+      named: ['mcp:read', 'offline_access'],
+      unauthenticated: `Bearer scope="mcp:read", ${METADATA}`,
+      insufficient: `Bearer error="insufficient_scope", scope="mcp:read", ${METADATA}`,
+    },
+    {
+      requiredScopes: ['mcp:read', 'offline_access', 'mcp:read'],
+      scopes: ['mcp:admin', 'mcp:read'],
+      named: ['mcp:read', 'offline_access', 'mcp:admin'],
+      unauthenticated: `Bearer scope="mcp:read mcp:admin", ${METADATA}`,
+      insufficient: `Bearer error="insufficient_scope", scope="mcp:read mcp:admin", ${METADATA}`,
+    },
+  ];
+
+  it.each(cases)(
+    'requiredScopes $requiredScopes, call scopes $scopes',
+    async ({ requiredScopes, scopes, named, unauthenticated, insufficient }) => {
+      const guard = new ResourceGuard({
+        resource: RESOURCE,
+        authorizationServer: ISSUER,
+        ...(requiredScopes ? { requiredScopes } : {}),
+        fetch: jwksFetch({ keys: [publicJwk] }),
+      });
+
+      for (const authorization of [undefined, 'DPoP abc']) {
+        const missing = await guard.authenticate(authorization, scopes).then(
+          () => expect.unreachable('should have thrown'),
+          (error: unknown) => error
+        );
+        expect(missing).toBeInstanceOf(MissingTokenError);
+        expect((missing as MissingTokenError).requiredScopes).toEqual(named);
+        expect(guard.challengeHeader(missing as MissingTokenError)).toBe(unauthenticated);
+      }
+
+      if (insufficient === null) {
+        expect(() => guard.assertScopes(unscoped, scopes)).not.toThrow();
+        return;
+      }
+      try {
+        guard.assertScopes(unscoped, scopes);
+        expect.unreachable('should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(InsufficientScopeError);
+        expect((error as InsufficientScopeError).requiredScopes).toEqual(named);
+        expect(guard.challengeHeader(error as InsufficientScopeError)).toBe(insufficient);
+      }
+    }
+  );
+});

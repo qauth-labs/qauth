@@ -589,3 +589,35 @@ describe('resource-guard Fastify plugin — sender-constrained tokens (RFC 9449 
     });
   });
 });
+
+// #1088 — a plugin registered without `scopesSupported` serves what 0.2.2
+// serves: the metadata route's bytes, and the 401 of each kind of route.
+describe('resource-guard Fastify plugin — without scopesSupported, as 0.2.2', () => {
+  const BASE = `"resource":"${RESOURCE}","authorization_servers":["${ISSUER}"],"bearer_methods_supported":["header"]`;
+
+  it.each([
+    [[], `{${BASE}}`, `Bearer resource_metadata="${METADATA_URL}"`],
+    [
+      ['mcp:read'],
+      `{${BASE},"scopes_supported":["mcp:read"]}`,
+      `Bearer scope="mcp:read", resource_metadata="${METADATA_URL}"`,
+    ],
+  ])('requiredScopes %j', async (requiredScopes, document, challenge) => {
+    app = await buildApp(requiredScopes);
+
+    const prm = await app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource' });
+    expect(prm.statusCode).toBe(200);
+    expect(prm.body).toBe(document);
+
+    const bearer = await app.inject({ method: 'GET', url: '/data' });
+    expect(bearer.statusCode).toBe(401);
+    expect(bearer.headers['www-authenticate']).toBe(challenge);
+    expect(bearer.body).toBe('{}');
+
+    const stepUp = await app.inject({ method: 'POST', url: '/admin' });
+    expect(stepUp.statusCode).toBe(401);
+    expect(stepUp.headers['www-authenticate']).toBe(
+      `Bearer scope="${[...requiredScopes, 'mcp:admin'].join(' ')}", resource_metadata="${METADATA_URL}"`
+    );
+  });
+});

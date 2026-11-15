@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ResourceGuard } from './core';
 import {
   buildProtectedResourceMetadata,
   metadataPathForResource,
@@ -102,5 +103,33 @@ describe('metadataUrlForResource', () => {
     expect(metadataUrlForResource('https://host.example.com/mcp/memory')).toBe(
       'https://host.example.com/.well-known/oauth-protected-resource/mcp/memory'
     );
+  });
+});
+
+// #1088 — without `scopesSupported`, the guard's document is the one 0.2.2
+// serves, byte for byte: `requiredScopes` as given (a repeated entry repeated,
+// as 0.2.2 lists it), `offline_access` left out, and no `scopes_supported`
+// key when nothing is left to list.
+describe('ResourceGuard.getProtectedResourceMetadata without scopesSupported (as 0.2.2)', () => {
+  const RESOURCE = 'https://mcp.example.com';
+  const ISSUER = 'https://auth.example.com';
+  const BASE = `"resource":"${RESOURCE}","authorization_servers":["${ISSUER}"],"bearer_methods_supported":["header"]`;
+
+  it.each([
+    [undefined, `{${BASE}}`],
+    [[], `{${BASE}}`],
+    [['offline_access'], `{${BASE}}`],
+    [['mcp:read'], `{${BASE},"scopes_supported":["mcp:read"]}`],
+    [
+      ['mcp:read', 'offline_access', 'mcp:write', 'mcp:read'],
+      `{${BASE},"scopes_supported":["mcp:read","mcp:write","mcp:read"]}`,
+    ],
+  ])('requiredScopes %j', (requiredScopes, document) => {
+    const guard = new ResourceGuard({
+      resource: RESOURCE,
+      authorizationServer: ISSUER,
+      ...(requiredScopes ? { requiredScopes } : {}),
+    });
+    expect(JSON.stringify(guard.getProtectedResourceMetadata())).toBe(document);
   });
 });
