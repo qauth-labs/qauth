@@ -98,7 +98,7 @@ describe('resolveMailBrand (#637)', () => {
   });
 
   it('drops a string too long or not a string', () => {
-    expect(resolveMailBrand({ name: 'x'.repeat(65) }).name).toBe(DEFAULT_MAIL_BRAND.name);
+    expect(resolveMailBrand({ name: 'x'.repeat(101) }).name).toBe(DEFAULT_MAIL_BRAND.name);
     expect(resolveMailBrand({ name: 42 }).name).toBe(DEFAULT_MAIL_BRAND.name);
     expect(resolveMailBrand({ footer: 'x'.repeat(281) }).footer).toBeUndefined();
   });
