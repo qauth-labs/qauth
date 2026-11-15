@@ -66,8 +66,12 @@ export type SsfMemberSource =
  * - `key`: the key `data.keyId` names, as an `opaque` identifier. Every stream
  *   of the realm that requested the event receives it, whatever subjects it
  *   added: a key concerns everyone who verifies the realm's tokens.
+ * - `realm`: the realm itself, as a `uri` identifier holding its issuer; a
+ *   realm with no issuer sends none. Every stream of the realm that requested
+ *   the event receives it, as for a key: a break-glass use (#602) concerns
+ *   everyone who trusts the realm.
  */
-export type SsfSubjectSource = 'subject' | 'client' | 'key';
+export type SsfSubjectSource = 'subject' | 'client' | 'key' | 'realm';
 
 /** Who invoked the event, as CAEP 1.0 §2 names it in `initiating_entity`. */
 export const INITIATING_ENTITIES = ['admin', 'user', 'policy', 'system'] as const;
