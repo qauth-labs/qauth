@@ -409,6 +409,8 @@ async function namesSignIn(
   const session = await request.server.repositories.sessions.findById(realmId, sid);
   return (
     session !== undefined &&
+    // A logout-only session (#1144) is no sign-in.
+    (session.kind === undefined || session.kind === 'browser') &&
     session.userId === userId &&
     Math.floor(session.authTime / 1000) * 1000 === authTime
   );

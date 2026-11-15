@@ -627,8 +627,9 @@ export async function decideAuthorization(
         codeChallengeMethod: query.code_challenge_method,
         nonce: query.nonce ?? null,
         // The session's authentication (`auth_time`, `acr`, its end and
-        // `sid`), or none of it for a registration (#640).
-        ...subjectGrant(session),
+        // `sid`), or none of it for a registration or a reset (#640), with a
+        // logout-only session's `sid` instead (#1144).
+        ...subjectGrant(session, { realm, request }),
         scopes,
         // RFC 8707: bind the resource indicator(s) to the authorization
         // code so /oauth/token can set the access token's `aud` claim to

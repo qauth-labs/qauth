@@ -25,6 +25,7 @@ export {
   sessionEpochCacheKey,
   type SessionEpochOwner,
   type SessionEpochs,
+  type SessionKind,
   type SessionMetrics,
   type SessionPage,
   type SessionPageRequest,

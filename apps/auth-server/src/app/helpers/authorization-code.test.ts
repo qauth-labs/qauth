@@ -90,7 +90,8 @@ function stub(
 /** The row a grant writes, but for its code and its expiry. */
 function rowOf(grant: AuthorizationCodeGrant) {
   const { session, ...binding } = grant;
-  return { ...binding, codeChallengeMethod: 'S256', sessionId: session?.sid ?? null };
+  const sid = session !== null && 'sid' in session ? session.sid : null;
+  return { ...binding, codeChallengeMethod: 'S256', sessionId: sid };
 }
 
 afterEach(() => {
@@ -219,6 +220,58 @@ describe('mintAuthorizationCode (ADR-017 Decision 10)', () => {
 
     await expect(mintAuthorizationCode(fastify, SESSION_GRANT)).resolves.toBe('session_ended');
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('writes a registration’s logout-only session in the code’s transaction, then binds it like a browser session (#1144)', async () => {
+    const { fastify, create, recordClient, tx } = stub();
+    const sessionCreate = vi.fn(async (row: Record<string, unknown>) => ({
+      ...row,
+      id: 'logout-only-sid',
+    }));
+    (fastify.repositories.sessions as unknown as { create: typeof sessionCreate }).create =
+      sessionCreate;
+
+    const minted = await mintAuthorizationCode(fastify, {
+      ...GRANT,
+      authTime: null,
+      amr: null,
+      sessionExpiresAt: 1_700_086_400_000,
+      session: {
+        realmId: 'realm-1',
+        logoutOnly: 'registration',
+        expiresAt: 1_700_086_400_000,
+        ipAddress: '192.0.2.7',
+        userAgent: 'Firefox',
+      },
+    });
+
+    expect(minted).toEqual({ code: expect.any(String) });
+    expect(sessionCreate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        realmId: 'realm-1',
+        userId: 'user-1',
+        kind: 'registration',
+        amr: [],
+        assuranceLevel: null,
+        ipAddress: '192.0.2.7',
+        userAgent: 'Firefox',
+        expiresAt: 1_700_086_400_000,
+      }),
+      tx
+    );
+    expect(recordClient).toHaveBeenCalledExactlyOnceWith(
+      'realm-1',
+      'logout-only-sid',
+      'client-row-1',
+      tx
+    );
+    // No authentication on the code: only the session's `sid` and end.
+    expect(create.mock.calls[0][0]).toMatchObject({
+      sessionId: 'logout-only-sid',
+      authTime: null,
+      amr: null,
+      sessionExpiresAt: 1_700_086_400_000,
+    });
   });
 
   it('records no client for a code with no session (the Bearer path, #549)', async () => {

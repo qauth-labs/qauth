@@ -44,6 +44,7 @@ function overview(overrides: Partial<AccountOverview> = {}): AccountOverview {
     sessions: [
       {
         sid: SID,
+        kind: 'browser',
         current: true,
         createdAt: Date.UTC(2026, 10, 3),
         lastSeenAt: Date.UTC(2026, 10, 3),
@@ -53,6 +54,7 @@ function overview(overrides: Partial<AccountOverview> = {}): AccountOverview {
       },
       {
         sid: OTHER_SID,
+        kind: 'browser',
         current: false,
         createdAt: Date.UTC(2026, 10, 4),
         lastSeenAt: Date.UTC(2026, 10, 4),
@@ -209,6 +211,49 @@ describe('accountPage (#844)', () => {
       notice: 'password_changed',
     });
     expect(page).toContain(ACCOUNT_NOTICES.password_changed);
+  });
+});
+
+describe('a logout-only session on the overview (#1144)', () => {
+  it('names a sign-up or a reset, never "This browser", and can end it', () => {
+    const page = accountPage({
+      cspNonce: NONCE,
+      realmHost: REALM_HOST,
+      csrf: CSRF,
+      passkeysOn: true,
+      overview: overview({
+        sessions: [
+          {
+            sid: SID,
+            kind: 'registration',
+            current: false,
+            createdAt: Date.UTC(2026, 10, 3),
+            lastSeenAt: Date.UTC(2026, 10, 3),
+            userAgent: 'Firefox',
+            ipAddress: '192.0.2.1',
+            clients: ['Photos'],
+          },
+          {
+            sid: OTHER_SID,
+            kind: 'reset',
+            current: false,
+            createdAt: Date.UTC(2026, 10, 4),
+            lastSeenAt: Date.UTC(2026, 10, 4),
+            userAgent: null,
+            ipAddress: null,
+            clients: [],
+          },
+        ],
+      }),
+    });
+
+    expect(page).toContain('<strong>A sign-up</strong>');
+    expect(page).toContain('<strong>A password reset</strong>');
+    expect(page).not.toContain('This browser');
+    expect(page).not.toContain('<strong>Firefox</strong>');
+    expect(page).toContain('Signed in to: Photos');
+    expect(page).toContain(`action="${ACCOUNT_PAGE_PATH}/sessions/${SID}/end"`);
+    expect(page).toContain(`action="${ACCOUNT_PAGE_PATH}/sessions/${OTHER_SID}/end"`);
   });
 });
 
