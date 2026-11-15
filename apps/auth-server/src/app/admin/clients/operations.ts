@@ -8,7 +8,10 @@ import {
 } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
-import { ClientManagedByDocumentError } from '../../helpers/admin-client-errors';
+import {
+  ClientManagedByDocumentError,
+  ClientOfServiceAccountError,
+} from '../../helpers/admin-client-errors';
 import type {
   AdminOperationDefinition,
   Classification,
@@ -518,13 +521,42 @@ export function assertShownInFull(
   }
 }
 
-/** `clients.delete`'s `loadState`: the client, which must not be a CIMD client. */
+/**
+ * Refuse to delete the client a service account binds (#522), with 409: the
+ * service account goes first. Read in the handler's transaction when there is
+ * one.
+ *
+ * @throws ClientOfServiceAccountError when a service account binds the client
+ */
+export async function refuseServiceAccountClient(
+  request: FastifyRequest,
+  realmId: string,
+  clientRowId: string
+): Promise<void> {
+  const bound = await request.server.repositories.serviceAccounts.findByClient(
+    realmId,
+    clientRowId,
+    request.adminPipeline?.transaction
+  );
+  if (bound !== undefined) throw new ClientOfServiceAccountError();
+}
+
+/**
+ * `clients.delete`'s `loadState`: the client, which must be neither a CIMD
+ * client nor a service account's (#522). Both are refused before the
+ * request is classified or filed for an approval.
+ */
 async function loadClientDeleteState(
   request: FastifyRequest,
   input: ClassifyInput
 ): Promise<AdminClient> {
   const state = await clientOfRequest(request, input, CLIENT_OPERATION_IDS.delete);
   refuseDocumentClient(state);
+  await refuseServiceAccountClient(
+    request,
+    pipelineCaller(request, CLIENT_OPERATION_IDS.delete).targetRealm.id,
+    state.id
+  );
   return state;
 }
 

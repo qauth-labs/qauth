@@ -27,6 +27,19 @@
 export const QAUTH_SCOPE_NAMESPACE = 'qauth:';
 
 /**
+ * The admin API's three scopes, in class order (read, write, security): the
+ * auth server's `ADMIN_SCOPE_LIST` (`helpers/admin-scopes.ts`). Here so the
+ * service accounts repository (`@qauth-labs/infra-db`, #522) lists them on a
+ * service account's client without the auth server; the account's admin
+ * grants decide which of them a token gets.
+ */
+export const ADMIN_API_SCOPES = Object.freeze([
+  'qauth:admin:read',
+  'qauth:admin:write',
+  'qauth:admin:security',
+] as const);
+
+/**
  * `qauth:` at the start, ASCII letters in any case. Without the `u` flag, `i`
  * folds no character outside ASCII onto an ASCII letter.
  */

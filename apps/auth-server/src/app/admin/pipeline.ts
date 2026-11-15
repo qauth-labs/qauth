@@ -352,6 +352,21 @@ export function requestAdminCaller(request: FastifyRequest): AdminCaller {
 }
 
 /**
+ * The actor of an event an admin call records (ADR-019 Decision 8): a person's
+ * admin account as the `user` it is, and a service account (#522) as the
+ * `client` it signs in with, acting for itself, by its `client_id`. A machine
+ * is never recorded as a person signed in.
+ */
+export function adminEventActor(caller: Pick<AdminCaller, 'userId' | 'serviceAccount'>): {
+  readonly type: 'user' | 'client';
+  readonly id: string;
+} {
+  return caller.serviceAccount === null
+    ? { type: 'user', id: caller.userId }
+    : { type: 'client', id: caller.serviceAccount.clientId };
+}
+
+/**
  * The transaction the handler of an admin route runs in. Every write the
  * handler makes goes through it: the audit row commits with them, or neither
  * does.
@@ -605,6 +620,8 @@ async function adminAuthorityStage(request: FastifyRequest): Promise<void> {
     iat: claims.iat,
     scopes: claims.scope,
     targetRealmId,
+    // A service account acts only through its own client (#522).
+    clientId: claims.clientId,
   });
   if (!authority.allowed) {
     if (authority.refusal === 'realm_not_found') {
@@ -862,9 +879,10 @@ function auditEntry(
 ): AdminAuditEntry {
   return {
     realmId: caller.targetRealm.id,
-    // The guard admits only a user as the subject: an admin account. Service
-    // accounts arrive with #522.
-    actorKind: 'human_admin',
+    // The guard admits only a user as the subject: a person's admin account,
+    // or a service account's (#522), named by its user id as its approvals'
+    // requester is.
+    actorKind: caller.kind === 'service_account' ? 'service_account' : 'human_admin',
     actorId: caller.userId,
     actorRealmId: caller.issuerRealm.id,
     // The admin family refuses a delegated token.

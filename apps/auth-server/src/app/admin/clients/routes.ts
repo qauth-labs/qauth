@@ -34,6 +34,7 @@ import { changePreview, changePreviewSchema } from '../change-preview';
 import {
   ADMIN_SECURITY_SCHEME,
   type AdminChange,
+  adminEventActor,
   type AdminTransaction,
   adminTransaction,
   recordAdminChange,
@@ -54,6 +55,7 @@ import {
   clientCheckContext,
   readClientState,
   refuseDocumentClient,
+  refuseServiceAccountClient,
 } from './operations';
 import { previewClientPatch } from './preview';
 import {
@@ -361,7 +363,7 @@ function clientEventOptions(
     tx: adminTransaction(request),
     realmId,
     subject: { type: 'client' as const, id: client.client_id },
-    actor: { type: 'user' as const, id: requestAdminCaller(request).userId },
+    actor: adminEventActor(requestAdminCaller(request)),
   };
 }
 
@@ -829,7 +831,7 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: 'Delete a client',
         description:
-          'Deletes the client with its authorization codes, refresh tokens, consents and API keys. A security operation: it needs clients.security and an approval, filed against the client as it stands; If-Match names its ETag (428 without it, 412 when it moved). A CIMD client is read-only: 409, naming its document.',
+          "Deletes the client with its authorization codes, refresh tokens, consents and API keys. A security operation: it needs clients.security and an approval, filed against the client as it stands; If-Match names its ETag (428 without it, 412 when it moved). A CIMD client is read-only: 409, naming its document. A service account's client is not deleted: 409; disable the service account instead.",
         'x-qauth-errors': [400, 401, 403, 404, 409, 412, 428],
         params: clientParams,
         headers: ifMatchHeadersSchema,
@@ -848,6 +850,9 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
         request.params.clientId
       );
       refuseDocumentClient(state);
+      // A service account's client goes only with the service account
+      // (#522); the foreign key refuses it all the same.
+      await refuseServiceAccountClient(request, realmId, row.id);
       await request.server.repositories.oauthClients.delete(
         realmId,
         row.id,
@@ -942,7 +947,7 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: 'Suspend a client',
         description:
-          'Suspends the client: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it. The suspension revokes every refresh token the client holds and spends its unredeemed authorization codes, so lifting it brings none of them back. A write, which only takes tokens away, needing clients.write and no approval; for a client that holds an admin scope (qauth:admin:*), a security operation, needing clients.security and an approval, since no new admin token is issued through it once it is suspended. If-Match names its ETag (428 without it, 412 when it moved). It takes no body, or an empty object. A client already suspended is answered as it is.',
+          "Suspends the client: it obtains no token until clients.enable lifts the suspension, and its owner cannot lift it. The suspension revokes every refresh token the client holds and spends its unredeemed authorization codes, so lifting it brings none of them back; for a service account's client, it also ends every admin token the service account holds. A write, which only takes tokens away, needing clients.write and no approval; for a client that holds an admin scope (qauth:admin:*), a security operation, needing clients.security and an approval, since no new admin token is issued through it once it is suspended. If-Match names its ETag (428 without it, 412 when it moved). It takes no body, or an empty object. A client already suspended is answered as it is.",
         'x-qauth-errors': [400, 401, 403, 404, 412, 428],
         params: clientParams,
         headers: ifMatchHeadersSchema,
@@ -978,6 +983,9 @@ export const clientRoutes: FastifyPluginAsync = async (fastify) => {
           SUSPENDED_CLIENT_REVOKE_REASON,
           tx
         );
+        // A service account's client (#522): its admin tokens end with the
+        // suspension, so lifting it brings none of them back.
+        await request.server.repositories.serviceAccounts.endTokensOfClient(realmId, row.id, tx);
         await emitUserEvent(
           request,
           'urn:qauth:event:client.suspended:v1-rc.0',

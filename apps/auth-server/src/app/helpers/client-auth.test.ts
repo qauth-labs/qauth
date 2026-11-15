@@ -27,6 +27,8 @@ import {
   classifyClientAuthentication,
   enforceAgentScopeCap,
   extractClientCredentials,
+  listsAdminAudienceWithoutPrivateKey,
+  mayHoldAdminAudience,
   type OAuthClientLike,
   resolveAudience,
   resolveUserGrantAudience,
@@ -742,17 +744,53 @@ describe('resolveUserGrantAudience (#509)', () => {
 describe('unlistedReservedAudiences (#509)', () => {
   const ADMIN = 'urn:qauth:aud:admin:v1-rc.0';
   const ACCOUNT = 'urn:qauth:aud:account:v1-rc.0';
+  /** A client that may hold the admin audience (#522). */
+  const KEYED = { tokenEndpointAuthMethod: 'private_key_jwt' } as const;
 
   it('returns the reserved audiences the client does not list', () => {
-    expect(unlistedReservedAudiences({ audience: null }, ADMIN)).toEqual([ADMIN]);
-    expect(unlistedReservedAudiences({ audience: [ADMIN] }, [ADMIN, ACCOUNT])).toEqual([ACCOUNT]);
+    expect(unlistedReservedAudiences({ audience: null, ...KEYED }, ADMIN)).toEqual([ADMIN]);
+    expect(unlistedReservedAudiences({ audience: [ADMIN], ...KEYED }, [ADMIN, ACCOUNT])).toEqual([
+      ACCOUNT,
+    ]);
     expect(
-      unlistedReservedAudiences({ audience: [ADMIN] }, ['URN:QAUTH:AUD:admin:v1-rc.0'])
+      unlistedReservedAudiences({ audience: [ADMIN], ...KEYED }, ['URN:QAUTH:AUD:admin:v1-rc.0'])
     ).toEqual(['URN:QAUTH:AUD:admin:v1-rc.0']);
   });
 
+  // #522: only a private_key_jwt client may hold the admin API's audience.
+  it.each(['client_secret_basic', 'client_secret_post', 'none', undefined])(
+    'treats a %s client as listing no admin audience, and keeps its other listings',
+    (method) => {
+      const client = {
+        audience: [ADMIN, ACCOUNT],
+        ...(method === undefined ? {} : { tokenEndpointAuthMethod: method }),
+      };
+      expect(unlistedReservedAudiences(client, [ADMIN, ACCOUNT])).toEqual([ADMIN]);
+      expect(unlistedReservedAudiences(client, ACCOUNT)).toEqual([]);
+      expect(listsAdminAudienceWithoutPrivateKey(client)).toBe(true);
+      expect(mayHoldAdminAudience(client)).toBe(false);
+    }
+  );
+
+  it('says a client lists the admin audience without a private key only when it lists it', () => {
+    expect(listsAdminAudienceWithoutPrivateKey({ audience: [ACCOUNT] })).toBe(false);
+    expect(listsAdminAudienceWithoutPrivateKey({ audience: [ADMIN], ...KEYED })).toBe(false);
+    expect(mayHoldAdminAudience(KEYED)).toBe(true);
+    // A self-registered client lists nothing anyway: the reserved audience
+    // refusal names it.
+    expect(
+      listsAdminAudienceWithoutPrivateKey({
+        audience: [ADMIN],
+        metadata: { registrationType: 'cimd' },
+        tokenEndpointAuthMethod: 'none',
+      })
+    ).toBe(false);
+  });
+
   it('returns nothing for listed or ordinary audiences', () => {
-    expect(unlistedReservedAudiences({ audience: [ADMIN, ACCOUNT] }, [ADMIN, ACCOUNT])).toEqual([]);
+    expect(
+      unlistedReservedAudiences({ audience: [ADMIN, ACCOUNT], ...KEYED }, [ADMIN, ACCOUNT])
+    ).toEqual([]);
     expect(
       unlistedReservedAudiences({ audience: null }, ['https://api.example.com', 'client-1'])
     ).toEqual([]);
@@ -772,16 +810,18 @@ describe('unlistedReservedAudiences (#509)', () => {
     ['a client with a dynamic registration time', { dynamicRegisteredAt: 1_700_000_000_000 }],
   ])('treats %s as listing no reserved audience', (_label, origin) => {
     expect(
-      unlistedReservedAudiences({ audience: [ADMIN, 'https://api.example.com'], ...origin }, [
-        ADMIN,
-        'https://api.example.com',
-      ])
+      unlistedReservedAudiences(
+        { audience: [ADMIN, 'https://api.example.com'], ...KEYED, ...origin },
+        [ADMIN, 'https://api.example.com']
+      )
     ).toEqual([ADMIN]);
   });
 
   it('reads the listing of an operator-set client, metadata or not', () => {
     for (const origin of [{}, { metadata: null, dynamicRegisteredAt: null }, { metadata: {} }]) {
-      expect(unlistedReservedAudiences({ audience: [ADMIN], ...origin }, ADMIN)).toEqual([]);
+      expect(unlistedReservedAudiences({ audience: [ADMIN], ...KEYED, ...origin }, ADMIN)).toEqual(
+        []
+      );
     }
   });
 });

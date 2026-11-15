@@ -43,6 +43,7 @@ import { ADMIN_SCOPE_LIST } from './admin-scopes';
 import type { IssuerResolver } from './family-token';
 import { tokenRealm } from './realm-url';
 import type { RealmRow } from './request-realm';
+import { adminCallerAccount, type ServiceAccountCaller } from './service-accounts';
 import { inactiveSubjectError } from './token-subject';
 
 /** A realm as the issuer directory returns it: the realm row. */
@@ -163,6 +164,13 @@ export interface AdminAuthorityRequest {
   readonly scopes: string | Iterable<string> | undefined;
   /** The realm the request acts on, as the request names it. */
   readonly targetRealmId: string;
+  /**
+   * The token's `client_id`: the client it was issued to. A service account
+   * acts only through its own client (#522), so a token for its account with
+   * another `client_id`, or a request with none (the approval page, where a
+   * person signs in), names no active account.
+   */
+  readonly clientId?: string;
 }
 
 /**
@@ -170,7 +178,12 @@ export interface AdminAuthorityRequest {
  *
  * - `issuer_unknown`: the token's `iss` names no enabled realm here;
  * - `account_inactive`: the subject is not an enabled account of that realm,
- *   or the token was issued before the account was last disabled (#748);
+ *   or the token was issued before the account was last disabled (#748); or
+ *   it is a service account (#522) that is disabled, whose client is unusable
+ *   or no longer authenticates with `private_key_jwt`, whose realm is no
+ *   longer the operator realm, whose token another client holds, or whose
+ *   binding is gone (an account marked a service account's is never taken
+ *   for a person's);
  * - `realm_not_found`: the requested realm is outside the caller's grants, or
  *   does not exist. The two are one answer, so it never confirms a realm
  *   exists to someone who may not manage it.
@@ -189,6 +202,14 @@ export type AdminAuthority =
       readonly targetRealm: RealmRow;
       /** The account. */
       readonly userId: string;
+      /**
+       * Who the account is (#522): `human`, a person's admin account, or
+       * `service_account`, automation that may file a security operation but
+       * never approves one and never counts as one of two admins.
+       */
+      readonly kind: 'human' | 'service_account';
+      /** The service account, for a `service_account` caller; `null` for a person. */
+      readonly serviceAccount: ServiceAccountCaller | null;
       /**
        * The permission ids the request may use: those the matching grants'
        * roles hold, intersected with the token's scopes. May be empty; the
@@ -272,7 +293,9 @@ export function grantCoversRealm(
  * 1. Find the realm whose issuer is the token's `iss`. No enabled realm:
  *    `issuer_unknown`.
  * 2. The subject must be an enabled account of that realm:
- *    `account_inactive` otherwise.
+ *    `account_inactive` otherwise. A service account's must also be enabled,
+ *    reached through its own client, which still authenticates with
+ *    `private_key_jwt`, and live in the operator realm (#522).
  * 3. An operator-realm token needs a live grant whose target is the requested
  *    realm or every realm.
  * 4. Any other token is realm-local: the requested realm must be the issuer's
@@ -310,6 +333,13 @@ export async function resolveAdminAuthority(
     return { allowed: false, refusal: 'account_inactive' };
   }
 
+  // A person, or a service account that may act now through this token's
+  // client (#522).
+  const account = await adminCallerAccount(fastify, issuerRealm, user, request.clientId);
+  if (account.kind === 'refused') {
+    return { allowed: false, refusal: 'account_inactive' };
+  }
+
   if (!uuidSchema.safeParse(request.targetRealmId).success) {
     return { allowed: false, refusal: 'realm_not_found' };
   }
@@ -343,6 +373,8 @@ export async function resolveAdminAuthority(
     operator,
     targetRealm,
     userId: user.id,
+    kind: account.kind,
+    serviceAccount: account.serviceAccount,
     permissions: effectivePermissions(granted, request.scopes ?? [], registry),
     rolePermissions: effectivePermissions(granted, ADMIN_SCOPE_LIST, registry),
     grantIds: matching.map((grant) => grant.grant.id),

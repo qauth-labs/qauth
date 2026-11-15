@@ -1533,6 +1533,57 @@ GRANT EXECUTE ON FUNCTION "deployment_nodes_live"(bigint), "deployment_nodes_reg
 Without them a node of the new release does not start: its boot fails with
 `permission denied` for the function.
 
+### Service accounts, and the admin audience needs `private_key_jwt`
+
+This release adds service accounts for the admin API
+([#522](https://github.com/qauth-labs/qauth/issues/522),
+[Service accounts](/operate/service-accounts/)) and, with them, one rule for
+every client: **the admin API's audience, and an admin scope, are issued only
+to a client that authenticates with `private_key_jwt`**, on every grant.
+
+- **A client that gets admin tokens with a secret or as a public client stops
+  getting them.** Its token request for the admin audience answers
+  `invalid_target`, with the event reason
+  `admin_audience_requires_private_key_jwt`; its admin scopes are withheld;
+  the authorization endpoint refuses the admin audience as a `resource`.
+  Before you upgrade, give such a client `token_endpoint_auth_method:
+  private_key_jwt` and its public keys (`jwks` or `jwks_uri`) in the seed
+  manifest, and switch the application to sign client assertions. The seed
+  manifest now refuses a `clients` entry that lists the admin audience with
+  another method, and a `--rotate` entry for a service account's client.
+- **A static developer API key of a client that lists the admin audience
+  stops authenticating.** None is minted for such a client any more.
+- **Migration 0078 adds the empty `service_accounts` table and the column
+  `users.is_service_account`.** The column's constant default rewrites no
+  row, but adding it takes a brief exclusive lock on `users`, and the new
+  foreign keys briefly lock `realms`, `users` and `oauth_clients` against
+  writes, so a sign-in, a sign-up or a client registration waits for the
+  runner's commit. A trigger keeps the column as it was written, and
+  `service_accounts_end_tokens(uuid, uuid)` ends a service account's tokens
+  when the admin API suspends its client. A client a service account binds can
+  no longer be deleted.
+- **`web`, `api` and `admin` read the table.** The token endpoint reads it for
+  every `client_credentials` request, the admin API for every call. A
+  deployment whose migration runner grants the roles' database users
+  ([above](#each-role-can-connect-as-a-database-user-of-its-own)), or whose
+  roles connect as the one user that owns the tables, needs nothing. One that
+  applies the grants by hand applies, before the new version starts:
+
+  ```sql
+  GRANT SELECT ON TABLE "service_accounts" TO <web_role>, <api_role>, <admin_role>;
+  GRANT EXECUTE ON FUNCTION "service_accounts_end_tokens"(uuid, uuid) TO <admin_role>;
+  ```
+
+  Without them every `client_credentials` request and every admin call fails
+  with `permission denied`, and so does every suspension of a client through
+  the admin API's `clients.disable`.
+
+- **During a rolling upgrade**, a node of the previous release still issues
+  the admin audience to a client with a secret, and knows no service account:
+  it issues a service account's client no admin token, and an admin node of
+  that release would take a service account's token as a person's. Replace
+  the `admin` nodes before you create the first service account.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

@@ -4,8 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   API_KEY_SCHEME,
+  assertNoAdminAudience,
   assertStaticApiKeysAllowed,
   authenticateApiKey,
+  clientMayGetAdminAudience,
   generateApiKey,
   parseApiKeyPrefix,
 } from './api-key';
@@ -220,6 +222,25 @@ describe('authenticateApiKey', () => {
     expect(result).toBeNull();
   });
 
+  // #522: there are no static admin keys. A key of a client that may get the
+  // admin API's audience authenticates nothing, even in development.
+  it("rejects a valid key whose client may get the admin API's audience", async () => {
+    const { fastify } = makeFastify();
+    const generated = await generateApiKey(fastify);
+    const row = liveKeyRow(generated.prefix, generated.key);
+
+    (fastify.repositories.apiKeys.findByPrefix as ReturnType<typeof vi.fn>).mockResolvedValue(row);
+    (fastify.repositories.oauthClients.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...devClient,
+      audience: ['https://api.example.com', 'urn:qauth:aud:admin:v1-rc.0'],
+    });
+    (fastify.repositories.realms.findById as ReturnType<typeof vi.fn>).mockResolvedValue(devRealm);
+
+    const result = await authenticateApiKey(fastify, devRealm, generated.key);
+    expect(result).toBeNull();
+    expect(fastify.repositories.apiKeys.touchLastUsed).not.toHaveBeenCalled();
+  });
+
   it('rejects a valid key whose client has since moved to PRODUCTION (gate re-applied on use)', async () => {
     const { fastify } = makeFastify();
     const generated = await generateApiKey(fastify);
@@ -301,5 +322,31 @@ describe('authenticateApiKey', () => {
 
   it('exposes the scheme constant', () => {
     expect(API_KEY_SCHEME).toBe('qauth');
+  });
+});
+
+// #522: a static API key never stands for a client that may get the admin
+// API's audience, whatever its environment allows.
+describe('assertNoAdminAudience', () => {
+  const ADMIN = 'urn:qauth:aud:admin:v1-rc.0';
+
+  it("refuses a client whose audience lists the admin API's", () => {
+    for (const audience of [[ADMIN], ['https://api.example.com', ADMIN]]) {
+      expect(clientMayGetAdminAudience({ audience })).toBe(true);
+      expect(() => assertNoAdminAudience({ audience })).toThrow(ForbiddenError);
+    }
+  });
+
+  it('lets any other client through, a malformed audience included', () => {
+    for (const audience of [
+      null,
+      undefined,
+      [],
+      ['https://api.example.com', 'urn:qauth:aud:account:v1-rc.0'],
+      ADMIN,
+    ]) {
+      expect(clientMayGetAdminAudience({ audience })).toBe(false);
+      expect(() => assertNoAdminAudience({ audience })).not.toThrow();
+    }
   });
 });

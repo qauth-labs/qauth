@@ -1,7 +1,7 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
-import { assertStaticApiKeysAllowed, generateApiKey } from './api-key';
+import { assertNoAdminAudience, assertStaticApiKeysAllowed, generateApiKey } from './api-key';
 import { resolveOwnedClient } from './developer-clients';
 import { emitUserEvent } from './user-events';
 
@@ -46,6 +46,8 @@ export async function mintDeveloperApiKey(
   // refuse minting (403) unless static API keys are allowed.
   const realm = await fastify.repositories.realms.findById(client.realmId);
   assertStaticApiKeysAllowed(client, realm ?? null);
+  // No static admin key (#522), whatever the environment allows.
+  assertNoAdminAudience(client);
 
   const generated = await generateApiKey(fastify);
 

@@ -29,6 +29,7 @@ import {
   createRealmsRepository,
   createRealmUpstreamProvidersRepository,
   createRefreshTokensRepository,
+  createServiceAccountsRepository,
   createSessionsRepository,
   createSsfStreamsRepository,
   createUserAttributesRepository,
@@ -53,6 +54,7 @@ import {
   type RealmsRepository,
   type RealmUpstreamProvidersRepository,
   type RefreshTokensRepository,
+  type ServiceAccountsRepository,
   type SessionsRepository,
   type SsfStreamsRepository,
   type UserAttributesRepository,
@@ -204,6 +206,13 @@ declare module 'fastify' {
        * seconds and removes itself when it closes.
        */
       deploymentNodes: DeploymentNodesRepository;
+      /**
+       * The service accounts of the admin API (ADR-019 Decision 7, #522):
+       * the token endpoint reads a client's for every `client_credentials`
+       * request, and the admin API reads a caller's on every call. No
+       * service role writes it.
+       */
+      serviceAccounts: ServiceAccountsRepository;
     };
   }
 }
@@ -247,6 +256,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   realmAuthMethodPlugins: true,
   realmUpstreamProviders: true,
   deploymentNodes: true,
+  serviceAccounts: true,
 };
 
 /** Every repository the plugin can build, in the order of the type above. */
@@ -356,6 +366,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       realmAuthMethodPlugins: () => createRealmAuthMethodPluginsRepository(database.db),
       realmUpstreamProviders: () => createRealmUpstreamProvidersRepository(database.db),
       deploymentNodes: () => createDeploymentNodesRepository(database.db),
+      serviceAccounts: () => createServiceAccountsRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};
     for (const name of options.repositories ?? REPOSITORY_NAMES) {

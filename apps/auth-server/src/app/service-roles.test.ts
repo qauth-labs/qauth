@@ -162,6 +162,8 @@ describe('what each role loads (the boot-time list)', () => {
       // The plugin operations (#600).
       'realmAuthMethodPlugins',
       'deploymentNodes',
+      // Whether a caller, or a would-be approver, is a service account (#522).
+      'serviceAccounts',
     ]);
     // The token guard verifies with the JWT plugin, which reads `fastify.dpop`;
     // a client the admin API registers gets its secret hashed (#632).

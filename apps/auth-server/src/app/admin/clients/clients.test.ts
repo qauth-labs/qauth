@@ -4,7 +4,10 @@ import type { FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import type { z } from 'zod';
 
-import { ClientManagedByDocumentError } from '../../helpers/admin-client-errors';
+import {
+  ClientManagedByDocumentError,
+  ClientOfServiceAccountError,
+} from '../../helpers/admin-client-errors';
 import { classifyRequest, OPERATION_REGISTRY } from '../../helpers/admin-operations';
 import { RESERVED_OPERATIONS } from '../../helpers/admin-operations-reserved';
 import type { AdminRateLimitCheck } from '../pipeline';
@@ -747,6 +750,38 @@ describe('the state of a client operation (#632)', () => {
         params: { realmId: REALM, clientId: 'reports' },
       })
     ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  // #522: a service account's client goes only with the service account.
+  it("refuses to delete a service account's client with 409, before anything is filed", async () => {
+    const findByClient = vi.fn(async (_realmId: string, clientRowId: string) =>
+      clientRowId === CLIENT ? { id: 'sa-1', clientId: CLIENT } : undefined
+    );
+    const request = (row: OAuthClientRecord) =>
+      ({
+        adminPipeline: { authority: { targetRealm: { id: REALM } }, transaction: 'tx' },
+        server: {
+          repositories: {
+            oauthClients: { findById: vi.fn(async () => row) },
+            serviceAccounts: { findByClient },
+          },
+        },
+      }) as unknown as FastifyRequest;
+    const refused = operation(CLIENT_OPERATION_IDS.delete).loadState?.(
+      request(clientRow()),
+      patch({})
+    );
+    await expect(refused).rejects.toBeInstanceOf(ClientOfServiceAccountError);
+    await expect(refused).rejects.toMatchObject({ statusCode: 409 });
+    expect(findByClient).toHaveBeenCalledWith(REALM, CLIENT, 'tx');
+
+    const other = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e72';
+    await expect(
+      operation(CLIENT_OPERATION_IDS.delete).loadState?.(request(clientRow({ id: other })), {
+        ...patch({}),
+        params: { realmId: REALM, clientId: other },
+      })
+    ).resolves.toMatchObject({ id: other });
   });
 });
 

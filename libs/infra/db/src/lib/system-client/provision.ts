@@ -50,6 +50,7 @@ import {
   recordFirstPartyChange,
 } from '../first-party/first-party-change';
 import { oauthClients, realms } from '../schema/core';
+import { serviceAccounts } from '../schema/service-accounts';
 import { unusableSecretHash } from '../unusable-secret-hash';
 import { publicJwkSchema } from './public-jwk';
 
@@ -113,7 +114,12 @@ export type SystemClientSpec = z.output<typeof systemClientSpecSchema>;
 export type SystemClientSpecInput = z.input<typeof systemClientSpecSchema>;
 
 /** Why a row named by the system client's id cannot become the system client. */
-export type SystemClientRefusal = 'developer_owned' | 'agent' | 'dynamic' | 'cimd';
+export type SystemClientRefusal =
+  | 'developer_owned'
+  | 'agent'
+  | 'dynamic'
+  | 'cimd'
+  | 'service_account';
 
 export type SystemClientResult =
   | { readonly status: 'realm_not_found'; readonly realm: string }
@@ -251,6 +257,21 @@ export async function provisionSystemClient(
     const refusal = refusalOf(existing);
     if (refusal !== null) {
       return { status: 'refused' as const, realm, clientId: spec.client_id, reason: refusal };
+    }
+    // #522: a service account's client is the service-accounts command's,
+    // written whole; it never becomes the system client.
+    const [owner] = await tx
+      .select({ id: serviceAccounts.id })
+      .from(serviceAccounts)
+      .where(eq(serviceAccounts.clientId, existing.id))
+      .limit(1);
+    if (owner !== undefined) {
+      return {
+        status: 'refused' as const,
+        realm,
+        clientId: spec.client_id,
+        reason: 'service_account' as const,
+      };
     }
 
     const before: FirstPartyColumns = {
@@ -437,4 +458,5 @@ const REFUSAL_TEXT: Record<SystemClientRefusal, string> = {
   agent: 'an agent',
   dynamic: 'a dynamically registered client',
   cimd: 'a CIMD client',
+  service_account: "a service account's client",
 };

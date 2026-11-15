@@ -7,7 +7,9 @@
  *
  * - An admin scope (`qauth:admin:read`, `:write`, `:security`) is issued only
  *   when the client lists the admin API's audience and the account holds a
- *   live admin grant whose role has a permission of that scope's class.
+ *   live admin grant whose role has a permission of that scope's class. A
+ *   client that does not authenticate with `private_key_jwt` lists no admin
+ *   audience, whatever its row holds (#522, `mayHoldAdminAudience`).
  * - A scope of the account or developer API (`API_FAMILY_SCOPES`:
  *   `qauth:account:read`, `qauth:developer:write`, ...) is issued only when
  *   the client lists that family's audience, which only an operator sets, and
@@ -35,7 +37,9 @@
  * Grants are read when the token is issued, so a refresh after a revocation
  * no longer carries what the grant gave. A request decided for no account
  * (`userId: null`) never gets an admin scope or the admin audience: a
- * `client_credentials` token, which names none, the two ID-JAG grants, whose
+ * `client_credentials` token of a client that is no service account, which
+ * names none (a service account's names its account, #522), the two ID-JAG
+ * grants, whose
  * authority comes from another identity provider or goes to another
  * authorization server, and a delegated token of token exchange, since an
  * admin acts as itself, never through an agent. The account and its grants
@@ -64,7 +68,10 @@ import { type OAuthClientLike, unlistedReservedAudiences } from './client-auth';
 /** What {@link adminIssuance} decides about one token. */
 export interface AdminIssuanceRequest {
   /** The client the token is issued to. */
-  readonly client: Pick<OAuthClientLike, 'audience' | 'metadata' | 'dynamicRegisteredAt'>;
+  readonly client: Pick<
+    OAuthClientLike,
+    'audience' | 'metadata' | 'dynamicRegisteredAt' | 'tokenEndpointAuthMethod'
+  >;
   /**
    * The request's realm (#489): the account is read, and its grants found, in
    * this realm only.

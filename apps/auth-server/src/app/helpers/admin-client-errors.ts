@@ -6,6 +6,23 @@
  * `409`, the `conflict` problem document, naming the document to change
  * instead. Its URL is the client's `client_id`, no secret.
  */
+/**
+ * An admin deletion of a client a service account binds (#522): the service
+ * account is its client's, and goes first. 409, as the database's foreign key
+ * would refuse the deletion anyway.
+ */
+export class ClientOfServiceAccountError extends Error {
+  readonly statusCode = 409;
+  readonly code = 'CONFLICT';
+
+  constructor() {
+    super(
+      "The client is a service account's: remove or disable the service account first, and the client goes with it"
+    );
+    this.name = 'ClientOfServiceAccountError';
+  }
+}
+
 export class ClientManagedByDocumentError extends Error {
   readonly statusCode = 409;
   readonly code = 'CONFLICT';

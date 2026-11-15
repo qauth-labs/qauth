@@ -828,6 +828,18 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     `${ADR_019}, #679`,
     'Remove a service account.'
   ),
+  reserve(
+    'serviceAccounts.disable',
+    ['administration'],
+    `${ADR_019}, #522, #679`,
+    'Disable a service account: it gets no token, and its tokens make no admin call.'
+  ),
+  reserve(
+    'serviceAccounts.enable',
+    ['administration'],
+    `${ADR_019}, #522, #679`,
+    'Enable a disabled service account again.'
+  ),
   reserveRequestDependent(
     'clients.disable',
     ['administration'],

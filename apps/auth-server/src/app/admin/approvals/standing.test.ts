@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import type { AdminCaller } from '../pipeline';
 import {
   type ApprovalAccount,
   type ApprovalRecord,
   approvalStanding,
   approvalVersion,
+  callerAccount,
   parseApprovalVersion,
   shownStatus,
 } from './standing';
@@ -115,6 +117,43 @@ describe('approval standings (#512)', () => {
     expect(approvalStanding(one, second, true).mayApprove).toBe(false);
     expect(approvalStanding(one, third, true).mayApprove).toBe(true);
     expect(approvalStanding(approval(1, [second], robot), third, true).mayApprove).toBe(false);
+  });
+
+  // #522, acceptance criterion: a service account cannot approve. The admin
+  // API's caller carries its kind from the authority stage, and its account
+  // stands as a service account towards every approval: it reads and files
+  // its own, and gives none, its own or another's.
+  it('makes a service-account caller a service account, which never approves', () => {
+    const caller = {
+      issuerRealm: { id: OPERATOR },
+      userId: 'robot',
+      kind: 'service_account',
+    } as Pick<AdminCaller, 'issuerRealm' | 'userId' | 'kind'>;
+    const account = callerAccount(caller);
+    expect(account).toEqual(robot);
+    expect(callerAccount({ ...caller, kind: 'human' }).kind).toBe('human');
+
+    for (const required of [1, 2]) {
+      // Its own request: it reads it, and gives it no approval.
+      expect(approvalStanding(approval(required, [], robot), account, true)).toEqual({
+        isRequester: true,
+        hasApproved: false,
+        mayApprove: false,
+        mayRead: true,
+      });
+      // A person's request, with approvals.approve on the realm: no approval,
+      // and nothing to read.
+      expect(approvalStanding(approval(required, [requester], requester), account, true)).toEqual({
+        isRequester: false,
+        hasApproved: false,
+        mayApprove: false,
+        mayRead: false,
+      });
+    }
+    // An account id the same as a person's request's: the kind tells them apart.
+    expect(
+      approvalStanding(approval(1, [], { ...robot, kind: 'human' }), account, true).isRequester
+    ).toBe(false);
   });
 
   it('shows an open approval as expired from its expiry on, and a closed one as it is', () => {

@@ -31,6 +31,7 @@ import { actDepth, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
 import {
   authenticateClientRequest,
   enforceAgentScopeCap,
+  listsAdminAudienceWithoutPrivateKey,
   type OAuthClientLike,
   resolveAudience,
   resolveUserGrantAudience,
@@ -76,6 +77,7 @@ import {
 } from '../../helpers/refresh-family';
 import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
+import { serviceAccountRefusal } from '../../helpers/service-accounts';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
 import { inactiveSubjectTokenError } from '../../helpers/token-subject';
@@ -166,7 +168,8 @@ async function rejectUnsupportedGrantType(request: FastifyRequest): Promise<void
  * `client_secret_basic` (Authorization header, RFC 6749 2.3.1).
  *
  * Issued JWTs include `iss`, `aud` (per-client, RFC 8707 light), `exp`, `iat`,
- * and `scope` (when granted). `client_credentials` tokens set `sub = client_id`
+ * and `scope` (when granted). `client_credentials` tokens set `sub = client_id`,
+ * except a service account's (#522), whose `sub` is its account's user id,
  * and do NOT include a refresh token (RFC 6749 4.4.3).
  */
 export default async function (fastify: FastifyInstance) {
@@ -877,7 +880,25 @@ async function assertReservedAudiencesListed(
   aud: string | readonly string[],
   userId: string | null = null
 ): Promise<void> {
-  if (unlistedReservedAudiences(ctx.client, aud).length === 0) return;
+  const unlisted = unlistedReservedAudiences(ctx.client, aud);
+  if (unlisted.length === 0) return;
+  // The client lists the admin API's audience, but no client that does not
+  // authenticate with `private_key_jwt` may hold it (#522): the refusal says
+  // the method is what to change.
+  if (
+    unlisted.includes(API_FAMILY_AUDIENCES.admin) &&
+    listsAdminAudienceWithoutPrivateKey(ctx.client)
+  ) {
+    await emitRequestFailed(
+      ctx,
+      'invalid_target',
+      'admin_audience_requires_private_key_jwt',
+      userId
+    );
+    throw new InvalidTargetError(
+      'the admin API audience is issued only to a client that authenticates with private_key_jwt'
+    );
+  }
   await emitRequestFailed(ctx, 'invalid_target', 'reserved_audience_not_listed', userId);
   throw new InvalidTargetError('a QAuth API audience is issued only to a client that lists it');
 }
@@ -1398,9 +1419,65 @@ async function handleAuthorizationCode(
 }
 
 /**
+ * The account a `client_credentials` token names (#522): the user id of the
+ * client's service account, or `null` for any other client, whose token names
+ * none and whose `sub` is its `client_id`.
+ *
+ * A service account that may not act now gets no token at all, whatever it
+ * asks for: one that is disabled, whose account is disabled or not marked a
+ * service account's, whose realm is no longer the operator realm, or whose
+ * client no longer authenticates with `private_key_jwt`
+ * (`serviceAccountRefusal`). It is refused as a disabled
+ * client is, `invalid_client` with no description (RFC 6749 §5.2), and the
+ * event records why. Its client is enabled and not suspended: client
+ * authentication refused it otherwise.
+ */
+async function serviceAccountSubject(
+  ctx: HandlerContext<TokenExchangeClientCredsBody>
+): Promise<string | null> {
+  const { fastify, client } = ctx;
+  const serviceAccount = await fastify.repositories.serviceAccounts.findByClient(
+    ctx.realmId,
+    client.id
+  );
+  if (serviceAccount === undefined) return null;
+  const refused = serviceAccountRefusal(requestRealm(ctx.request), serviceAccount, client);
+  const user =
+    refused === null
+      ? await fastify.repositories.users.findById(ctx.realmId, serviceAccount.userId)
+      : undefined;
+  // The token's `iat` is in whole seconds: the account must be usable from
+  // that second on, or the admin API would refuse the token it got (#748).
+  const issuedAtMs = Math.floor(Date.now() / 1000) * 1000;
+  const reason =
+    refused ??
+    (user === undefined || accountCredentialRefusal(user, issuedAtMs) !== null
+      ? 'account_inactive'
+      : // A row that binds an account not marked a service account's was
+        // written some other way than the repository: its token would act as
+        // that account, a person's perhaps.
+        user.isServiceAccount !== true
+        ? 'account_not_marked'
+        : null);
+  if (reason !== null) {
+    await emitRequestFailed(
+      ctx,
+      'invalid_client',
+      `service_account_${reason}`,
+      serviceAccount.userId
+    );
+    throw new InvalidClientError();
+  }
+  return serviceAccount.userId;
+}
+
+/**
  * Handle the client_credentials grant (RFC 6749 4.4).
  *
- * - `sub` = clientId (no end-user).
+ * - `sub` = clientId (no end-user), except for a service account's client
+ *   (#522): its token names the service account's user id, the account its
+ *   admin grants attach to, and is issued for the admin API's audience alone,
+ *   bound to the request's DPoP key, with the realm's admin token lifetime.
  * - No refresh token issued (RFC 6749 4.4.3).
  * - Scopes must be a subset of client's configured `scopes` column, and of
  *   its `client_credentials_scopes` when the operator set one (#891). A CIMD
@@ -1417,6 +1494,9 @@ async function handleClientCredentials(
     // RFC 6749 5.2: client authenticated, but not authorized for this grant.
     throw new UnauthorizedClientError();
   }
+
+  // #522: the service account this client is, whose account the token names.
+  const serviceAccountUserId = await serviceAccountSubject(ctx);
 
   // Validate requested scopes against client.scopes allowlist, additionally
   // clamping any reserved agent-mode scope (`agent:readonly|admin|exec`) to the
@@ -1474,15 +1554,39 @@ async function handleClientCredentials(
   }
 
   const aud = resolveAudience(client, requestedResource);
-  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197);
+  // for the admin API's audience, the realm's admin token lifetime.
   const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
-  await assertReservedAudiencesListed(ctx, aud);
-  // The token names no account, and admin grants belong to accounts (#510):
-  // no admin scope, and no admin audience.
-  const issuedScopes = await issuableScopes(ctx, { userId: null, scopes: grantedScopes, aud });
+  await assertReservedAudiencesListed(ctx, aud, serviceAccountUserId);
+  // A service account's token is an admin token and nothing else (#522): it
+  // names the account, which other resource servers would read as a person.
+  if (
+    serviceAccountUserId !== null &&
+    !(audToArray(aud).length === 1 && audToArray(aud)[0] === API_FAMILY_AUDIENCES.admin)
+  ) {
+    await emitRequestFailed(
+      ctx,
+      'invalid_target',
+      'service_account_admin_audience_only',
+      serviceAccountUserId
+    );
+    throw new InvalidTargetError(
+      "a service account's token is issued for the admin API's audience alone"
+    );
+  }
+  // Any other client's token names no account, and admin grants belong to
+  // accounts (#510): no admin scope, and no admin audience. A service
+  // account's names its account, whose live admin grants decide its admin
+  // scopes; it is no user of the account or developer API (#933).
+  const issuedScopes = await issuableScopes(ctx, {
+    userId: serviceAccountUserId,
+    scopes: grantedScopes,
+    aud,
+    namesUser: false,
+  });
   const scopeString = issuedScopes.join(' ');
   const accessToken = await issueAccessToken(fastify, requestRealm(request), {
-    sub: client.clientId,
+    sub: serviceAccountUserId ?? client.clientId,
     clientId: client.clientId,
     ...clientNameClaim(client),
     scope: scopeString,
@@ -1508,7 +1612,13 @@ async function handleClientCredentials(
       expiresIn: accessTokenExpiresIn,
       ...(scopeMode === null ? {} : { scopeMode }),
     },
-    { realmId: ctx.realmId, clientId: client.clientId, actor: 'client' }
+    {
+      realmId: ctx.realmId,
+      // A service account's token names its account (#522).
+      ...(serviceAccountUserId === null ? {} : { userId: serviceAccountUserId }),
+      clientId: client.clientId,
+      actor: 'client',
+    }
   );
 
   // Token issuance metrics (#126). No refresh token on client_credentials.

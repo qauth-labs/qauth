@@ -130,6 +130,58 @@ const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
 const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
 const TOKEN_FAMILY_REVOKED = 'urn:qauth:event:token.family_revoked:v1-rc.0';
 
+/**
+ * The key of every test client below that lists the admin API's audience:
+ * only a `private_key_jwt` client may hold it (#522), so each such client
+ * authenticates with an assertion signed with this key, never with a secret.
+ */
+let adminClientKey: { privateKey: CryptoKey; jwk: JWK } | undefined;
+
+beforeAll(async () => {
+  const { privateKey, publicKey } = await generateKeyPair('ES256', { extractable: true });
+  adminClientKey = {
+    privateKey,
+    jwk: { ...(await exportJWK(publicKey)), kid: 'admin-client-key' },
+  };
+});
+
+/** `client` as a `private_key_jwt` client whose key set holds {@link adminClientKey}'s public half. */
+function keyedClient<T extends object>(client: T) {
+  if (adminClientKey === undefined)
+    throw new Error('the admin client key is made before the tests');
+  return {
+    ...client,
+    tokenEndpointAuthMethod: 'private_key_jwt',
+    jwks: { keys: [adminClientKey.jwk as unknown as Record<string, unknown>] },
+    jwksUri: null,
+  };
+}
+
+/**
+ * The members of a token request that authenticate `clientId` with an
+ * assertion of {@link adminClientKey} (RFC 7523 §2.2), for the realm's issuer,
+ * and that send no secret.
+ */
+async function assertionOf(clientId: string): Promise<Record<string, string | undefined>> {
+  if (adminClientKey === undefined)
+    throw new Error('the admin client key is made before the tests');
+  const now = Math.floor(Date.now() / 1000);
+  const assertion = await new SignJWT({})
+    .setProtectedHeader({ alg: 'ES256', kid: 'admin-client-key' })
+    .setIssuer(clientId)
+    .setSubject(clientId)
+    .setAudience(REALM.issuer as string)
+    .setJti(`jti-${Math.random().toString(36).slice(2)}`)
+    .setIssuedAt(now)
+    .setExpirationTime(now + 120)
+    .sign(adminClientKey.privateKey);
+  return {
+    client_secret: undefined,
+    client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+    client_assertion: assertion,
+  };
+}
+
 /** A live admin grant of a built-in role on every realm, as `adminGrants.listLive` lists it (#510). */
 function liveBuiltInGrant(role: string) {
   return {
@@ -280,6 +332,10 @@ function createFastifyStub() {
       },
       adminGrants: {
         listLive: vi.fn().mockResolvedValue([]),
+      },
+      // #522: no client is a service account's unless a test says so.
+      serviceAccounts: {
+        findByClient: vi.fn().mockResolvedValue(undefined),
       },
     },
     passwordHasher: {
@@ -529,9 +585,11 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       );
     });
 
-    // Admin grants belong to accounts, and a client_credentials token names
-    // none (#510): the admin audience is refused even to a client that lists
-    // it, asked for or in its default, and nothing reads a grant.
+    // Only a private_key_jwt client may hold the admin audience (#522): it is
+    // refused to a client that authenticates with a secret even when its row
+    // lists it, asked for or in its default, and nothing reads a grant. A
+    // private_key_jwt client that is no service account names no account,
+    // and is refused it all the same (#510, the private_key_jwt suite below).
     it.each([
       ['asked for with resource', [ADMIN_AUDIENCE]],
       ['in the default audience', undefined],
@@ -542,10 +600,11 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       );
       await expect(result).rejects.toThrow(InvalidTargetError);
       expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
       expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
         expect.objectContaining({
           error: 'invalid_target',
-          reason: 'admin_audience_without_grant',
+          reason: 'admin_audience_requires_private_key_jwt',
         }),
       ]);
     });
@@ -1810,9 +1869,23 @@ describe('POST /oauth/token route — authorization_code grant', () => {
   }
 
   /**
+   * {@link requestWithProof}, authenticated with an assertion: the client of
+   * {@link adminCodeStub} holds a key, as only a client that may get the admin
+   * audience does (#522).
+   */
+  async function keyedRequestWithProof() {
+    return requestWithProof(await assertionOf('test-client-1'));
+  }
+
+  /** {@link baseRequest} in the realm that has policies, authenticated with an assertion. */
+  async function keyedRequest() {
+    return { ...baseRequest(await assertionOf('test-client-1')), realm: REALM_WITH_POLICIES };
+  }
+
+  /**
    * The stub for a code of `scopes` for `resource`, redeemed by a client that
-   * lists the admin API, for an account with a viewer grant, in a realm whose
-   * policies hold `tokens`.
+   * lists the admin API and authenticates with `private_key_jwt`, for an
+   * account with a viewer grant, in a realm whose policies hold `tokens`.
    */
   function adminCodeStub(
     scopes: string[],
@@ -1822,6 +1895,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const stub = setupAuthCodeStub();
     const { fastify, client, authCode } = stub;
     client.audience = ['https://api.example.com', ADMIN_API_AUDIENCE];
+    // Only a private_key_jwt client may hold the admin audience (#522).
+    Object.assign(client, keyedClient({}));
     (fastify as unknown as { policyStore: unknown }).policyStore = testPolicyStore({
       ...REALM_LIFETIMES,
       ...tokens,
@@ -1853,7 +1928,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await tokenRoute(fastify);
     if (!ctx.handler) throw new Error('Handler missing');
 
-    const result = await ctx.handler(requestWithProof(), createReply());
+    const result = await ctx.handler(await keyedRequestWithProof(), createReply());
 
     expect(result).toMatchObject({ expires_in: expected, token_type: 'DPoP' });
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
@@ -1880,7 +1955,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       await tokenRoute(fastify);
       if (!ctx.handler) throw new Error('Handler missing');
 
-      const result = await ctx.handler(requestWithProof(), createReply());
+      const result = await ctx.handler(await keyedRequestWithProof(), createReply());
 
       expect(result).toMatchObject({ expires_in: 900, scope: 'openid qauth:admin:read' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
@@ -1901,9 +1976,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
         await tokenRoute(fastify);
         if (!ctx.handler) throw new Error('Handler missing');
 
-        await expect(
-          ctx.handler({ ...baseRequest(), realm: REALM_WITH_POLICIES }, createReply())
-        ).rejects.toBeInstanceOf(refusal);
+        await expect(ctx.handler(await keyedRequest(), createReply())).rejects.toBeInstanceOf(
+          refusal
+        );
         expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
         expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
         expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
@@ -1920,10 +1995,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       await tokenRoute(fastify);
       if (!ctx.handler) throw new Error('Handler missing');
 
-      const result = await ctx.handler(
-        { ...baseRequest(), realm: REALM_WITH_POLICIES },
-        createReply()
-      );
+      const result = await ctx.handler(await keyedRequest(), createReply());
 
       expect(result).toMatchObject({ scope: 'read:foo', token_type: 'Bearer' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
@@ -1943,9 +2015,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
         await tokenRoute(fastify);
         if (!ctx.handler) throw new Error('Handler missing');
 
-        await expect(
-          ctx.handler({ ...baseRequest(), realm: REALM_WITH_POLICIES }, createReply())
-        ).rejects.toBeInstanceOf(refusal);
+        await expect(ctx.handler(await keyedRequest(), createReply())).rejects.toBeInstanceOf(
+          refusal
+        );
         expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
       }
     });
@@ -1956,7 +2028,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       await tokenRoute(fastify);
       if (!ctx.handler) throw new Error('Handler missing');
 
-      await ctx.handler(requestWithProof(), createReply());
+      await ctx.handler(await keyedRequestWithProof(), createReply());
 
       expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
         expect.objectContaining({ cnfJkt: PROOF_JKT }),
@@ -1970,7 +2042,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       await tokenRoute(fastify);
       if (!ctx.handler) throw new Error('Handler missing');
 
-      await ctx.handler(requestWithProof(), createReply());
+      await ctx.handler(await keyedRequestWithProof(), createReply());
 
       expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
         expect.objectContaining({ cnfJkt: null }),
@@ -5499,18 +5571,22 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     const KEY = 'k'.repeat(43);
 
     /**
-     * A confidential client that lists the admin API, a viewer grant, DPoP on
-     * with a verifier that accepts every proof under {@link KEY}, and a family
-     * of `scopes` bound to `resource` and to the DPoP key `cnfJkt`.
+     * A confidential client that lists the admin API and authenticates with
+     * `private_key_jwt`, as only one that may get the admin audience does
+     * (#522), a viewer grant, DPoP on with a verifier that accepts every proof
+     * under {@link KEY}, and a family of `scopes` bound to `resource` and to
+     * the DPoP key `cnfJkt`.
      */
     function adminRefreshStub(cnfJkt: string | null, scopes: string[], resource: string[]) {
       const stub = setupRefreshStub();
       const { fastify, confidentialClient, storedToken } = stub;
-      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
-        ...confidentialClient,
-        scopes: [...confidentialClient.scopes, 'qauth:admin:read'],
-        audience: ['https://api.example.com', ADMIN_API_AUDIENCE],
-      });
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        keyedClient({
+          ...confidentialClient,
+          scopes: [...confidentialClient.scopes, 'qauth:admin:read'],
+          audience: ['https://api.example.com', ADMIN_API_AUDIENCE],
+        })
+      );
       (
         fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
       ).mockResolvedValue({ ...storedToken, scopes, resource, cnfJkt });
@@ -5523,7 +5599,10 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       return stub;
     }
 
-    const withProof = () => refreshRequest({}, { dpop: 'proof.header.signature' });
+    const withProof = async () =>
+      refreshRequest(await assertionOf('confidential-client'), {
+        dpop: 'proof.header.signature',
+      });
 
     it('refuses the admin audience to a family bound to no key, whatever key the request proves', async () => {
       const { fastify, ctx } = adminRefreshStub(
@@ -5534,7 +5613,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       await tokenRoute(fastify);
       if (!ctx.handler) throw new Error('Handler missing');
 
-      await expect(ctx.handler(withProof(), createReply())).rejects.toBeInstanceOf(
+      await expect(ctx.handler(await withProof(), createReply())).rejects.toBeInstanceOf(
         InvalidGrantError
       );
       expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
@@ -5556,7 +5635,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       await tokenRoute(fastify);
       if (!ctx.handler) throw new Error('Handler missing');
 
-      const result = await ctx.handler(withProof(), createReply());
+      const result = await ctx.handler(await withProof(), createReply());
 
       expect(result).toMatchObject({ scope: 'read:foo' });
       expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
@@ -5614,7 +5693,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       await tokenRoute(fastify);
       if (!ctx.handler) throw new Error('Handler missing');
 
-      const result = await ctx.handler(withProof(), createReply());
+      const result = await ctx.handler(await withProof(), createReply());
 
       expect(result).toMatchObject({ scope: 'read:foo qauth:admin:read', token_type: 'DPoP' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
@@ -6455,10 +6534,19 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
           subjectAud: ADMIN_API_AUDIENCE,
           subjectScope: SUBJECT_SCOPE,
         });
-        client.audience = [ADMIN_API_AUDIENCE] as never;
+        // An agent that may hold the admin audience: it authenticates with
+        // private_key_jwt (#522). The exchange still decides for no account.
+        Object.assign(client, keyedClient({ audience: [ADMIN_API_AUDIENCE] }));
         grants(fastify, ...roles);
         await expect(
-          invoke(fastify, ctx, exchangeRequest({ audience: [ADMIN_API_AUDIENCE] }))
+          invoke(
+            fastify,
+            ctx,
+            exchangeRequest({
+              audience: [ADMIN_API_AUDIENCE],
+              ...(await assertionOf(AGENT_CLIENT_ID)),
+            })
+          )
         ).rejects.toThrow(InvalidTargetError);
         expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
         expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
@@ -7107,16 +7195,22 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
   it('refuses the admin audience, whatever the grants (#510)', async () => {
     enableIdJag();
     const idpKey = await wireTrustedIdp();
-    const { fastify, ctx } = setupConsumeStub({
+    const { fastify, ctx, client } = setupConsumeStub({
       idJagTargets: [ADMIN_API_AUDIENCE],
       audience: [ADMIN_API_AUDIENCE],
     });
+    // A client that may hold the admin audience: it authenticates with
+    // private_key_jwt (#522). The grant still decides for no account.
+    Object.assign(client, keyedClient({}));
 
     await expect(
       invoke(
         fastify,
         ctx,
-        bearerRequest(await signIdJag(idpKey, { scope: 'chat.read', resource: ADMIN_API_AUDIENCE }))
+        bearerRequest(
+          await signIdJag(idpKey, { scope: 'chat.read', resource: ADMIN_API_AUDIENCE }),
+          await assertionOf(EMA_CLIENT_ID)
+        )
       )
     ).rejects.toThrow(InvalidTargetError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
@@ -9042,5 +9136,246 @@ describe('POST /oauth/token — private_key_jwt client authentication (#384 wiri
 
     expect(result).toMatchObject({ access_token: 'signed.jwt.token', scope: 'read:foo' });
     expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalled();
+  });
+});
+
+/**
+ * SERVICE ACCOUNTS (#522, ADR-019 Decision 7). A service account's client
+ * authenticates with `private_key_jwt`, and `client_credentials` with a DPoP
+ * proof gives it an admin token: its `sub` is the service account's user id,
+ * not the `client_id`, its lifetime the realm's admin token lifetime, and its
+ * admin scopes those the account's grants reach. One that may not act now
+ * gets no token at all.
+ */
+describe('POST /oauth/token — a service account (#522)', () => {
+  const SA_CLIENT_ID = 'ci-realm-import';
+  const SA_USER = '01900000-0000-7000-8000-00000000ab01';
+  const OPERATOR_REALM = testRealm({
+    id: REALM.id,
+    name: 'default',
+    isOperator: true,
+    policiesVersion: 3,
+  });
+  /** The thumbprint the stub DPoP verifier gives every proof. */
+  const PROOF_JKT = 'p'.repeat(43);
+
+  /** The service account's client, as the service accounts repository writes it. */
+  function serviceAccountClient(overrides: Record<string, unknown> = {}) {
+    return keyedClient({
+      id: 'client-uuid-sa-1',
+      clientId: SA_CLIENT_ID,
+      clientSecretHash: 'unusable',
+      enabled: true,
+      suspended: false,
+      grantTypes: ['client_credentials'],
+      scopes: ['qauth:admin:read', 'qauth:admin:write', 'qauth:admin:security'],
+      audience: [ADMIN_API_AUDIENCE],
+      dpopBoundAccessTokens: true,
+      ...overrides,
+    });
+  }
+
+  function stub(
+    options: {
+      client?: Record<string, unknown>;
+      serviceAccount?: Record<string, unknown> | null;
+      user?: Record<string, unknown> | null;
+      grants?: string[];
+    } = {}
+  ) {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      serviceAccountClient(options.client)
+    );
+    (fastify.repositories.serviceAccounts.findByClient as unknown as Mock).mockResolvedValue(
+      options.serviceAccount === null
+        ? undefined
+        : {
+            id: 'sa-1',
+            realmId: REALM.id,
+            name: 'ci',
+            userId: SA_USER,
+            clientId: 'client-uuid-sa-1',
+            enabled: true,
+            ...options.serviceAccount,
+          }
+    );
+    (fastify.repositories.users.findById as unknown as Mock).mockImplementation(
+      async (realmId: string, id: string) =>
+        options.user === null || realmId !== REALM.id || id !== SA_USER
+          ? undefined
+          : {
+              id: SA_USER,
+              realmId: REALM.id,
+              enabled: true,
+              notValidBefore: null,
+              isServiceAccount: true,
+              ...options.user,
+            }
+    );
+    (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue(
+      (options.grants ?? ['viewer']).map(liveBuiltInGrant)
+    );
+    (fastify as unknown as { policyStore: unknown }).policyStore = testPolicyStore({
+      ...REALM_LIFETIMES,
+      adminAccessTokenLifespanSeconds: 120,
+    });
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.admin.jwt');
+    Object.assign(fastify, {
+      dpop: {
+        algorithms: ['ES256'],
+        verifyRequest: vi.fn(async () => ({ thumbprint: PROOF_JKT })),
+      },
+    });
+    return { fastify, ctx };
+  }
+
+  async function request(
+    options: { realm?: typeof OPERATOR_REALM; proof?: boolean; body?: Record<string, unknown> } = {}
+  ) {
+    return {
+      body: {
+        grant_type: 'client_credentials',
+        client_id: SA_CLIENT_ID,
+        scope: 'qauth:admin:read qauth:admin:security',
+        ...(await assertionOf(SA_CLIENT_ID)),
+        ...options.body,
+      },
+      ip: '127.0.0.1',
+      headers: {
+        'user-agent': 'vitest',
+        ...(options.proof === false ? {} : { dpop: 'proof.header.signature' }),
+      },
+      realm: options.realm ?? OPERATOR_REALM,
+    };
+  }
+
+  async function run(fastify: FastifyInstance, ctx: TestContext, req: unknown) {
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+    return ctx.handler(req, createReply());
+  }
+
+  // Acceptance criterion: the token's `sub` is the service account's user id.
+  it("issues an admin token whose sub is the service account's user id, not the client_id", async () => {
+    const { fastify, ctx } = stub();
+    const result = await run(fastify, ctx, await request());
+
+    // The viewer grant reaches the read class only; the realm's admin
+    // lifetime, 120 seconds, is the token's; no refresh token.
+    expect(result).toEqual({
+      access_token: 'signed.admin.jwt',
+      expires_in: 120,
+      token_type: 'DPoP',
+      scope: 'qauth:admin:read',
+    });
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({
+        sub: SA_USER,
+        clientId: SA_CLIENT_ID,
+        aud: ADMIN_API_AUDIENCE,
+        scope: 'qauth:admin:read',
+        cnf: { jkt: PROOF_JKT },
+        expiresInOverride: 120,
+      })
+    );
+    expect(fastify.repositories.serviceAccounts.findByClient).toHaveBeenCalledWith(
+      REALM.id,
+      'client-uuid-sa-1'
+    );
+    // The grants are read for the account, in the request's realm (#489).
+    expect(fastify.repositories.adminGrants.listLive).toHaveBeenCalledWith(REALM.id, SA_USER);
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    const issued = emitUserEventMock.mock.calls.find(([, type]) => type === TOKEN_ISSUED);
+    expect(issued?.[3]).toMatchObject({ userId: SA_USER, clientId: SA_CLIENT_ID, actor: 'client' });
+  });
+
+  it('gives it the admin scopes its grants reach, as for a person', async () => {
+    const { fastify, ctx } = stub({ grants: ['security-admin'] });
+    await expect(run(fastify, ctx, await request())).resolves.toMatchObject({
+      scope: 'qauth:admin:read qauth:admin:security',
+    });
+  });
+
+  it('refuses the admin audience to a service account that holds no admin grant', async () => {
+    const { fastify, ctx } = stub({ grants: [] });
+    await expect(run(fastify, ctx, await request())).rejects.toThrow(InvalidTargetError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_target', reason: 'admin_audience_without_grant' }),
+    ]);
+  });
+
+  // The client the repository writes is marked DPoP-bound, so its token
+  // request without a proof never reaches the grant; one whose mark an
+  // operator lifted is refused by the admin token rule all the same (#520).
+  it('refuses a request without a DPoP proof: an admin token is bound to a key', async () => {
+    const { fastify, ctx } = stub({ client: { dpopBoundAccessTokens: false } });
+    await expect(run(fastify, ctx, await request({ proof: false }))).rejects.toThrow(
+      InvalidDpopProofError
+    );
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_dpop_proof', reason: 'admin_token_without_dpop' }),
+    ]);
+  });
+
+  // Acceptance criterion: a disabled service account gets no token.
+  it.each([
+    ['a disabled service account', { serviceAccount: { enabled: false } }, 'disabled'],
+    [
+      'a service account whose account is disabled',
+      { user: { enabled: false } },
+      'account_inactive',
+    ],
+    ['a service account whose account is gone', { user: null }, 'account_inactive'],
+    // A row that binds an account not marked a service account's was written
+    // some other way: its token would act as that account.
+    [
+      'a binding to an account not marked a service account',
+      { user: { isServiceAccount: false } },
+      'account_not_marked',
+    ],
+  ] as const)('gives %s no token, as a disabled client', async (_label, options, reason) => {
+    const { fastify, ctx } = stub(options);
+    const refused = run(fastify, ctx, await request());
+    await expect(refused).rejects.toThrow(InvalidClientError);
+    await expect(refused).rejects.toMatchObject({ errorDescription: undefined });
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_client', reason: `service_account_${reason}` }),
+    ]);
+  });
+
+  it('gives no token to a service account of a realm that is no longer the operator realm', async () => {
+    const { fastify, ctx } = stub();
+    await expect(
+      run(fastify, ctx, await request({ realm: { ...OPERATOR_REALM, isOperator: false } }))
+    ).rejects.toThrow(InvalidClientError);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ reason: 'service_account_realm_not_operator' }),
+    ]);
+  });
+
+  it("issues a service account's token for the admin audience alone", async () => {
+    const { fastify, ctx } = stub({
+      client: { audience: [ADMIN_API_AUDIENCE, 'https://api.example.com'] },
+    });
+    await expect(run(fastify, ctx, await request())).rejects.toThrow(InvalidTargetError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ reason: 'service_account_admin_audience_only' }),
+    ]);
+  });
+
+  it('names no account for a private_key_jwt client that is no service account: no admin audience', async () => {
+    const { fastify, ctx } = stub({ serviceAccount: null });
+    await expect(run(fastify, ctx, await request())).rejects.toThrow(InvalidTargetError);
+    expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ reason: 'admin_audience_without_grant' }),
+    ]);
   });
 });

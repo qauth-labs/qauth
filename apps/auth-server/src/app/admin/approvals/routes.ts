@@ -405,7 +405,9 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
       const approval = await request.server.repositories.adminApprovals.create(
         {
           realmId,
-          requesterKind: 'human',
+          // A service account's request (#522) needs every approval from a
+          // human admin: its own step-up has nothing to stand on.
+          requesterKind: callerAccount(caller).kind,
           requesterRealmId: caller.issuerRealm.id,
           requesterId: caller.userId,
           operationId: operation.id,

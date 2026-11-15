@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Service accounts for the admin API** ([#522], ADR-019 Decision 7).
+  Automation reaches the admin API as a service account of the operator
+  realm: a `users` row with no credential, its OAuth client and a row of the
+  new `service_accounts` table (migration 0078), which binds the two, names
+  the account and switches it. Its admin grants attach to the user row, as a
+  person's do. Its client authenticates with `private_key_jwt` only, has the
+  `client_credentials` grant only and is DPoP-bound: a token request with an
+  assertion and a DPoP proof gets an admin token whose `sub` is the service
+  account's user id, not the `client_id`, for the admin API's audience
+  alone, with the realm's admin token lifetime (at most 900 seconds) and no
+  refresh token. A disabled service account, or one whose account or client
+  is disabled, gets no token (`invalid_client`), and its tokens make no
+  admin call from the next request on; the admin API also takes its token
+  only from its own client. Disabling a service account disables its account
+  too, so a token issued before stays refused once it is enabled again, and
+  the admin API's `clients.disable` ends every admin token of a service
+  account's client it suspends. A service account's client is not deleted
+  while the service account binds it (`clients.delete` answers `409`, and the
+  foreign key refuses it), and being a service account is a lasting fact of
+  the account (`users.is_service_account`, which a trigger keeps): a marked
+  account whose binding is gone is refused, never taken for a person's. A
+  service account never takes the system client's id, and the system
+  client's provisioner never rewrites a service account's client. A service account may file and read approvals
+  for its own requests, but never gives one and never counts as one of two
+  admins: every approval of its security operations comes from a human
+  admin, and a request no human could approve fails closed
+  (`approval_unavailable`). Its admin audit rows name the actor kind
+  `service_account` and its user id; the events of its operations name it
+  as the `client` acting for itself. The host command `pnpm nx run
+  auth-server:service-accounts -- create|disable|enable|list` creates one
+  with its public keys and built-in role grants, and records each creation,
+  disable and enable in the operator realm's admin audit log as
+  `serviceAccounts.create`, `serviceAccounts.disable` or
+  `serviceAccounts.enable` by the operating-system user (the two new ids are
+  reserved security operations of the admin API, beside
+  `serviceAccounts.create`); no secret is made or printed
+  ([Service accounts](https://docs.qauth.dev/operate/service-accounts/)).
+
+### Changed
+
+- **The admin API's audience needs a client that authenticates with
+  `private_key_jwt`** ([#522], ADR-019 Decision 7). No client that
+  authenticates with a shared secret (`client_secret_basic`,
+  `client_secret_post`) or as a public client (`none`) gets the admin
+  audience or an admin scope any more, on any grant, whatever its `audience`
+  lists: the token endpoint answers `invalid_target` (event reason
+  `admin_audience_requires_private_key_jwt`), and the authorization endpoint
+  and the consent step refuse the admin audience as a `resource`. The seed
+  manifest refuses a `clients` entry that lists the admin audience with
+  another method, and a `--rotate` entry for a service account's client. A
+  static developer API key of a client that lists the admin audience is
+  neither minted nor accepted. **Breaking** for a client set up to get admin
+  tokens with a secret or as a public client: give it `private_key_jwt` and
+  its public keys before upgrading
+  ([Upgrades](https://docs.qauth.dev/operate/upgrades/#service-accounts-and-the-admin-audience-needs-private_key_jwt)).
+
 ## [0.2.7] - 2026-11-15
 
 A patch release with no breaking change of the stable surface. It has three

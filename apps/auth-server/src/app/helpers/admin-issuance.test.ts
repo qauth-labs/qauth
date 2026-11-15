@@ -69,8 +69,17 @@ function server(
   return fastify as unknown as FastifyInstance & typeof fastify;
 }
 
-/** An operator-provisioned client that lists the admin audience. */
-const ADMIN_CLIENT = { audience: [ADMIN], metadata: null, dynamicRegisteredAt: null };
+/**
+ * An operator-provisioned client that lists the admin audience, and
+ * authenticates with `private_key_jwt`, as only a client that may hold it
+ * does (#522).
+ */
+const ADMIN_CLIENT = {
+  audience: [ADMIN],
+  metadata: null,
+  dynamicRegisteredAt: null,
+  tokenEndpointAuthMethod: 'private_key_jwt',
+};
 
 describe('adminIssuance', () => {
   it('reads nothing for a token with no qauth: scope and no admin audience', async () => {
@@ -222,6 +231,14 @@ describe('adminIssuance', () => {
       { audience: null, metadata: null, dynamicRegisteredAt: null },
       { audience: [ADMIN], metadata: { registrationType: 'dynamic' }, dynamicRegisteredAt: null },
       { audience: [ADMIN], metadata: null, dynamicRegisteredAt: 1 },
+      // #522: a client that does not authenticate with private_key_jwt lists
+      // no admin audience, whatever its row holds.
+      ...['client_secret_basic', 'client_secret_post', 'none'].map((method) => ({
+        audience: [ADMIN],
+        metadata: null,
+        dynamicRegisteredAt: null,
+        tokenEndpointAuthMethod: method,
+      })),
     ]) {
       const decision = await adminIssuance(fastify, {
         realmId: OPERATOR,
@@ -257,6 +274,7 @@ describe('adminIssuance', () => {
         audience: [ADMIN, API_FAMILY_AUDIENCES.developer, API_FAMILY_AUDIENCES.account],
         metadata: null,
         dynamicRegisteredAt: null,
+        tokenEndpointAuthMethod: 'private_key_jwt',
       },
       userId: USER,
       scopes: odd,
@@ -404,7 +422,11 @@ describe('adminIssuance of the account and developer scopes (#933)', () => {
     await expect(
       adminIssuance(fastify, {
         realmId: OPERATOR,
-        client: { ...FAMILY_CLIENT, audience: [ADMIN, API_FAMILY_AUDIENCES.developer] },
+        client: {
+          ...FAMILY_CLIENT,
+          audience: [ADMIN, API_FAMILY_AUDIENCES.developer],
+          tokenEndpointAuthMethod: 'private_key_jwt',
+        },
         userId: USER,
         scopes: ['qauth:developer:write', ...ALL_ADMIN_SCOPES],
         aud: API_FAMILY_AUDIENCES.developer,

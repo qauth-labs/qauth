@@ -2021,8 +2021,9 @@ export interface AdminAuditEntry {
   realmId: string;
   actorKind: AdminActorKind;
   /**
-   * An account id for a human admin, a `client_id` for a service account, the
-   * operating-system user for the break-glass CLI or a host tool.
+   * An account id for a human admin, the account's user id for a service
+   * account (#522), the operating-system user for the break-glass CLI or a
+   * host tool.
    */
   actorId: string;
   /**
