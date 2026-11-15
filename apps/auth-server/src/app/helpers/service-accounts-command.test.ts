@@ -169,13 +169,15 @@ function server(options: { operator?: boolean; createError?: Error; enabled?: bo
 
 function run(
   fastify: Pick<FastifyInstance, 'db' | 'repositories'>,
-  command: ServiceAccountsCommand
+  command: ServiceAccountsCommand,
+  reservedClientIds: readonly string[] = ['portal-system']
 ) {
   const out: string[] = [];
   const err: string[] = [];
   const done = runServiceAccountsCommand(command, {
     fastify,
     operatingSystemUser: 'operator',
+    reservedClientIds,
     out: (line) => out.push(line),
     err: (line) => err.push(line),
   });
@@ -206,6 +208,9 @@ describe('runServiceAccountsCommand', () => {
         clientId: 'ci',
         jwksUri: 'https://ci.example.com/jwks.json',
         createdBy: null,
+        // The deployment's SYSTEM_CLIENT_ID, which the repository refuses
+        // beside the default one (#522).
+        reservedClientIds: ['portal-system'],
       },
       TX
     );

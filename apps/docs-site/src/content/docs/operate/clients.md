@@ -150,6 +150,12 @@ switches on a client no developer owns; a developer's own switch stays
 theirs. It needs an approval, as `clients.delete` does, which removes the
 client with its authorization codes, refresh tokens, consents and API keys.
 
+A service account's client ([Service accounts](/operate/service-accounts/)) is
+not deleted: `clients.delete` answers `409`, and the database refuses the
+deletion too. Disable the service account instead. Suspending it with
+`clients.disable` ends every admin token its service account holds, so lifting
+the suspension brings none of them back.
+
 The seed manifest writes a client it provisions again on each run, and the
 server gives each realm's system client what it needs as it boots: change
 such a client in the manifest, or the next run may undo an admin's change.

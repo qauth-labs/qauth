@@ -15,6 +15,10 @@
  * - It reaches the admin API only through its own client: a token for its
  *   account that another client holds is refused, and so is every call once
  *   the service account, its account or its client is disabled.
+ * - Being one is a lasting fact of its account (`users.is_service_account`,
+ *   set when it is created and never changed): an account so marked whose
+ *   binding is gone, or a binding to an account not so marked, is refused,
+ *   never taken for a person's.
  * - It never approves, and never counts as one of two admins: every approval
  *   of a security operation it files comes from a human admin. The admin
  *   audit log names it with the actor kind `service_account`.
@@ -89,8 +93,20 @@ export type AdminCallerAccount =
   | { readonly kind: 'service_account'; readonly serviceAccount: ServiceAccountCaller }
   | {
       readonly kind: 'refused';
-      readonly reason: ServiceAccountRefusal | 'other_client' | 'no_client';
+      readonly reason:
+        | ServiceAccountRefusal
+        | 'other_client'
+        | 'no_client'
+        | 'binding_missing'
+        | 'account_not_marked';
     };
+
+/** The parts of an account {@link adminCallerAccount} reads. */
+export interface CallerUser {
+  readonly id: string;
+  /** `users.is_service_account`; absent reads as `false`. */
+  readonly isServiceAccount?: boolean;
+}
 
 /**
  * Who the account `userId` of `realm` is as an admin caller: a person, or a
@@ -101,19 +117,31 @@ export type AdminCallerAccount =
  * no client at all (`no_client`, such as the approval page, where a person
  * signs in), is refused, as is one {@link serviceAccountRefusal} refuses.
  *
+ * Only an account neither marked a service account's nor bound by one is a
+ * person's. A marked account whose `service_accounts` row is gone
+ * (`binding_missing`), and a row that binds an account not marked
+ * (`account_not_marked`, written some other way than the repository), fail
+ * closed.
+ *
  * @param tokenClientId - the token's `client_id`; `undefined` where no token
  *   is read
  */
 export async function adminCallerAccount(
   fastify: FastifyInstance,
   realm: Pick<RealmRow, 'id' | 'isOperator'>,
-  userId: string,
+  user: CallerUser,
   tokenClientId: string | undefined,
   tx?: Transaction
 ): Promise<AdminCallerAccount> {
   const { repositories } = fastify;
-  const serviceAccount = await repositories.serviceAccounts.findByUser(realm.id, userId, tx);
-  if (serviceAccount === undefined) return { kind: 'human', serviceAccount: null };
+  const serviceAccount = await repositories.serviceAccounts.findByUser(realm.id, user.id, tx);
+  const marked = user.isServiceAccount === true;
+  if (serviceAccount === undefined) {
+    return marked
+      ? { kind: 'refused', reason: 'binding_missing' }
+      : { kind: 'human', serviceAccount: null };
+  }
+  if (!marked) return { kind: 'refused', reason: 'account_not_marked' };
   const client = await repositories.oauthClients.findById(realm.id, serviceAccount.clientId, tx);
   const refusal = serviceAccountRefusal(realm, serviceAccount, client);
   if (refusal !== null) return { kind: 'refused', reason: refusal };
@@ -127,15 +155,20 @@ export async function adminCallerAccount(
 }
 
 /**
- * Whether the account `userId` of `realmId` is a service account's: such an
+ * Whether the account `user` of `realmId` is a service account's: marked one
+ * (`users.is_service_account`), or bound by a `service_accounts` row. Such an
  * account never gives an approval, and is never counted as one who could
- * (the two-admin rule's rule 1, `admin/approvals/two-admin.ts`).
+ * (the two-admin rule's rule 1, `admin/approvals/two-admin.ts`), whether its
+ * binding is whole or not.
  */
 export async function isServiceAccountUser(
   fastify: FastifyInstance,
   realmId: string,
-  userId: string,
+  user: CallerUser,
   tx?: Transaction
 ): Promise<boolean> {
-  return (await fastify.repositories.serviceAccounts.findByUser(realmId, userId, tx)) !== undefined;
+  if (user.isServiceAccount === true) return true;
+  return (
+    (await fastify.repositories.serviceAccounts.findByUser(realmId, user.id, tx)) !== undefined
+  );
 }

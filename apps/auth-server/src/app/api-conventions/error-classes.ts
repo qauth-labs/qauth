@@ -45,7 +45,10 @@ import {
   SecondFactorRequiredError,
 } from '../helpers/account-operation-errors';
 import { AccountVerificationConflictError } from '../helpers/account-verification-errors';
-import { ClientManagedByDocumentError } from '../helpers/admin-client-errors';
+import {
+  ClientManagedByDocumentError,
+  ClientOfServiceAccountError,
+} from '../helpers/admin-client-errors';
 import {
   InvalidCursorError,
   SandboxCeilingError,
@@ -273,6 +276,12 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // Metadata Document (ADR-012 Decision 3, #632): the answer names it.
   {
     errorClass: ClientManagedByDocumentError,
+    code: 'conflict',
+    oauthError: 'invalid_request',
+  },
+  // An admin deletion of a service account's client (#522).
+  {
+    errorClass: ClientOfServiceAccountError,
     code: 'conflict',
     oauthError: 'invalid_request',
   },

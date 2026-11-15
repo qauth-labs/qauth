@@ -40,6 +40,8 @@ interface GrantFixture {
   createdAt?: number;
   /** When the account's credentials last changed, as the grant records it. */
   lastSecurityChangeAt?: number;
+  /** Whether the account is marked a service account's (`users.is_service_account`, #522). */
+  isServiceAccount?: boolean;
 }
 
 let grantSeq = 0;
@@ -74,6 +76,7 @@ function liveGrant(fixture: GrantFixture) {
       enabled: fixture.enabled ?? true,
       notValidBefore: fixture.notValidBefore ?? null,
       createdAt: fixture.accountCreatedAt ?? OLD,
+      isServiceAccount: fixture.isServiceAccount ?? false,
     },
   };
 }
@@ -214,6 +217,16 @@ describe('eligibleApproverCount (#589)', () => {
       ],
       ['robot', 'robot-everywhere']
     );
+    expect(await count(fastify)).toBe(1);
+  });
+
+  // A marked account whose binding is gone is a service account's all the
+  // same: it never counts.
+  it('never counts an account marked a service account, its binding gone', async () => {
+    const { fastify } = serverWith(REALMS, [
+      { userId: 'unbound-robot', accountRealmId: OPERATOR, target: TENANT, isServiceAccount: true },
+      { userId: 'person', accountRealmId: OPERATOR, target: TENANT },
+    ]);
     expect(await count(fastify)).toBe(1);
   });
 

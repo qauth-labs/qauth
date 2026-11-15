@@ -1553,10 +1553,15 @@ to a client that authenticates with `private_key_jwt`**, on every grant.
   another method, and a `--rotate` entry for a service account's client.
 - **A static developer API key of a client that lists the admin audience
   stops authenticating.** None is minted for such a client any more.
-- **Migration 0078 adds the empty `service_accounts` table.** Its foreign keys
-  briefly lock `realms`, `users` and `oauth_clients` against writes (reads go
-  on), so a sign-up or a client registration waits for the runner's commit.
-  Nothing is rewritten.
+- **Migration 0078 adds the empty `service_accounts` table and the column
+  `users.is_service_account`.** The column's constant default rewrites no
+  row, but adding it takes a brief exclusive lock on `users`, and the new
+  foreign keys briefly lock `realms`, `users` and `oauth_clients` against
+  writes, so a sign-in, a sign-up or a client registration waits for the
+  runner's commit. A trigger keeps the column as it was written, and
+  `service_accounts_end_tokens(uuid, uuid)` ends a service account's tokens
+  when the admin API suspends its client. A client a service account binds can
+  no longer be deleted.
 - **`web`, `api` and `admin` read the table.** The token endpoint reads it for
   every `client_credentials` request, the admin API for every call. A
   deployment whose migration runner grants the roles' database users
@@ -1566,10 +1571,12 @@ to a client that authenticates with `private_key_jwt`**, on every grant.
 
   ```sql
   GRANT SELECT ON TABLE "service_accounts" TO <web_role>, <api_role>, <admin_role>;
+  GRANT EXECUTE ON FUNCTION "service_accounts_end_tokens"(uuid, uuid) TO <admin_role>;
   ```
 
-  Without it every `client_credentials` request and every admin call fails
-  with `permission denied`.
+  Without them every `client_credentials` request and every admin call fails
+  with `permission denied`, and so does every suspension of a client through
+  the admin API's `clients.disable`.
 
 - **During a rolling upgrade**, a node of the previous release still issues
   the admin audience to a client with a secret, and knows no service account:

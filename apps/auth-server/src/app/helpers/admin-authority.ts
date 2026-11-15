@@ -181,7 +181,9 @@ export interface AdminAuthorityRequest {
  *   or the token was issued before the account was last disabled (#748); or
  *   it is a service account (#522) that is disabled, whose client is unusable
  *   or no longer authenticates with `private_key_jwt`, whose realm is no
- *   longer the operator realm, or whose token another client holds;
+ *   longer the operator realm, whose token another client holds, or whose
+ *   binding is gone (an account marked a service account's is never taken
+ *   for a person's);
  * - `realm_not_found`: the requested realm is outside the caller's grants, or
  *   does not exist. The two are one answer, so it never confirms a realm
  *   exists to someone who may not manage it.
@@ -333,7 +335,7 @@ export async function resolveAdminAuthority(
 
   // A person, or a service account that may act now through this token's
   // client (#522).
-  const account = await adminCallerAccount(fastify, issuerRealm, user.id, request.clientId);
+  const account = await adminCallerAccount(fastify, issuerRealm, user, request.clientId);
   if (account.kind === 'refused') {
     return { allowed: false, refusal: 'account_inactive' };
   }

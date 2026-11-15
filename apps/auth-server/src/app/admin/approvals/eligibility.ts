@@ -132,7 +132,12 @@ export async function eligibleApprovers(
         accountId: live.grant.userId,
         // A service account never approves (#522): rule 1 refuses it below,
         // so it is never counted, whatever its grants give.
-        kind: (await isServiceAccountUser(fastify, account.realmId, live.grant.userId, tx))
+        kind: (await isServiceAccountUser(
+          fastify,
+          account.realmId,
+          { id: live.grant.userId, isServiceAccount: account.isServiceAccount },
+          tx
+        ))
           ? ('service_account' as const)
           : ('human' as const),
         createdAt: account.createdAt,

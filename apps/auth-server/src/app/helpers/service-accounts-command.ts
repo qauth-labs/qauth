@@ -220,6 +220,12 @@ export interface ServiceAccountsDependencies {
   readonly fastify: Pick<FastifyInstance, 'db' | 'repositories'>;
   /** The operating-system user the command runs as: the audit row's actor. */
   readonly operatingSystemUser: string;
+  /**
+   * The client ids the deployment keeps for clients of its own, beside the
+   * default system client's: its `SYSTEM_CLIENT_ID`. A service account never
+   * takes one.
+   */
+  readonly reservedClientIds?: readonly string[];
   readonly out: (line: string) => void;
   readonly err: (line: string) => void;
 }
@@ -260,6 +266,7 @@ async function create(
         ...(command.jwks === undefined ? {} : { jwks: command.jwks }),
         ...(command.jwksUri === undefined ? {} : { jwksUri: command.jwksUri }),
         createdBy: null,
+        reservedClientIds: deps.reservedClientIds ?? [],
       },
       tx
     );

@@ -47,7 +47,7 @@ tsx src/service-accounts.ts create --name ci-realm-import --client-id ci-realm-i
 | Flag          | What it sets                                                                                                  |
 | ------------- | ------------------------------------------------------------------------------------------------------------- |
 | `--name`      | Lower-case words joined by hyphens, unique in the operator realm.                                             |
-| `--client-id` | The `client_id` the client's assertions name, unused in the operator realm.                                   |
+| `--client-id` | The `client_id` the client's assertions name: no client's in the operator realm, and not the system client's. |
 | `--jwks`      | A file holding the client's public JWK Set, `{"keys": [...]}`. A key with a private member is refused.        |
 | `--jwks-uri`  | An https URL that serves the client's public JWK Set. Give this or `--jwks`, not both.                        |
 | `--grant`     | `viewer`, `editor` or `security-admin`, on the realm named after `@`, or on every realm with `@*`. Repeat it. |
@@ -137,11 +137,22 @@ pnpm nx run auth-server:service-accounts -- disable --name ci-realm-import
 ```
 
 A disabled service account gets no token (`invalid_client`), and a token it
-already holds makes no admin call from the next request on. So do a service
-account whose account is disabled, whose client is disabled or suspended
-(`db:suspend-oauth-client`), and one whose client was changed to authenticate
-any other way than `private_key_jwt`. `enable` turns it on again. Removing a
-grant takes what it gave from the next call, as for a person.
+already holds makes no admin call from the next request on. Disabling it
+disables its account too, which ends every token issued to it so far: `enable`
+turns it on again, and a token issued before the disable stays refused, so the
+automation asks for a new one. So do a service account whose account is
+disabled, whose client is disabled or suspended (`db:suspend-oauth-client`, or
+the admin API's `clients.disable`, which also ends every admin token it holds),
+and one whose client was changed to authenticate any other way than
+`private_key_jwt`. Removing a grant takes what it gave from the next call, as
+for a person.
+
+A service account's client is not deleted while the service account binds it:
+the admin API's `clients.delete` answers `409`, and the database refuses the
+deletion from anywhere else. There is no removal of a service account yet, so
+disable it. Being a service account is a lasting fact of its account, which a
+later change never clears: an account so marked whose binding is gone gets no
+token and makes no admin call, and is never taken for a person's.
 
 Each `disable` and `enable` writes one row of the operator realm's admin audit
 log in the transaction of the switch, `serviceAccounts.disable` or

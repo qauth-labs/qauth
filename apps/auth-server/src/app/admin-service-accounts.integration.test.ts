@@ -10,6 +10,7 @@ import {
   type DpopTestKey,
   dpopTestKey,
   rememberTokenKey,
+  signBoundAccessToken,
 } from '../testing/admin-dpop';
 import type { TestApprovalFactor } from '../testing/approval-factor';
 import {
@@ -212,7 +213,7 @@ describe('service accounts for the admin API (#522, real containers)', () => {
   }
 
   async function send(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE',
     url: string,
     token: string,
     payload?: unknown,
@@ -358,7 +359,7 @@ describe('service accounts for the admin API (#522, real containers)', () => {
     // Bound to a service account by hand, it is still no service account's
     // client that may act: it gets no token at all.
     const realmUser = await app().dbPool.query<{ id: string }>(
-      'INSERT INTO users (realm_id) VALUES ($1) RETURNING id',
+      'INSERT INTO users (realm_id, is_service_account) VALUES ($1, true) RETURNING id',
       [realm.id]
     );
     await app().dbPool.query(
@@ -598,9 +599,69 @@ describe('service accounts for the admin API (#522, real containers)', () => {
     expect(await failureReasons()).toEqual(['service_account_disabled']);
     expect((await send('GET', url, token)).statusCode).toBe(401);
 
-    // Enabled again, it gets a token again.
+    // Enabled again: the token it held before stays refused, since the
+    // disable ended what its account was issued (users.not_valid_before).
     await app().repositories.serviceAccounts.setEnabled(realm.id, account.id, true);
+    expect((await send('GET', url, token)).statusCode).toBe(401);
+    // A token's `iat` is in whole seconds: one minted in the second of the
+    // disable would count as issued before it.
+    await nextSecondAfterDisable(account.userId);
     const again = await adminTokenOf('qauth:admin:read');
     expect((await send('GET', url, again)).statusCode).toBe(200);
+  });
+
+  /** Wait until a token minted now has an `iat` at or after the account's `not_valid_before`. */
+  async function nextSecondAfterDisable(userId: string): Promise<void> {
+    const { rows } = await app().dbPool.query<{ not_valid_before: string | null }>(
+      'SELECT not_valid_before FROM users WHERE id = $1',
+      [userId]
+    );
+    const notValidBefore = Number(rows[0]?.not_valid_before ?? 0);
+    expect(notValidBefore).toBeGreaterThan(0);
+    const from = Math.ceil(notValidBefore / 1000) * 1000;
+    while (Date.now() < from) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  // #522: a service account's client is not deleted while the service account
+  // binds it, and an account whose binding is gone is never a person's.
+  it("refuses to delete a service account's client, and refuses a token whose binding is gone", async () => {
+    const realm = await operatorRealm();
+    const { client, userId: robot } = await serviceAccount('viewer');
+    const token = await adminTokenOf('qauth:admin:read');
+    const url = `/admin/v1-rc.0/realms/${realm.id}`;
+    expect((await send('GET', url, token)).statusCode).toBe(200);
+
+    // A human admin who may delete clients.
+    const humanId = (
+      await app().repositories.users.create({ realmId: realm.id }, testPrimaryCredential())
+    ).id;
+    await app().repositories.adminGrants.create({
+      userId: humanId,
+      role: { kind: 'built-in', name: 'security-admin' },
+      targetRealmId: realm.id,
+      createdBy: null,
+    });
+    const human = await signBoundAccessToken(app(), realm, {
+      sub: humanId,
+      clientId: 'admin-console',
+      aud: ADMIN,
+      scope: 'qauth:admin:read qauth:admin:write qauth:admin:security',
+    });
+    const clientUrl = `/admin/v1-rc.0/realms/${realm.id}/clients/${client.id}`;
+    const read = await send('GET', clientUrl, human);
+    expect(read.statusCode, read.body).toBe(200);
+    const etag = read.headers['etag'] as string;
+    const refused = await send('DELETE', clientUrl, human, undefined, { 'if-match': etag });
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json()).toMatchObject({ code: 'conflict' });
+    // The database refuses it too, whoever deletes it.
+    await expect(
+      app().dbPool.query('DELETE FROM oauth_clients WHERE id = $1', [client.id])
+    ).rejects.toMatchObject({ code: '23503' });
+
+    // The binding gone by hand: the account is still a service account's,
+    // so its live token makes no admin call, as a person's or otherwise.
+    await app().dbPool.query('DELETE FROM service_accounts WHERE user_id = $1', [robot]);
+    expect((await send('GET', url, token)).statusCode).toBe(401);
   });
 });

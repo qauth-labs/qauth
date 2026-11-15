@@ -104,7 +104,14 @@ function server(options: { serviceAccount: boolean } = { serviceAccount: true })
       users: {
         findById: vi.fn(async (realmId: string, id: string) =>
           realmId === OPERATOR && id === ROBOT
-            ? { id: ROBOT, realmId: OPERATOR, enabled: true, notValidBefore: null, createdAt: 0 }
+            ? {
+                id: ROBOT,
+                realmId: OPERATOR,
+                enabled: true,
+                notValidBefore: null,
+                createdAt: 0,
+                isServiceAccount: options.serviceAccount,
+              }
             : undefined
         ),
       },

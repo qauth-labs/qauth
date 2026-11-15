@@ -22,7 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refresh token. A disabled service account, or one whose account or client
   is disabled, gets no token (`invalid_client`), and its tokens make no
   admin call from the next request on; the admin API also takes its token
-  only from its own client. A service account may file and read approvals
+  only from its own client. Disabling a service account disables its account
+  too, so a token issued before stays refused once it is enabled again, and
+  the admin API's `clients.disable` ends every admin token of a service
+  account's client it suspends. A service account's client is not deleted
+  while the service account binds it (`clients.delete` answers `409`, and the
+  foreign key refuses it), and being a service account is a lasting fact of
+  the account (`users.is_service_account`, which a trigger keeps): a marked
+  account whose binding is gone is refused, never taken for a person's. A
+  service account never takes the system client's id, and the system
+  client's provisioner never rewrites a service account's client. A service account may file and read approvals
   for its own requests, but never gives one and never counts as one of two
   admins: every approval of its security operations comes from a human
   admin, and a request no human could approve fails closed

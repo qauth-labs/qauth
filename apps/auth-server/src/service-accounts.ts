@@ -74,9 +74,13 @@ async function main(): Promise<number> {
       repositories: ['realms', 'serviceAccounts', 'adminGrants', 'adminAuditLog'],
     });
     await server.ready();
+    // The system client's id, as the auth server and the seed read it: a
+    // service account never takes it.
+    const systemClientId = process.env['SYSTEM_CLIENT_ID']?.trim();
     return await runServiceAccountsCommand(command, {
       fastify: server,
       operatingSystemUser: operatingSystemUser(),
+      reservedClientIds: systemClientId ? [systemClientId] : [],
       out: (line) => process.stdout.write(`${line}\n`),
       err: (line) => process.stderr.write(`${line}\n`),
     });

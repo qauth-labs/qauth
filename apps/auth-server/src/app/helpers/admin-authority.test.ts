@@ -48,11 +48,17 @@ const REALMS: Record<string, IssuerRealm> = {
 
 const USERS: Record<
   string,
-  { id: string; realmId: string; enabled: boolean; notValidBefore?: number | null }
+  {
+    id: string;
+    realmId: string;
+    enabled: boolean;
+    notValidBefore?: number | null;
+    isServiceAccount?: boolean;
+  }
 > = {
   [OPERATOR_ADMIN]: { id: OPERATOR_ADMIN, realmId: OPERATOR, enabled: true },
   [ADMIN_OF_A]: { id: ADMIN_OF_A, realmId: REALM_A, enabled: true },
-  [ROBOT]: { id: ROBOT, realmId: OPERATOR, enabled: true },
+  [ROBOT]: { id: ROBOT, realmId: OPERATOR, enabled: true, isServiceAccount: true },
 };
 
 let grantSeq = 0;
@@ -693,6 +699,27 @@ describe('resolveAdminAuthority', () => {
           JSON.stringify(client)
         ).resolves.toEqual({ allowed: false, refusal: 'account_inactive' });
       }
+    });
+
+    // Being a service account is a lasting fact of the account: a marked
+    // account whose binding is gone is never taken for a person's, and a
+    // binding to an account not marked fails closed too.
+    it('refuses a marked account whose binding is gone, and a binding to an unmarked account', async () => {
+      const unbound = server([grant(ROBOT, REALM_A, 'security-admin')], { serviceAccounts: [] });
+      for (const clientId of [ROBOT_CLIENT, 'admin-console', null]) {
+        await expect(asRobot(unbound, clientId), String(clientId)).resolves.toEqual({
+          allowed: false,
+          refusal: 'account_inactive',
+        });
+      }
+      const unmarked = server([grant(ROBOT, REALM_A, 'security-admin')], {
+        serviceAccounts: [robot()],
+        users: { ...USERS, [ROBOT]: { ...USERS[ROBOT], isServiceAccount: false } },
+      });
+      await expect(asRobot(unmarked)).resolves.toEqual({
+        allowed: false,
+        refusal: 'account_inactive',
+      });
     });
 
     it('refuses one whose realm is no longer the operator realm', async () => {

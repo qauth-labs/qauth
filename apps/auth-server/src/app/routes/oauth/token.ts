@@ -1424,9 +1424,10 @@ async function handleAuthorizationCode(
  * none and whose `sub` is its `client_id`.
  *
  * A service account that may not act now gets no token at all, whatever it
- * asks for: one that is disabled, whose account is disabled, whose realm is
- * no longer the operator realm, or whose client no longer authenticates with
- * `private_key_jwt` (`serviceAccountRefusal`). It is refused as a disabled
+ * asks for: one that is disabled, whose account is disabled or not marked a
+ * service account's, whose realm is no longer the operator realm, or whose
+ * client no longer authenticates with `private_key_jwt`
+ * (`serviceAccountRefusal`). It is refused as a disabled
  * client is, `invalid_client` with no description (RFC 6749 §5.2), and the
  * event records why. Its client is enabled and not suspended: client
  * authentication refused it otherwise.
@@ -1445,11 +1446,19 @@ async function serviceAccountSubject(
     refused === null
       ? await fastify.repositories.users.findById(ctx.realmId, serviceAccount.userId)
       : undefined;
+  // The token's `iat` is in whole seconds: the account must be usable from
+  // that second on, or the admin API would refuse the token it got (#748).
+  const issuedAtMs = Math.floor(Date.now() / 1000) * 1000;
   const reason =
     refused ??
-    (user === undefined || accountCredentialRefusal(user, Date.now()) !== null
+    (user === undefined || accountCredentialRefusal(user, issuedAtMs) !== null
       ? 'account_inactive'
-      : null);
+      : // A row that binds an account not marked a service account's was
+        // written some other way than the repository: its token would act as
+        // that account, a person's perhaps.
+        user.isServiceAccount !== true
+        ? 'account_not_marked'
+        : null);
   if (reason !== null) {
     await emitRequestFailed(
       ctx,

@@ -9204,7 +9204,14 @@ describe('POST /oauth/token — a service account (#522)', () => {
       async (realmId: string, id: string) =>
         options.user === null || realmId !== REALM.id || id !== SA_USER
           ? undefined
-          : { id: SA_USER, realmId: REALM.id, enabled: true, notValidBefore: null, ...options.user }
+          : {
+              id: SA_USER,
+              realmId: REALM.id,
+              enabled: true,
+              notValidBefore: null,
+              isServiceAccount: true,
+              ...options.user,
+            }
     );
     (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue(
       (options.grants ?? ['viewer']).map(liveBuiltInGrant)
@@ -9324,6 +9331,13 @@ describe('POST /oauth/token — a service account (#522)', () => {
       'account_inactive',
     ],
     ['a service account whose account is gone', { user: null }, 'account_inactive'],
+    // A row that binds an account not marked a service account's was written
+    // some other way: its token would act as that account.
+    [
+      'a binding to an account not marked a service account',
+      { user: { isServiceAccount: false } },
+      'account_not_marked',
+    ],
   ] as const)('gives %s no token, as a disabled client', async (_label, options, reason) => {
     const { fastify, ctx } = stub(options);
     const refused = run(fastify, ctx, await request());
