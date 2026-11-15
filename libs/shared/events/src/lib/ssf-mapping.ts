@@ -29,6 +29,7 @@ export const CAEP_SESSION_REVOKED = `${CAEP_EVENT_BASE}session-revoked`;
 export const CAEP_TOKEN_CLAIMS_CHANGE = `${CAEP_EVENT_BASE}token-claims-change`;
 export const CAEP_CREDENTIAL_CHANGE = `${CAEP_EVENT_BASE}credential-change`;
 export const CAEP_ASSURANCE_LEVEL_CHANGE = `${CAEP_EVENT_BASE}assurance-level-change`;
+export const RISC_ACCOUNT_PURGED = `${RISC_EVENT_BASE}account-purged`;
 export const RISC_ACCOUNT_DISABLED = `${RISC_EVENT_BASE}account-disabled`;
 export const RISC_ACCOUNT_ENABLED = `${RISC_EVENT_BASE}account-enabled`;
 
@@ -142,6 +143,13 @@ export const STANDARD_SSF_EVENTS: readonly SsfEventDefinition[] = Object.freeze<
       },
       reason_admin: REASON_ADMIN,
     },
+  },
+  {
+    uri: RISC_ACCOUNT_PURGED,
+    name: 'account-purged',
+    definedIn: 'RISC 1.0 §2.2',
+    description: 'The account identified by the subject has been permanently deleted.',
+    members: {},
   },
   {
     uri: RISC_ACCOUNT_DISABLED,

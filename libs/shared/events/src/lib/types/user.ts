@@ -7,6 +7,7 @@ import {
   CAEP_SESSION_REVOKED,
   RISC_ACCOUNT_DISABLED,
   RISC_ACCOUNT_ENABLED,
+  RISC_ACCOUNT_PURGED,
 } from '../ssf-mapping';
 import {
   FIRST_RELEASE,
@@ -307,21 +308,22 @@ export const userEnabled = defineEventType({
   ssf: { event: RISC_ACCOUNT_ENABLED },
 });
 
-/** Why an operator's or an admin's action ended a session (#893). The set may grow. */
-export const SESSION_REVOCATION_REASONS = ['account_disabled'] as const;
+/** Why an operator's or an admin's action ended a session (#893, #681). The set may grow. */
+export const SESSION_REVOCATION_REASONS = ['account_disabled', 'account_deleted'] as const;
 
 /**
  * One browser session an operator's or an admin's action on the account
  * ended (#893), recorded in the transaction that ended it, so a receiver
- * that acts per session learns of each: today only the disablement of the
- * account by the operator tool, beside its `user.disabled`.
+ * that acts per session learns of each: the disablement of the account by
+ * the operator tool, beside its `user.disabled`, and an admin's deletion of
+ * the account (#681), beside its `user.deleted`.
  */
 export const userSessionRevoked = defineEventType({
   name: 'user.session_revoked',
   version: 1,
   rc: 0,
   description:
-    "An operator's or an admin's action on an account ended one of its browser sessions, not the person's own sign-out: the operator tool disabled the account, and ended each session it held. One event per session ended, in the transaction that ended it.",
+    "An operator's or an admin's action on an account ended one of its sessions, not the person's own sign-out: the operator tool disabled the account, or an admin deleted it, and ended each session it held, a sign-up's or a reset's logout-only session included. One event per session ended, in the transaction that ended it.",
   category: 'admin',
   severity: 'info',
   since: 'v0.2.4',
@@ -329,7 +331,7 @@ export const userSessionRevoked = defineEventType({
   data: z.strictObject({
     sid: recordId('The session that ended: the `sid` its ID tokens carry (#549).'),
     reason: extensibleEnum(SESSION_REVOCATION_REASONS).describe(
-      '`account_disabled`: the account was disabled. The set may grow in a minor release.'
+      '`account_disabled`: the account was disabled. `account_deleted`: an admin deleted the account. The set may grow in a minor release.'
     ),
   }),
   security: true,
@@ -343,10 +345,35 @@ export const userSessionRevoked = defineEventType({
           account_disabled: {
             en: 'The account was disabled; every session it held was revoked.',
           },
+          account_deleted: {
+            en: 'The account was deleted; every session it held was revoked.',
+          },
         },
       },
     },
   },
+});
+
+/**
+ * An admin deleted an account (ADR-020 §3, #681): the admin API's security
+ * operation `users.delete`, run with its approval. Recorded in the
+ * transaction of the deletion, after the `user.session_revoked` of each
+ * session it ended; the subject is the account, which no longer exists, and
+ * the actor the admin or the service account that filed it.
+ */
+export const userDeleted = defineEventType({
+  name: 'user.deleted',
+  version: 1,
+  rc: 0,
+  description:
+    'An admin deleted an account, at once: the account and everything that hangs off it are gone, its credentials, recovery codes, consents, attributes, upstream identities and refresh tokens included. Every session it held ended first, in the same transaction, each with a `user.session_revoked`, and each client a session had signed in to with a registered `backchannel_logout_uri` was queued a logout token. Its access tokens no longer introspect. A deletion of an id the realm does not hold changes nothing and records no event.',
+  category: 'admin',
+  severity: 'warning',
+  since: 'v0.2.8',
+  subject: 'user',
+  data: z.strictObject({}),
+  security: true,
+  ssf: { event: RISC_ACCOUNT_PURGED },
 });
 
 /**
@@ -691,4 +718,5 @@ export const USER_EVENT_TYPES = [
   userRecoveryCodesRegenerated,
   userAgentOwnershipRefused,
   userVerified,
+  userDeleted,
 ] as const;

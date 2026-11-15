@@ -10,6 +10,7 @@ import {
   QAUTH_TOKEN_REVOKED,
   RISC_ACCOUNT_DISABLED,
   RISC_ACCOUNT_ENABLED,
+  RISC_ACCOUNT_PURGED,
   ssfStreamVerificationRequested,
 } from '@qauth-labs/shared-events';
 import { describe, expect, it, vi } from 'vitest';
@@ -269,6 +270,7 @@ describe('the SETs of mapped event types (#540)', () => {
   const userDisabled = typeOf('user.disabled');
   const userEnabled = typeOf('user.enabled');
   const userSessionRevoked = typeOf('user.session_revoked');
+  const userDeleted = typeOf('user.deleted');
   const userPasswordReset = typeOf('user.password_reset');
   const userPasswordChanged = typeOf('user.password_changed');
   const userCredentialAdded = typeOf('user.credential_added');
@@ -321,6 +323,11 @@ describe('the SETs of mapped event types (#540)', () => {
       category: 'admin',
       actor: { type: 'operator_cli', id: 'root' },
       data: { sid: '0192a000-0000-7000-8000-0000000000d3', reason: 'account_disabled' },
+    }),
+    // An admin's deletion of the account through the admin API (#681).
+    [userDeleted.type]: event(userDeleted.type, {
+      category: 'admin',
+      actor: { type: 'user', id: '0192a000-0000-7000-8000-0000000000a9' },
     }),
     // The owner's password reset (#642), from the client the sign-in was for.
     [userPasswordReset.type]: event(userPasswordReset.type, { client: { id: 'notes-app' } }),
@@ -473,6 +480,21 @@ describe('the SETs of mapped event types (#540)', () => {
         events: { [uri]: { event_timestamp: SECONDS, initiating_entity: 'admin' } },
       });
     }
+  });
+
+  it("sends an admin's deletion of an account as RISC account-purged about the user, by an admin (#681)", async () => {
+    const { outcome, claims, hasSubject } = await signed(SAMPLES[userDeleted.type]);
+    expect(outcome).toEqual({ ok: true, statusCode: 202 });
+    expect(hasSubject).toHaveBeenCalledWith(STREAM, { type: 'user', id: USER });
+    expect(claims).toEqual({
+      jti: EVENT_ID,
+      iat: SECONDS,
+      aud: 'receiver',
+      sub_id: { format: 'iss_sub', iss: ISSUER, sub: USER },
+      events: {
+        [RISC_ACCOUNT_PURGED]: { event_timestamp: SECONDS, initiating_entity: 'admin' },
+      },
+    });
   });
 
   it('sends the owner’s password reset as CAEP credential-change about the user, by the user (#642)', async () => {

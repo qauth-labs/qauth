@@ -14,6 +14,7 @@ import {
   QAUTH_TOKEN_REVOKED,
   RISC_ACCOUNT_DISABLED,
   RISC_ACCOUNT_ENABLED,
+  RISC_ACCOUNT_PURGED,
   ssfEventMembers,
   ssfMappingOf,
   STANDARD_SSF_EVENTS,
@@ -441,6 +442,28 @@ describe('the mapping table of #540', () => {
   it('maps user disable and enable to RISC account-disabled and account-enabled (#748)', () => {
     expect(eventOf('urn:qauth:event:user.disabled:v1-rc.0')).toBe(RISC_ACCOUNT_DISABLED);
     expect(eventOf('urn:qauth:event:user.enabled:v1-rc.0')).toBe(RISC_ACCOUNT_ENABLED);
+  });
+
+  it("maps an admin's deletion of an account to RISC account-purged, and each session it ended to CAEP session-revoked (#681)", () => {
+    expect(eventOf('urn:qauth:event:user.deleted:v1-rc.0')).toBe(RISC_ACCOUNT_PURGED);
+    expect(STANDARD_SSF_EVENTS.find((event) => event.uri === RISC_ACCOUNT_PURGED)).toMatchObject({
+      name: 'account-purged',
+      definedIn: 'RISC 1.0 §2.2',
+      members: {},
+    });
+    const revoked = getEventType('urn:qauth:event:user.session_revoked:v1-rc.0');
+    const mapping = revoked === undefined ? undefined : ssfMappingOf(revoked);
+    if (mapping === undefined) throw new Error('user.session_revoked has no SSF mapping');
+    const members = ssfEventMembers(mapping, {
+      time: '2026-11-15T09:30:00.000Z',
+      category: 'admin',
+      actor: { type: 'user', id: '0192a000-0000-7000-8000-0000000000e3' },
+      data: { sid: '0192a000-0000-7000-8000-0000000000e5', reason: 'account_deleted' },
+    });
+    expect(members).toMatchObject({
+      reason_admin: { en: 'The account was deleted; every session it held was revoked.' },
+      initiating_entity: 'admin',
+    });
   });
 
   it('maps a replay that revokes a refresh family to CAEP session-revoked', () => {
