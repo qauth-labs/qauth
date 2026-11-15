@@ -1,8 +1,12 @@
 import type { BrowserSession } from '@qauth-labs/fastify-plugin-sessions';
+import { eventRequest } from '@qauth-labs/shared-events';
+import type { FastifyRequest } from 'fastify';
 
+import { env } from '../../config/env';
 import { toStoredAssuranceLevel } from './acr-claims';
 import type { AuthorizationCodeGrant } from './authorization-code';
 import type { EnvironmentPolicy } from './environment-policy';
+import type { RealmRow } from './request-realm';
 
 /**
  * WHO AN AUTHORIZATION REQUEST IS DECIDED FOR: the browser session it comes
@@ -13,17 +17,36 @@ import type { EnvironmentPolicy } from './environment-policy';
  */
 
 /**
- * A user an interaction just registered (#640; ADR-017 Decisions 8 and 10):
- * the new account, with no browser session and no authentication time. A
- * request is decided for it as for a session that authenticated at no known
- * time: a dangerous scope, `prompt=login`, `max_age` or a client that forces a
- * fresh login needs a sign-in first, and its code carries no `auth_time`, no
- * `acr` and no session.
+ * A user an interaction just registered (#640; ADR-017 Decisions 8 and 10),
+ * or whose password it just reset (#642): the account, with no browser
+ * session and no authentication time. A request is decided for it as for a
+ * session that authenticated at no known time: a dangerous scope,
+ * `prompt=login`, `max_age` or a client that forces a fresh login needs a
+ * sign-in first, and its code carries no `auth_time`, no `amr` and no `acr`.
+ * Its code names a logout-only session (#1144), which the mint writes: no
+ * cookie names it, and the account's session endings send the client a
+ * logout token with its `sid`.
  */
 export interface RegisteredSubject {
   readonly registered: true;
   readonly realmId: string;
   readonly userId: string;
+  /**
+   * What finished the interaction (#1144): a registration, or a password
+   * reset, which advanced the account's session epoch past 0.
+   */
+  readonly finishedBy: 'registration' | 'reset';
+}
+
+/**
+ * What {@link subjectGrant} needs for a {@link RegisteredSubject}'s
+ * logout-only session (#1144): the realm's browser session lifetime, and the
+ * request that finished it, whose address and `User-Agent` the account page
+ * shows.
+ */
+export interface SubjectGrantContext {
+  readonly realm: Pick<RealmRow, 'ssoMaxLifespan'>;
+  readonly request: Pick<FastifyRequest, 'ip' | 'headers'>;
 }
 
 /** Who an authorization request is decided for: a browser session, or a user just registered. */
@@ -55,25 +78,55 @@ export function subjectEnforcesDangerousStepUp(
   return isRegisteredSubject(subject) ? true : policy.agentStepUpEnforced;
 }
 
-/**
- * What a code binds of its subject's authentication: the browser session's
- * `auth_time`, `amr`, assurance level, end and `sid`, or, for a registration
- * or a reset, none of them (ADR-017 Decision 10: no `auth_time`, no `amr`, no
- * session).
- */
-export function subjectGrant(
-  subject: AuthorizationSubject
-): Pick<
+/** What a code binds of its subject's authentication. */
+type SubjectGrant = Pick<
   AuthorizationCodeGrant,
   'authTime' | 'amr' | 'assuranceLevel' | 'sessionExpiresAt' | 'session'
-> {
+>;
+
+/**
+ * What a code binds of its subject's authentication: the browser session's
+ * `auth_time`, `amr`, assurance level, end and `sid`. For a registration or a
+ * reset, none of the authentication (ADR-017 Decision 10: no `auth_time`, no
+ * `amr`, no `acr`), and a logout-only session the mint writes (#1144), which
+ * ends when a browser session the realm started now would: its `sid` goes to
+ * the ID token, and its end caps the refresh family.
+ *
+ * @throws Error for a registered subject without `context`, which only a
+ *   caller that cannot mint for one omits
+ */
+export function subjectGrant(subject: BrowserSession): SubjectGrant;
+export function subjectGrant(
+  subject: AuthorizationSubject,
+  context: SubjectGrantContext
+): SubjectGrant;
+export function subjectGrant(
+  subject: AuthorizationSubject,
+  context?: SubjectGrantContext
+): SubjectGrant {
   if (isRegisteredSubject(subject)) {
+    if (context === undefined) {
+      throw new Error('a registration or a reset needs its realm and request to name a session');
+    }
+    const expiresAt = Date.now() + (context.realm.ssoMaxLifespan ?? env.SESSION_COOKIE_TTL) * 1000;
+    const userAgent = context.request.headers['user-agent'];
+    // As a browser session stores them (`createBrowserSession`).
+    const origin = eventRequest({
+      ip: context.request.ip,
+      userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+    });
     return {
       authTime: null,
       amr: null,
       assuranceLevel: null,
-      sessionExpiresAt: null,
-      session: null,
+      sessionExpiresAt: expiresAt,
+      session: {
+        realmId: subject.realmId,
+        logoutOnly: subject.finishedBy,
+        expiresAt,
+        ipAddress: origin?.ip ?? null,
+        userAgent: origin?.userAgent ?? null,
+      },
     };
   }
   return {

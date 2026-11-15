@@ -1,5 +1,5 @@
 import type { ActClaim } from '@qauth-labs/fastify-plugin-jwt';
-import { InvalidSessionCursorError } from '@qauth-labs/fastify-plugin-sessions';
+import { InvalidSessionCursorError, type SessionKind } from '@qauth-labs/fastify-plugin-sessions';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { InvalidCursorError } from './api-request-errors';
@@ -53,6 +53,11 @@ export interface AccountSessionOwner {
 /** One live session of the account, as the page and the API show it. */
 export interface AccountSession {
   readonly sid: string;
+  /**
+   * A browser's sign-in, or the logout-only session a registration or a
+   * password reset left (#1144), which no browser holds.
+   */
+  readonly kind: SessionKind;
   /** Whether it is the caller's own: the page's browser session, or the token's `sid`. */
   readonly current: boolean;
   readonly createdAt: number;
@@ -101,6 +106,7 @@ export async function pageAccountSessions(
   return {
     items: listed.items.map((item) => ({
       sid: item.sid,
+      kind: item.kind,
       current: page.currentSid !== undefined && item.sid === page.currentSid,
       createdAt: item.createdAt,
       lastSeenAt: item.lastSeenAt,
@@ -170,6 +176,15 @@ export async function endAccountSession(
     [result.session.authTime],
     'session_ended'
   );
+  // And, for a logout-only session (#1144), the families its codes started,
+  // which `session_refresh_families` links to it: its codes carry no
+  // `auth_time`, so the sweep above cannot find them. A browser session has
+  // no links, and this ends nothing more for it.
+  await fastify.repositories.refreshTokens.revokeFamiliesOfSession(
+    userId,
+    result.session.id,
+    'session_ended'
+  );
   if (result.outcome === 'already_ended') return { kind: 'not_found' };
   // The stored id, lowercase as the ID tokens' `sid` is, which a Shared
   // Signals receiver matches on.
@@ -197,23 +212,42 @@ export async function endAllAccountSessions(
   options: { readonly keepSid?: string } = {}
 ): Promise<readonly string[]> {
   const { realmId, userId } = owner;
+  // A logout-only session (#1144) is no caller's own to keep: no browser holds
+  // it, and signing out everywhere ends it with its logout tokens, even when
+  // the caller's token names it.
+  const keepSid =
+    options.keepSid === undefined || (await isLogoutOnlySession(fastify, realmId, options.keepSid))
+      ? undefined
+      : options.keepSid;
   const ended = await endBrowserSessions(fastify, realmId, userId, {
     reason: 'sign_out_everywhere',
-    ...(options.keepSid === undefined ? {} : { exceptSid: options.keepSid }),
+    ...(keepSid === undefined ? {} : { exceptSid: keepSid }),
   });
   // Codes first: one redeemed after the sweep below would mint a refresh
   // token that survives it.
   await fastify.repositories.authorizationCodes.invalidateForUser(userId);
   await fastify.repositories.refreshTokens.revokeAllForUser(userId, 'logout');
-  const kept =
-    options.keepSid !== undefined &&
-    (await isLiveSessionOf(fastify, realmId, userId, options.keepSid));
+  const kept = keepSid !== undefined && (await isLiveSessionOf(fastify, realmId, userId, keepSid));
   if (kept) {
     for (const sid of ended) await recordSignedOut(request, owner, sid);
   } else {
     await recordSignedOut(request, owner, undefined);
   }
   return ended;
+}
+
+/** A session id as the tokens carry it: a UUID. */
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Whether `sid` names a logout-only session of the realm (#1144), whatever its state. */
+async function isLogoutOnlySession(
+  fastify: FastifyInstance,
+  realmId: string,
+  sid: string
+): Promise<boolean> {
+  if (!SESSION_ID.test(sid)) return false;
+  const row = await fastify.repositories.sessions.findById(realmId, sid.toLowerCase());
+  return row?.kind !== undefined && row.kind !== 'browser';
 }
 
 /** Whether `sid` names a live session of the user in the realm. */

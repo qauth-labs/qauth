@@ -18,6 +18,24 @@ export const SESSION_REVOKED_REASONS = [
 
 export type SessionRevokedReason = (typeof SESSION_REVOKED_REASONS)[number];
 
+/**
+ * What a session row is (#1144): the same list as `SESSION_KINDS` in
+ * `@qauth-labs/infra-db`, whose CHECK `sessions_kind_valid` accepts exactly
+ * these, repeated for the reason {@link SESSION_REVOKED_REASONS} is.
+ *
+ * - `browser` — a browser's sign-in, held by its session cookie.
+ * - `registration`, `reset` — a logout-only session: a registration or a
+ *   password reset finished an authorization interaction and signed nobody
+ *   in (ADR-017 Decisions 8 and 10). It carries the code's `sid` so the
+ *   account's session endings reach the client by back-channel logout. The
+ *   service never hands one out as a {@link BrowserSession}; it lists and
+ *   ends as a browser session does, and lapses at its absolute end alone,
+ *   since no browser uses it to keep it from going idle.
+ */
+export const SESSION_KINDS = ['browser', 'registration', 'reset'] as const;
+
+export type SessionKind = (typeof SESSION_KINDS)[number];
+
 /** The eIDAS level of assurance a session's authentication established. */
 export type SessionAssuranceLevel = 'substantial' | 'high';
 
@@ -48,6 +66,11 @@ export interface SessionRecord {
   newCredentialIds?: string[];
   /** NULL when nothing above `low` was established. */
   assuranceLevel: SessionAssuranceLevel | null;
+  /**
+   * What the row is (#1144). Absent reads as `browser`: a store that predates
+   * the column, or a record built by hand.
+   */
+  kind?: SessionKind;
   ipAddress: string | null;
   userAgent: string | null;
   /** The absolute end set at creation. */
@@ -90,7 +113,7 @@ export interface StoredSession {
 /**
  * The part of a live session the cache holds. The address and the user agent
  * stay in Postgres, and so do the revocation columns: only a live session is
- * cached.
+ * cached. So does the kind: only a browser session is cached (#1144).
  */
 export type CachedSessionRecord = Omit<
   SessionRecord,
@@ -100,6 +123,7 @@ export type CachedSessionRecord = Omit<
   | 'revokedReason'
   | 'recoveryCodeUsed'
   | 'newCredentialIds'
+  | 'kind'
 >;
 
 /**
@@ -257,6 +281,8 @@ export interface ListedSession {
   sid: string;
   realmId: string;
   userId: string;
+  /** What the session is (#1144): a browser's sign-in, or a logout-only one. */
+  kind: SessionKind;
   /** When the user authenticated (the ID token's `auth_time`), in epoch milliseconds. */
   authTime: number;
   amr: readonly string[];

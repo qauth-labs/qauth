@@ -273,3 +273,71 @@ describe('refresh-token purge', () => {
     expect(before).toBe(after);
   });
 });
+
+describe('the refresh families of a logout-only session (#1144)', () => {
+  const FAMILY_ID = '0192f1c4-4444-7000-8000-000000000004';
+  const SESSION_ID = '0192f1c4-5555-7000-8000-000000000005';
+  const row = {
+    userId: USER_ID,
+    oauthClientId: CLIENT_ID,
+    tokenHash: 'a'.repeat(64),
+    familyId: FAMILY_ID,
+    familyCreatedAt: 1_700_000_000_000,
+    familySessionExpiresAt: null,
+    authTime: null,
+    amr: null,
+    expiresAt: 1_700_086_400_000,
+  };
+
+  it('links a family’s first token to its code’s session, when that is a logout-only one', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createRefreshTokensRepository(db)
+      .create({ ...row, authorizationCodeId: CODE_ID }, db)
+      .catch(() => undefined);
+
+    const sql = texts(queries);
+    const insert = sql.findIndex((t) => t.startsWith('insert into "refresh_tokens"'));
+    const link = sql.findIndex((t) =>
+      t.trim().startsWith('insert into "session_refresh_families"')
+    );
+    expect(link).toBeGreaterThan(insert);
+    // Through the code's session, and only for a session no browser holds.
+    expect(sql[link]).toContain(
+      'join "sessions" on "sessions"."id" = "authorization_codes"."session_id"'
+    );
+    expect(sql[link]).toContain('"authorization_codes"."id" = $');
+    expect(sql[link]).toContain(`"sessions"."kind" <> 'browser'`);
+    expect(sql[link]).toContain('on conflict do nothing');
+    expect(queries[link].values).toEqual(expect.arrayContaining([FAMILY_ID, CODE_ID]));
+    // The refresh row itself names no session (#549).
+    expect(JSON.stringify(queries[insert].values)).not.toContain(SESSION_ID);
+  });
+
+  it('links nothing for a rotation, which no code started', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createRefreshTokensRepository(db)
+      .create({ ...row }, db)
+      .catch(() => undefined);
+
+    expect(texts(queries).some((t) => t.includes('session_refresh_families'))).toBe(false);
+  });
+
+  it('revokes the user’s families the session’s links name, and no one else’s', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createRefreshTokensRepository(db).revokeFamiliesOfSession(
+      USER_ID,
+      SESSION_ID,
+      'session_ended',
+      db
+    );
+
+    const update = texts(queries).find((t) => t.startsWith('update "refresh_tokens"'));
+    expect(update).toContain('"refresh_tokens"."user_id" = $');
+    expect(update).toContain(
+      '"refresh_tokens"."family_id" in (select "family_id" from "session_refresh_families" where "session_refresh_families"."session_id" = $'
+    );
+  });
+});

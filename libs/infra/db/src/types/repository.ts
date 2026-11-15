@@ -834,6 +834,20 @@ export interface RefreshTokensRepository {
     tx?: DbClient
   ): Promise<number>;
   /**
+   * Revoke the refresh families the codes of one session started (#1144):
+   * every unrevoked token of the user, expired ones too, of each family
+   * `session_refresh_families` links to `sessionId`. Only a logout-only
+   * session's families are linked, at the code exchange that starts them.
+   *
+   * @returns Count of rows revoked by this call.
+   */
+  revokeFamiliesOfSession(
+    userId: string,
+    sessionId: string,
+    reason: string,
+    tx?: DbClient
+  ): Promise<number>;
+  /**
    * Revoke every active refresh token one user holds for one client.
    *
    * Consent revocation calls this: withdrawing a grant must also end the

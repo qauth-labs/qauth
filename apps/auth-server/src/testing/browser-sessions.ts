@@ -137,6 +137,8 @@ export function createFakeSessionService(): FakeSessionService {
   function listed(session: BrowserSession): ListedSession {
     return {
       ...session,
+      // The fixture holds browser sessions only.
+      kind: 'browser',
       ipAddress: null,
       userAgent: null,
       state: Date.now() < session.expiresAt ? 'live' : 'expired',

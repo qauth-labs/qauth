@@ -408,9 +408,15 @@ Beyond the standard `iss` / `sub` / `aud` / `exp` / `iat`, `id_token` carries
 
 `sid` names the browser session the user signed in with on the auth server,
 and is what back-channel logout will name when that session ends (ADR-019
-Decisions 3 and 4). A code from the headless Bearer hand-off of
-`/oauth/authorize` has no browser session, so its ID token has no `sid`. A
-sign-out spends the codes minted under the session that are not yet redeemed.
+Decisions 3 and 4). After a registration or a password reset nobody signed
+in, but the ID token still has a `sid`: it names a logout-only session that
+no browser holds and that signs nobody in (ADR-017, amended 2026-11-15).
+"Sign out everywhere", a later reset, disabling the account and RP-initiated
+logout with that ID token end it, and back-channel logout names it, so your
+app's session from the sign-up ends with the account's other sessions. A
+code from the headless Bearer hand-off of `/oauth/authorize` has no browser
+session, so its ID token has no `sid`. A sign-out spends the codes minted
+under the session that are not yet redeemed.
 The access token, the introspection response and the refresh token never
 carry `sid`, and discovery does not advertise it yet.
 
@@ -877,6 +883,10 @@ What happens:
   or one without `sid` (an ID token minted before ID tokens carried it), is
   suspect (§2) and gets the confirmation step. So does a hint of an app that
   was deleted, disabled or suspended since.
+- **The hint is a sign-up's or a reset's ID token.** Its `sid` names a
+  logout-only session, which no browser holds. That session ends at once on
+  the hint alone, and the browser goes back to the registered URI. A session
+  the browser holds itself is then handled as above.
 - **Any other signed-in browser** gets a confirmation step: sign out, sign out
   of all accounts, or stay signed in. Nothing ends until the person answers.
   So a request without a valid hint, such as a cross-site image tag, ends
