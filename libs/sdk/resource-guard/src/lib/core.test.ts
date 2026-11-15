@@ -478,3 +478,145 @@ describe('ResourceGuard — challenges without scopesSupported are those of 0.2.
     }
   );
 });
+
+// #1088 — a resource whose operations each need their own scope (an MCP
+// server with one scope per tool): none is required of every request, and
+// every one is advertised.
+describe('ResourceGuard — scopesSupported', () => {
+  const METADATA = `resource_metadata="${RESOURCE}/.well-known/oauth-protected-resource"`;
+  const TOOL_SCOPES = ['notes:read', 'notes:write', 'notes:delete'];
+
+  function guard(config: { requiredScopes?: string[]; scopesSupported?: string[] }) {
+    return new ResourceGuard({
+      resource: RESOURCE,
+      authorizationServer: ISSUER,
+      ...config,
+      fetch: jwksFetch({ keys: [publicJwk] }),
+    });
+  }
+
+  async function missingTokenError(
+    target: ResourceGuard,
+    authorization: string | undefined,
+    scopes?: string[]
+  ): Promise<MissingTokenError> {
+    const error = await target.authenticate(authorization, scopes).then(
+      () => expect.unreachable('should have thrown'),
+      (rejection: unknown) => rejection
+    );
+    expect(error).toBeInstanceOf(MissingTokenError);
+    return error as MissingTokenError;
+  }
+
+  it('refuses a requiredScopes entry missing from scopesSupported', () => {
+    expect(() =>
+      guard({ requiredScopes: ['notes:read', 'mcp:admin'], scopesSupported: TOOL_SCOPES })
+    ).toThrow(ResourceGuardConfigError);
+    expect(() =>
+      guard({ requiredScopes: ['notes:read', 'mcp:admin'], scopesSupported: TOOL_SCOPES })
+    ).toThrow('`scopesSupported` must hold every `requiredScopes` entry; missing: mcp:admin');
+    // An empty list leaves out every default.
+    expect(() => guard({ requiredScopes: ['notes:read'], scopesSupported: [] })).toThrow(
+      ResourceGuardConfigError
+    );
+  });
+
+  it('accepts a scopesSupported holding every requiredScopes entry, in any order', () => {
+    expect(
+      guard({ requiredScopes: ['notes:write', 'notes:read'], scopesSupported: TOOL_SCOPES })
+        .scopesSupported
+    ).toEqual(TOOL_SCOPES);
+  });
+
+  it('defaults to requiredScopes', () => {
+    expect(guard({ requiredScopes: ['notes:read'] }).scopesSupported).toEqual(['notes:read']);
+    expect(guard({}).scopesSupported).toEqual([]);
+  });
+
+  it('accepts a token that carries none of the supported scopes', async () => {
+    const perTool = guard({ scopesSupported: TOOL_SCOPES });
+    for (const claims of [{ sub: 'u' }, { sub: 'u', scope: 'other:scope' }]) {
+      const token = await signToken(claims, RESOURCE);
+      expect((await perTool.authenticate(`Bearer ${token}`)).sub).toBe('u');
+    }
+  });
+
+  it('lists every supported scope in the metadata', () => {
+    expect(
+      guard({ scopesSupported: TOOL_SCOPES }).getProtectedResourceMetadata().scopes_supported
+    ).toEqual(TOOL_SCOPES);
+  });
+
+  it('names every supported scope on the 401 of a call with no per-operation scopes', async () => {
+    const perTool = guard({ scopesSupported: TOOL_SCOPES });
+    const challenge = `Bearer scope="notes:read notes:write notes:delete", ${METADATA}`;
+    for (const authorization of [undefined, 'DPoP abc', 'Basic abc']) {
+      const error = await missingTokenError(perTool, authorization);
+      expect(error.requiredScopes).toEqual(TOOL_SCOPES);
+      expect(perTool.challengeHeader(error)).toBe(challenge);
+    }
+    expect(perTool.challengeHeader(await missingTokenError(perTool, undefined, []))).toBe(
+      challenge
+    );
+  });
+
+  it('names the per-operation scopes and requiredScopes when the call passes some', async () => {
+    const perTool = guard({ scopesSupported: TOOL_SCOPES });
+    const write = await missingTokenError(perTool, undefined, ['notes:write']);
+    expect(write.requiredScopes).toEqual(['notes:write']);
+    expect(perTool.challengeHeader(write)).toBe(`Bearer scope="notes:write", ${METADATA}`);
+
+    const withDefault = guard({ requiredScopes: ['notes:read'], scopesSupported: TOOL_SCOPES });
+    const both = await missingTokenError(withDefault, undefined, ['notes:delete']);
+    expect(withDefault.challengeHeader(both)).toBe(
+      `Bearer scope="notes:read notes:delete", ${METADATA}`
+    );
+  });
+
+  it('names only the asserted scope in the 403 of assertScopes', async () => {
+    const perTool = guard({ scopesSupported: TOOL_SCOPES });
+    const claims = await perTool.authenticate(`Bearer ${await signToken({ sub: 'u' }, RESOURCE)}`);
+    try {
+      perTool.assertScopes(claims, ['notes:write']);
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(InsufficientScopeError);
+      expect((error as InsufficientScopeError).requiredScopes).toEqual(['notes:write']);
+      expect(perTool.challengeHeader(error as InsufficientScopeError)).toBe(
+        `Bearer error="insufficient_scope", scope="notes:write", ${METADATA}`
+      );
+    }
+  });
+
+  it('requires requiredScopes and the per-call scopes only', async () => {
+    const withDefault = guard({ requiredScopes: ['notes:read'], scopesSupported: TOOL_SCOPES });
+    const reader = await signToken({ sub: 'u', scope: 'notes:read' }, RESOURCE);
+    expect((await withDefault.authenticate(`Bearer ${reader}`)).sub).toBe('u');
+
+    const nobody = await signToken({ sub: 'u' }, RESOURCE);
+    await expect(withDefault.authenticate(`Bearer ${nobody}`)).rejects.toMatchObject({
+      requiredScopes: ['notes:read'],
+      missingScopes: ['notes:read'],
+    });
+    await expect(
+      withDefault.authenticate(`Bearer ${reader}`, ['notes:write'])
+    ).rejects.toMatchObject({
+      requiredScopes: ['notes:read', 'notes:write'],
+      missingScopes: ['notes:write'],
+    });
+  });
+
+  it('de-duplicates scopesSupported and keeps offline_access out of what it advertises', async () => {
+    const perTool = guard({
+      scopesSupported: ['notes:read', 'offline_access', 'notes:write', 'notes:read'],
+    });
+    expect(perTool.scopesSupported).toEqual(['notes:read', 'offline_access', 'notes:write']);
+    expect(perTool.getProtectedResourceMetadata().scopes_supported).toEqual([
+      'notes:read',
+      'notes:write',
+    ]);
+    expect(perTool.challengeHeader(await missingTokenError(perTool, undefined))).toBe(
+      `Bearer scope="notes:read notes:write", ${METADATA}`
+    );
+  });
+});

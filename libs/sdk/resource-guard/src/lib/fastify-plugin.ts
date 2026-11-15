@@ -41,7 +41,8 @@ declare module 'fastify' {
     /**
      * preHandler that requires a valid, audience-bound bearer carrying the
      * guard's default `requiredScopes`. On success, `request.tokenClaims` is
-     * populated. Use as a route `preHandler`.
+     * populated. Use as a route `preHandler`. A request without a bearer gets
+     * a 401 naming the guard's `scopesSupported`.
      */
     requireBearer: preHandlerHookHandler;
     /**
