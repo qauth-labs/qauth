@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once, on a host that holds the database credentials and the KEK. In one
   transaction the key, and its hybrid partner, are marked `compromised` and
   leave the JWKS, their `kid`s go on the new `realm_key_denylist` table
-  (migration 0075), a new key signs in place of an active one with no
+  (migration 0076), a new key signs in place of an active one with no
   pre-publication, every refresh-token family of the realm created or used
   since the key may have signed (its activation time less the activation
   delay) is revoked, a critical `key.emergency_retired`
@@ -39,6 +39,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the SHA-256 of the canonical record `{ op, realm, kid, requester, nonce }`;
   only `token_signing` keys are retired this way. No admin API route starts it
   yet.
+
+- **The signer service: roles sign through the signer over mutual TLS**
+  ([#497], ADR-019 Decision 9). A process that holds `signer` while the roles
+  are split serves the signer on its internal listener, one `POST` route per
+  operation under `/internal/signer/v1-rc.0/`, and every process without the
+  signer calls it through a remote signer with the in-process signer's
+  interface: `api` issues tokens, `web` signs its cookies and wallet requests,
+  and `delivery` signs its webhooks and event tokens with no KEK and no key
+  variable. The signer takes the caller's role from its certificate's SAN in
+  `INTERNAL_PEER_ROLES` and holds each call to that role's grant: only `web`
+  gets the cookie keys, and `api` gets what it needs of them without them,
+  keys derived from the cookie key for its failure ladder and emailed-code
+  digests and a signer-side check of the session cookie at `/auth/logout`, so
+  `api` signs in, verifies and signs out with no cookie key; `web` opens the
+  secrets sign-in needs (TOTP, upstream and plugin client secrets, mail
+  transport secrets) and signs upstream client assertions, so every sign-in
+  works on a split deployment. Each refusal is
+  logged and counted in the new
+  `qauth_signer_refusals_total{role,operation,reason}`. Calls are capped at
+  64 KiB, or 2 MiB for claims, messages and data (`413`); each peer
+  certificate at 2,000 tokens a second after a burst of 4,000, a token per
+  16 KiB of body, and 128 calls in flight (`429`); and the internal listener
+  at 256 connections per peer certificate. The caller
+  gives each attempt 2 seconds, tries a read or a decryption once more, and
+  answers at once for 5 seconds after 5 outages in a row, then recovers by
+  itself; while the signer is down, what signs answers `503` and the JWKS,
+  token verification, `/userinfo` and introspection keep working, as they read
+  the realm's published keys. The new `SIGNER_SAN` names the SAN the signer's
+  certificate must hold: `SIGNER_URL`'s host name when unset, required when
+  that host is an IP address. A process without the signer that holds two
+  roles warns at boot, since it calls as the one role its certificate maps
+  to. [Service roles](https://docs.qauth.dev/operate/service-roles/#the-signer-service)
+  has the details and a deployment with every role apart.
+- **Access tokens carry the client's declared `client_name`** ([#1148]),
+  beside `client_id`, so a resource server can name the app or agent to the
+  person instead of showing an opaque id. It is the name the client
+  declared, which QAuth did not verify: show it as declared, as the consent
+  page does (ADR-019 Decision 6). It is cleaned and cut to 64 characters as
+  the consent page shows it. ID tokens and introspection are unchanged.
+- **A realm can turn the new-factor window off** ([#1143]).
+  `accounts.newFactorWindowDays` (and `NEW_FACTOR_WINDOW_DAYS`, which seeds
+  it) now takes 0. With 0, a passkey or authenticator app bound after a
+  sign-in that proved only the password counts at once: the password alone
+  no longer signs in or removes it. The owner can then no longer undo, with
+  the password alone, a factor that an intruder with the password bound.
+  The default stays 7 days. A realm that already booted changes it through
+  the policy update, a security operation.
+- **A sign-up or a password reset leaves a logout-only session**
+  ([#1144], ADR-017 Decisions 8 and 10, amended 2026-11-15). A
+  registration or a reset that finishes an authorization request still signs
+  nobody in, and its code still carries no `amr`, `auth_time` or `acr`. But
+  its ID token now has a `sid`, the id of a session no browser holds and
+  that never satisfies an authorization request. "Sign out everywhere", a
+  later reset, disabling the account, ending it on the account page (shown
+  as "A sign-up" or "A password reset") and RP-initiated logout with that ID
+  token end it. Each ending sends a logout token naming it, so an app that
+  sets `backchannel_logout_session_required` no longer keeps the session a
+  sign-up started. It ends at the session lifetime; the realm's idle limit
+  does not apply, since no browser uses it. Ending it alone revokes the
+  refresh families its codes started. Migration 0075 adds `sessions.kind`
+  and the `session_refresh_families` table, which links such a session to
+  its families; refresh rows still name no session. It rewrites no table,
+  and the previous release keeps working on it during a rolling upgrade.
+
+### Changed
+
+- **The sign-in page and the account pages name the realm's host.** Their
+  headings said only "QAuth", so a person with accounts on several QAuth
+  servers could not tell whose account it was. The sign-in page now says
+  "Sign in to auth.example.com" and the account overview "Your account on
+  auth.example.com", where `auth.example.com` is the host of the realm's
+  issuer; every account page's title carries it too. A realm has no display
+  name or logo yet; the brand settings bring them ([#695]).
+
+### Fixed
+
+- **An address past its free password failures is no longer locked out by
+  the bot challenge** ([#1147]). When the address arrived as an identifier
+  answer, with no `login_hint`, the challenge it made due was offered, but
+  its answer named no address, so it was never checked and the identifier
+  step raised the challenge again, without end: neither the password step
+  nor "Forgot your password?" was reached. A challenge the engine offered
+  stays due until it is answered, so its answer is checked, and a right one
+  lets the address through to the password step.
+- **A realm's mail is named after its sender, not QAuth.** Since 0.2.6
+  every mail showed QAuth's name and logo, and the verification and
+  "account exists" mails said "QAuth" in their text, even for a realm that
+  sends as another name (`mail.fromName`, seeded by `EMAIL_FROM_NAME`). The
+  mail now takes the realm's sender name: the name its `From` header
+  already shows names the header, the text and the footer. QAuth's mark
+  shows only for a realm whose sender name is `QAuth`, the default. A realm
+  has no display name or logo of its own yet; the brand settings bring them
+  ([#695]).
+- **QAuth's logo in a mail reads in dark mode.** The wordmark's black letters
+  vanished on the dark background of a mail client's dark mode (Gmail on
+  Android). The mail now carries the mark alone, which has no black, and
+  writes the name beside it as text, which the client recolours like the
+  rest of the mail.
+
+## [0.2.6] - 2026-11-15
+
+A patch release with no breaking change, no migration and no new setting.
+Every mail the server sends now has QAuth's look, and a realm that set no
+brand shows QAuth's logo, carried in the mail itself, so opening a mail
+fetches nothing. The key library can rotate a realm's key before it is due,
+under an approval of that rotation; no route calls it yet. CI
+refuses a migration that would break the previous release.
+
+### Added
 
 - **Manual key rotation, as a security operation** ([#544], ADR-019
   Decisions 7 and 9). The key library's `rotateNow` starts a rotation of one
@@ -109,38 +218,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says how to write a change as expand, then switch, with no drop within
   1.x.
 
-- **The signer service: roles sign through the signer over mutual TLS**
-  ([#497], ADR-019 Decision 9). A process that holds `signer` while the roles
-  are split serves the signer on its internal listener, one `POST` route per
-  operation under `/internal/signer/v1-rc.0/`, and every process without the
-  signer calls it through a remote signer with the in-process signer's
-  interface: `api` issues tokens, `web` signs its cookies and wallet requests,
-  and `delivery` signs its webhooks and event tokens with no KEK and no key
-  variable. The signer takes the caller's role from its certificate's SAN in
-  `INTERNAL_PEER_ROLES` and holds each call to that role's grant: only `web`
-  gets the cookie keys, and `api` gets what it needs of them without them,
-  keys derived from the cookie key for its failure ladder and emailed-code
-  digests and a signer-side check of the session cookie at `/auth/logout`, so
-  `api` signs in, verifies and signs out with no cookie key; `web` opens the
-  secrets sign-in needs (TOTP, upstream and plugin client secrets, mail
-  transport secrets) and signs upstream client assertions, so every sign-in
-  works on a split deployment. Each refusal is
-  logged and counted in the new
-  `qauth_signer_refusals_total{role,operation,reason}`. Calls are capped at
-  64 KiB, or 2 MiB for claims, messages and data (`413`); each peer
-  certificate at 2,000 tokens a second after a burst of 4,000, a token per
-  16 KiB of body, and 128 calls in flight (`429`); and the internal listener
-  at 256 connections per peer certificate. The caller
-  gives each attempt 2 seconds, tries a read or a decryption once more, and
-  answers at once for 5 seconds after 5 outages in a row, then recovers by
-  itself; while the signer is down, what signs answers `503` and the JWKS,
-  token verification, `/userinfo` and introspection keep working, as they read
-  the realm's published keys. The new `SIGNER_SAN` names the SAN the signer's
-  certificate must hold: `SIGNER_URL`'s host name when unset, required when
-  that host is an IP address. A process without the signer that holds two
-  roles warns at boot, since it calls as the one role its certificate maps
-  to. [Service roles](https://docs.qauth.dev/operate/service-roles/#the-signer-service)
-  has the details and a deployment with every role apart.
+### Changed
+
+- **Mail in QAuth's design system.** Every mail the server sends, the engine
+  mail and the registration verification and "account exists" mails alike,
+  now has the look of `@qauth-labs/ui` in place of a stock template: a square
+  card with a hairline edge on the muted page, Instrument Serif for the
+  heading, DM Sans for text, JetBrains Mono for a code, and the terracotta
+  primary for a button. Mail clients read no OKLCH and seldom load web fonts,
+  so the colours are the light-mode tokens as `#rrggbb` (an auth-server test
+  checks each against its token) and each face falls back to the nearest
+  system one. A realm that set no brand shows QAuth's logo, carried in the
+  mail as an inline image (`cid:`) rather than loaded from a server, so
+  opening a mail fetches nothing. A realm named otherwise shows its name, or
+  the logo it uploaded. The default mail brand's colours change with it, from
+  `#2563eb` on `#f6f9fc` to `#b44723` on `#f5f5f4`. `EmailOptions` gains
+  `inlineImages`, which the SMTP and Resend providers send as inline parts.
 
 ## [0.2.5] - 2026-11-14
 
@@ -4586,6 +4679,7 @@ It adds migrations 0068 and 0069.
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689
+[#695]: https://github.com/qauth-labs/qauth/issues/695
 [#700]: https://github.com/qauth-labs/qauth/issues/700
 [#709]: https://github.com/qauth-labs/qauth/issues/709
 [#714]: https://github.com/qauth-labs/qauth/issues/714
@@ -4637,6 +4731,10 @@ It adds migrations 0068 and 0069.
 [#1109]: https://github.com/qauth-labs/qauth/issues/1109
 [#1110]: https://github.com/qauth-labs/qauth/issues/1110
 [#1118]: https://github.com/qauth-labs/qauth/issues/1118
+[#1143]: https://github.com/qauth-labs/qauth/issues/1143
+[#1144]: https://github.com/qauth-labs/qauth/issues/1144
+[#1147]: https://github.com/qauth-labs/qauth/issues/1147
+[#1148]: https://github.com/qauth-labs/qauth/issues/1148
 
 ### Deprecated
 
@@ -5497,7 +5595,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/qauth-labs/qauth/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/qauth-labs/qauth/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/qauth-labs/qauth/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/qauth-labs/qauth/compare/v0.2.2...v0.2.3

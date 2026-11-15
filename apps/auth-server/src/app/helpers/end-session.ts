@@ -60,15 +60,21 @@ import { emitUserEvent } from './user-events';
  *   registered none never gets one.
  * - **The session.** Only when a valid hint names the account of the browser's
  *   session and, by its `sid`, that session, and the client it was issued to
- *   may still be used, does it end at once. Otherwise a signed-in browser gets the
+ *   may still be used, does it end at once. A valid hint of a client that may
+ *   still be used whose `sid` names a logout-only session of its account
+ *   (#1144: a registration's or a reset's, which no browser holds) ends that
+ *   one at once too, whatever the browser holds: only the app holds the ID
+ *   token that names it. Otherwise a signed-in browser gets the
  *   `logout_confirm` step and nothing ends until the person answers: a
  *   cross-site image tag, which carries no valid hint, ends nothing.
  * - **Ending it.** The session service revokes the one session (`sign_out`):
  *   its row is marked revoked, its cache entry tombstoned, its registry rows
  *   and unredeemed codes go with it, and its listeners hear of it with the
- *   clients it served, for back-channel logout (#624). No refresh token is
- *   revoked: an app revokes its own at `/oauth/revoke` before it sends the
- *   browser here. The response clears the session cookie.
+ *   clients it served, for back-channel logout (#624). No refresh token of
+ *   a browser session is revoked: an app revokes its own at `/oauth/revoke`
+ *   before it sends the browser here. A logout-only session (#1144) that the
+ *   hint names takes its linked refresh families with it. The response
+ *   clears the session cookie.
  * - **Audit.** `user.signed_out` with the ended session's `sid`, or
  *   `user.sign_out_failed` with why nothing ended.
  *
@@ -350,6 +356,54 @@ async function endLogoutSession(
   );
 }
 
+/** A session id as the ID tokens carry it: a UUID. */
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * End the logout-only session a valid hint names (#1144): a registration's or
+ * a reset's, live, of the hint's account. No browser holds one, so the
+ * browser's own session is not what decides; the hint alone, an ID token only
+ * the app holds, does. `null` when the hint names no such session, or when
+ * another request ended it first.
+ */
+async function endHintedLogoutOnlySession(
+  fastify: FastifyInstance,
+  realmId: string,
+  hint: IdTokenHint
+): Promise<CarriedSession | null> {
+  if (hint.sid === undefined || !SESSION_ID.test(hint.sid)) return null;
+  const row = await fastify.repositories.sessions.findById(realmId, hint.sid.toLowerCase());
+  if (
+    row === undefined ||
+    row.kind === 'browser' ||
+    row.userId !== hint.sub ||
+    row.revokedAt !== null
+  ) {
+    return null;
+  }
+  // Its refresh families end with it (#861), before the session does: a
+  // sweep that fails leaves the session live, so a retried hint runs it
+  // again, while one after the end would never be retried (the revoked row
+  // returns above). The sweep is idempotent. A browser session's families
+  // are not revoked on this path; the app revokes its own at /oauth/revoke.
+  await fastify.repositories.refreshTokens.revokeFamiliesOfSession(
+    row.userId,
+    row.id,
+    'session_ended'
+  );
+  // Only an end this request made counts: a concurrent one that won between
+  // the read and the revoke recorded its own sign-out.
+  const outcome = await endBrowserSession(
+    fastify,
+    realmId,
+    row.id,
+    'sign_out',
+    { type: 'user', id: row.userId },
+    row.userId
+  );
+  return outcome === 'ended' ? { userId: row.userId, sid: row.id } : null;
+}
+
 /** Record the sign-out of one session, naming it, so its SET names the session (#889). */
 async function recordSignedOut(
   request: FastifyRequest,
@@ -425,9 +479,19 @@ export async function answerEndSession(
       ? undefined
       : returnLocation(logout.post_logout_redirect_uri, logout.state);
 
+  // The app's ID token names a logout-only session (#1144): it ends at once,
+  // and the browser's own session, if any, is then handled as below.
+  const loggedOut =
+    hint !== null && client !== null
+      ? await endHintedLogoutOnlySession(fastify, realm.id, hint)
+      : null;
+  if (loggedOut !== null) await recordSignedOut(request, realm.id, loggedOut, clientId);
+
   const session = await resolveBrowserSession(fastify, request, reply);
   if (session === null) {
-    await recordSignOutFailed(request, realm.id, 'no_session', clientId, null);
+    if (loggedOut === null) {
+      await recordSignOutFailed(request, realm.id, 'no_session', clientId, null);
+    }
     return back === undefined
       ? sendSignedOut(fastify, request, reply)
       : sendBackToApp(fastify, request, reply, client, back);

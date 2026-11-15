@@ -25,6 +25,34 @@ export interface AuthorizationCodeSession {
 }
 
 /**
+ * The logout-only session a code is issued under (#1144; ADR-017 Decisions 8
+ * and 10, amended 2026-11-15): a registration or a password reset finished
+ * the interaction and signed nobody in. The mint writes the session's row
+ * (`sessions.kind` `registration` or `reset`) in its own transaction, with
+ * no `amr`, and stores its `sid` on the code, so the ID token names a session
+ * the account's endings reach by back-channel logout. No cookie names it, and
+ * no authorization request is ever decided for it.
+ */
+export interface AuthorizationCodeLogoutOnlySession {
+  readonly realmId: string;
+  /** What finished the interaction. */
+  readonly logoutOnly: 'registration' | 'reset';
+  /** Its absolute end (epoch ms): the realm's browser session lifetime from now. */
+  readonly expiresAt: number;
+  /** The client address of the request that finished it, for the account page. */
+  readonly ipAddress: string | null;
+  /** The `User-Agent` of that request, for the account page. */
+  readonly userAgent: string | null;
+}
+
+/** Whether `session` is one the mint writes ({@link AuthorizationCodeLogoutOnlySession}). */
+export function isLogoutOnlyCodeSession(
+  session: AuthorizationCodeSession | AuthorizationCodeLogoutOnlySession
+): session is AuthorizationCodeLogoutOnlySession {
+  return 'logoutOnly' in session;
+}
+
+/**
  * What a mint did: the code to send to the client, or `session_ended` when the
  * browser session was revoked or expired under the request and no code was
  * written (#549).
@@ -78,9 +106,10 @@ export interface AuthorizationCodeGrant {
    * the ID token; the client is recorded against the session
    * (`session_clients`, what back-channel logout reads). Null for a code no
    * interactive session backs, as on the legacy Bearer path #524 retired: no
-   * `sid`, no client recorded.
+   * `sid`, no client recorded. A logout-only session (#1144) is written by the
+   * mint itself, then treated as a browser session's is.
    */
-  readonly session: AuthorizationCodeSession | null;
+  readonly session: AuthorizationCodeSession | AuthorizationCodeLogoutOnlySession | null;
 }
 
 /**
@@ -173,13 +202,20 @@ async function mintIn(
   grant: AuthorizationCodeGrant,
   tx: AuthorizationCodeTransaction
 ): Promise<AuthorizationCodeMint> {
+  // A registration or a reset (#1144): its logout-only session is written
+  // here, in the code's transaction, so a code that is not written leaves no
+  // session behind.
+  const session =
+    grant.session === null || !isLogoutOnlyCodeSession(grant.session)
+      ? grant.session
+      : await logoutOnlySessionIn(fastify, grant.userId, grant.session, tx);
   // Recorded first, under the session's share lock: a session that ended
   // gets no code at all.
   if (
-    grant.session !== null &&
+    session !== null &&
     !(await fastify.repositories.sessions.recordClient(
-      grant.session.realmId,
-      grant.session.sid,
+      session.realmId,
+      session.sid,
       grant.oauthClientId,
       tx
     ))
@@ -204,7 +240,7 @@ async function mintIn(
       amr: storedAmr(grant),
       assuranceLevel: grant.assuranceLevel,
       sessionExpiresAt: grant.sessionExpiresAt,
-      sessionId: grant.session?.sid ?? null,
+      sessionId: session?.sid ?? null,
       scopes: grant.scopes,
       resource: grant.resource,
       state: grant.state,
@@ -218,4 +254,35 @@ async function mintIn(
       if (!isUniqueConstraintError(err) || attempt === MAX_MINT_ATTEMPTS) throw err;
     }
   }
+}
+
+/**
+ * Write the logout-only session of a registration or a reset (#1144) in `tx`:
+ * the account's, with no `amr`, an authentication time that is only its
+ * creation (the code copies none), and the end the grant computed.
+ */
+async function logoutOnlySessionIn(
+  fastify: Pick<FastifyInstance, 'repositories'>,
+  userId: string,
+  session: AuthorizationCodeLogoutOnlySession,
+  tx: AuthorizationCodeTransaction
+): Promise<AuthorizationCodeSession> {
+  const at = Date.now();
+  const row = await fastify.repositories.sessions.create(
+    {
+      realmId: session.realmId,
+      userId,
+      kind: session.logoutOnly,
+      authTime: at,
+      amr: [],
+      assuranceLevel: null,
+      ipAddress: session.ipAddress,
+      userAgent: session.userAgent,
+      createdAt: at,
+      lastSeenAt: at,
+      expiresAt: session.expiresAt,
+    },
+    tx
+  );
+  return { realmId: row.realmId, sid: row.id };
 }

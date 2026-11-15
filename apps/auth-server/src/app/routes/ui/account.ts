@@ -36,7 +36,7 @@ import { resolveBrowserSession } from '../../helpers/browser-session';
 import { ACCOUNT_RETURN_PATHS, type AccountReturnPath } from '../../helpers/interaction-record';
 import { ladderEndUserIp } from '../../helpers/password-attempts';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
-import { buildRealmUrl, realmIssuer } from '../../helpers/realm-url';
+import { buildRealmUrl, realmIssuer, realmIssuerHost } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import { clearSessionCookie } from '../../helpers/session-cookie';
 import { unlinkUpstreamIdentity } from '../../helpers/upstream-links';
@@ -122,6 +122,11 @@ export default async function (fastify: FastifyInstance) {
   };
   const tags = ['UI'];
 
+  /** What every account page takes from its request: the CSP nonce, and the realm's host it names. */
+  const chrome = (reply: FastifyReply) => ({
+    cspNonce: reply.cspNonce.style,
+    realmHost: realmIssuerHost(requestRealm(reply.request)),
+  });
   const sendPage = (reply: FastifyReply, body: string, status = 200) =>
     reply
       .code(status)
@@ -138,7 +143,7 @@ export default async function (fastify: FastifyInstance) {
     sendPage(
       reply,
       accountMessagePage({
-        cspNonce: reply.cspNonce.style,
+        ...chrome(reply),
         title,
         message: text,
         ...(back === undefined ? {} : { back }),
@@ -212,7 +217,7 @@ export default async function (fastify: FastifyInstance) {
         await sendPage(
           reply,
           reauthenticatePage({
-            cspNonce: reply.cspNonce.style,
+            ...chrome(reply),
             csrf: await accountCsrfToken(fastify, session),
             requiredFactor: verdict.requiredFactor,
             returnTo,
@@ -247,7 +252,7 @@ export default async function (fastify: FastifyInstance) {
       return sendPage(
         reply,
         accountPage({
-          cspNonce: reply.cspNonce.style,
+          ...chrome(reply),
           csrf: await accountCsrfToken(fastify, session),
           overview,
           passkeysOn: fastify.passkeySignIn === true,
@@ -283,7 +288,7 @@ export default async function (fastify: FastifyInstance) {
       return sendPage(
         reply,
         passwordChangePage({
-          cspNonce: reply.cspNonce.style,
+          ...chrome(reply),
           csrf: await accountCsrfToken(fastify, session),
           ...(overview.password.address === undefined
             ? {}
@@ -334,7 +339,7 @@ export default async function (fastify: FastifyInstance) {
         sendPage(
           reply,
           passwordChangePage({
-            cspNonce: reply.cspNonce.style,
+            ...chrome(reply),
             csrf: await accountCsrfToken(fastify, session),
             errors,
           }),
@@ -604,7 +609,7 @@ export default async function (fastify: FastifyInstance) {
       return sendPage(
         reply,
         newRecoveryCodesPage({
-          cspNonce: reply.cspNonce.style,
+          ...chrome(reply),
           csrf: await accountCsrfToken(fastify, session),
           codes: result.codes,
           setId: result.setId,

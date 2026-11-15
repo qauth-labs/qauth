@@ -31,7 +31,7 @@ const {
 }));
 
 vi.mock('../../config/env', () => ({
-  env: { DYNAMIC_CLIENT_BADGE_DAYS: 30, INTERACTION_UI_ENABLED: true },
+  env: { DYNAMIC_CLIENT_BADGE_DAYS: 30, INTERACTION_UI_ENABLED: true, SESSION_COOKIE_TTL: 86_400 },
 }));
 vi.mock('./authorization-request', () => ({ checkAuthorizationRequest, decideAuthorization }));
 vi.mock('./authorization-code', () => ({ mintAuthorizationCode }));
@@ -140,6 +140,8 @@ const CLIENT_DISPLAY = {
 /** The request of a cancel or a consent answer, on the realm's host. */
 const realmRequest = {
   realm: REALM,
+  ip: '192.0.2.7',
+  headers: { 'user-agent': 'Firefox' },
   log: { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() },
 } as unknown as FastifyRequest;
 
@@ -935,6 +937,9 @@ describe('a registration (#640)', () => {
       registered: true,
       realmId: REALM.id,
       userId: NEW_USER,
+      // A new account's epoch is 0: its code's logout-only session is a
+      // registration's (#1144).
+      finishedBy: 'registration',
     });
   });
 
@@ -969,6 +974,8 @@ describe('a registration (#640)', () => {
       registered: true,
       realmId: REALM.id,
       userId: NEW_USER,
+      // The reset advanced the epoch past 0: a reset's session (#1144).
+      finishedBy: 'reset',
     });
   });
 
@@ -1023,7 +1030,7 @@ describe('a registration (#640)', () => {
       };
     }
 
-    it('mints a code that carries no auth_time, no acr and no session', async () => {
+    it('mints a code that carries no auth_time and no acr, under a logout-only session (#1144)', async () => {
       const location = new URL(
         await finishConsent(fastify, realmRequest, reply, consentOf(['openid', 'email']))
       );
@@ -1035,9 +1042,18 @@ describe('a registration (#640)', () => {
         expect.objectContaining({
           userId: NEW_USER,
           authTime: null,
+          amr: null,
           assuranceLevel: null,
-          sessionExpiresAt: null,
-          session: null,
+          // The mint writes the registration's logout-only session, which
+          // ends when a browser session the realm started now would.
+          sessionExpiresAt: expect.any(Number),
+          session: {
+            realmId: REALM.id,
+            logoutOnly: 'registration',
+            expiresAt: expect.any(Number),
+            ipAddress: '192.0.2.7',
+            userAgent: 'Firefox',
+          },
           scopes: ['openid', 'email'],
         }),
         TX

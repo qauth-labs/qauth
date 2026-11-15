@@ -98,13 +98,13 @@ describe('VerifyEmail', () => {
       expect(html).toContain('mso-font-width:');
     });
 
-    it('should keep the brand styling of the call-to-action button', async () => {
+    it('should style the call-to-action button with the design system primary', async () => {
       const template = React.createElement(VerifyEmail, defaultProps);
       const html = await render(template);
 
-      expect(html).toContain('background-color:#2563eb');
+      expect(html).toContain('background-color:#b44723');
       expect(html).toContain('padding-top:12px');
-      expect(html).toContain('padding-left:24px');
+      expect(html).toContain('padding-left:20px');
     });
 
     it('should render a readable plain-text version', async () => {

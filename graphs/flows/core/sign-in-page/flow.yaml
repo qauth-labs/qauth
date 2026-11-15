@@ -346,7 +346,8 @@ states:
           __Host-qauth_login_csrf=<kid>.<value>.<mac>; Path=/; HttpOnly; SameSite=Lax; Max-Age=SESSION_COOKIE_TTL, with
           Secure when SESSION_COOKIE_SECURE is on; sent only when the request carried no validly signed one
       body:
-        title: Sign in — QAuth
+        title: Sign in — <the host of the realm's issuer>
+        heading: Sign in to <the host of the realm's issuer>
         form:
           method: post
           action: /ui/login

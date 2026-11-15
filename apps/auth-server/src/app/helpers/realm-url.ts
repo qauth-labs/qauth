@@ -36,6 +36,16 @@ export function realmIssuer(realm: RealmUrlSource): string {
 }
 
 /**
+ * The host of the realm's issuer, as the hosted pages name the realm to the
+ * person: the address the realm's own pages are served from, built from the
+ * realm row like every URL here, never from the request. A realm has no display
+ * name or logo yet; the brand settings bring them (#695).
+ */
+export function realmIssuerHost(realm: RealmUrlSource): string {
+  return new URL(realmIssuer(realm)).host;
+}
+
+/**
  * The absolute URL of `path` on the realm's issuer: the issuer identifier
  * followed by `path`, as discovery builds every endpoint URL.
  *

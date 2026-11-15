@@ -1,5 +1,5 @@
 {
-  "id": "8b5bfb92-4962-49d7-b710-16d4b94e2569",
+  "id": "f92ffe6a-956c-4719-b39c-bced20c8e094",
   "prevId": "a65918fd-c18b-4b20-b9e6-e986210d8081",
   "version": "7",
   "dialect": "postgresql",
@@ -3711,65 +3711,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.realm_key_denylist": {
-      "name": "realm_key_denylist",
-      "schema": "",
-      "columns": {
-        "realm_id": {
-          "name": "realm_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kid": {
-          "name": "kid",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "purpose": {
-          "name": "purpose",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "algorithm": {
-          "name": "algorithm",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "denied_at": {
-          "name": "denied_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "realm_key_denylist_realm_id_realms_id_fk": {
-          "name": "realm_key_denylist_realm_id_realms_id_fk",
-          "tableFrom": "realm_key_denylist",
-          "tableTo": "realms",
-          "columnsFrom": ["realm_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "realm_key_denylist_pk": {
-          "name": "realm_key_denylist_pk",
-          "columns": ["realm_id", "kid"]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.realm_keys": {
       "name": "realm_keys",
       "schema": "",
@@ -4722,6 +4663,46 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.session_refresh_families": {
+      "name": "session_refresh_families",
+      "schema": "",
+      "columns": {
+        "session_id": {
+          "name": "session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "family_id": {
+          "name": "family_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "session_refresh_families_session_id_sessions_id_fk": {
+          "name": "session_refresh_families_session_id_sessions_id_fk",
+          "tableFrom": "session_refresh_families",
+          "tableTo": "sessions",
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "session_refresh_families_pk": {
+          "name": "session_refresh_families_pk",
+          "columns": ["session_id", "family_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.sessions": {
       "name": "sessions",
       "schema": "",
@@ -4821,6 +4802,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'browser'"
         }
       },
       "indexes": {
@@ -4920,6 +4908,10 @@
         "sessions_revoked_pair": {
           "name": "sessions_revoked_pair",
           "value": "(\"sessions\".\"revoked_at\" IS NULL) = (\"sessions\".\"revoked_reason\" IS NULL)"
+        },
+        "sessions_kind_valid": {
+          "name": "sessions_kind_valid",
+          "value": "\"sessions\".\"kind\" IN ('browser', 'registration', 'reset')"
         }
       },
       "isRLSEnabled": false

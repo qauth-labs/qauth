@@ -150,8 +150,9 @@ export interface RepositoryTotpOptions<Tx = unknown> {
   /**
    * How long, in milliseconds, a TOTP bound after a sign-in that proved only
    * the password stays new in the realm (#1064; ADR-017 Decision 8, amended
-   * 2026-11-12): the realm's `accounts.newFactorWindowDays`. Read in the
-   * binding's transaction, only for a new binding; a throw binds nothing.
+   * 2026-11-12): the realm's `accounts.newFactorWindowDays`. 0 is no window:
+   * the TOTP counts at once. Read in the binding's transaction, only for a
+   * new binding; a throw binds nothing.
    */
   readonly newFactorWindowMs: (realmId: string) => Promise<number>;
   /** After the hard action set the mark: the "second factor disabled" notice. */
@@ -258,7 +259,9 @@ export function createRepositoryTotp<Tx>(
         const at = clock.now();
         // A binding after a password-only sign-in is new (#1064): its window
         // replaces whatever the old secret's row held; any other clears it.
-        const newUntil = isNew === true ? at + (await options.newFactorWindowMs(realmId)) : null;
+        // A realm with no window (#1143) binds it as not new.
+        const windowMs = isNew === true ? await options.newFactorWindowMs(realmId) : 0;
+        const newUntil = windowMs > 0 ? at + windowMs : null;
         const row = await credentials.upsertTotp(
           {
             realmId,
