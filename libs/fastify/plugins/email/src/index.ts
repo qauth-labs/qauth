@@ -7,6 +7,7 @@ export {
   engineMailCarriesCode,
   type EngineMailContext,
   EngineMailError,
+  type EngineMailSendContext,
   isMailPass,
   MAIL_COLOR_TOKENS,
   MAIL_COLORS,

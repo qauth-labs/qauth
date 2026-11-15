@@ -10,7 +10,11 @@ import type {
   VerificationLink,
 } from '../types';
 import { DEFAULT_MAIL_BRAND, mailImagesOf } from './engine-mail/brand';
-import { type EngineMail, type EngineMailContext, renderEngineMail } from './engine-mail/registry';
+import {
+  type EngineMail,
+  type EngineMailSendContext,
+  renderEngineMail,
+} from './engine-mail/registry';
 import { formatDuration } from './format-duration';
 import { AccountExistsEmail } from './templates/account-exists-email';
 import { renderEmail, renderEmailText } from './templates/render';
@@ -54,6 +58,8 @@ export function createEmailService(
   config?: EmailServiceConfig
 ): EmailService {
   const defaultFrom = config?.defaultFrom;
+  /** The brand of the service's mail: its realm's sender name's, or QAuth's. */
+  const brand = config?.brand ?? DEFAULT_MAIL_BRAND;
   // Rendered once: the configured lifetime cannot change while the service lives.
   const expiresIn = formatDuration(
     config?.verificationTokenExpiry ?? DEFAULT_VERIFICATION_TOKEN_EXPIRY_SECONDS
@@ -79,11 +85,12 @@ export function createEmailService(
         const template = React.createElement(VerifyEmail, {
           verificationUrl,
           expiresIn,
+          brand,
         });
 
         html = await renderEmail(template);
         text = await renderEmailText(template);
-        inlineImages = mailImagesOf(DEFAULT_MAIL_BRAND);
+        inlineImages = mailImagesOf(brand);
       }
 
       return provider.sendEmail({
@@ -107,10 +114,10 @@ export function createEmailService(
       let inlineImages: readonly EmailInlineImage[] = [];
 
       if (!text && !html) {
-        const template = React.createElement(AccountExistsEmail);
+        const template = React.createElement(AccountExistsEmail, { brand });
         html = await renderEmail(template);
         text = await renderEmailText(template);
-        inlineImages = mailImagesOf(DEFAULT_MAIL_BRAND);
+        inlineImages = mailImagesOf(brand);
       }
 
       return provider.sendEmail({
@@ -126,9 +133,12 @@ export function createEmailService(
     async sendEngineMail(
       to: string,
       mail: EngineMail,
-      context: EngineMailContext
+      context: EngineMailSendContext
     ): Promise<EmailResult> {
-      const { subject, html, text, images } = await renderEngineMail(mail, context);
+      const { subject, html, text, images } = await renderEngineMail(mail, {
+        baseUrl: context.baseUrl,
+        brand: context.brand ?? brand,
+      });
       return provider.sendEmail({
         to,
         subject,

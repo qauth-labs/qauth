@@ -1,4 +1,5 @@
-import type { EngineMail, EngineMailContext } from '../lib/engine-mail/registry';
+import type { MailBrand } from '../lib/engine-mail/brand';
+import type { EngineMail, EngineMailSendContext } from '../lib/engine-mail/registry';
 import type { EmailOptions, EmailResult } from './core';
 
 /**
@@ -17,6 +18,14 @@ export interface EmailServiceConfig {
    * @default 86400 (24 hours)
    */
   verificationTokenExpiry?: number;
+  /**
+   * The brand the service's mail is rendered with: its name, logo and
+   * colours. A realm's service is given the brand of its sender name
+   * (`mail.fromName`). An engine mail sent with a brand of its own uses that.
+   *
+   * @default DEFAULT_MAIL_BRAND (QAuth's)
+   */
+  brand?: MailBrand;
 }
 
 /**
@@ -81,5 +90,9 @@ export interface EmailService {
    * @param context - The realm's issuer and brand
    * @throws EngineMailError when the data does not fit the template
    */
-  sendEngineMail(to: string, mail: EngineMail, context: EngineMailContext): Promise<EmailResult>;
+  sendEngineMail(
+    to: string,
+    mail: EngineMail,
+    context: EngineMailSendContext
+  ): Promise<EmailResult>;
 }

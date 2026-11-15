@@ -31,8 +31,8 @@ export interface MailBrandLogo {
 }
 
 /**
- * A logo the mail carries itself, shown through `cid:`: QAuth's own, in the
- * mail of a realm that set no name of its own.
+ * A logo the mail carries itself, shown through `cid:`: QAuth's mark, before
+ * the name as text, in the mail of a realm whose name is QAuth's.
  */
 export interface MailAttachedLogo {
   readonly image: EmailInlineImage;
@@ -87,8 +87,12 @@ export function mailImagesOf(brand: MailBrand): readonly EmailInlineImage[] {
   return brand.logo !== undefined && isAttachedLogo(brand.logo) ? [brand.logo.image] : [];
 }
 
-/** The longest service name, as the brand screen bounds it. */
-const NAME_MAX_LENGTH = 64;
+/**
+ * The longest service name: the bound of the realm's sender name
+ * (`mail.fromName`), which names the realm's mail until the brand settings
+ * do (#695), so no sender name falls back to QAuth's.
+ */
+const NAME_MAX_LENGTH = 100;
 /** The longest footer notice. */
 const FOOTER_MAX_LENGTH = 280;
 /** The longest logo path. */

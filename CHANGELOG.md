@@ -17,6 +17,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   issuer; every account page's title carries it too. A realm has no display
   name or logo yet; the brand settings bring them ([#695]).
 
+### Fixed
+
+- **A realm's mail is named after its sender, not QAuth.** Since 0.2.6
+  every mail showed QAuth's name and logo, and the verification and
+  "account exists" mails said "QAuth" in their text, even for a realm that
+  sends as another name (`mail.fromName`, seeded by `EMAIL_FROM_NAME`). The
+  mail now takes the realm's sender name: the name its `From` header
+  already shows names the header, the text and the footer. QAuth's mark
+  shows only for a realm whose sender name is `QAuth`, the default. A realm
+  has no display name or logo of its own yet; the brand settings bring them
+  ([#695]).
+- **QAuth's logo in a mail reads in dark mode.** The wordmark's black letters
+  vanished on the dark background of a mail client's dark mode (Gmail on
+  Android). The mail now carries the mark alone, which has no black, and
+  writes the name beside it as text, which the client recolours like the
+  rest of the mail.
+
 ## [0.2.6] - 2026-11-15
 
 A patch release with no breaking change, no migration and no new setting.
