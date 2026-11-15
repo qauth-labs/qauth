@@ -229,7 +229,9 @@ describe('the scopes of a registered protected resource (#1087, real containers)
   /**
    * Run an authorization request of `clientId` from the signed-in browser:
    * the consent page is shown, read, and allowed with "Remember this
-   * decision" ticked. Returns the page's scope rows and the code.
+   * decision" ticked. Returns the page's scope rows and the code. The request
+   * sends `prompt=consent`, so the page is shown even where a consent an
+   * earlier request of the test stored already covers this one.
    */
   async function authorize(
     clientId: string,
@@ -245,6 +247,7 @@ describe('the scopes of a registered protected resource (#1087, real containers)
       code_challenge: pkce.challenge,
       code_challenge_method: 'S256',
       state: 'protected-resource-state',
+      prompt: 'consent',
     });
     for (const resource of [params.resource ?? []].flat()) query.append('resource', resource);
     if (params.ui_locales !== undefined) query.set('ui_locales', params.ui_locales);

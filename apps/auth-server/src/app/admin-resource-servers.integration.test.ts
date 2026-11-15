@@ -375,9 +375,10 @@ describe('the admin resource server operations (#1087, real containers)', () => 
     });
     expect(created.headers['location']).toBe(serverPath(realm.id, server.id));
     expect(created.headers['etag']).toBe('"1"');
-    expect(await auditRows(realm.id, 'resourceServers.create')).toEqual([
-      expect.objectContaining({ operation_class: 'security', outcome: 'succeeded' }),
-    ]);
+    // The refused call is audited too, as denied; the applied one as succeeded.
+    const createRows = await auditRows(realm.id, 'resourceServers.create');
+    expect(createRows.map((row) => row.outcome)).toEqual(['denied', 'succeeded']);
+    expect(createRows.at(-1)).toMatchObject({ operation_class: 'security' });
 
     const again = await fileAndApprove(realm.id, securityAdmin, 'resourceServers.create', {}, body);
     const duplicate = await send('POST', serversPath(realm.id), securityAdmin.token, body, {
@@ -474,9 +475,17 @@ describe('the admin resource server operations (#1087, real containers)', () => 
     });
     const row = await app().repositories.protectedResources.findById(realm.id, stored.id);
     expect(row).toMatchObject({ anyClient: true, clientIds: [], version: 2 });
-    expect(await auditRows(realm.id, 'resourceServers.update')).toEqual([
-      expect.objectContaining({ operation_class: 'security', outcome: 'succeeded' }),
+    // The moved indicator (422), the call with no approval (403) and the one
+    // with no If-Match (428) are audited as denied; the applied one as
+    // succeeded. Neither the previews nor the filing is an update call.
+    const updateRows = await auditRows(realm.id, 'resourceServers.update');
+    expect(updateRows.map((row) => row.outcome)).toEqual([
+      'denied',
+      'denied',
+      'denied',
+      'succeeded',
     ]);
+    expect(updateRows.at(-1)).toMatchObject({ operation_class: 'security' });
 
     // The old version is gone: a save against it is 412.
     const stale = await patchServer(realm.id, stored.id, securityAdmin, { clients: ['a'] }, etag);
@@ -516,8 +525,9 @@ describe('the admin resource server operations (#1087, real containers)', () => 
     expect(
       (await send('GET', serverPath(realm.id, stored.id), securityAdmin.token)).statusCode
     ).toBe(404);
-    expect(await auditRows(realm.id, 'resourceServers.delete')).toEqual([
-      expect.objectContaining({ operation_class: 'security', outcome: 'succeeded' }),
-    ]);
+    // The call with no approval is audited as denied; the applied one as succeeded.
+    const deleteRows = await auditRows(realm.id, 'resourceServers.delete');
+    expect(deleteRows.map((row) => row.outcome)).toEqual(['denied', 'succeeded']);
+    expect(deleteRows.at(-1)).toMatchObject({ operation_class: 'security' });
   });
 });
