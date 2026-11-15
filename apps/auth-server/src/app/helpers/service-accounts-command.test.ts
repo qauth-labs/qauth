@@ -2,9 +2,11 @@ import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-error
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
+import { RESERVED_OPERATIONS } from './admin-operations-reserved';
 import {
   parseServiceAccountsArguments,
   runServiceAccountsCommand,
+  SERVICE_ACCOUNT_OPERATIONS,
   type ServiceAccountsCommand,
   ServiceAccountsUsageError,
 } from './service-accounts-command';
@@ -117,7 +119,7 @@ describe('parseServiceAccountsArguments', () => {
 });
 
 /** A server whose operator realm is {@link OPERATOR}, with a realm named `tenant`. */
-function server(options: { operator?: boolean; createError?: Error } = {}) {
+function server(options: { operator?: boolean; createError?: Error; enabled?: boolean } = {}) {
   const appendAdminAudit = vi.fn(async () => ({}));
   const createAccount = vi.fn(async (input: { name: string; clientId: string }) => {
     if (options.createError) throw options.createError;
@@ -146,7 +148,7 @@ function server(options: { operator?: boolean; createError?: Error } = {}) {
         create: createAccount,
         findByName: vi.fn(async (_realmId: string, name: string) =>
           name === 'ci'
-            ? { id: 'sa-1', name: 'ci', enabled: true, userId: 'robot-user' }
+            ? { id: 'sa-1', name: 'ci', enabled: options.enabled ?? true, userId: 'robot-user' }
             : undefined
         ),
         setEnabled,
@@ -283,19 +285,84 @@ describe('runServiceAccountsCommand', () => {
     }
   });
 
-  it('disables and enables a service account by name, and says when nothing changed', async () => {
-    const { fastify, setEnabled } = server();
+  /** The audit row a switch of the service account `ci` writes, by the operator. */
+  const switchRow = (operationId: string, diff: unknown) => ({
+    realmId: OPERATOR,
+    actorKind: 'host_operator',
+    actorId: 'operator',
+    actorRealmId: null,
+    actChain: null,
+    operationId,
+    operationClass: 'security',
+    effects: ['administration'],
+    outcome: 'succeeded',
+    diff,
+    approvals: [],
+    requestDigest: null,
+    traceId: null,
+  });
+  const state = (enabled: boolean) => ({ id: 'sa-1', name: 'ci', userId: 'robot-user', enabled });
+
+  it('disables a service account by name, and records it in the same transaction', async () => {
+    const { fastify, setEnabled, appendAdminAudit } = server();
     const disabled = run(fastify, { kind: 'disable', name: 'ci' });
     await expect(disabled.done).resolves.toBe(0);
-    expect(setEnabled).toHaveBeenCalledWith(OPERATOR, 'sa-1', false);
+    expect(setEnabled).toHaveBeenCalledWith(OPERATOR, 'sa-1', false, TX);
     expect(disabled.out.join('\n')).toContain('gets no token');
+    expect(appendAdminAudit.mock.calls).toEqual([
+      [
+        TX,
+        switchRow('serviceAccounts.disable', {
+          change: { before: state(true), after: state(false) },
+          annotations: {},
+        }),
+      ],
+    ]);
+  });
 
+  it('enables a disabled service account, and records it', async () => {
+    const { fastify, setEnabled, appendAdminAudit } = server({ enabled: false });
+    const enabled = run(fastify, { kind: 'enable', name: 'ci' });
+    await expect(enabled.done).resolves.toBe(0);
+    expect(setEnabled).toHaveBeenCalledWith(OPERATOR, 'sa-1', true, TX);
+    expect(enabled.out.join('\n')).toContain('is enabled');
+    expect(appendAdminAudit.mock.calls).toEqual([
+      [
+        TX,
+        switchRow('serviceAccounts.enable', {
+          change: { before: state(false), after: state(true) },
+          annotations: {},
+        }),
+      ],
+    ]);
+  });
+
+  it('records a run that finds the service account switched already, with no change', async () => {
+    const { fastify, setEnabled, appendAdminAudit } = server();
     const already = run(fastify, { kind: 'enable', name: 'ci' });
     await expect(already.done).resolves.toBe(0);
-    expect(setEnabled).toHaveBeenCalledTimes(1);
+    expect(already.out.join('\n')).toContain('nothing changed');
+    expect(setEnabled).not.toHaveBeenCalled();
+    expect(appendAdminAudit.mock.calls).toEqual([[TX, switchRow('serviceAccounts.enable', null)]]);
+  });
 
+  it('refuses an unknown service account, and records nothing', async () => {
+    const { fastify, setEnabled, appendAdminAudit } = server();
     const unknown = run(fastify, { kind: 'disable', name: 'other' });
     await expect(unknown.done).resolves.toBe(1);
+    expect(unknown.err.join('\n')).toContain('no service account "other"');
+    expect(setEnabled).not.toHaveBeenCalled();
+    expect(appendAdminAudit).not.toHaveBeenCalled();
+  });
+
+  // #522: the ids the host writes are the admin API's, reserved as security
+  // operations that change who administers.
+  it('names only operations the admin operation registry reserves, with the administration effect', () => {
+    for (const id of Object.values(SERVICE_ACCOUNT_OPERATIONS)) {
+      const reserved = RESERVED_OPERATIONS.find((operation) => operation.id === id);
+      expect(reserved, id).toBeDefined();
+      expect(reserved?.effects, id).toContain('administration');
+    }
   });
 
   it('lists the operator realm’s service accounts', async () => {

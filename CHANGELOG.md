@@ -30,9 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `service_account` and its user id; the events of its operations name it
   as the `client` acting for itself. The host command `pnpm nx run
   auth-server:service-accounts -- create|disable|enable|list` creates one
-  with its public keys and built-in role grants, and records the creation in
-  the operator realm's admin audit log as `serviceAccounts.create` by the
-  operating-system user; no secret is made or printed
+  with its public keys and built-in role grants, and records each creation,
+  disable and enable in the operator realm's admin audit log as
+  `serviceAccounts.create`, `serviceAccounts.disable` or
+  `serviceAccounts.enable` by the operating-system user (the two new ids are
+  reserved security operations of the admin API, beside
+  `serviceAccounts.create`); no secret is made or printed
   ([Service accounts](https://docs.qauth.dev/operate/service-accounts/)).
 
 ### Changed

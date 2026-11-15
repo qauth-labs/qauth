@@ -15,8 +15,8 @@
  * tsx src/service-accounts.ts disable --name ci-realm-import
  * ```
  *
- * It records a creation, with the operating-system user, in the operator
- * realm's admin audit log. It makes no secret and prints none: the service
+ * It records each creation, disable and enable, with the operating-system
+ * user, in the operator realm's admin audit log. It makes no secret and prints none: the service
  * account's private key stays with the automation that signs with it.
  */
 import { readFileSync } from 'node:fs';

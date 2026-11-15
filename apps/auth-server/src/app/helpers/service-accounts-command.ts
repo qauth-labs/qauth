@@ -21,7 +21,11 @@
  * half is given here.
  *
  * `disable` and `enable` switch the service account: a disabled one gets no
- * token, and its tokens make no admin call, from the next request on.
+ * token, and its tokens make no admin call, from the next request on. Each
+ * run writes one row of the operator realm's admin audit log in the
+ * transaction of the switch, `serviceAccounts.disable` or
+ * `serviceAccounts.enable`, with the same actor; a run that finds the
+ * service account switched already records itself with no change.
  *
  * The logic lives here, apart from the entry in `service-accounts.ts`, so it
  * can be tested without a process.
@@ -31,8 +35,23 @@ import type { FastifyInstance } from 'fastify';
 
 import { BUILT_IN_ROLE_NAMES } from './admin-roles';
 
-/** The operation the audit row of a creation names: reserved for the admin API too (#508). */
-export const SERVICE_ACCOUNT_CREATE_OPERATION = 'serviceAccounts.create';
+/**
+ * The operations the command's audit rows name, by what it was asked to do.
+ * Each is reserved for the admin API too (`admin-operations-reserved.ts`,
+ * #508), with the effect `administration`, so the admin API's own operation
+ * of the same id, once it ships (#679), writes rows a reader takes alike.
+ */
+export const SERVICE_ACCOUNT_OPERATIONS = Object.freeze({
+  create: 'serviceAccounts.create',
+  disable: 'serviceAccounts.disable',
+  enable: 'serviceAccounts.enable',
+} as const);
+
+/** The operation the audit row of a creation names. */
+export const SERVICE_ACCOUNT_CREATE_OPERATION = SERVICE_ACCOUNT_OPERATIONS.create;
+
+/** The effects of every operation the command records (ADR-019 Decision 7). */
+const SERVICE_ACCOUNT_EFFECTS = Object.freeze(['administration'] as const);
 
 export const SERVICE_ACCOUNTS_USAGE = `Usage: service-accounts create --name <name> --client-id <client_id>
                          (--jwks <file> | --jwks-uri <https URL>)
@@ -268,7 +287,7 @@ async function create(
       actChain: null,
       operationId: SERVICE_ACCOUNT_CREATE_OPERATION,
       operationClass: 'security',
-      effects: ['administration'],
+      effects: [...SERVICE_ACCOUNT_EFFECTS],
       outcome: 'succeeded',
       diff: {
         change: {
@@ -308,25 +327,59 @@ async function setEnabled(
   command: Extract<ServiceAccountsCommand, { kind: 'disable' | 'enable' }>,
   deps: ServiceAccountsDependencies
 ): Promise<number> {
-  const { repositories } = deps.fastify;
-  const operator = await repositories.realms.findOperator();
-  const account =
-    operator === undefined
-      ? undefined
-      : await repositories.serviceAccounts.findByName(operator.id, command.name);
-  if (operator === undefined || account === undefined) {
-    throw new Refusal(`The operator realm holds no service account "${command.name}"`);
-  }
+  const { fastify } = deps;
+  const { repositories } = fastify;
   const enabled = command.kind === 'enable';
-  if (account.enabled === enabled) {
-    deps.out(`The service account "${account.name}" is already ${command.kind}d; nothing changed.`);
+  const { name, changed } = await fastify.db.transaction(async (tx) => {
+    const operator = await repositories.realms.findOperator(tx);
+    const account =
+      operator === undefined
+        ? undefined
+        : await repositories.serviceAccounts.findByName(operator.id, command.name, tx);
+    if (operator === undefined || account === undefined) {
+      throw new Refusal(`The operator realm holds no service account "${command.name}"`);
+    }
+    const switched =
+      account.enabled === enabled
+        ? undefined
+        : await repositories.serviceAccounts.setEnabled(operator.id, account.id, enabled, tx);
+    const state = (enabledNow: boolean) => ({
+      id: account.id,
+      name: account.name,
+      userId: account.userId,
+      enabled: enabledNow,
+    });
+    // Disabling or enabling a service account changes who administers
+    // (ADR-019 Decision 7): the operator realm's chain records each run, a
+    // run that changed nothing included, with who ran the command.
+    await repositories.adminAuditLog.appendAdminAudit(tx, {
+      realmId: operator.id,
+      actorKind: 'host_operator',
+      actorId: deps.operatingSystemUser,
+      actorRealmId: null,
+      actChain: null,
+      operationId: SERVICE_ACCOUNT_OPERATIONS[command.kind],
+      operationClass: 'security',
+      effects: [...SERVICE_ACCOUNT_EFFECTS],
+      outcome: 'succeeded',
+      diff:
+        switched === undefined
+          ? null
+          : { change: { before: state(account.enabled), after: state(enabled) }, annotations: {} },
+      approvals: [],
+      requestDigest: null,
+      traceId: null,
+    });
+    return { name: account.name, changed: switched !== undefined };
+  });
+  if (!changed) {
+    deps.out(`The service account "${name}" is already ${command.kind}d; nothing changed.`);
     return 0;
   }
-  await repositories.serviceAccounts.setEnabled(operator.id, account.id, enabled);
   deps.out(
     enabled
-      ? `The service account "${account.name}" is enabled.`
-      : `The service account "${account.name}" is disabled: it gets no token, and its tokens make no admin call from the next request on.`
+      ? `The service account "${name}" is enabled.`
+      : `The service account "${name}" is disabled: it gets no token, and its tokens make no admin call from the next request on.`
   );
   return 0;
 }

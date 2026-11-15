@@ -143,10 +143,19 @@ account whose account is disabled, whose client is disabled or suspended
 any other way than `private_key_jwt`. `enable` turns it on again. Removing a
 grant takes what it gave from the next call, as for a person.
 
+Each `disable` and `enable` writes one row of the operator realm's admin audit
+log in the transaction of the switch, `serviceAccounts.disable` or
+`serviceAccounts.enable`, with the actor kind `host_operator` and the
+operating-system user, as a creation does. A run that finds the service
+account switched already is recorded too, with no change.
+
 ## What the logs show
 
 - Each admin call's audit row names the actor kind `service_account`, its
   user id and the operator realm.
+- The host command's rows, `serviceAccounts.create`, `serviceAccounts.disable`
+  and `serviceAccounts.enable`, name the actor kind `host_operator` and the
+  operating-system user.
 - Its approvals' requester is the service account; each approval names the
   human who gave it, with the actor kind `human_admin`.
 - The events its operations record, such as `user.verified`, name it as the
