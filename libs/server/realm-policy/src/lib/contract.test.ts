@@ -3,9 +3,15 @@ import { isSecurityEffect } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 
-import { ANNOTATION_KEYS, DIRECTION_KINDS, directionKind, SECURITY_WHEN } from './field';
+import {
+  ANNOTATION_KEYS,
+  DIRECTION_KINDS,
+  directionKind,
+  isOneSentence,
+  SECURITY_WHEN,
+} from './field';
 import { ACCOUNTS_POLICY_GROUP } from './groups/accounts';
-import { REALM_POLICY_ENV, REALM_POLICY_REGISTRY } from './realm-policies';
+import { defaultsFromEnv, REALM_POLICY_ENV, REALM_POLICY_REGISTRY } from './realm-policies';
 import { PolicySeedError } from './registry';
 
 /**
@@ -508,12 +514,10 @@ describe('accounts.newFactorWindowDays (#1143)', () => {
     for (const days of [-1, 31, 1.5]) expect(field.schema.safeParse(days).success).toBe(false);
     expect(field.default).toBe(7);
     expect(field.securityWhen).toBe('any-change');
+    expect(isOneSentence(field.doc.summary)).toBe(true);
   });
 
   it('seeds 0 from NEW_FACTOR_WINDOW_DAYS', () => {
-    expect(
-      REALM_POLICY_REGISTRY.defaultsFromEnv({ NEW_FACTOR_WINDOW_DAYS: '0' }).accounts
-        .newFactorWindowDays
-    ).toBe(0);
+    expect(defaultsFromEnv({ NEW_FACTOR_WINDOW_DAYS: '0' }).accounts.newFactorWindowDays).toBe(0);
   });
 });

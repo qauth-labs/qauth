@@ -73,7 +73,7 @@ export const ACCOUNTS_POLICY_GROUP = {
     environmentBound: false,
     doc: {
       summary:
-        "How many days, 0 to 30, a passkey or authenticator app bound after a sign-in that proved only the password stays new: the password alone may remove it, and it does not count as the account's strongest factor for a reset or a change. 0 is no window: a new factor counts at once, and the owner can no longer remove one an intruder with the password bound, with the password alone.",
+        "How many days, 0 to 30, a passkey or authenticator app bound after a sign-in that proved only the password stays new: the password alone may remove it, and it does not count as the account's strongest factor for a reset or a change; 0 means no window.",
       link: groupDocsLink('accounts'),
     },
   }),
