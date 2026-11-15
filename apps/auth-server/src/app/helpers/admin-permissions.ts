@@ -197,7 +197,8 @@ export function createPermissionRegistry(
  * planning a realm-file import (#518), the AuthMethod plugin operations
  * (#600), the approval requests of security operations (#512), sealing a
  * secret for a security operation (#984), an operator's verification of
- * an account (#1052), and the client operations (#632).
+ * an account (#1052), the client operations (#632), and the resource server
+ * operations (#1087).
  */
 export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
   definePermission({
@@ -289,6 +290,20 @@ export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
     resource: 'clients',
     description:
       "Register and delete a client, lift a suspension, and change a client's settings whose change is a security operation, such as its redirect URIs, its authentication method or first-party trust (#632).",
+  }),
+  definePermission({
+    id: 'resourceServers.read',
+    class: 'read',
+    resource: 'resourceServers',
+    description:
+      'List and read the resource servers (protected resources) of a realm, with their scopes, consent texts and who may ask for them, and preview a change of one (#1087).',
+  }),
+  definePermission({
+    id: 'resourceServers.security',
+    class: 'security',
+    resource: 'resourceServers',
+    description:
+      'Register, change and delete a resource server of a realm: its scopes, their consent texts and who may ask for them decide what a token for it asserts (#1087).',
   }),
   definePermission({
     id: 'approvals.read',

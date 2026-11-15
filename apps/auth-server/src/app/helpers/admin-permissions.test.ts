@@ -35,6 +35,8 @@ describe('the admin permission catalog (#507)', () => {
       ['clients.read', 'read'],
       ['clients.write', 'write'],
       ['clients.security', 'security'],
+      ['resourceServers.read', 'read'],
+      ['resourceServers.security', 'security'],
       ['approvals.read', 'read'],
       ['approvals.approve', 'security'],
     ]);
@@ -48,6 +50,7 @@ describe('the admin permission catalog (#507)', () => {
       'plugins.security',
       'users.security',
       'clients.security',
+      'resourceServers.security',
       'approvals.approve',
     ]);
     expect(security.filter((id) => write.includes(id))).toEqual([]);

@@ -18,6 +18,8 @@
     "clients.read",
     "clients.write",
     "clients.security",
+    "resourceServers.read",
+    "resourceServers.security",
     "approvals.read",
     "approvals.approve"
   ],
@@ -197,6 +199,34 @@
       }
     },
     "clients.security": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "security"
+          ]
+        }
+      }
+    },
+    "resourceServers.read": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "read"
+          ]
+        }
+      }
+    },
+    "resourceServers.security": {
       "type": "object",
       "required": [
         "class"

@@ -34,6 +34,7 @@ describe('built-in roles (#507)', () => {
       'realms.import.plan',
       'plugins.read',
       'clients.read',
+      'resourceServers.read',
       'approvals.read',
     ]);
   });
@@ -49,6 +50,7 @@ describe('built-in roles (#507)', () => {
       'secrets.seal',
       'clients.read',
       'clients.write',
+      'resourceServers.read',
       'approvals.read',
     ]);
   });
@@ -236,6 +238,7 @@ describe('effectivePermissions (#507)', () => {
       'plugins.security',
       'users.security',
       'clients.security',
+      'resourceServers.security',
       'approvals.approve',
     ]);
   });

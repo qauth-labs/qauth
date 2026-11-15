@@ -677,20 +677,20 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
   reserve(
     'resourceServers.create',
     ['token-content'],
-    ADR_019,
-    'Register a resource server and its audience.'
+    `${ADR_019}, #1087`,
+    'Register a resource server and its audience: its resource indicator, the scopes it defines with their consent texts and sensitive flags, and who may ask for them, any client of the realm or the listed clients.'
   ),
   reserve(
     'resourceServers.update',
     ['token-content'],
-    ADR_019,
-    'Change a resource server or its audience.'
+    `${ADR_019}, #1087`,
+    'Change a resource server: its scopes, their consent texts and sensitive flags, or who may ask for them; a narrowing too.'
   ),
   reserve(
     'resourceServers.delete',
     ['token-content'],
-    ADR_019,
-    'Remove a resource server and its audience.'
+    `${ADR_019}, #1087`,
+    'Remove a resource server and its audience, so its scopes are no longer bound to it.'
   ),
   reserve('roles.create', ['token-content'], `${ADR_019}, #683`, 'Define a realm role.'),
   reserve(
