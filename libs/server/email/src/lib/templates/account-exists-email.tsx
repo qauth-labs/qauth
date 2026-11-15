@@ -3,6 +3,17 @@ import * as React from 'react';
 import { DEFAULT_MAIL_BRAND, type MailBrand } from '../engine-mail/brand';
 import { MailFrame, Paragraph } from './engine/layout';
 
+/** Props for the AccountExistsEmail template. */
+export interface AccountExistsEmailProps {
+  /**
+   * The brand the mail is named after: the realm's sender name's
+   * (`EmailServiceConfig.brand`).
+   *
+   * @default DEFAULT_MAIL_BRAND (QAuth's)
+   */
+  brand?: MailBrand;
+}
+
 /**
  * React Email template sent when someone registers an address that already
  * has an account.
@@ -12,11 +23,9 @@ import { MailFrame, Paragraph } from './engine/layout';
  * carries no link and no token: nothing in it can sign anyone in or change the
  * account, so it is safe to send whoever made the attempt.
  *
- * @param props.brand - the brand the mail is named after: the realm's sender
- *   name's (`EmailServiceConfig.brand`), QAuth's by default
  * @returns React component
  */
-export function AccountExistsEmail({ brand = DEFAULT_MAIL_BRAND }: { brand?: MailBrand } = {}) {
+export function AccountExistsEmail({ brand = DEFAULT_MAIL_BRAND }: AccountExistsEmailProps) {
   return (
     <MailFrame
       brand={brand}
