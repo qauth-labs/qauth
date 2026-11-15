@@ -244,7 +244,7 @@ describe('EmailService', () => {
       await named.sendEngineMail('a@example.com', { template: 'password_changed' }, LINK);
 
       const [mail] = provider.getSentEmails();
-      expect(mail?.html).toContain('This email was sent by delur.io');
+      expect(mail?.text).toContain('This email was sent by delur.io');
       expect(mail?.html).not.toContain('QAuth');
       expect(mail?.inlineImages).toEqual([]);
     });
@@ -260,7 +260,7 @@ describe('EmailService', () => {
       );
 
       const [mail] = provider.getSentEmails();
-      expect(mail?.html).toContain('This email was sent by Acme Login');
+      expect(mail?.text).toContain('This email was sent by Acme Login');
       expect(mail?.html).not.toContain('delur.io');
     });
 
@@ -273,7 +273,7 @@ describe('EmailService', () => {
       );
 
       const [mail] = provider.getSentEmails();
-      expect(mail?.html).toContain('This email was sent by QAuth');
+      expect(mail?.text).toContain('This email was sent by QAuth');
       expect(mail?.inlineImages).toEqual([QAUTH_MAIL_LOGO_IMAGE]);
     });
   });

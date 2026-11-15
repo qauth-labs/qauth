@@ -212,7 +212,8 @@ describe('createRealmMailService (#529)', () => {
 
     const [engine, verification, exists] = built[0]?.sent ?? [];
     for (const mail of [engine, verification, exists]) {
-      expect(mail?.from).toBe('delur.io <no-reply@example.com>');
+      // A dot is not an atom character, so the phrase is quoted (RFC 5322).
+      expect(mail?.from).toBe('"delur.io" <no-reply@example.com>');
       expect(mail?.html).toContain('delur.io');
       expect(mail?.html).not.toContain('QAuth');
       expect(mail?.text).not.toContain('QAuth');
