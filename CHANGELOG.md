@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The sign-in page and the account pages name the realm's host.** Their
+  headings said only "QAuth", so a person with accounts on several QAuth
+  servers could not tell whose account it was. The sign-in page now says
+  "Sign in to auth.example.com" and the account overview "Your account on
+  auth.example.com", where `auth.example.com` is the host of the realm's
+  issuer; every account page's title carries it too. A realm has no display
+  name or logo yet; the brand settings bring them ([#695]).
+
 ## [0.2.6] - 2026-11-15
 
 A patch release with no breaking change, no migration and no new setting.
@@ -4520,6 +4530,7 @@ It adds migrations 0068 and 0069.
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689
+[#695]: https://github.com/qauth-labs/qauth/issues/695
 [#700]: https://github.com/qauth-labs/qauth/issues/700
 [#709]: https://github.com/qauth-labs/qauth/issues/709
 [#714]: https://github.com/qauth-labs/qauth/issues/714

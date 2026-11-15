@@ -25,6 +25,7 @@ import {
   RESUME_PATH_PREFIX,
 } from '../../helpers/pending-authorization';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmIssuerHost } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import { isSafeReturnTo } from '../../helpers/return-to';
 import {
@@ -67,6 +68,11 @@ function loginPage(opts: {
   cspNonce: string;
   /** Signed double-submit CSRF token; mirrored in the __Host- login cookie. */
   csrfToken: string;
+  /**
+   * The host of the realm's issuer (`realmIssuerHost`), which the title and
+   * the heading name, so the person sees whose server asks for the password.
+   */
+  realmHost: string;
   error?: string;
   email?: string;
   /**
@@ -84,8 +90,16 @@ function loginPage(opts: {
    */
   upstreamProviders: readonly UpstreamProviderEntry[];
 }): string {
-  const { returnTo, cspNonce, csrfToken, error, email, walletLoginOffered, upstreamProviders } =
-    opts;
+  const {
+    returnTo,
+    cspNonce,
+    csrfToken,
+    realmHost,
+    error,
+    email,
+    walletLoginOffered,
+    upstreamProviders,
+  } = opts;
   const walletLoginHref = `/ui/wallet-login?return_to=${encodeURIComponent(returnTo)}`;
   return render(
     html`<!doctype html>
@@ -94,7 +108,7 @@ function loginPage(opts: {
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
-          <title>Sign in — QAuth</title>
+          <title>Sign in — ${realmHost}</title>
           ${uiStylesheetLink()}
           <style nonce="${cspNonce}">
             .card {
@@ -102,6 +116,9 @@ function loginPage(opts: {
             }
             h1 {
               margin-bottom: 1.5rem;
+            }
+            .domain {
+              overflow-wrap: anywhere;
             }
             .divider {
               display: flex;
@@ -134,7 +151,7 @@ function loginPage(opts: {
         </head>
         <body>
           <form class="card" method="post" action="/ui/login">
-            <h1>Sign in to QAuth</h1>
+            <h1>Sign in to <span class="domain">${realmHost}</span></h1>
             ${error ? html`<div class="error">${error}</div>` : ''}
             <input type="hidden" name="return_to" value="${returnTo}" />
             <input type="hidden" name="csrf_token" value="${csrfToken}" />
@@ -290,6 +307,7 @@ export default async function (fastify: FastifyInstance) {
         loginPage({
           returnTo,
           cspNonce: reply.cspNonce.style,
+          realmHost: realmIssuerHost(requestRealm(request)),
           csrfToken,
           walletLoginOffered: await walletLoginOfferedIn(fastify, requestRealm(request)),
           upstreamProviders: await upstreamProvidersFor(requestRealm(request).id, returnTo),
@@ -351,6 +369,7 @@ export default async function (fastify: FastifyInstance) {
           loginPage({
             returnTo,
             cspNonce: reply.cspNonce.style,
+            realmHost: realmIssuerHost(requestRealm(request)),
             csrfToken: freshCsrf,
             error: 'Your session expired. Please try again.',
             email: body.email,
@@ -381,6 +400,7 @@ export default async function (fastify: FastifyInstance) {
           loginPage({
             returnTo,
             cspNonce: reply.cspNonce.style,
+            realmHost: realmIssuerHost(requestRealm(request)),
             // The CSRF cookie is still valid on a refusal — reuse it so the
             // re-rendered form keeps matching the cookie.
             csrfToken: cookieCsrf,
