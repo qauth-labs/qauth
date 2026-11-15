@@ -437,7 +437,9 @@ describe('clientNameClaim (#1148)', () => {
     const emoji = clientNameClaim({ name: '😀'.repeat(200) }).clientName ?? '';
     expect([...emoji].length).toBeLessThanOrEqual(DECLARED_NAME_MAX_LENGTH);
     // No lone surrogate: every code point is whole.
-    expect(emoji).toBe(emoji.toWellFormed());
+    expect(emoji).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+    );
   });
 
   it('gives no claim without a name, or for one that sanitises to nothing', () => {
