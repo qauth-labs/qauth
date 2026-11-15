@@ -105,6 +105,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its public keys before upgrading
   ([Upgrades](https://docs.qauth.dev/operate/upgrades/#service-accounts-and-the-admin-audience-needs-private_key_jwt)).
 
+### Fixed
+
+- **A realm's mail on Resend is tried again when Resend is busy** ([#1093]).
+  The Resend SDK answers a refused or failed request as an error result and
+  never throws for one, so the provider's retry, which waited for a thrown
+  error, never ran: a mail the account's rate limit turned away
+  (`429 rate_limit_exceeded`, 10 requests a second per account by default,
+  shared by every sender on it), a `5xx`, a `409 concurrent_idempotent_requests`
+  or a request that got no answer failed at once, and the person waited for
+  a sign-up, verification or reset code that never came. These are now
+  tried again up to three times, after 2, 4 and 8 seconds or the longer
+  wait a `Retry-After` asks for (up to 10 seconds; a longer one ends the
+  send), always with the same idempotency key, so the mail goes out at most
+  once. Every other answer is final, the daily and monthly quotas
+  (`daily_quota_exceeded`, `monthly_quota_exceeded`) among them. An attempt
+  is aborted after 10 seconds and counts as no answer. A failure names
+  Resend's status and error name, never its message, which can quote an
+  address.
+
 ## [0.2.7] - 2026-11-15
 
 A patch release with no breaking change of the stable surface. It has three
@@ -4899,6 +4918,7 @@ It adds migrations 0068 and 0069.
 [#1082]: https://github.com/qauth-labs/qauth/issues/1082
 [#1083]: https://github.com/qauth-labs/qauth/issues/1083
 [#1088]: https://github.com/qauth-labs/qauth/issues/1088
+[#1093]: https://github.com/qauth-labs/qauth/issues/1093
 [#1106]: https://github.com/qauth-labs/qauth/issues/1106
 [#1107]: https://github.com/qauth-labs/qauth/issues/1107
 [#1108]: https://github.com/qauth-labs/qauth/issues/1108
