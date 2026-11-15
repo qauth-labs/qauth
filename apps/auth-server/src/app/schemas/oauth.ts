@@ -73,7 +73,10 @@ export const UI_LOCALES_MAX_LENGTH = 255;
  * skipped, never refused; a value longer than {@link UI_LOCALES_MAX_LENGTH}
  * is refused with `invalid_request`, as it round-trips through the sign-in.
  */
-export const uiLocalesParamSchema = z.string().max(UI_LOCALES_MAX_LENGTH).optional();
+export const uiLocalesParamSchema = z.string().max(UI_LOCALES_MAX_LENGTH).optional().meta({
+  description:
+    "OpenID Connect Core 1.0 §3.1.2.1: the person's preferred languages, as space-separated BCP 47 tags, preferred first, at most 255 characters. The consent screen shows a registered protected resource's consent text for its scopes in the first of them the resource gives one in, and in English otherwise. A malformed or unsupported tag is skipped.",
+});
 
 /**
  * OpenID Connect Core 1.0 §3.1.2.1 `login_hint` (#628): a hint at the

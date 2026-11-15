@@ -52,7 +52,7 @@ export interface ProtectedResourceScope {
  *   under the same `client_id` matches again.
  * - `version` rises by one with every write: the admin API's entity tag.
  *
- * Written by the admin API (`protectedResources.*`, security operations) and
+ * Written by the admin API (`resourceServers.*`, security operations) and
  * the seed manifest's `resources` section; read by every path that grants a
  * user's scopes. Deleting the realm deletes its rows.
  */
