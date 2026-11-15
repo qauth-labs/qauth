@@ -139,6 +139,15 @@
       },
       "description": "Create one key for a realm, purpose and algorithm in the realm's encrypted key store (ADR-019 Decision 9, #485), for example an RS256 signing key for an OpenID Foundation run: `pnpm nx run auth-server:keys:create --purpose=token_signing --algorithm=RS256`. Run it on a host that holds the KEK, with the server's environment (DATABASE_URL, KEK or KEK_PATH, SIGNING_ALGORITHM_MODE, HYBRID_SIGNING_ENABLED, DEFAULT_REALM_NAME)."
     },
+    "keys:rewrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/keys-rewrap.ts",
+        "cwd": "apps/auth-server",
+        "forwardAllArgs": true
+      },
+      "description": "Rotate the KEK (ADR-019 Decision 9, #545): re-wrap every stored key's data key from the old KEK to the new one, then print the stored keys per kek_ref and whether KEK_PREVIOUS can be removed. `pnpm nx run auth-server:keys:rewrap --status` counts the keys per kek_ref; `--from=<old kek_ref>` re-wraps them. Run it on a host that holds both KEKs, with the server's environment (DATABASE_URL, the new KEK as KEK or KEK_PATH and the old one as KEK_PREVIOUS or KEK_PREVIOUS_PATH)."
+    },
     "openapi-export": {
       "executor": "nx:run-commands",
       "options": {

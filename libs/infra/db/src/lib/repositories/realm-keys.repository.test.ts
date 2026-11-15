@@ -150,6 +150,15 @@ const CALLS: Record<
   deleteByScope: (repo) => repo.deleteByScope(REALM_ID, 'webhook_signing', 'subscription-1'),
   // The lock takes the caller's transaction; the recording client stands in for it.
   lockRealm: (repo, tx) => repo.lockRealm(REALM_ID, tx),
+  countByKekRef: (repo) => repo.countByKekRef(),
+  listByKekRef: (repo) => repo.listByKekRef('kek-ref', REALM_ID, 100),
+  replaceWrappedDek: (repo) =>
+    repo.replaceWrappedDek(REALM_ID, KID, {
+      fromKekRef: 'kek-ref',
+      fromWrappedDek: Buffer.from('wrapped-dek'),
+      wrappedDek: Buffer.from('rewrapped-dek'),
+      kekRef: 'kek-ref-2',
+    }),
 };
 
 async function run(method: keyof RealmKeysRepository): Promise<CapturedQuery[]> {

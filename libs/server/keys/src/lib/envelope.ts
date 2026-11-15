@@ -1,9 +1,9 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { encodeKeyAad, KEY_AAD_VERSION, keyAad, type KeyIdentity } from './aad';
 import { KeyDecryptionError } from './errors';
 import { finishGcmDecryption } from './gcm';
-import type { KekProvider } from './kek-provider';
+import type { KekProvider, WrappedDataKey } from './kek-provider';
 
 /**
  * Envelope encryption of stored key material (ADR-019 Decision 9, NIST
@@ -128,6 +128,84 @@ export async function openKeyMaterial(
     } catch (error) {
       throw new KeyDecryptionError({ detail: 'material did not authenticate', cause: error });
     }
+  } finally {
+    dek.fill(0);
+  }
+}
+
+/**
+ * Unwrap the data key of one stored key under the KEK its `kekRef` names,
+ * without decrypting the material: the KEK rotation (#545) checks with it
+ * that a node opens a KEK reference.
+ *
+ * @param identity - the row's identity, read from the row itself
+ * @returns the data key, in a buffer that belongs to the caller. Zero it.
+ * @throws KeyDecryptionError when the wrapped data key does not open under
+ *   the identity, or is not a data key
+ * @throws UnknownKekRefError when the provider holds no KEK named by `kekRef`
+ */
+export async function unwrapDataKey(
+  provider: KekProvider,
+  sealed: Pick<SealedKeyMaterial, 'wrappedDek' | 'kekRef' | 'aadVersion'>,
+  identity: KeyIdentity
+): Promise<Buffer> {
+  const aad = keyAad(identity, sealed.aadVersion);
+  try {
+    encodeKeyAad(aad);
+  } catch (error) {
+    throw new KeyDecryptionError({ detail: 'unusable associated data', cause: error });
+  }
+  // A view, not a copy, so the caller's `fill(0)` clears the bytes the
+  // provider returned (see `KekProvider.unwrap`).
+  const unwrapped = await provider.unwrap(sealed.wrappedDek, aad, sealed.kekRef);
+  const dek = Buffer.from(unwrapped.buffer, unwrapped.byteOffset, unwrapped.byteLength);
+  if (dek.length !== DATA_KEY_BYTES) {
+    dek.fill(0);
+    throw new KeyDecryptionError({ detail: 'unwrapped data key has the wrong length' });
+  }
+  return dek;
+}
+
+/**
+ * Re-wrap the data key of one stored key under the provider's current KEK
+ * (ADR-019 Decision 9, #545): unwrap it under the KEK the row's `kekRef`
+ * names, wrap it again, and check that the new wrap opens to the same data
+ * key before it is handed back. The material and its ciphertext are not
+ * touched: they stay encrypted under the same data key, so the row's
+ * `ciphertext`, `iv` and `aad_version` stay as they are.
+ *
+ * The data key is bound to the same associated data as before, of the row's
+ * own `aad_version`.
+ *
+ * @param identity - the row's identity, read from the row itself
+ * @returns the new `wrapped_dek` and `kek_ref`
+ * @throws KeyDecryptionError when the wrapped data key does not open under
+ *   the identity, is not a data key, or the new wrap does not open to it
+ * @throws UnknownKekRefError when the provider holds no KEK named by `kekRef`
+ */
+export async function rewrapDataKey(
+  provider: KekProvider,
+  sealed: Pick<SealedKeyMaterial, 'wrappedDek' | 'kekRef' | 'aadVersion'>,
+  identity: KeyIdentity
+): Promise<WrappedDataKey> {
+  const aad = keyAad(identity, sealed.aadVersion);
+  const dek = await unwrapDataKey(provider, sealed, identity);
+  try {
+    const rewrapped = await provider.wrap(dek, aad);
+    const wrapped = Buffer.from(rewrapped.wrapped);
+    const back = await unwrapDataKey(
+      provider,
+      { wrappedDek: wrapped, kekRef: rewrapped.kekRef, aadVersion: sealed.aadVersion },
+      identity
+    );
+    try {
+      if (!timingSafeEqual(back, dek)) {
+        throw new KeyDecryptionError({ detail: 're-wrapped data key opens to another key' });
+      }
+    } finally {
+      back.fill(0);
+    }
+    return Object.freeze({ wrapped, kekRef: rewrapped.kekRef });
   } finally {
     dek.fill(0);
   }
