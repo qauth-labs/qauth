@@ -131,6 +131,10 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   oauth_clients: { web: SIU, api: SIUD, admin: SIUD },
   oauth_consents: { web: SIU, api: SIU },
   oid4vp_request_states: { web: SIU, api: SIUD },
+  // The protected resources each realm registered (#1087): read by every
+  // path that grants a user's scopes (`web` authorizes and shows consent,
+  // `api` redeems codes and refreshes), written by the admin API.
+  protected_resources: { web: S, api: S, admin: SIUD },
   // Each realm's AuthMethod plugins (#600): enabled and configured by admin.
   realm_auth_method_plugins: { web: S, admin: SIU },
   realm_hosts: { web: SI, api: SI, admin: SI, signer: SI },

@@ -23,6 +23,7 @@ import {
   createOAuthClientsRepository,
   createOAuthConsentsRepository,
   createOid4vpRequestStatesRepository,
+  createProtectedResourcesRepository,
   createRealmAuthMethodPluginsRepository,
   createRealmPublicKeysRepository,
   createRealmSecretsRepository,
@@ -47,6 +48,7 @@ import {
   OAuthClientsRepository,
   type OAuthConsentsRepository,
   type Oid4vpRequestStatesRepository,
+  type ProtectedResourcesRepository,
   type RealmAuthMethodPluginsRepository,
   type RealmPublicKeysRepository,
   type RealmSecretsRepository,
@@ -204,6 +206,13 @@ declare module 'fastify' {
        * seconds and removes itself when it closes.
        */
       deploymentNodes: DeploymentNodesRepository;
+      /**
+       * The protected resources each realm registered (#1087), with the
+       * scopes each defines and the clients that may ask for them: the admin
+       * API writes them, and every path that grants a user's scopes reads
+       * them (authorize, the consent step, the code and refresh grants).
+       */
+      protectedResources: ProtectedResourcesRepository;
     };
   }
 }
@@ -247,6 +256,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   realmAuthMethodPlugins: true,
   realmUpstreamProviders: true,
   deploymentNodes: true,
+  protectedResources: true,
 };
 
 /** Every repository the plugin can build, in the order of the type above. */
@@ -356,6 +366,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       realmAuthMethodPlugins: () => createRealmAuthMethodPluginsRepository(database.db),
       realmUpstreamProviders: () => createRealmUpstreamProvidersRepository(database.db),
       deploymentNodes: () => createDeploymentNodesRepository(database.db),
+      protectedResources: () => createProtectedResourcesRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};
     for (const name of options.repositories ?? REPOSITORY_NAMES) {
