@@ -223,8 +223,8 @@
 > promised in place of the mailed code. Decision 8's binding bullet is edited in place:
 >
 > - A passkey or TOTP bound after a sign-in that proved only the account's password is _new_ for
->   the realm's `accounts.newFactorWindowDays` (default 7, from 1 to 30). The credential stores
->   when its window ends. A factor bound after a sign-in that proved a settled factor beyond the
+>   the realm's `accounts.newFactorWindowDays` (default 7, from 0 to 30; 0, since #1143, is no
+>   window: the factor is never new). The credential stores when its window ends. A factor bound after a sign-in that proved a settled factor beyond the
 >   password is never new, and neither is one bound on an account that holds no password. A
 >   recovery code counts as a settled factor, for this rule as for a reset or a forced password
 >   update, only on an account that holds no new factor: the first binding shows the set, so while

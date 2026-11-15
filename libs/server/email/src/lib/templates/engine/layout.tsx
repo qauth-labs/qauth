@@ -12,10 +12,11 @@ import { MAIL_COLORS, MAIL_FONTS } from '../theme';
  * the footer notice; it sets no link. The text colours, the faces and the
  * square, hairline-edged card are the design system's, whatever the brand.
  *
- * An attached logo (QAuth's) is shown through `cid:`, and the sender adds the
- * image as an inline part (`mailImagesOf`). An uploaded logo is loaded from
- * the realm's own host, its path after the realm's issuer; without an issuer
- * to start at, the name stands in.
+ * An attached logo (QAuth's mark) is shown through `cid:`, before the name as
+ * text, and the sender adds the image as an inline part (`mailImagesOf`). An
+ * uploaded logo is loaded from the realm's own host, its path after the
+ * realm's issuer, in place of the name; without an issuer to start at, the
+ * name stands in.
  */
 export interface MailFrameProps {
   readonly brand: MailBrand;
@@ -40,6 +41,25 @@ export function MailFrame({ brand, baseUrl, preview, title, children }: MailFram
           <Section style={styles.section}>
             {brand.logo === undefined || logoSrc === undefined ? (
               <Text style={styles.name}>{brand.name}</Text>
+            ) : isAttachedLogo(brand.logo) ? (
+              <Section style={styles.header}>
+                <table role="presentation" cellPadding={0} cellSpacing={0} border={0}>
+                  <tbody>
+                    <tr>
+                      <td style={styles.markCell}>
+                        <img
+                          src={logoSrc}
+                          width={brand.logo.width}
+                          height={brand.logo.height}
+                          alt=""
+                          style={styles.logo}
+                        />
+                      </td>
+                      <td style={styles.markName}>{brand.name}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </Section>
             ) : (
               <Section style={styles.header}>
                 <img
@@ -162,8 +182,8 @@ function stylesOf(brand: MailBrand) {
     section: { padding: '36px 40px 32px' },
     name: {
       fontFamily: MAIL_FONTS.sans,
-      fontSize: '16px',
-      lineHeight: '24px',
+      fontSize: '18px',
+      lineHeight: '28px',
       fontWeight: '600',
       color: MAIL_COLORS.foreground,
       margin: '0 0 32px',
@@ -172,6 +192,15 @@ function stylesOf(brand: MailBrand) {
     },
     header: { margin: '0 0 32px', paddingBottom: '20px', borderBottom: HAIRLINE },
     logo: { display: 'block', maxWidth: '100%', height: 'auto', border: '0' },
+    markCell: { verticalAlign: 'middle', paddingRight: '10px' },
+    markName: {
+      verticalAlign: 'middle',
+      fontFamily: MAIL_FONTS.sans,
+      fontSize: '18px',
+      lineHeight: '28px',
+      fontWeight: '600',
+      color: MAIL_COLORS.foreground,
+    },
     title: {
       fontFamily: MAIL_FONTS.display,
       fontSize: '36px',

@@ -115,14 +115,17 @@ describe('the engine mail registry (#637)', () => {
     expect(images).toEqual([]);
   });
 
-  it('carries the QAuth logo itself when the realm set no brand', async () => {
+  it('carries the QAuth mark itself, beside the name as text, when the realm set no brand', async () => {
     const { html, text, images } = await renderEngineMail(
       { template: 'password_changed' },
       { baseUrl: BASE_URL, brand: resolveMailBrand(undefined) }
     );
 
     expect(html).toContain(`src="${ATTACHED_LOGO}"`);
-    expect(html).toContain('alt="QAuth"');
+    // The mark is an image with no text of its own; the name is text, which a
+    // client's dark mode recolours as it does the rest of the mail.
+    expect(html).toContain('alt=""');
+    expect(html).toMatch(/<td[^>]*>QAuth<\/td>/);
     // The only image is the attached one: nothing is fetched when the mail is opened.
     expect([...html.matchAll(/<img\b/g)]).toHaveLength(1);
     expect(images).toEqual([QAUTH_MAIL_LOGO_IMAGE]);
