@@ -523,14 +523,28 @@ describe('ResourceGuard — scopesSupported', () => {
 
   it('accepts a scopesSupported holding every requiredScopes entry, in any order', () => {
     expect(
-      guard({ requiredScopes: ['notes:write', 'notes:read'], scopesSupported: TOOL_SCOPES })
-        .scopesSupported
+      guard({
+        requiredScopes: ['notes:write', 'notes:read'],
+        scopesSupported: TOOL_SCOPES,
+      }).getProtectedResourceMetadata().scopes_supported
     ).toEqual(TOOL_SCOPES);
   });
 
-  it('defaults to requiredScopes', () => {
-    expect(guard({ requiredScopes: ['notes:read'] }).scopesSupported).toEqual(['notes:read']);
-    expect(guard({}).scopesSupported).toEqual([]);
+  it('defaults to requiredScopes', async () => {
+    const reader = guard({ requiredScopes: ['notes:read'] });
+    expect(reader.getProtectedResourceMetadata().scopes_supported).toEqual(['notes:read']);
+    expect((await missingTokenError(reader, undefined)).requiredScopes).toEqual(['notes:read']);
+    expect(guard({}).getProtectedResourceMetadata()).not.toHaveProperty('scopes_supported');
+  });
+
+  // The guard keeps its own copy: a host that changes the array it passed
+  // changes neither what is advertised nor what is enforced.
+  it('keeps its own copy of the configured list', async () => {
+    const configured = [...TOOL_SCOPES];
+    const perTool = guard({ scopesSupported: configured });
+    configured.length = 0;
+    expect(perTool.getProtectedResourceMetadata().scopes_supported).toEqual(TOOL_SCOPES);
+    expect((await missingTokenError(perTool, undefined)).requiredScopes).toEqual(TOOL_SCOPES);
   });
 
   it('accepts a token that carries none of the supported scopes', async () => {
@@ -610,7 +624,11 @@ describe('ResourceGuard — scopesSupported', () => {
     const perTool = guard({
       scopesSupported: ['notes:read', 'offline_access', 'notes:write', 'notes:read'],
     });
-    expect(perTool.scopesSupported).toEqual(['notes:read', 'offline_access', 'notes:write']);
+    expect((await missingTokenError(perTool, undefined)).requiredScopes).toEqual([
+      'notes:read',
+      'offline_access',
+      'notes:write',
+    ]);
     expect(perTool.getProtectedResourceMetadata().scopes_supported).toEqual([
       'notes:read',
       'notes:write',

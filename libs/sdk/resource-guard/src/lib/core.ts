@@ -97,14 +97,16 @@ export class ResourceGuard {
   readonly authorizationServer: string;
   /** Default scopes required for any access. */
   readonly requiredScopes: string[];
+  readonly validationMode: ValidationMode;
+
   /**
    * Every scope the resource understands: advertised in its metadata and on
    * the credential-absent 401 of a call with no per-operation scopes, never
    * required of a token. `requiredScopes` unless the config lists them.
+   * Private, so no caller can reach `requiredScopes` through it: trimming
+   * what is advertised must never change what is enforced.
    */
-  readonly scopesSupported: string[];
-  readonly validationMode: ValidationMode;
-
+  private readonly scopesSupported: readonly string[];
   private readonly validator: TokenValidator;
   private readonly metadata: ProtectedResourceMetadata;
 
@@ -127,7 +129,7 @@ export class ResourceGuard {
     this.metadata = buildProtectedResourceMetadata({
       resource: this.resource,
       authorizationServer: this.authorizationServer,
-      scopesSupported: this.scopesSupported.length > 0 ? this.scopesSupported : undefined,
+      scopesSupported: this.scopesSupported.length > 0 ? [...this.scopesSupported] : undefined,
     });
   }
 
@@ -298,7 +300,7 @@ export class ResourceGuard {
   }
 }
 
-function dedupe(values: string[]): string[] {
+function dedupe(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
@@ -311,7 +313,10 @@ function dedupe(values: string[]): string[] {
  *   `requiredScopes` entry: every token must carry that scope, so a document
  *   that does not list it would tell a client to request too little.
  */
-function resolveScopesSupported(configured: string[] | undefined, required: string[]): string[] {
+function resolveScopesSupported(
+  configured: readonly string[] | undefined,
+  required: string[]
+): readonly string[] {
   if (configured === undefined) {
     return required;
   }
