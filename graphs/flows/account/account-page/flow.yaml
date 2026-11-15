@@ -399,7 +399,9 @@ states:
       headers:
         Content-Type: text/html; charset=utf-8
         Cache-Control: no-store
-      body: the overview, each action a form with the session's account CSRF value
+      body: >-
+        the overview, headed "Your account on <the host of the realm's issuer>", each action a form with the
+        session's account CSRF value
 
   password_form_shown:
     type: final

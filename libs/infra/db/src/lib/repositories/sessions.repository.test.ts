@@ -23,6 +23,9 @@ interface CapturedQuery {
 
 const REALM_ID = '0190a000-0000-7000-8000-000000000001';
 const SESSION_ID = '0190a000-0000-7000-8000-0000000000aa';
+
+/** A session's idle end as the queries spell it, lowercased: a browser session's only (#1144). */
+const IDLE_END = `(case when "sessions"."kind" = 'browser' then "sessions"."last_seen_at" + "realms"."sso_idle_timeout" * 1000 end)`;
 const USER_ID = '0190a000-0000-7000-8000-0000000000bb';
 const CLIENT_ID = '0190a000-0000-7000-8000-0000000000cc';
 const OTHER_SESSION = '0190a000-0000-7000-8000-0000000000ab';
@@ -77,6 +80,8 @@ const SESSION_ROW: unknown[] = [
   'sign_out',
   String(NOW - 10_000),
   String(NOW - 10_000),
+  // `kind` (#1144), the last column.
+  'browser',
 ];
 
 /** The same row, live: not revoked. */
@@ -725,9 +730,9 @@ describe('session lists and bulk revocations (#550)', () => {
     expect(text).toContain(
       'least("sessions"."expires_at", "sessions"."created_at" + coalesce("realms"."sso_max_lifespan" * 1000, $3::bigint)) > $4::bigint'
     );
-    expect(text).toContain(
-      '("realms"."sso_idle_timeout" is null or "sessions"."last_seen_at" + "realms"."sso_idle_timeout" * 1000 > $5::bigint)'
-    );
+    // A browser session's idle end alone: a logout-only one has none (#1144),
+    // and a realm without an idle limit gives NULL.
+    expect(text).toContain(`(${IDLE_END} is null or ${IDLE_END} > $5::bigint)`);
     expect(text).toContain(
       '("sessions"."last_seen_at" < $6 or ("sessions"."last_seen_at" = $7 and "sessions"."id" < $8))'
     );
@@ -937,10 +942,8 @@ describe('session lists and bulk revocations (#550)', () => {
     const absolute =
       'least("sessions"."expires_at", "sessions"."created_at" + coalesce("realms"."sso_max_lifespan" * 1000,';
     expect(lock.text).toContain(absolute);
-    expect(lock.text).toContain('"realms"."sso_idle_timeout" is not null');
-    expect(lock.text).toContain(
-      '"sessions"."last_seen_at" + "realms"."sso_idle_timeout" * 1000 <='
-    );
+    // A browser session's idle end alone: a logout-only one has none (#1144).
+    expect(lock.text).toContain(`(${IDLE_END} is not null and ${IDLE_END} <=`);
     expect(lock.text.trim()).toMatch(/limit \$\d+ for update of "sessions"$/);
     expect(lock.values).toEqual(expect.arrayContaining([86_400_000, NOW, 50]));
     expect(update.text).toMatch(

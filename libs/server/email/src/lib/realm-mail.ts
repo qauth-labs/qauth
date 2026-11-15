@@ -7,7 +7,8 @@ import type {
   VerificationLink,
 } from '../types';
 import { createEmailService } from './email-service';
-import type { EngineMail, EngineMailContext } from './engine-mail/registry';
+import { resolveMailBrand } from './engine-mail/brand';
+import type { EngineMail, EngineMailSendContext } from './engine-mail/registry';
 import { createEmailProvider, formatMailbox, type MailTransport } from './provider-factory';
 import type { SmtpConnectionPolicy } from './smtp-destination';
 
@@ -108,7 +109,9 @@ export interface RealmEmailService {
   /**
    * Send one of the engine's mails (PRO-14, #637) for the realm `realmId`,
    * through its transport, from its sender: a template of the registry with
-   * its data, rendered with `context` (the realm's issuer and brand).
+   * its data, rendered with `context` (the realm's issuer, and a brand if the
+   * caller has one). Without a brand, the mail is named after the realm's
+   * sender name (`mail.fromName`): the name its `From` header shows.
    *
    * @throws RealmMailUnavailableError when the realm cannot send mail
    * @throws EngineMailError when the data does not fit the template
@@ -117,7 +120,7 @@ export interface RealmEmailService {
     realmId: string,
     to: string,
     mail: EngineMail,
-    context: EngineMailContext
+    context: EngineMailSendContext
   ): Promise<EmailResult>;
 
   /**
@@ -250,6 +253,10 @@ export function createRealmMailService(options: RealmMailServiceOptions): RealmE
     return createEmailService(provider, {
       ...options.serviceConfig,
       ...(fromAddress === null ? {} : { defaultFrom: formatMailbox(fromName, fromAddress) }),
+      // No brand settings exist yet (#695): the mail is named after the
+      // sender its From header shows, so a realm that sends as "delur.io"
+      // does not say QAuth in the body. QAuth's mark goes with QAuth's name only.
+      brand: resolveMailBrand({ name: fromName }),
     });
   }
 
@@ -302,7 +309,7 @@ export function createRealmMailService(options: RealmMailServiceOptions): RealmE
       realmId: string,
       to: string,
       mail: EngineMail,
-      context: EngineMailContext
+      context: EngineMailSendContext
     ): Promise<EmailResult> {
       return (await serviceOf(realmId)).sendEngineMail(to, mail, context);
     },

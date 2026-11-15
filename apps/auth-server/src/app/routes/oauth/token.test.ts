@@ -391,6 +391,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       grantTypes: ['client_credentials'],
       scopes: ['read:foo'],
       audience: null,
+      name: 'Report Bot',
     });
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
@@ -414,7 +415,8 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     expect(result).toMatchObject({ expires_in: 300 });
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       IN_REQUEST_REALM,
-      expect.objectContaining({ expiresInOverride: 300 })
+      // The client's declared name rides beside client_id (#1148).
+      expect.objectContaining({ expiresInOverride: 300, clientName: 'Report Bot' })
     );
     expect(fastify.policyStore.ofRealm).toHaveBeenCalledExactlyOnceWith(REALM_WITH_POLICIES);
     expect(realmReads).toEqual([]);

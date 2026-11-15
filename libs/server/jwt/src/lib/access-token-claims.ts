@@ -42,6 +42,8 @@ export const accessTokenClaimsSchema = z.looseObject({
   email_verified: z.boolean().optional(),
   // OAuth client identifier (`client_id` claim).
   client_id: z.string().optional(),
+  // The name the client declared (#1148): display text, never verified.
+  client_name: z.string().optional(),
   // Space-separated granted scopes (omitted when none granted).
   scope: z.string().optional(),
   // RFC 8707 audience — single or multiple.

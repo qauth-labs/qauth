@@ -397,8 +397,9 @@ export function createServerPasskeys(
       }
       // A passkey bound after a sign-in that proved only the password is new
       // for the realm's window (#1064; ADR-017 Decision 8, amended 2026-11-12).
-      const newUntil =
-        isNew === true ? now() + (await newFactorWindowIn(fastify, realmId)) : undefined;
+      // A realm with no window (#1143) binds it as not new.
+      const windowMs = isNew === true ? await newFactorWindowIn(fastify, realmId) : 0;
+      const newUntil = windowMs > 0 ? now() + windowMs : undefined;
       let created: { readonly id: string };
       try {
         created = await storePasskeyEnrolment(

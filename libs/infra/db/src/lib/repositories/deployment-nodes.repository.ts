@@ -10,7 +10,7 @@ import type { DbClient } from '../../types';
  *
  * Every time is the database's clock, in epoch ms, so the nodes' own clocks
  * never decide whether a node is live. The repository reads and writes the
- * list through the functions of migration 0076 alone, since no role's
+ * list through the functions of migration 0077 alone, since no role's
  * database user holds anything on the table: they set the times, check
  * every value, and mark seen or remove only the rows the caller's own
  * database user registered.

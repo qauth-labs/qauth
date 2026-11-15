@@ -22,6 +22,7 @@ vi.mock('../../config/env', () => ({
 import {
   clientDisplay,
   type ClientDisplaySource,
+  clientNameClaim,
   DECLARED_NAME_MAX_LENGTH,
   declaredText,
 } from './client-display';
@@ -420,5 +421,30 @@ describe('clientDisplay (ADR-019 Decision 6, #593)', () => {
     expect(redirect.properties['scheme'].pattern).toBe(DISPLAY_SCHEME_PATTERN);
     expect(redirect.properties['host']['maxLength']).toBe(DISPLAY_HOST_MAX_LENGTH);
     expect(redirect.properties['scheme']['maxLength']).toBe(DISPLAY_SCHEME_MAX_LENGTH);
+  });
+});
+
+describe('clientNameClaim (#1148)', () => {
+  it('carries the declared name as the consent page shows it', () => {
+    expect(clientNameClaim({ name: 'Notes Agent' })).toEqual({ clientName: 'Notes Agent' });
+    // Line breaks and bidi controls go, as on the consent page.
+    expect(clientNameClaim({ name: 'Notes\nAgent\u202E' })).toEqual({ clientName: 'Notes Agent' });
+  });
+
+  it('caps the name at the consent page’s bound, at a character boundary', () => {
+    const claim = clientNameClaim({ name: 'x'.repeat(255) }).clientName ?? '';
+    expect([...claim].length).toBeLessThanOrEqual(DECLARED_NAME_MAX_LENGTH);
+    const emoji = clientNameClaim({ name: '😀'.repeat(200) }).clientName ?? '';
+    expect([...emoji].length).toBeLessThanOrEqual(DECLARED_NAME_MAX_LENGTH);
+    // No lone surrogate: every code point is whole.
+    expect(emoji).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+    );
+  });
+
+  it('gives no claim without a name, or for one that sanitises to nothing', () => {
+    expect(clientNameClaim({})).toEqual({});
+    expect(clientNameClaim({ name: null })).toEqual({});
+    expect(clientNameClaim({ name: '   ' })).toEqual({});
   });
 });

@@ -1,6 +1,6 @@
 {
-  "id": "661fd688-d70f-40d5-9521-e50803bacabd",
-  "prevId": "8b5bfb92-4962-49d7-b710-16d4b94e2569",
+  "id": "d5b6529b-11e8-408f-8d4f-bcf8f2dee273",
+  "prevId": "f92ffe6a-956c-4719-b39c-bced20c8e094",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2688,91 +2688,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.deployment_nodes": {
-      "name": "deployment_nodes",
-      "schema": "",
-      "columns": {
-        "node_id": {
-          "name": "node_id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "roles": {
-          "name": "roles",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "version": {
-          "name": "version",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "config_digest": {
-          "name": "config_digest",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "config_keys": {
-          "name": "config_keys",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        },
-        "last_seen_at": {
-          "name": "last_seen_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        },
-        "registered_by": {
-          "name": "registered_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "session_user"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "deployment_nodes_roles_not_empty": {
-          "name": "deployment_nodes_roles_not_empty",
-          "value": "cardinality(\"deployment_nodes\".\"roles\") > 0"
-        },
-        "deployment_nodes_roles_known": {
-          "name": "deployment_nodes_roles_known",
-          "value": "\"deployment_nodes\".\"roles\" <@ ARRAY['web', 'api', 'admin', 'signer', 'delivery']::text[]"
-        },
-        "deployment_nodes_version_format": {
-          "name": "deployment_nodes_version_format",
-          "value": "\"deployment_nodes\".\"version\" ~ '^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.]+)?$'"
-        },
-        "deployment_nodes_config_digest_hex": {
-          "name": "deployment_nodes_config_digest_hex",
-          "value": "\"deployment_nodes\".\"config_digest\" ~ '^[0-9a-f]{64}$'"
-        },
-        "deployment_nodes_config_keys_valid": {
-          "name": "deployment_nodes_config_keys_valid",
-          "value": "deployment_nodes_config_keys_valid(\"deployment_nodes\".\"config_keys\")"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.event_deliveries": {
       "name": "event_deliveries",
       "schema": "",
@@ -4807,6 +4722,46 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.session_refresh_families": {
+      "name": "session_refresh_families",
+      "schema": "",
+      "columns": {
+        "session_id": {
+          "name": "session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "family_id": {
+          "name": "family_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "session_refresh_families_session_id_sessions_id_fk": {
+          "name": "session_refresh_families_session_id_sessions_id_fk",
+          "tableFrom": "session_refresh_families",
+          "tableTo": "sessions",
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "session_refresh_families_pk": {
+          "name": "session_refresh_families_pk",
+          "columns": ["session_id", "family_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.sessions": {
       "name": "sessions",
       "schema": "",
@@ -4906,6 +4861,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'browser'"
         }
       },
       "indexes": {
@@ -5005,6 +4967,10 @@
         "sessions_revoked_pair": {
           "name": "sessions_revoked_pair",
           "value": "(\"sessions\".\"revoked_at\" IS NULL) = (\"sessions\".\"revoked_reason\" IS NULL)"
+        },
+        "sessions_kind_valid": {
+          "name": "sessions_kind_valid",
+          "value": "\"sessions\".\"kind\" IN ('browser', 'registration', 'reset')"
         }
       },
       "isRLSEnabled": false

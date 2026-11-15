@@ -62,6 +62,17 @@ export class ResendEmailProvider implements EmailProvider {
       subject: options.subject,
       ...(options.html && { html: options.html }),
       ...(options.text && { text: options.text }),
+      ...(options.inlineImages !== undefined && options.inlineImages.length > 0
+        ? {
+            // A content ID makes each an inline part the HTML names through `cid:`.
+            attachments: options.inlineImages.map((image) => ({
+              filename: image.filename,
+              content: image.content,
+              contentType: image.contentType,
+              contentId: image.contentId,
+            })),
+          }
+        : {}),
     };
 
     const result = await this.resend.emails.send(emailPayload as CreateEmailOptions, {

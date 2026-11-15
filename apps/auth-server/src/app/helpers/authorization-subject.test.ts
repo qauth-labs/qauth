@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../config/env', () => ({ env: { NODE_ENV: 'test' } }));
+vi.mock('../../config/env', () => ({ env: { NODE_ENV: 'test', SESSION_COOKIE_TTL: 86_400 } }));
 
 import {
   isRegisteredSubject,
@@ -25,7 +25,18 @@ const SESSION = {
   idleExpiresAt: null,
 } as never;
 
-const REGISTERED: RegisteredSubject = { registered: true, realmId: 'realm-1', userId: 'user-new' };
+const REGISTERED: RegisteredSubject = {
+  registered: true,
+  realmId: 'realm-1',
+  userId: 'user-new',
+  finishedBy: 'registration',
+};
+
+/** The realm and the request a registration's code is minted in (#1144). */
+const CONTEXT = {
+  realm: { ssoMaxLifespan: null },
+  request: { ip: '192.0.2.7', headers: { 'user-agent': 'Firefox' } },
+} as never;
 
 describe('the subject of an authorization request', () => {
   it('tells a registration from a browser session', () => {
@@ -65,13 +76,36 @@ describe('the subject of an authorization request', () => {
     expect(subjectGrant(unproved)).toMatchObject({ authTime: 1_700_000_000_000, amr: null });
   });
 
-  it('binds none of them for a registration (ADR-017 Decision 10)', () => {
-    expect(subjectGrant(REGISTERED)).toEqual({
-      authTime: null,
-      amr: null,
-      assuranceLevel: null,
-      sessionExpiresAt: null,
-      session: null,
-    });
+  it('binds none of the authentication for a registration, and a logout-only session (#1144)', () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    try {
+      // The realm sets no `sso_max_lifespan`: a browser session's lifetime.
+      const end = 1_700_000_000_000 + 86_400_000;
+      expect(subjectGrant(REGISTERED, CONTEXT)).toEqual({
+        authTime: null,
+        amr: null,
+        assuranceLevel: null,
+        sessionExpiresAt: end,
+        session: {
+          realmId: 'realm-1',
+          logoutOnly: 'registration',
+          expiresAt: end,
+          ipAddress: '192.0.2.7',
+          userAgent: 'Firefox',
+        },
+      });
+      const reset = { ...REGISTERED, finishedBy: 'reset' } as const;
+      const realm = { realm: { ssoMaxLifespan: 3600 }, request: { ip: '', headers: {} } } as never;
+      expect(subjectGrant(reset, realm)).toMatchObject({
+        sessionExpiresAt: 1_700_003_600_000,
+        session: { logoutOnly: 'reset', expiresAt: 1_700_003_600_000, userAgent: null },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses a registration without the realm and request its session needs', () => {
+    expect(() => subjectGrant(REGISTERED as never)).toThrow(/realm and request/);
   });
 });

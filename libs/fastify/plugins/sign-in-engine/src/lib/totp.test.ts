@@ -240,6 +240,19 @@ describe('the TOTP over user_credentials (#653)', () => {
     expect(built.opts.newFactorWindowMs).toHaveBeenCalledTimes(1);
   });
 
+  it('binds a new TOTP as not new in a realm with no window (#1143)', async () => {
+    const built = setup();
+    built.opts.newFactorWindowMs.mockResolvedValueOnce(0);
+    await bound(built, { isNew: true });
+    expect(built.opts.newFactorWindowMs).toHaveBeenCalledWith(REALM);
+    // No `new_until`: the TOTP counts at once, so a password alone no longer signs in.
+    expect(built.totpRow()?.newUntil).toBeNull();
+    expect(built.opts.recorded).toHaveBeenCalledWith(
+      { ...ACCOUNT, credentialId: built.totpRow()?.id },
+      built.transactions[0]
+    );
+  });
+
   it('binds nothing when the realm’s window cannot be read (#1064)', async () => {
     const built = setup();
     built.opts.newFactorWindowMs.mockRejectedValueOnce(new Error('the realm is gone'));

@@ -14,6 +14,7 @@ import {
 
 const CSRF = 'csrf-token-of-the-session';
 const NONCE = 'style-nonce';
+const REALM_HOST = 'auth.example.com';
 const PASSKEY_ID = '00000000-0000-4000-8000-0000000000a1';
 const SID = '00000000-0000-4000-8000-0000000000c1';
 const OTHER_SID = '00000000-0000-4000-8000-0000000000c2';
@@ -43,6 +44,7 @@ function overview(overrides: Partial<AccountOverview> = {}): AccountOverview {
     sessions: [
       {
         sid: SID,
+        kind: 'browser',
         current: true,
         createdAt: Date.UTC(2026, 10, 3),
         lastSeenAt: Date.UTC(2026, 10, 3),
@@ -52,6 +54,7 @@ function overview(overrides: Partial<AccountOverview> = {}): AccountOverview {
       },
       {
         sid: OTHER_SID,
+        kind: 'browser',
         current: false,
         createdAt: Date.UTC(2026, 10, 4),
         lastSeenAt: Date.UTC(2026, 10, 4),
@@ -86,6 +89,7 @@ describe('accountPage (#844)', () => {
   it('draws every action as a plain form that carries the CSRF value', () => {
     const page = accountPage({
       cspNonce: NONCE,
+      realmHost: REALM_HOST,
       csrf: CSRF,
       overview: overview(),
       passkeysOn: true,
@@ -114,6 +118,7 @@ describe('accountPage (#844)', () => {
   it('escapes what the person, a browser or an operator wrote', () => {
     const page = accountPage({
       cspNonce: NONCE,
+      realmHost: REALM_HOST,
       csrf: CSRF,
       overview: overview(),
       passkeysOn: true,
@@ -127,6 +132,7 @@ describe('accountPage (#844)', () => {
   it('offers to set up what the account lacks, and no passkey form while passkeys are off', () => {
     const page = accountPage({
       cspNonce: NONCE,
+      realmHost: REALM_HOST,
       csrf: CSRF,
       overview: overview({
         passkeys: [],
@@ -149,6 +155,7 @@ describe('accountPage (#844)', () => {
     const newUntil = Date.UTC(2026, 10, 9);
     const page = accountPage({
       cspNonce: NONCE,
+      realmHost: REALM_HOST,
       csrf: CSRF,
       overview: overview({
         passkeys: [
@@ -185,6 +192,7 @@ describe('accountPage (#844)', () => {
   it('shows no such notice when no new factor is left to tell of', () => {
     const page = accountPage({
       cspNonce: NONCE,
+      realmHost: REALM_HOST,
       csrf: CSRF,
       overview: overview(),
       passkeysOn: true,
@@ -196,6 +204,7 @@ describe('accountPage (#844)', () => {
   it('shows a known notice', () => {
     const page = accountPage({
       cspNonce: NONCE,
+      realmHost: REALM_HOST,
       csrf: CSRF,
       overview: overview(),
       passkeysOn: true,
@@ -205,10 +214,98 @@ describe('accountPage (#844)', () => {
   });
 });
 
+describe('a logout-only session on the overview (#1144)', () => {
+  it('names a sign-up or a reset, never "This browser", and can end it', () => {
+    const page = accountPage({
+      cspNonce: NONCE,
+      realmHost: REALM_HOST,
+      csrf: CSRF,
+      passkeysOn: true,
+      overview: overview({
+        sessions: [
+          {
+            sid: SID,
+            kind: 'registration',
+            current: false,
+            createdAt: Date.UTC(2026, 10, 3),
+            lastSeenAt: Date.UTC(2026, 10, 3),
+            userAgent: 'Firefox',
+            ipAddress: '192.0.2.1',
+            clients: ['Photos'],
+          },
+          {
+            sid: OTHER_SID,
+            kind: 'reset',
+            current: false,
+            createdAt: Date.UTC(2026, 10, 4),
+            lastSeenAt: Date.UTC(2026, 10, 4),
+            userAgent: null,
+            ipAddress: null,
+            clients: [],
+          },
+        ],
+      }),
+    });
+
+    expect(page).toContain('<strong>A sign-up</strong>');
+    expect(page).toContain('<strong>A password reset</strong>');
+    expect(page).not.toContain('This browser');
+    expect(page).not.toContain('<strong>Firefox</strong>');
+    expect(page).toContain('Signed in to: Photos');
+    expect(page).toContain(`action="${ACCOUNT_PAGE_PATH}/sessions/${SID}/end"`);
+    expect(page).toContain(`action="${ACCOUNT_PAGE_PATH}/sessions/${OTHER_SID}/end"`);
+  });
+});
+
+describe('the realm the account pages name', () => {
+  it('the overview names the realm’s host in its heading and its title', () => {
+    const page = accountPage({
+      cspNonce: NONCE,
+      realmHost: REALM_HOST,
+      csrf: CSRF,
+      overview: overview(),
+      passkeysOn: true,
+    });
+    expect(page).toContain(`<title>Your account — ${REALM_HOST}</title>`);
+    expect(page).toContain(`<h1>Your account on <span class="domain">${REALM_HOST}</span></h1>`);
+    expect(page).not.toContain('— QAuth');
+  });
+
+  it('every other page names the realm’s host in its title', () => {
+    const pages = [
+      passwordChangePage({ cspNonce: NONCE, realmHost: REALM_HOST, csrf: CSRF }),
+      newRecoveryCodesPage({
+        cspNonce: NONCE,
+        realmHost: REALM_HOST,
+        csrf: CSRF,
+        codes: ['AAAA-BBBB'],
+        setId: 'set-1',
+      }),
+      reauthenticatePage({
+        cspNonce: NONCE,
+        realmHost: REALM_HOST,
+        csrf: CSRF,
+        requiredFactor: 'pwd',
+        returnTo: ACCOUNT_PAGE_PATH,
+      }),
+      accountMessagePage({
+        cspNonce: NONCE,
+        realmHost: REALM_HOST,
+        title: 'Not found',
+        message: 'Gone',
+      }),
+    ];
+    for (const page of pages) {
+      expect(page).toContain(` — ${REALM_HOST}</title>`);
+    }
+  });
+});
+
 describe('the other account pages (#844)', () => {
   it('the password form carries the CSRF value and shows the policy’s messages escaped', () => {
     const page = passwordChangePage({
       cspNonce: NONCE,
+      realmHost: REALM_HOST,
       csrf: CSRF,
       address: 'ada@example.com',
       errors: ['Add another word or two. Uncommon words are better.', '<b>bold</b>'],
@@ -223,6 +320,7 @@ describe('the other account pages (#844)', () => {
   it('the new recovery codes are shown once, with the set to confirm', () => {
     const page = newRecoveryCodesPage({
       cspNonce: NONCE,
+      realmHost: REALM_HOST,
       csrf: CSRF,
       codes: ['AAAA-BBBB', 'CCCC-DDDD'],
       setId: 'set-1',
@@ -236,6 +334,7 @@ describe('the other account pages (#844)', () => {
   it('"confirm it’s you" names the factor and where to come back to', () => {
     const page = reauthenticatePage({
       cspNonce: NONCE,
+      realmHost: REALM_HOST,
       csrf: CSRF,
       requiredFactor: 'otp',
       returnTo: `${ACCOUNT_PAGE_PATH}/password`,
@@ -246,7 +345,12 @@ describe('the other account pages (#844)', () => {
   });
 
   it('a message page links back to the overview', () => {
-    const page = accountMessagePage({ cspNonce: NONCE, title: 'Not found', message: 'Gone <now>' });
+    const page = accountMessagePage({
+      cspNonce: NONCE,
+      realmHost: REALM_HOST,
+      title: 'Not found',
+      message: 'Gone <now>',
+    });
     expect(page).toContain(`href="${ACCOUNT_PAGE_PATH}"`);
     expect(page).toContain('Gone &lt;now&gt;');
     expect(formsOf(page)).toHaveLength(0);

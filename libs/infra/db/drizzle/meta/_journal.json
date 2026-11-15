@@ -530,15 +530,22 @@
     {
       "idx": 75,
       "version": "7",
-      "when": 1794675279446,
-      "tag": "0075_key_denylist",
+      "when": 1794742736102,
+      "tag": "0075_logout_only_sessions",
       "breakpoints": true
     },
     {
       "idx": 76,
       "version": "7",
-      "when": 1794687646091,
-      "tag": "0076_deployment_nodes",
+      "when": 1794749848141,
+      "tag": "0076_key_denylist",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1794750805045,
+      "tag": "0077_deployment_nodes",
       "breakpoints": true
     }
   ]

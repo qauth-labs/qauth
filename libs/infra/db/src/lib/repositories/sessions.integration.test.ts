@@ -945,6 +945,57 @@ describe('sessions integration (real Postgres)', () => {
       ).toEqual([]);
     });
 
+    it('ends a logout-only session at its absolute end alone: the idle limit does not reach it (#1144)', async () => {
+      const now = Date.now();
+      const strict = await one(
+        `INSERT INTO realms (name, sso_max_lifespan, sso_idle_timeout) VALUES ($1, 7200, 600) RETURNING id`,
+        [`realm-${Math.random().toString(36).slice(2)}`]
+      );
+      const user = await seedUser(strict);
+      // Last seen an hour ago against a 10-minute limit, which nothing can
+      // reset for a session no browser holds.
+      const signUp = await repo.create(
+        session(strict, user, {
+          kind: 'registration',
+          amr: [],
+          createdAt: now - HOUR,
+          lastSeenAt: now - HOUR,
+        })
+      );
+      // The same, a browser's: it is idle.
+      const browser = await repo.create(
+        session(strict, user, { createdAt: now - HOUR, lastSeenAt: now - HOUR })
+      );
+      // A reset's, past the realm's 2-hour maximum lifespan.
+      const oldReset = await repo.create(
+        session(strict, user, {
+          kind: 'reset',
+          amr: [],
+          createdAt: now - 3 * HOUR,
+          lastSeenAt: now - 3 * HOUR,
+          expiresAt: now + HOUR,
+        })
+      );
+
+      const live = await repo.listLiveForUser(strict, user, {
+        limit: 10,
+        now,
+        defaultMaxLifespanMs: 4 * HOUR,
+      });
+      expect(live.map((row) => row.session.id)).toEqual([signUp.id]);
+
+      const batch = await repo.revokeLapsedBatch({
+        now,
+        defaultMaxLifespanMs: 4 * HOUR,
+        limit: 100,
+      });
+      const byId = new Map(batch.ended.map((row) => [row.session.id, row.session.revokedReason]));
+      expect(byId.get(browser.id)).toBe('idle');
+      expect(byId.get(oldReset.id)).toBe('expired');
+      expect(byId.has(signUp.id)).toBe(false);
+      expect((await repo.findById(strict, signUp.id))?.revokedAt).toBeNull();
+    });
+
     it('marks a session exactly at each end, not a millisecond before, and names the end that came first', async () => {
       // The session service's rules (lifetimes.ts): absolute end =
       // least(expires_at, created_at + (sso_max_lifespan ?? SESSION_COOKIE_TTL)

@@ -20,6 +20,7 @@ import { withoutAdminAudience } from '../../helpers/admin-scopes';
 import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { resolveAudience } from '../../helpers/client-auth';
+import { clientNameClaim } from '../../helpers/client-display';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { issueAccessToken } from '../../helpers/hybrid-token';
@@ -268,6 +269,7 @@ export default async function (fastify: FastifyInstance) {
         const accessToken = await issueAccessToken(fastify, realm, {
           sub: user.id,
           clientId: systemClient.clientId,
+          ...clientNameClaim(systemClient),
           aud,
           // The developer API's two scopes (#933), so the portal reads and
           // writes through it; only on a token for that API alone.
