@@ -15,6 +15,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DbClient } from '../db';
 import { realms } from '../schema/core';
 import { createAdminGrantsRepository } from './admin-grants.repository';
+import type { AdminRoleCatalog } from './admin-roles.repository';
 import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
 import { createRealmsRepository } from './realms.repository';
 import { createServiceAccountsRepository } from './service-accounts.repository';
@@ -27,6 +28,18 @@ const ACCOUNT_TABLES = [
   'sessions',
   'refresh_tokens',
 ] as const;
+
+const BUILT_IN = ['viewer', 'editor', 'security-admin'];
+
+/**
+ * A stand-in for the auth server's role catalog, which the grants repository
+ * needs to write a grant: the built-in roles alone, as the grant below names.
+ */
+const catalog: AdminRoleCatalog = {
+  builtInRoleNames: BUILT_IN,
+  isBuiltInRoleName: (name) => BUILT_IN.includes(name),
+  validatePermissionIds: (ids) => ({ valid: true, permissionIds: [...ids] }),
+};
 
 describe("users.delete's functions (real Postgres, #681)", () => {
   let ctx: IntegrationDb | undefined;
@@ -190,7 +203,7 @@ describe("users.delete's functions (real Postgres, #681)", () => {
   it('refuses an account that holds an admin grant, and deletes it once the grant is revoked', async () => {
     const realmId = await realm('delete-3');
     const admin = await account(realmId);
-    const grants = createAdminGrantsRepository(db());
+    const grants = createAdminGrantsRepository(db(), { catalog });
     const grant = await grants.create({
       userId: admin.id,
       role: { kind: 'built-in', name: 'viewer' },
