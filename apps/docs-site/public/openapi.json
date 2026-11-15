@@ -9296,6 +9296,16 @@
           {
             "schema": {
               "type": "string",
+              "maxLength": 255
+            },
+            "in": "query",
+            "name": "ui_locales",
+            "required": false,
+            "description": "OpenID Connect Core 1.0 §3.1.2.1: the person's preferred languages, as space-separated BCP 47 tags, preferred first, at most 255 characters. The consent screen shows a registered protected resource's consent text for its scopes in the first of them the resource gives one in, and in English otherwise. A malformed or unsupported tag is skipped."
+          },
+          {
+            "schema": {
+              "type": "string",
               "maxLength": 64
             },
             "in": "query",
@@ -9467,6 +9477,11 @@
                     "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it.",
                     "type": "string",
                     "maxLength": 254
+                  },
+                  "ui_locales": {
+                    "description": "OpenID Connect Core 1.0 §3.1.2.1: the person's preferred languages, as space-separated BCP 47 tags, preferred first, at most 255 characters. The consent screen shows a registered protected resource's consent text for its scopes in the first of them the resource gives one in, and in English otherwise. A malformed or unsupported tag is skipped.",
+                    "type": "string",
+                    "maxLength": 255
                   },
                   "qauth_upstream": {
                     "description": "QAuth's direct-routing parameter: the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included. When the request needs a sign-in, the sign-in starts at that provider instead of the first sign-in step. A value that names no provider the realm has on is ignored, as it is when no sign-in is needed.",
@@ -18388,6 +18403,16 @@
             "name": "login_hint",
             "required": false,
             "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "in": "query",
+            "name": "ui_locales",
+            "required": false,
+            "description": "OpenID Connect Core 1.0 §3.1.2.1: the person's preferred languages, as space-separated BCP 47 tags, preferred first, at most 255 characters. The consent screen shows a registered protected resource's consent text for its scopes in the first of them the resource gives one in, and in English otherwise. A malformed or unsupported tag is skipped."
           },
           {
             "schema": {
