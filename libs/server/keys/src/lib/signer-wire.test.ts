@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { sealData } from './data-at-rest';
 import { KeyDecryptionError } from './errors';
 import { SIGNER_OPERATIONS } from './signer';
 import {
@@ -47,6 +48,27 @@ describe('the signer wire format (#497)', () => {
       // An encryption of the largest plaintext, in base64url, fits an answer.
       expect(SIGNER_MAX_ANSWER_BYTES).toBeGreaterThan(Math.ceil((limit * 4) / 3) + 4096);
     }
+  });
+
+  it('lets a decrypt carry the sealed form of the largest plaintext an encrypt takes', async () => {
+    const realmId = '0190a6d4-5b8e-7c3a-9f12-3b4c5d6e7f80';
+    const limit = SIGNER_REQUEST_BODY_LIMITS.encrypt;
+    const encryptBytes = (size: number) =>
+      Buffer.byteLength(
+        encodeSignerRequest('encrypt', [{ realmId, plaintext: new Uint8Array(size) }])
+      );
+    // The largest plaintext whose encrypt request fits its limit.
+    let size = Math.floor(((limit - encryptBytes(0)) * 3) / 4);
+    while (encryptBytes(size + 1) <= limit) size += 1;
+    while (encryptBytes(size) > limit) size -= 1;
+    const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+      'encrypt',
+    ]);
+    // The longest kid a key may have.
+    const ciphertext = await sealData(key, 'k'.repeat(255), realmId, '', new Uint8Array(size));
+    const decrypt = encodeSignerRequest('decrypt', [{ realmId, ciphertext }]);
+    expect(Buffer.byteLength(decrypt)).toBeGreaterThan(limit);
+    expect(Buffer.byteLength(decrypt)).toBeLessThanOrEqual(SIGNER_REQUEST_BODY_LIMITS.decrypt);
   });
 
   it('carries bytes as base64url, and reads back only well-formed ones', () => {
