@@ -131,6 +131,40 @@ describe('createKidDenylist (#551)', () => {
     expect(denylist.isDenied(REALM, 'k1')).toBe(true);
   });
 
+  it('counts a read from when its query began: an older query drops nothing learned since, and is no fresher', async () => {
+    const { denylist, load, clock } = fixture();
+    await denylist.refresh();
+    // The snapshot names the retired kid a second later.
+    clock.now += 1_000;
+    load.mockResolvedValueOnce(cached([{ realmId: REALM, kid: 'retired' }]));
+    await denylist.refresh();
+    // A call a second after that waits for a database query an earlier call
+    // started before the retirement: it lacks the kid.
+    clock.now += 1_000;
+    load.mockResolvedValueOnce({ entries: [], complete: true, ageMs: 1_500 });
+    await denylist.refresh();
+    expect(denylist.isDenied(REALM, 'retired')).toBe(true);
+    // A query that began after the copy learned it drops it, if the table lacks it.
+    clock.now += 1;
+    await denylist.refresh();
+    expect(denylist.isDenied(REALM, 'retired')).toBe(false);
+
+    // A query older than the bound leaves the copy as stale as it was.
+    clock.now += KID_DENYLIST_MAX_STALENESS_MS + 10;
+    expect(denylist.isCurrent()).toBe(false);
+    load.mockResolvedValueOnce({ entries: [], complete: true, ageMs: 5 });
+    await denylist.refresh();
+    expect(denylist.isCurrent()).toBe(true);
+    clock.now += KID_DENYLIST_MAX_STALENESS_MS + 10;
+    load.mockResolvedValueOnce({
+      entries: [],
+      complete: true,
+      ageMs: KID_DENYLIST_MAX_STALENESS_MS + 5,
+    });
+    await denylist.refresh();
+    expect(denylist.isCurrent()).toBe(false);
+  });
+
   it('denies what the node that retired a key adds, at once and without a read', async () => {
     const { denylist, load } = fixture();
     await denylist.refresh();
@@ -169,6 +203,8 @@ describe('createKidDenylist (#551)', () => {
       { entries: [{ realmId: REALM }], complete: true },
       { entries: [{ realmId: REALM, kid: '' }], complete: false },
       { entries: [{ realmId: REALM, kid: 'k1' }] },
+      { entries: [], complete: true, ageMs: -1 },
+      { entries: [], complete: true, ageMs: '5' },
       'k1',
     ]) {
       load.mockResolvedValueOnce(answer as never);

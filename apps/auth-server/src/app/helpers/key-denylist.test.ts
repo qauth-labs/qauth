@@ -217,7 +217,8 @@ describe('keyDenylistLoader', () => {
         })
     );
     const { redis } = fakeRedis({ get: async () => null });
-    const load = keyDenylistLoader({ redis: () => redis, listDenied });
+    // A clock that stands still: both calls begin when the query does.
+    const load = keyDenylistLoader({ redis: () => redis, listDenied }, {}, () => 0);
     const first = load();
     const second = load();
     await vi.waitFor(() => expect(listDenied).toHaveBeenCalledTimes(1));
@@ -229,6 +230,45 @@ describe('keyDenylistLoader', () => {
     await vi.waitFor(() => expect(listDenied).toHaveBeenCalledTimes(2));
     answer([]);
     await expect(third).resolves.toEqual({ entries: [], complete: true });
+  });
+
+  it('answers a query it waited for with its age, stores it as no snapshot, and does not put the next query off', async () => {
+    vi.useFakeTimers();
+    let answer: (rows: DeniedKid[]) => void = () => undefined;
+    const listDenied = vi.fn(
+      () =>
+        new Promise<DeniedKid[]>((resolve) => {
+          answer = resolve;
+        })
+    );
+    const { store, redis } = fakeRedis();
+    const load = keyDenylistLoader({ redis: () => redis, listDenied });
+    // The first call gives up on its query, which runs on.
+    const first = expect(load()).rejects.toThrow('did not answer in time');
+    await vi.advanceTimersByTimeAsync(KEY_DENYLIST_STORE_TIMEOUT_MS);
+    await first;
+    await vi.advanceTimersByTimeAsync(1_000);
+    // The next waits for it: what it answers is as old as the first call, so
+    // it may lack a kid denied since.
+    const second = load();
+    expect(listDenied).toHaveBeenCalledTimes(1);
+    answer([]);
+    await expect(second).resolves.toEqual({
+      entries: [],
+      complete: true,
+      ageMs: KEY_DENYLIST_STORE_TIMEOUT_MS + 1_000,
+    });
+    expect(store.has(KEY_DENYLIST_SNAPSHOT_KEY)).toBe(false);
+    // The database is due a read interval after the query began, whatever
+    // the snapshot holds, not a read interval after the call that waited.
+    store.set(KEY_DENYLIST_SNAPSHOT_KEY, JSON.stringify([]));
+    await vi.advanceTimersByTimeAsync(
+      KEY_DENYLIST_STORE_READ_INTERVAL_MS - KEY_DENYLIST_STORE_TIMEOUT_MS - 1_000
+    );
+    const third = load();
+    expect(listDenied).toHaveBeenCalledTimes(2);
+    answer(DENIED);
+    await expect(third).resolves.toEqual({ entries: DENIED, complete: true });
   });
 
   it("rejects with the database's error when Redis has no snapshot and the database fails", async () => {

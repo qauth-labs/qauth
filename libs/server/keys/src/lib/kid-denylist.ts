@@ -92,6 +92,14 @@ export interface KidDenylistRead {
    * the copy. A read of the shared cache is not, and only adds to it.
    */
   readonly complete: boolean;
+  /**
+   * How long before the `load` call the read began, in ms, when it began
+   * earlier: a database query that an earlier call started, and that this
+   * one waited for. The copy counts the read from when it began, so it never
+   * drops what it learned since, nor looks fresher than what it read.
+   * Absent, or `0`, for a read that began with the call.
+   */
+  readonly ageMs?: number;
 }
 
 /** Options of {@link createKidDenylist}. */
@@ -167,8 +175,13 @@ export function createKidDenylist(options: KidDenylistOptions): KidDenylist {
 
   function isRead(value: unknown): value is KidDenylistRead {
     if (typeof value !== 'object' || value === null) return false;
-    const { entries, complete } = value as Record<string, unknown>;
-    return typeof complete === 'boolean' && Array.isArray(entries) && entries.every(isDeniedKid);
+    const { entries, complete, ageMs } = value as Record<string, unknown>;
+    return (
+      typeof complete === 'boolean' &&
+      Array.isArray(entries) &&
+      entries.every(isDeniedKid) &&
+      (ageMs === undefined || (typeof ageMs === 'number' && Number.isFinite(ageMs) && ageMs >= 0))
+    );
   }
 
   function read(): Promise<void> {
@@ -197,11 +210,13 @@ export function createKidDenylist(options: KidDenylistOptions): KidDenylist {
     return running;
   }
 
-  /** Apply one read that began at `startedAt` to the copy. */
-  function take(result: unknown, startedAt: number): void {
+  /** Apply one read, whose `load` call began at `calledAt`, to the copy. */
+  function take(result: unknown, calledAt: number): void {
     if (!isRead(result)) {
       throw new TypeError('The denylist read is not a list of denied keys');
     }
+    // A query the call only waited for began when an earlier call started it.
+    const startedAt = calledAt - (result.ageMs ?? 0);
     if (result.complete) {
       // A complete read older than one the copy took already is ignored.
       if (startedAt < completeReadAt) return;
