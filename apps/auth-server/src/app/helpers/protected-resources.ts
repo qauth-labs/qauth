@@ -90,8 +90,9 @@ export function isResourceBoundScope(scope: string, registered: RegisteredResour
  * The entry of `scope` that grants it to this request, or `undefined`. It is
  * granted only when the request names at least one resource and every one of
  * them is a registered resource that defines the scope and is open to the
- * client; the entry is the first named resource's, whose consent text the
- * consent step shows.
+ * client. The text is the first named resource's, which the consent step
+ * shows; the scope is sensitive when any of them flags it, so the order of
+ * the request's resources never lowers the warning.
  */
 export function grantingEntry(
   scope: string,
@@ -100,14 +101,16 @@ export function grantingEntry(
   registered: RegisteredResources
 ): RegisteredResourceScope | undefined {
   let granting: RegisteredResourceScope | undefined;
+  let sensitive = false;
   for (const indicator of resources) {
     const resource = registered.find((candidate) => candidate.resource === indicator);
     if (resource === undefined || !openTo(resource, client.clientId)) return undefined;
     const entry = resource.scopes.find((candidate) => candidate.scope === scope);
     if (entry === undefined) return undefined;
     granting ??= entry;
+    sensitive ||= entry.sensitive === true;
   }
-  return granting;
+  return granting === undefined ? undefined : { ...granting, sensitive };
 }
 
 /**

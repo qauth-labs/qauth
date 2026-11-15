@@ -110,6 +110,20 @@ describe('grantRequestedScopes', () => {
       'files:read',
     ]);
     expect(scopeCeilingAt(cimd, [FILES, MIRROR], [files, mirror])).toContain('files:read');
+    // Sensitive when either resource flags it, in whichever order they are named.
+    const flagged: RegisteredResource = {
+      ...mirror,
+      scopes: [{ ...files.scopes[0], sensitive: true }],
+    };
+    for (const order of [
+      [FILES, MIRROR],
+      [MIRROR, FILES],
+    ]) {
+      expect(resourceScopeDisplay('files:read', cimd, order, [files, flagged], ['en'])).toEqual({
+        text: 'Read your files',
+        sensitive: true,
+      });
+    }
     // A resource of the same scope name closed to the client, or one the realm
     // does not know, lets nothing through.
     const closedMirror: RegisteredResource = {
