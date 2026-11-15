@@ -137,7 +137,9 @@ import {
  * it: with the node's copy of the `kid` denylist ({@link
  * InProcessSignerOptions.keyDenylist}), every list cached before the
  * denylist changed is read again on the next call, and a denied `kid` never
- * signs, verifies or is published. The realm's issuer never changes once
+ * signs, verifies or is published. A token whose key the denylist names by
+ * the time it is signed, as when the retirement lands while the key loads, is
+ * dropped, and the key picked again. The realm's issuer never changes once
  * set, so it is read once.
  *
  * ## What it never does
@@ -173,6 +175,15 @@ export const DEFAULT_SIGNER_REFRESH_INTERVAL_MS = DEFAULT_PUBLISHED_KEY_REFRESH_
  * the list again, but a run of them does not each cost a query.
  */
 const MIN_FORCED_READ_INTERVAL_MS = 1_000;
+
+/**
+ * How many times a token signature picks its key, when the denylist names the
+ * key it picked before the token is handed out (#551): an emergency
+ * retirement can land while the key loads. Each pick reads the key list under
+ * the denylist's new revision, so the second finds the replacement; the third
+ * allows for one more retirement meanwhile.
+ */
+const SIGNING_KEY_PICKS = 3;
 
 /** Options of {@link createInProcessSigner}. */
 export interface InProcessSignerOptions {
@@ -360,6 +371,18 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   ): readonly T[] {
     if (keyDenylist === undefined) return Object.freeze([...records]);
     return Object.freeze(records.filter((record) => !keyDenylist.isDenied(realmId, record.kid)));
+  }
+
+  /**
+   * Whether the denylist names one of `records` now. A token signed with a key
+   * picked before the denylist named it is never handed out: the caller picks
+   * again, up to {@link SIGNING_KEY_PICKS} times, then fails.
+   */
+  function deniedNow(realmId: string, records: readonly { readonly kid: string }[]): boolean {
+    return (
+      keyDenylist !== undefined &&
+      records.some((record) => keyDenylist.isDenied(realmId, record.kid))
+    );
   }
 
   function isFresh(entry: Timed<unknown> | undefined): boolean {
@@ -808,13 +831,23 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       }
 
       const issuer = await realmIssuer(realmId);
-      const record = await activeKey(realmId, purpose, algorithm);
-      const key = await jwsKey(realmId, purpose, record);
-      return signJwt({ iss: issuer, ...claims } as JWTPayload, key, {
-        alg: algorithm,
-        kid: record.kid,
-        typ,
-      });
+      for (let pick = 1; ; pick += 1) {
+        const record = await activeKey(realmId, purpose, algorithm);
+        const key = await jwsKey(realmId, purpose, record);
+        const token = await signJwt({ iss: issuer, ...claims } as JWTPayload, key, {
+          alg: algorithm,
+          kid: record.kid,
+          typ,
+        });
+        // The key may have been denied while it loaded or signed (#551).
+        if (!deniedNow(realmId, [record])) return token;
+        if (pick === SIGNING_KEY_PICKS) {
+          throw new SignerKeyNotFoundError(realmId, purpose, {
+            algorithm,
+            detail: 'each key picked was denied before it signed',
+          });
+        }
+      }
     },
 
     async signHybrid(caller: SignerCaller, request: SignHybridRequest): Promise<HybridSignedToken> {
@@ -842,44 +875,55 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       const claims = resolveClaims(fields['claims']);
 
       const issuer = await realmIssuer(realmId);
-      // Both halves of a pair switch at the same moment, so the keys that sign
-      // now are one pair, before and after a scheduled switch alike.
-      const records = await listKeys(realmId, 'token_signing', null);
-      const at = now();
-      const edRecord = signingKeyOf(records, 'EdDSA', at);
-      const mlDsaRecord = signingKeyOf(records, PQC_ALG_ML_DSA_65, at);
-      if (
-        edRecord === undefined ||
-        mlDsaRecord === undefined ||
-        edRecord.pairId === null ||
-        edRecord.pairId !== mlDsaRecord.pairId
-      ) {
-        throw new SignerKeyNotFoundError(realmId, 'token_signing', {
-          algorithm: `EdDSA+${PQC_ALG_ML_DSA_65}`,
-          detail: 'no complete hybrid pair',
+      for (let pick = 1; ; pick += 1) {
+        // Both halves of a pair switch at the same moment, so the keys that
+        // sign now are one pair, before and after a scheduled switch alike.
+        const records = await listKeys(realmId, 'token_signing', null);
+        const at = now();
+        const edRecord = signingKeyOf(records, 'EdDSA', at);
+        const mlDsaRecord = signingKeyOf(records, PQC_ALG_ML_DSA_65, at);
+        if (
+          edRecord === undefined ||
+          mlDsaRecord === undefined ||
+          edRecord.pairId === null ||
+          edRecord.pairId !== mlDsaRecord.pairId
+        ) {
+          throw new SignerKeyNotFoundError(realmId, 'token_signing', {
+            algorithm: `EdDSA+${PQC_ALG_ML_DSA_65}`,
+            detail: 'no complete hybrid pair',
+          });
+        }
+
+        // Resolved before anything is signed, so a disabled backend never
+        // leaves a classical-only token behind.
+        const backend = getSignatureBackend(PQC_ALG_ML_DSA_65, enabledSignatureAlgorithms);
+        const edKey = await jwsKey(realmId, 'token_signing', edRecord);
+        const mlDsa = await loadKey(identityOf(realmId, 'token_signing', mlDsaRecord));
+        if (mlDsa.kind !== 'ml-dsa') {
+          throw new KeyDecryptionError({ detail: 'not an ML-DSA-65 key' });
+        }
+
+        const token = await signJwt({ iss: issuer, ...claims } as JWTPayload, edKey, {
+          alg: 'EdDSA',
+          kid: edRecord.kid,
+          typ,
+          [PQC_HEADER_ALG_MEMBER]: PQC_ALG_ML_DSA_65,
+          [PQC_HEADER_KID_MEMBER]: mlDsaRecord.kid,
         });
+        const pqcSignature = Buffer.from(
+          backend.sign(mlDsa.key, extractJwsSigningInput(token))
+        ).toString('base64url');
+        // Either key may have been denied while the pair loaded or signed (#551).
+        if (!deniedNow(realmId, [edRecord, mlDsaRecord])) {
+          return Object.freeze({ token, pqcSignature, pqcAlg: PQC_ALG_ML_DSA_65 });
+        }
+        if (pick === SIGNING_KEY_PICKS) {
+          throw new SignerKeyNotFoundError(realmId, 'token_signing', {
+            algorithm: `EdDSA+${PQC_ALG_ML_DSA_65}`,
+            detail: 'each pair picked was denied before it signed',
+          });
+        }
       }
-
-      // Resolved before anything is signed, so a disabled backend never leaves
-      // a classical-only token behind.
-      const backend = getSignatureBackend(PQC_ALG_ML_DSA_65, enabledSignatureAlgorithms);
-      const edKey = await jwsKey(realmId, 'token_signing', edRecord);
-      const mlDsa = await loadKey(identityOf(realmId, 'token_signing', mlDsaRecord));
-      if (mlDsa.kind !== 'ml-dsa') {
-        throw new KeyDecryptionError({ detail: 'not an ML-DSA-65 key' });
-      }
-
-      const token = await signJwt({ iss: issuer, ...claims } as JWTPayload, edKey, {
-        alg: 'EdDSA',
-        kid: edRecord.kid,
-        typ,
-        [PQC_HEADER_ALG_MEMBER]: PQC_ALG_ML_DSA_65,
-        [PQC_HEADER_KID_MEMBER]: mlDsaRecord.kid,
-      });
-      const pqcSignature = Buffer.from(
-        backend.sign(mlDsa.key, extractJwsSigningInput(token))
-      ).toString('base64url');
-      return Object.freeze({ token, pqcSignature, pqcAlg: PQC_ALG_ML_DSA_65 });
     },
 
     async signWebhook(caller: SignerCaller, request: SignWebhookRequest): Promise<string> {

@@ -34,8 +34,13 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
  * The side that retires a key reads the database after the commit and stores
  * that list as the snapshot, overwriting the one before (or deletes it, when
  * it cannot), and denies the `kid`s on its own copy at once. Another node
- * sees the change at its next read: within one refresh interval, and within
- * one database read interval when Redis cannot be written. Under 10 s.
+ * sees the change at its next read, within one refresh interval. When Redis
+ * cannot be written, it sees it at its first database query that begins
+ * after the commit: that begins within one database read interval, and,
+ * while the database answers within {@link KEY_DENYLIST_STORE_TIMEOUT_MS},
+ * ends within 13 s of the commit. A query that a node only waited for, as
+ * an earlier call started it, counts from when it began: one that began
+ * before the commit never passes for a later read.
  *
  * The database is the truth; Redis only spares it reads. A node that reads
  * neither for {@link KID_DENYLIST_MAX_STALENESS_MS} refuses every token until
@@ -133,37 +138,44 @@ async function readStore(
   return rows.map(({ realmId, kid }) => ({ realmId, kid }));
 }
 
+/** One database query of the denylist, and when it began. */
+interface StoreQuery {
+  readonly read: Promise<readonly DeniedKid[]>;
+  readonly since: number;
+}
+
 /**
  * `listDenied` with one query at a time: a call while one runs waits for
- * that one. A query the loader gave up on still holds a pooled connection
- * until the database answers (the repository bounds it there too), so a node
- * does not stack them up and take the pool. One still running after
- * `maxAgeMs` is left to itself: its connection may be gone, and the next
- * call starts another.
+ * that one, and is told when it began. A query the loader gave up on still
+ * holds a pooled connection until the database answers (the repository
+ * bounds it there too), so a node does not stack them up and take the pool.
+ * One still running after `maxAgeMs` is left to itself: its connection may
+ * be gone, and the next call starts another.
  */
 function singleFlight(
   listDenied: () => Promise<readonly DeniedKid[]>,
   maxAgeMs: number,
   now: () => number
-): () => Promise<readonly DeniedKid[]> {
-  let running: { readonly read: Promise<readonly DeniedKid[]>; readonly since: number } | undefined;
+): () => StoreQuery {
+  let running: StoreQuery | undefined;
   return () => {
-    if (running !== undefined && now() - running.since < maxAgeMs) return running.read;
+    if (running !== undefined && now() - running.since < maxAgeMs) return running;
+    const since = now();
     let started: Promise<readonly DeniedKid[]>;
     try {
       started = listDenied();
     } catch (error) {
-      return Promise.reject(error);
+      return { read: Promise.reject(error), since };
     }
-    const current = {
+    const current: StoreQuery = {
       read: started.finally(() => {
         if (running === current) running = undefined;
       }),
-      since: now(),
+      since,
     };
     current.read.catch(() => undefined);
     running = current;
-    return current.read;
+    return current;
   };
 }
 
@@ -199,8 +211,10 @@ export function parseKeyDenylistSnapshot(text: string): DeniedKid[] | undefined 
 /**
  * The loader of a node's copy: the Redis snapshot, which only adds to the
  * copy; else, and at least every `storeReadIntervalMs`, the database, whose
- * answer replaces the copy and is stored as the snapshot when none is. When
- * the database fails, a snapshot still answers.
+ * answer replaces the copy and is stored as the snapshot when none is. A
+ * query that an earlier call started, and this one waited for, is answered
+ * with its age (`ageMs`) and not stored. When the database fails, a
+ * snapshot still answers.
  *
  * @throws the database's error when it cannot answer in time and Redis holds
  *   no snapshot: the copy then keeps what it had, until it goes stale
@@ -211,7 +225,7 @@ export function keyDenylistLoader(
   now: () => number = Date.now
 ): () => Promise<KidDenylistRead> {
   const { storeReadIntervalMs, storeTimeoutMs } = windowsOf(timing);
-  const listDenied = singleFlight(sources.listDenied, 2 * storeTimeoutMs, now);
+  const query = singleFlight(sources.listDenied, 2 * storeTimeoutMs, now);
   /** When the last database read that succeeded began. */
   let storeReadAt = -Infinity;
   return async () => {
@@ -221,14 +235,25 @@ export function keyDenylistLoader(
       if (cached !== undefined) return { entries: cached, complete: false };
     }
     let rows: DeniedKid[];
+    let since = startedAt;
     try {
-      rows = await readStore(sources, storeTimeoutMs, listDenied);
+      rows = await readStore(sources, storeTimeoutMs, () => {
+        const running = query();
+        since = running.since;
+        return running.read;
+      });
     } catch (error) {
       const cached = await readSnapshot(sources);
       if (cached !== undefined) return { entries: cached, complete: false };
       throw error;
     }
-    storeReadAt = Math.max(storeReadAt, startedAt);
+    // A query an earlier call started, and this one waited for, is as old as
+    // that call: it may predate a retirement this node has learned of since,
+    // so the copy counts it from then, and it does not delay the next query.
+    const ageMs = Math.max(0, startedAt - since);
+    storeReadAt = Math.max(storeReadAt, Math.min(startedAt, since));
+    // Nor is it stored as the snapshot, where it would keep a fresher list out.
+    if (ageMs > 0) return { entries: rows, complete: true, ageMs };
     try {
       await cacheCall(() =>
         sources
@@ -321,7 +346,7 @@ export async function invalidateKeyDenylist(
     } catch {
       log.warn(
         { err: error },
-        `The key denylist snapshot could not be replaced; other nodes see the retirement at their next database read, within ${KEY_DENYLIST_STORE_READ_INTERVAL_MS / 1000} s`
+        `The key denylist snapshot could not be replaced; other nodes see the retirement at their next database read, which begins within ${KEY_DENYLIST_STORE_READ_INTERVAL_MS / 1000} s`
       );
     }
   }

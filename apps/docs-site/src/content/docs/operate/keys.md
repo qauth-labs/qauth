@@ -200,8 +200,9 @@ retention ends. A `next` key and a `compromised` key verify nothing. A hybrid
 token's ML-DSA-65 key is found the same way, by its `pqc_kid`. Every process
 reads a realm's key list again at most every 60 seconds, and refuses the
 tokens of a key [retired in an emergency](#emergency-retirement) within 10
-seconds, or one database read later when the retiring host cannot write to
-Redis.
+seconds. When the retiring host cannot write to Redis, that takes up to 13
+seconds while the database answers each node within 5 seconds, and longer
+when it does not.
 
 A token issued before the upgrade to 0.2 carries no `kid`. It still verifies,
 but only against the Ed25519 key that `JWT_PRIVATE_KEY` or `JWT_PUBLIC_KEY`
@@ -376,21 +377,25 @@ printed.
 
 How fast the key stops working:
 
-- **On QAuth's own servers, within 10 seconds.** Every node keeps a copy of
-  the denylist and reads it every 2 seconds, mostly from a Redis snapshot that
-  lives 5 seconds. It reads the database instead when Redis has no snapshot or
-  does not answer within 250 ms, and at least every 8 seconds whatever Redis
-  holds. Only a database read can take a `kid` off the node's copy. Every
-  token verification checks the copy once the signature verified, an expired
-  token's included: a bearer token on any protected route, userinfo (`401`),
-  introspection (`active: false`), revocation, logout and the end-session
-  hint. The signer stops signing with the key and the JWKS drops it in the
-  same time, without waiting for the 60-second key refresh. After the commit,
-  the command stores the database's list as the snapshot, so the other nodes
-  see the change at their next read. When it cannot write to Redis, they see
-  it at their next database read, which begins within 10 seconds of the
-  commit: the bound then adds the time that read takes, which a node gives
-  up on after 5 seconds.
+- **On QAuth's own servers, within 10 seconds while Redis works.** Every node
+  keeps a copy of the denylist and reads it every 2 seconds, mostly from a
+  Redis snapshot that lives 5 seconds. It reads the database instead when
+  Redis has no snapshot or does not answer within 250 ms, and at least every 8
+  seconds whatever Redis holds. Only a database read can take a `kid` off the
+  node's copy. Every token verification checks the copy once the signature
+  verified, an expired token's included: a bearer token on any protected
+  route, userinfo (`401`), introspection (`active: false`), revocation, logout
+  and the end-session hint. The signer stops signing with the key and the JWKS
+  drops it in the same time, without waiting for the 60-second key refresh.
+  After the commit, the command stores the database's list as the snapshot, so
+  the other nodes see the change at their next read. When it cannot store the
+  snapshot, each node sees the change at its first database read that begins
+  after the commit. That read begins within 8 seconds of the commit, and a
+  node waits at most 5 seconds for it: while the database answers in that
+  time, the key stops working within 13 seconds. A read that only waited for a
+  query begun earlier counts from when that query began, so it never passes
+  for a later one. While no database read succeeds, the 30-second bound below
+  applies.
 - **On a node that cannot read the denylist, within 30 seconds.** A node that
   has not read it, from Redis or the database, for 30 seconds refuses every
   token until it can again, and logs a warning. The denylist lives in the
