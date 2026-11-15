@@ -7,13 +7,17 @@
  * transaction, and removing it revokes every refresh token of the client,
  * in every family and for every user, and no other client's.
  *
+ * And the secrets it issues (#1138): only an entry that authenticates with a
+ * secret gets one, and the report prints no secret for any other.
+ *
  * Requires Docker; skips locally without it, fails on CI (requireDockerOrSkip).
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
+import { hash, verify } from '@node-rs/argon2';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import { and, eq } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FIRST_PARTY_REMOVED_REVOKE_REASON } from '../lib/first-party/first-party-change';
 import { createRealmsRepository, createRefreshTokensRepository } from '../lib/repositories';
@@ -21,7 +25,8 @@ import { type IntegrationDb, setupIntegrationDb } from '../lib/repositories/inte
 import { oauthClients } from '../lib/schema/core';
 import { events } from '../lib/schema/events';
 import { refreshTokens } from '../lib/schema/tokens';
-import { provisionClient } from './seed-clients';
+import { buildInsert, type Issued, provisionClient } from './seed-clients';
+import { reportClients } from './seed-clients-report';
 import { type ClientSpec, manifestSchema } from './seed-manifest';
 
 const FIRST_PARTY_CHANGED = 'urn:qauth:event:client.first_party_changed:v1-rc.0';
@@ -338,7 +343,7 @@ describe('seed-oauth-clients first-party profile (real Postgres)', () => {
         true
       );
 
-      expect(issued, refusal).toEqual({ clientId, secret: '', action: 'refused', refusal });
+      expect(issued, refusal).toEqual({ clientId, action: 'refused', refusal });
       expect(await client(realmId, clientId), refusal).toEqual(before);
     }
     expect(await firstPartyEvents(realmId)).toEqual([]);
@@ -367,7 +372,6 @@ describe('seed-oauth-clients first-party profile (real Postgres)', () => {
 
     expect(refused).toEqual({
       clientId: 'notes-app',
-      secret: '',
       action: 'refused',
       refusal: 'client_credentials_scopes_dropped',
     });
@@ -392,4 +396,196 @@ describe('seed-oauth-clients first-party profile (real Postgres)', () => {
     expect((await provisionClient(db(), realmId, spec(RECEIVER), true)).action).toBe('rotated');
     expect((await client(realmId, 'notes-app')).clientCredentialsScopes).toBeNull();
   });
+});
+
+/**
+ * #1138: a `clients` entry gets a secret only when it authenticates with one.
+ * A `private_key_jwt` or public (`none`) entry is written with a hash no
+ * secret matches, and the report prints no secret for it.
+ */
+describe('seed-oauth-clients secrets (real Postgres)', () => {
+  const KEYED = {
+    client_id: 'notes-worker',
+    name: 'Notes worker',
+    grant_types: ['client_credentials'],
+    token_endpoint_auth_method: 'private_key_jwt',
+    jwks: KEYS,
+  };
+  const PUBLIC = {
+    client_id: 'notes-spa',
+    name: 'Notes SPA',
+    grant_types: ['authorization_code'],
+    redirect_uris: ['https://notes.example.com/callback'],
+    token_endpoint_auth_method: 'none',
+  };
+  const SERVICE = {
+    client_id: 'notes-service',
+    name: 'Notes service',
+    grant_types: ['client_credentials'],
+  };
+
+  let ctx: IntegrationDb | undefined;
+  let dockerUp = false;
+
+  beforeAll(async () => {
+    dockerUp = await requireDockerOrSkip();
+    if (!dockerUp) return;
+    ctx = await setupIntegrationDb();
+  }, 180_000);
+
+  afterAll(async () => {
+    await ctx?.teardown();
+  });
+
+  beforeEach(async (testCtx) => {
+    if (!dockerUp || !ctx) {
+      testCtx.skip();
+      return;
+    }
+    await ctx.reset();
+  });
+
+  function db() {
+    if (!ctx) throw new Error('integration db not initialised');
+    return ctx.database.db;
+  }
+
+  async function realm(name: string): Promise<string> {
+    return (await createRealmsRepository(db()).create({ name })).id;
+  }
+
+  async function storedHash(realmId: string, clientId: string): Promise<string> {
+    const [row] = await db()
+      .select({ clientSecretHash: oauthClients.clientSecretHash })
+      .from(oauthClients)
+      .where(and(eq(oauthClients.realmId, realmId), eq(oauthClients.clientId, clientId)));
+    return row.clientSecretHash;
+  }
+
+  /** The report the script prints for these results, line by line. */
+  function printed(issued: Issued[]): string[] {
+    const lines: string[] = [];
+    const capture = (...args: unknown[]) => {
+      lines.push(...args.map(String).join(' ').split('\n'));
+    };
+    const log = vi.spyOn(console, 'log').mockImplementation(capture);
+    const error = vi.spyOn(console, 'error').mockImplementation(capture);
+    try {
+      reportClients('r', issued);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+    return lines;
+  }
+
+  const secretLines = (lines: string[]) =>
+    lines.filter((line) => /^\s*(secret|fingerprint):/.test(line));
+
+  it('issues a private_key_jwt and a public entry no secret, and prints none', async () => {
+    const realmId = await realm('secret-1');
+
+    const issued = [
+      await provisionClient(db(), realmId, spec(KEYED), false),
+      await provisionClient(db(), realmId, spec(PUBLIC), false),
+    ];
+
+    expect(issued).toEqual([
+      expect.objectContaining({
+        clientId: 'notes-worker',
+        action: 'created',
+        authenticatesWith: 'private_key_jwt',
+      }),
+      expect.objectContaining({
+        clientId: 'notes-spa',
+        action: 'created',
+        authenticatesWith: 'none',
+      }),
+    ]);
+    for (const result of issued) {
+      expect(result).not.toHaveProperty('secret');
+    }
+
+    const lines = printed(issued);
+    expect(secretLines(lines)).toEqual([]);
+    expect(lines).toContain(
+      '  notes-worker: created, no secret (authenticates with private_key_jwt)'
+    );
+    expect(lines).toContain('  notes-spa: created, no secret (authenticates with none)');
+
+    // No value the report printed for a client verifies against its hash.
+    for (const clientId of ['notes-worker', 'notes-spa']) {
+      const stored = await storedHash(realmId, clientId);
+      expect(stored).toMatch(/^\$argon2id\$/);
+      const words = lines
+        .filter((line) => line.includes(clientId))
+        .flatMap((line) => line.split(/\s+/))
+        .filter((word) => word !== '');
+      expect(words.length).toBeGreaterThan(0);
+      for (const word of new Set(words)) {
+        expect(await verify(stored, word), word).toBe(false);
+      }
+    }
+  }, 60_000);
+
+  it('--rotate of a private_key_jwt entry replaces the hash of a secret an earlier release printed', async () => {
+    const realmId = await realm('secret-2');
+    // The row an earlier release's seed wrote for the entry, with the secret
+    // it printed.
+    const printedBefore = randomBytes(32).toString('hex');
+    await db()
+      .insert(oauthClients)
+      .values(buildInsert(realmId, spec(KEYED), await hash(printedBefore)));
+    const before = await storedHash(realmId, 'notes-worker');
+    expect(await verify(before, printedBefore)).toBe(true);
+
+    const rotated = await provisionClient(db(), realmId, spec(KEYED), true);
+
+    expect(rotated).toMatchObject({ action: 'rotated', authenticatesWith: 'private_key_jwt' });
+    expect(rotated).not.toHaveProperty('secret');
+    const after = await storedHash(realmId, 'notes-worker');
+    expect(after).not.toBe(before);
+    expect(await verify(after, printedBefore)).toBe(false);
+
+    const lines = printed([rotated]);
+    expect(secretLines(lines)).toEqual([]);
+    expect(lines).toContain(
+      '  notes-worker: rotated, no secret (authenticates with private_key_jwt)'
+    );
+  }, 60_000);
+
+  it('still issues a secret-based entry a secret, printed once, that verifies against its hash', async () => {
+    const realmId = await realm('secret-3');
+    const entries = [
+      { ...SERVICE, client_id: 'svc-basic', token_endpoint_auth_method: 'client_secret_basic' },
+      { ...SERVICE, client_id: 'svc-post', token_endpoint_auth_method: 'client_secret_post' },
+      // No method: the column default the seed writes, client_secret_basic.
+      { ...SERVICE, client_id: 'svc-default' },
+    ];
+
+    for (const entry of entries) {
+      const issued = await provisionClient(db(), realmId, spec(entry), false);
+
+      expect(issued, entry.client_id).toMatchObject({
+        clientId: entry.client_id,
+        action: 'created',
+      });
+      expect(issued, entry.client_id).not.toHaveProperty('authenticatesWith');
+      const secret = issued.secret ?? '';
+      expect(secret, entry.client_id).toMatch(/^[0-9a-f]{64}$/);
+      expect(await verify(await storedHash(realmId, entry.client_id), secret)).toBe(true);
+
+      const lines = printed([issued]);
+      const showingSecret = lines.filter((line) => line.includes(secret));
+      expect(showingSecret).toEqual([`    secret:      ${secret}`]);
+      // The block the wire-suite CI job and the upgrade test read the secret from.
+      const at = lines.indexOf(`  ${entry.client_id}`);
+      expect(lines.slice(at, at + 4)).toEqual([
+        `  ${entry.client_id}`,
+        `    secret:      ${secret}`,
+        expect.stringMatching(/^ {4}fingerprint: [0-9a-f]{8}$/),
+        '    action:      created',
+      ]);
+    }
+  }, 60_000);
 });

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-11-15
+
+A patch release with no breaking change of the stable surface. It has three
+non-destructive migrations: 0075 (`sessions.kind` and
+`session_refresh_families`), 0076 (`realm_key_denylist`) and 0077
+(`deployment_nodes`). A deployment that applies its database grants by hand
+grants the new tables before it starts the new version
+([upgrade guide](https://docs.qauth.dev/operate/upgrades/)). There are two
+new settings, `CONFIG_DIGEST_ROLLOUT` and `SIGNER_SAN`, and
+`NEW_FACTOR_WINDOW_DAYS` now takes 0. A node refuses to boot when its
+deployment-wide settings differ from those of a running node of the same
+release. With split roles, every process signs through the signer over mutual
+TLS, and an operator can retire a key in an emergency. A realm's mail is named
+after its sender, access tokens carry the client's declared name, a sign-up or
+reset session can be ended by back-channel logout, and an address past its
+free password failures is no longer locked out by the bot challenge.
+
 ### Added
 
 - **A configuration digest check at boot** ([#499], ADR-019 Decision 8).
@@ -210,6 +227,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Android). The mail now carries the mark alone, which has no black, and
   writes the name beside it as text, which the client recolours like the
   rest of the mail.
+
+### Security
+
+- **The seed issues and prints no secret for a `private_key_jwt` or public
+  client** ([#1138]). `db:seed-oauth-clients` issued a secret for every
+  `clients` entry, whatever its `token_endpoint_auth_method`, stored its hash
+  and printed it under "Store these plaintext secrets securely", on creation
+  and on every `--rotate`. The auth server refuses that secret while the
+  client's method is `private_key_jwt` or `none`, but the admin API's
+  `clients.update` may change the method and leaves the hash as it is:
+  switched to `client_secret_basic`, the client would accept a secret that
+  had sat in terminals and logs since the seed. Such an entry now gets the
+  hash no secret matches that the admin API, the system client and CIMD
+  clients already hold, and the report names it on one line,
+  `<client_id>: created, no secret (authenticates with private_key_jwt)`,
+  with no `secret:` or `fingerprint:` line. An entry with
+  `client_secret_basic`, `client_secret_post` or no method gets its secret as
+  before, in the same block. **If 0.2.5 or earlier seeded a
+  `private_key_jwt` or `none` client, run its entry once more with
+  `--rotate`:** the rotation replaces the hash, and the secret printed then
+  verifies nowhere.
 
 ## [0.2.6] - 2026-11-15
 
@@ -4806,6 +4844,7 @@ It adds migrations 0068 and 0069.
 [#1109]: https://github.com/qauth-labs/qauth/issues/1109
 [#1110]: https://github.com/qauth-labs/qauth/issues/1110
 [#1118]: https://github.com/qauth-labs/qauth/issues/1118
+[#1138]: https://github.com/qauth-labs/qauth/issues/1138
 [#1143]: https://github.com/qauth-labs/qauth/issues/1143
 [#1144]: https://github.com/qauth-labs/qauth/issues/1144
 [#1147]: https://github.com/qauth-labs/qauth/issues/1147
@@ -5670,7 +5709,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/qauth-labs/qauth/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/qauth-labs/qauth/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/qauth-labs/qauth/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/qauth-labs/qauth/compare/v0.2.3...v0.2.4

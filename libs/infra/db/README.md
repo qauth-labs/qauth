@@ -754,8 +754,9 @@ Two seeders live under `src/scripts/`. Both require `DATABASE_URL` in the enviro
 nx run infra-db:db:seed
 
 # Idempotent OAuth-client provisioner (additive; production-safe)
-# Reads a JSON manifest; generates 32-byte client secrets; argon2id-hashes
-# them; prints plaintext secrets once to STDOUT (the DB only keeps hashes).
+# Reads a JSON manifest; generates a 32-byte secret for each client that
+# authenticates with one; argon2id-hashes it; prints it once to STDOUT (the DB
+# only keeps hashes). A private_key_jwt or public client gets no secret.
 # Existing client_ids are skipped unless `--rotate` is passed.
 nx run infra-db:db:seed-oauth-clients -- --manifest=/path/to/manifest.json [--rotate]
 
@@ -787,6 +788,8 @@ Manifest shape for `db:seed-oauth-clients`:
 ```
 
 The target realm must already exist. See `src/scripts/seed-oauth-clients.ts` for the authoritative Zod schema and the full set of optional fields (`description`, `response_types`, `redirect_uris`, `require_pkce`, `token_endpoint_auth_method`).
+
+Only a `clients` entry that authenticates with a secret gets one (#1138): `token_endpoint_auth_method` `client_secret_basic`, `client_secret_post`, or none at all, which the seeder writes as `client_secret_basic`. The seeder prints that secret once, under the client's id, with its `fingerprint:` and `action:`. An entry with `private_key_jwt` or `none` gets no secret, on creation and on `--rotate`: its `client_secret_hash` is a hash no secret matches, as on such a client the admin API's `clients.create`, the system client's provisioner or a CIMD resolution writes, and the report names it on one line, `<client_id>: created, no secret (authenticates with private_key_jwt)`, with no `secret:` or `fingerprint:` line. QAuth 0.2.5 and earlier printed a secret for such an entry too. The auth server refuses that secret for a `private_key_jwt` or `none` client, but it would authenticate the client once its method changed to `client_secret_basic` or `client_secret_post`. To drop it, run the entry once more with `--rotate`: the rotation writes the hash no secret matches over it, and the old secret then verifies nowhere.
 
 `post_logout_redirect_uris` lists where the end-session route may send the browser after a logout (OpenID Connect RP-Initiated Logout 1.0 §3.1, #675). The route matches a requested URI exactly, and each entry must pass the same rule as a redirect URI. Without the list, `oauth_clients.post_logout_redirect_uris` is `[]` and the route never redirects. Dynamic registration and CIMD documents set it too.
 

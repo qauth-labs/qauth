@@ -75,7 +75,9 @@ export function hasSystemClientAudience(audience: readonly string[] | null | und
  * well-formed argon2id string of random bytes, as the CIMD sentinel is
  * (`cimdSentinelSecretHash`). The system client authenticates with
  * `private_key_jwt`, which every client-authentication path checks before a
- * secret, so it has no secret at all.
+ * secret, so it has no secret at all. A copy of `unusableSecretHash` in
+ * `libs/infra/db/src/lib/unusable-secret-hash.ts`, which the operator paths
+ * share (#1138): an app may not import that library (`scope:app`).
  */
 function unusableSecretHash(): string {
   const salt = randomBytes(16).toString('base64').replace(/=+$/, '');
