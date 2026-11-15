@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 
 import { ANNOTATION_KEYS, DIRECTION_KINDS, directionKind, SECURITY_WHEN } from './field';
+import { ACCOUNTS_POLICY_GROUP } from './groups/accounts';
 import { REALM_POLICY_ENV, REALM_POLICY_REGISTRY } from './realm-policies';
 import { PolicySeedError } from './registry';
 
@@ -497,5 +498,22 @@ describe('the configuration key registry (#449)', () => {
       }
     }
     expect(compared).toBeGreaterThan(0);
+  });
+});
+
+describe('accounts.newFactorWindowDays (#1143)', () => {
+  it('takes 0, no window, up to 30 days, and is a security operation on any change', () => {
+    const field = ACCOUNTS_POLICY_GROUP.newFactorWindowDays;
+    for (const days of [0, 1, 7, 30]) expect(field.schema.safeParse(days).success).toBe(true);
+    for (const days of [-1, 31, 1.5]) expect(field.schema.safeParse(days).success).toBe(false);
+    expect(field.default).toBe(7);
+    expect(field.securityWhen).toBe('any-change');
+  });
+
+  it('seeds 0 from NEW_FACTOR_WINDOW_DAYS', () => {
+    expect(
+      REALM_POLICY_REGISTRY.defaultsFromEnv({ NEW_FACTOR_WINDOW_DAYS: '0' }).accounts
+        .newFactorWindowDays
+    ).toBe(0);
   });
 });

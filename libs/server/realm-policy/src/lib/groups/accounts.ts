@@ -21,8 +21,8 @@ import { policyField } from '../field';
  *
  * `newFactorWindowDays` (#1064; ADR-017 Decision 8, amended 2026-11-12) is
  * how long a passkey or an authenticator app stays *new* after a sign-in
- * that proved only the account's password bound it: 7 days by default, 1 to
- * 30. While it is new, the password alone, after a fresh sign-in, may remove
+ * that proved only the account's password bound it: 7 days by default, 0 to
+ * 30, where 0 (#1143) is no window and the factor counts at once. While it is new, the password alone, after a fresh sign-in, may remove
  * it, and it is not the account's strongest factor for a reset or for the
  * fresh authentication a change needs; it signs in as usual. A shorter
  * window is the stricter value: the factor counts in full sooner. A longer
@@ -59,12 +59,13 @@ export const ACCOUNTS_POLICY_GROUP = {
       link: groupDocsLink('accounts'),
     },
   }),
-  newFactorWindowDays: policyField(z.number().int().min(1).max(30), {
+  newFactorWindowDays: policyField(z.number().int().min(0).max(30), {
     seedEnv: 'NEW_FACTOR_WINDOW_DAYS',
     default: 7,
     // Neither way is stricter (#1064): a longer window leaves a new factor
     // removable with the password for longer, the owner's own included, and
-    // a shorter one leaves the owner less time to undo an intruder's.
+    // a shorter one leaves the owner less time to undo an intruder's. 0
+    // (#1143) gives up that undo: a new factor counts at once.
     direction: 'opaque',
     securityWhen: 'any-change',
     effects: ['credential-path'],
@@ -72,7 +73,7 @@ export const ACCOUNTS_POLICY_GROUP = {
     environmentBound: false,
     doc: {
       summary:
-        "How many days, 1 to 30, a passkey or authenticator app bound after a sign-in that proved only the password stays new: the password alone may remove it, and it does not count as the account's strongest factor for a reset or a change.",
+        "How many days, 0 to 30, a passkey or authenticator app bound after a sign-in that proved only the password stays new: the password alone may remove it, and it does not count as the account's strongest factor for a reset or a change. 0 is no window: a new factor counts at once, and the owner can no longer remove one an intruder with the password bound, with the password alone.",
       link: groupDocsLink('accounts'),
     },
   }),

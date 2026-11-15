@@ -146,7 +146,7 @@ export const authEnvSchema = z.object({
    * The auth server reads each realm's own policy from the realm row.
    * Defaults to 7.
    */
-  NEW_FACTOR_WINDOW_DAYS: z.coerce.number().int().min(1).max(30).default(7),
+  NEW_FACTOR_WINDOW_DAYS: z.coerce.number().int().min(0).max(30).default(7),
 
   /**
    * Maximum registration attempts per window
