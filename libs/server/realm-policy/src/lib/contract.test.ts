@@ -520,4 +520,10 @@ describe('accounts.newFactorWindowDays (#1143)', () => {
   it('seeds 0 from NEW_FACTOR_WINDOW_DAYS', () => {
     expect(defaultsFromEnv({ NEW_FACTOR_WINDOW_DAYS: '0' }).accounts.newFactorWindowDays).toBe(0);
   });
+
+  it('seeds the default, not 0, from a blank or unset NEW_FACTOR_WINDOW_DAYS', () => {
+    for (const env of [{}, { NEW_FACTOR_WINDOW_DAYS: '' }, { NEW_FACTOR_WINDOW_DAYS: '   ' }]) {
+      expect(defaultsFromEnv(env).accounts.newFactorWindowDays, JSON.stringify(env)).toBe(7);
+    }
+  });
 });

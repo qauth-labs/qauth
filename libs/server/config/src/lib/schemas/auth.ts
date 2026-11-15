@@ -146,7 +146,12 @@ export const authEnvSchema = z.object({
    * 0 is no window (#1143). The auth server reads each realm's own policy from
    * the realm row. Defaults to 7.
    */
-  NEW_FACTOR_WINDOW_DAYS: z.coerce.number().int().min(0).max(30).default(7),
+  // A blank value is unset, not 0: 0 turns the window off, so it must be
+  // written out (#1143).
+  NEW_FACTOR_WINDOW_DAYS: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.coerce.number().int().min(0).max(30).default(7)
+  ),
 
   /**
    * Maximum registration attempts per window
