@@ -699,7 +699,7 @@ describe('the stored client secret', () => {
     for (const form of forms) expect(seen).not.toContain(form);
   });
 
-  it('opens as api, and not for another provider, the web role or the delivery role', async () => {
+  it('opens as api and web, the roles that serve sign-in, and not for another provider or the delivery role', async () => {
     const stored = await seal(TYPE, configFor('client_secret_post'));
     await expect(
       openUpstreamOidcConfig(
@@ -708,15 +708,25 @@ describe('the stored client secret', () => {
         stored
       )
     ).rejects.toThrow();
-    for (const caller of ['web', 'delivery']) {
+    await expect(
+      openUpstreamOidcConfig(
+        signer.signer,
+        { realmId, providerId: TYPE, caller: 'delivery' },
+        stored
+      )
+    ).rejects.toMatchObject({
+      code: 'SIGNER_ACCESS_DENIED',
+      caller: 'delivery',
+      operation: 'decrypt',
+    });
+    // `web` serves the browser sign-in, whose upstream callback redeems the
+    // code with this secret when the roles run apart (#497).
+    for (const caller of ['api', 'web']) {
       await expect(
         openUpstreamOidcConfig(signer.signer, { realmId, providerId: TYPE, caller }, stored),
         caller
-      ).rejects.toMatchObject({ code: 'SIGNER_ACCESS_DENIED', caller, operation: 'decrypt' });
+      ).resolves.toMatchObject({ clientAuthentication: { clientSecret: CLIENT_SECRET } });
     }
-    await expect(
-      openUpstreamOidcConfig(signer.signer, { realmId, providerId: TYPE, caller: 'api' }, stored)
-    ).resolves.toMatchObject({ clientAuthentication: { clientSecret: CLIENT_SECRET } });
   });
 
   it('does not open once the issuer points elsewhere, even with the recorded destination edited', async () => {

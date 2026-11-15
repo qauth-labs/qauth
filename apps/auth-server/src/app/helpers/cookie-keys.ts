@@ -101,8 +101,11 @@ export interface CookieKeyRingOptions {
 /**
  * The signer's caller name. In a single deployment every role shares one
  * process, so it is `local`, as for every other signer call of the auth
- * server; the remote signer (#497) takes the caller's role from its client
- * certificate instead.
+ * server; the signer service (#497) takes the caller's role from its client
+ * certificate instead, and hands the cookie keys to `web` only: on any other
+ * process without the signer a read answers 503. What `api` needs of them it
+ * gets without them: the digests' derived keys (`cookie-derived-keys.ts`) and
+ * a session cookie checked by the signer (`verifySessionCookieAtSigner`).
  */
 const SIGNER_CALLER = 'local';
 

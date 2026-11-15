@@ -140,86 +140,140 @@ internal route takes the realm from the request, not from the `Host` header.
 The admin API keeps [its own listener](#the-admin-listener) and its own rule:
 a peer certificate grants nothing there.
 
-Until the signer service ships, `web` must sit with the signer: the settings
-of the split that works today, with the internal listener, are in
-[What a split deployment can do today](#what-a-split-deployment-can-do-today).
+The signer service is the first module the listener serves to the other
+roles: [The signer service](#the-signer-service) says how they call it.
 
-## What a split deployment can do today
+## The signer service
 
-The internal listener runs, but the signer service it is for is not built
-yet (#497): no signer route answers on it. Until it is, a process without the
-signer cannot sign anything, and warns at boot:
+A process that holds `signer` while the roles are split serves the signer to
+the others on its internal listener (ADR-019 Decision 9), one `POST` route per
+operation under `/internal/signer/v1-rc.0/`: signing a JWS, a hybrid token, a
+webhook message, a client assertion or an OID4VP request object, encrypting
+and decrypting with the realm's `data_at_rest` key, the cookie keys, a key
+derived from the cookie key, checking a cookie's MAC, and the realm's
+verification keys and JWKS. Every other process calls it through its
+remote signer, which has the in-process signer's interface, so the same code
+signs either way. A single process (`SERVICE_ROLES=all`) signs in-process and
+never calls it.
 
-- a request that needs a signature, an encryption or a cookie secret, such as
-  token issuance, an ID-JAG assertion, or a browser page that reads or sets a
-  signed cookie (the sign-in, consent and wallet pages), answers `503` with
-  `temporarily_unavailable`;
-- an event delivery waits: the `delivery` role holds it without spending an
-  attempt and offers it again every 30 seconds, until a signer answers;
-- a mail of a realm whose transport needs a stored secret (`mail.smtp.password`
-  or `mail.resend.apiKey`) is not sent, since the secret is decrypted through
-  the signer: the request answers as it would otherwise, and the log names the
-  realm. Send such mail from a process that holds the signer.
+- **The certificate names the caller.** The signer takes the caller's role
+  from the SAN of its client certificate, as `INTERNAL_PEER_ROLES` maps it,
+  never from the request, and holds each call to that role's grant. `api`
+  signs access tokens, ID tokens, ID-JAGs and client assertions; `web` gets
+  the cookie keys and signs the wallet sign-in's request objects; both open
+  what sign-in needs, an account's TOTP secret, an upstream provider's or a
+  plugin's client secret and the realm's mail transport secret, and sign
+  client assertions toward an upstream provider; `delivery`
+  signs Security Event Tokens, logout tokens and webhook messages; `admin`
+  reads public keys and seals the values of its own operations. The signer
+  sets each token's `iss` and `kid` itself. A call the role may not make gets
+  `403`, and each refusal is logged with the role and the operation and
+  counted in `qauth_signer_refusals_total`
+  ([Observability](/operate/observability/#metrics-get-internalmetrics)).
+- **A grant holds in every realm.** Every process serves every realm, so a
+  role's grant is the same in each: the signer does not narrow a peer to some
+  realms. A stolen certificate and its key can make that role's calls for
+  every realm, `web`'s the cookie keys among them: keep each role's key as
+  you keep the signer's, and rotate a certificate that may have leaked.
+- **One role per process.** A process calls as the one role its certificate
+  maps to, so one that holds two roles without the signer, such as `web,api`,
+  warns at boot: the signer refuses the calls of the other role, and those
+  requests answer `503`. Give each role its own process and certificate.
+- **The signer's name is pinned.** The caller sends a call only to a server
+  whose certificate holds `SIGNER_SAN`, a DNS name or a URI such as
+  `spiffe://example.org/qauth/signer`, or `SIGNER_URL`'s host name when it is
+  unset. A `SIGNER_URL` that names an IP address needs `SIGNER_SAN`, or the
+  process refuses to boot.
+- **The cookie key stays with `web`.** Whoever holds a realm's cookie key can
+  make a session cookie, so only `web` gets it. `api` needs two things of it,
+  and gets them without it: the keys the failure ladder and the emailed
+  code's digests are made with, which the signer derives from the cookie key
+  with HKDF for one use each and which make no cookie, and, at
+  `/auth/logout`, a session cookie's MAC, which the signer checks and answers
+  only whether it holds. A process keeps the derived keys in memory and
+  reads them again every minute, so a sign-in makes no signer call.
+- **Bounded.** A call carries at most 64 KiB of JSON, or 2 MiB for one that
+  carries claims, a message or data: the caller refuses a larger one before it
+  sends it, and the signer answers `413`. Each peer certificate has 2,000
+  tokens a second after a burst of 4,000, a call costing one token and one
+  more per 16 KiB of its body, and at most 128 calls in flight (`429` with
+  `Retry-After`); the internal listener holds at most 256 connections per peer
+  certificate. A role refused for its grant is refused before its body is
+  read. Processes that share a certificate share these caps. Every answer is
+  `Cache-Control: no-store`, and the warnings of a refused peer are logged at
+  most once a minute per peer and operation.
+- **Nothing secret in an error.** An error answer and its log line name the
+  operation, the role and the error's class, never a claim value, a plaintext
+  or key material; a body that is not JSON is refused without being quoted.
 
-Token verification (with each realm's published keys), the realm JWKS,
-`/ssf/jwks.json`, discovery and the endpoints that sign nothing keep working.
+The caller gives each attempt 2 seconds. A call that changes nothing on the
+signer (a read, a decryption) is tried once more after an outage; a signature
+or an encryption is not. After 5 outages in a row, calls answer at once for 5
+seconds, then one call at a time tests the signer, and the first answer opens
+the way again: a restarted signer is used again with no restart of its
+callers. A call that fails answers `503` with `temporarily_unavailable`, so
+while the signer is down a request that needs a signature, an encryption or a
+cookie key answers `503`: token issuance, an ID-JAG assertion, a browser page
+that sets a signed cookie. An event delivery waits meanwhile: the `delivery`
+role holds it without spending an attempt and offers it again every 30
+seconds.
+
+What reads public keys keeps working through an outage. A process without the
+signer reads each realm's verification keys and JWKS from the keys the realm
+publishes (`realm_public_keys`), at most once a minute, not from the signer:
+token verification, the realm JWKS, `/userinfo` and introspection answer as
+before, and `/ssf/jwks.json` and discovery need no signer either. A `web`
+process keeps the cookie keys in memory and reads them again every minute,
+or as soon as a cookie names a key it does not know yet. The internal TLS
+files are read again every five seconds, as the listener reads them, and a
+rotated certificate is used for the next calls.
+
 Hybrid signing (`HYBRID_SIGNING_ENABLED=true`) describes what the signer
 issues, so every process of a hybrid deployment sets it: a process without the
-signer verifies hybrid tokens with the realm's published ML-DSA-65 keys, and
-answers `503` when asked to sign one.
+signer verifies hybrid tokens with the realm's published ML-DSA-65 keys.
 
-The browser cookies are signed with the realm's cookie key, which only the
-signer hands out (#493), so the browser-facing role needs a signer as much as
-the roles that sign tokens do. So the split that works today keeps `web` with
-every signing role, and only `admin`, which signs nothing, apart:
+A deployment with every role apart:
 
 ```bash
-# The nodes that sign and serve the browser: the KEK and the private keys live
-# here only, and the internal listener serves the other nodes over mutual TLS.
-SERVICE_ROLES=web,api,signer,delivery
+# The signer nodes: the KEK and the private keys live here only. Their
+# certificate holds the SAN spiffe://example.org/qauth/signer.
+SERVICE_ROLES=signer
 KEK_PATH=/run/secrets/qauth-kek
 JWT_PRIVATE_KEY_PATH=/run/secrets/qauth-ed25519.pem
 INTERNAL_HOST=0.0.0.0
 INTERNAL_TLS_CERT_PATH=/run/secrets/signer.crt
 INTERNAL_TLS_KEY_PATH=/run/secrets/signer.key
 INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
-INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/admin":"admin","spiffe://example.org/prometheus":"metrics"}
+INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/web":"web","spiffe://example.org/qauth/api":"api","spiffe://example.org/qauth/delivery":"delivery","spiffe://example.org/qauth/admin":"admin","spiffe://example.org/prometheus":"metrics"}
 
-# Admin nodes: no KEK, no private key. Their certificate holds the SAN
-# spiffe://example.org/qauth/admin, which the signer's nodes map to admin.
-# Their own internal listener serves their metrics to the scraper.
-SERVICE_ROLES=admin
+# The api nodes: no KEK, no private key, no SESSION_COOKIE_SECRET. Their
+# certificate holds spiffe://example.org/qauth/api. The web, delivery and
+# admin nodes are alike, each with its role's certificate.
+SERVICE_ROLES=api
 SIGNER_URL=https://signer.internal:3443
+SIGNER_SAN=spiffe://example.org/qauth/signer
 INTERNAL_HOST=0.0.0.0
-INTERNAL_TLS_CERT_PATH=/run/secrets/admin.crt
-INTERNAL_TLS_KEY_PATH=/run/secrets/admin.key
+INTERNAL_TLS_CERT_PATH=/run/secrets/api.crt
+INTERNAL_TLS_KEY_PATH=/run/secrets/api.key
 INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
 INTERNAL_PEER_ROLES={"spiffe://example.org/prometheus":"metrics"}
 ```
 
-Once the signer service ships (#497), a `web` node without the KEK gets the
-cookie keys from it and keeps them in memory, reading them again every minute.
+Route browser paths (`/oauth/authorize`, `/ui/*`, `/consents`,
+`/auth/link/wallet`, and `GET /auth/verify`, the email verification page) to
+the `web` nodes and every other path to the others at the reverse proxy.
+`POST /auth/verify` is the API's and stays on `api`: route `/auth/verify` by
+method. The pages' stylesheet and fonts, under `/assets/ui/`, are `api`'s too,
+like the discovery documents: they are not browser paths, and the pages on the
+`web` nodes link them.
 
-Wallet sign-in builds its signed request on the node that serves
-`/ui/wallet-login`, a `web` node, which may not hold the verifier key: a
-profile that signs its requests cannot offer wallet sign-in on a split
-deployment until the signer service ships. Route browser paths
-(`/oauth/authorize`, `/ui/*`, `/consents`, `/auth/link/wallet`, and
-`GET /auth/verify`, the email verification page) to the `web` nodes and every
-other path to the others at the reverse proxy. `POST /auth/verify` is the
-API's and stays on `api`: route `/auth/verify` by method. The pages' stylesheet
-and fonts, under `/assets/ui/`, are `api`'s too, like the discovery documents:
-they are not browser paths, and the pages on the `web` nodes link them.
+### Settings of a process without the signer
 
-The `web` and `api` roles read the session cookie (`api` for `/auth/logout`),
-with the realm's cookie key from the signer (#493). Only the browser-facing
-role receives the cookie keys from a signer service (ADR-019 Decision 9): on a
-process that cannot read them, `/auth/logout` still ends the user's sessions and
-tokens, and leaves the request's cookie for the next page to clear.
-`SESSION_COOKIE_SECRET` is optional on every process: only the key boot step, on
-a process that holds the signer, reads it, to import it into the default realm's
-key store or to replace the stored cookie key with it. `NODE_ENV=production`
-refuses every value QAuth's examples published, on every process.
+`SESSION_COOKIE_SECRET` is optional on every process: only the key boot step,
+on a process that holds the signer, reads it, to import it into the default
+realm's key store or to replace the stored cookie key with it.
+`NODE_ENV=production` refuses every value QAuth's examples published, on every
+process.
 
 With `ENABLE_SWAGGER` on, only a process holding `api` serves the Swagger UI
 and its spec under `/docs`.

@@ -23,6 +23,7 @@ import { KEK_A, KEK_B, localProvider } from '../testing/keks';
 import { createMemoryKeyStore, type MemoryKeyStore } from '../testing/memory-key-store';
 import { createMemorySignerStore, type MemorySignerStore } from '../testing/memory-signer-store';
 import { testCertificateFor } from '../testing/test-certificate';
+import { COOKIE_DERIVED_KEY_LABELS, cookieMacInput, deriveCookieKey } from './cookie-derivation';
 import { openKeyMaterial, sealKeyMaterial } from './envelope';
 import { isKeyCustodyError } from './errors';
 import { createInProcessSigner, type InProcessSignerOptions } from './in-process-signer';
@@ -1235,6 +1236,113 @@ describe('getCookieSecrets', () => {
   });
 });
 
+describe('getCookieDerivedKey (#497)', () => {
+  it('derives a key from the active cookie secret for each label, by HKDF-SHA-256', async () => {
+    const { signer } = await setup();
+    const { current } = await signer.getCookieSecrets('local', REALM_A);
+    const keys = [];
+    for (const label of COOKIE_DERIVED_KEY_LABELS) {
+      const derived = await signer.getCookieDerivedKey('api', { realmId: REALM_A, label });
+      expect(derived.kid).toBe(current.kid);
+      expect(derived.key).toHaveLength(32);
+      expect(derived.key.equals(deriveCookieKey(current.secret, label))).toBe(true);
+      expect(derived.key.equals(current.secret)).toBe(false);
+      keys.push(derived.key.toString('hex'));
+    }
+    expect(new Set(keys).size).toBe(COOKIE_DERIVED_KEY_LABELS.length);
+  });
+
+  it('hands out a copy, and refuses a label of no use', async () => {
+    const { signer } = await setup();
+    const label = COOKIE_DERIVED_KEY_LABELS[0];
+    const first = await signer.getCookieDerivedKey('web', { realmId: REALM_A, label });
+    const original = Buffer.from(first.key);
+    first.key.fill(0);
+    expect(
+      (await signer.getCookieDerivedKey('web', { realmId: REALM_A, label })).key.equals(original)
+    ).toBe(true);
+    expect(
+      await refusal(signer.getCookieDerivedKey('api', { realmId: REALM_A, label: 'cookie' }))
+    ).toBe('INVALID_LABEL');
+    expect(
+      await refusal(
+        signer.getCookieDerivedKey('api', { realmId: REALM_A, label, extra: 1 } as never)
+      )
+    ).toBe('UNEXPECTED_FIELD');
+  });
+});
+
+describe('verifyCookieMac (#497)', () => {
+  const COOKIE = '__Host-qauth_session';
+
+  /** A signed cookie's parts, its MAC made with `secret` as the auth server makes it. */
+  function signed(secret: Buffer, kid: string, payload = 'eyJzIjpbInNpZCJdfQ') {
+    const mac = createHmac('sha256', secret)
+      .update(cookieMacInput({ cookieName: COOKIE, realmId: REALM_A, kid, payload }))
+      .digest('base64url');
+    return { realmId: REALM_A, cookieName: COOKIE, kid, payload, mac };
+  }
+
+  it("checks a cookie's MAC with the current or the previous key its kid names", async () => {
+    const { signer, keys, factory, store, advance } = await setup();
+    const first = activeKid(keys, REALM_A, 'cookie_hmac', 'HS256');
+    const before = await signer.getCookieSecrets('local', REALM_A);
+    const old = signed(before.current.secret, first);
+    expect(await signer.verifyCookieMac('api', old)).toBe(true);
+
+    const [second] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'cookie_hmac',
+      status: 'next',
+    });
+    store.update(REALM_A, first, { status: 'retired', retireAt: NOW + 1 });
+    store.update(REALM_A, second.kid, { status: 'active' });
+    advance(REFRESH_MS);
+    const after = await signer.getCookieSecrets('local', REALM_A);
+    expect(await signer.verifyCookieMac('api', signed(after.current.secret, second.kid))).toBe(
+      true
+    );
+    // The previous key still verifies what it signed.
+    expect(await signer.verifyCookieMac('api', old)).toBe(true);
+  });
+
+  it('answers false for a changed value, another cookie, another key or another realm', async () => {
+    const { signer, keys } = await setup();
+    const kid = activeKid(keys, REALM_A, 'cookie_hmac', 'HS256');
+    const { current } = await signer.getCookieSecrets('local', REALM_A);
+    const good = signed(current.secret, kid);
+    expect(await signer.verifyCookieMac('api', { ...good, payload: `${good.payload}x` })).toBe(
+      false
+    );
+    expect(await signer.verifyCookieMac('api', { ...good, cookieName: '__Host-other' })).toBe(
+      false
+    );
+    expect(await signer.verifyCookieMac('api', { ...good, kid: 'made-up' })).toBe(false);
+    expect(await signer.verifyCookieMac('api', { ...good, realmId: REALM_B })).toBe(false);
+    expect(await signer.verifyCookieMac('api', signed(Buffer.alloc(32, 7), kid))).toBe(false);
+  });
+
+  it('refuses parts that are not of the signed cookie format', async () => {
+    const { signer, keys } = await setup();
+    const kid = activeKid(keys, REALM_A, 'cookie_hmac', 'HS256');
+    const { current } = await signer.getCookieSecrets('local', REALM_A);
+    const good = signed(current.secret, kid);
+    for (const bad of [
+      { mac: 'short' },
+      { kid: 'has.dot' },
+      { payload: '' },
+      { payload: 'a.b' },
+      { payload: 'x'.repeat(4097) },
+      { cookieName: 'has space' },
+    ]) {
+      expect(
+        await refusal(signer.verifyCookieMac('api', { ...good, ...bad })),
+        JSON.stringify(bad)
+      ).toBe('INVALID_COOKIE');
+    }
+  });
+});
+
 describe('encrypt and decrypt', () => {
   const plaintext = Buffer.from('an upstream refresh token');
 
@@ -2173,6 +2281,19 @@ const CALLS: Record<SignerOperation, (signer: Signer, caller: SignerCaller) => P
   signHybrid: (signer, caller) =>
     signer.signHybrid(caller, { realmId: REALM_A, typ: 'at+jwt', claims: CLAIMS }),
   getCookieSecrets: (signer, caller) => signer.getCookieSecrets(caller, REALM_A),
+  getCookieDerivedKey: (signer, caller) =>
+    signer.getCookieDerivedKey(caller, {
+      realmId: REALM_A,
+      label: 'urn:qauth:key-use:identifier-hmac:v1-rc.0',
+    }),
+  verifyCookieMac: (signer, caller) =>
+    signer.verifyCookieMac(caller, {
+      realmId: REALM_A,
+      cookieName: '__Host-qauth_session',
+      kid: 'made-up',
+      payload: 'payload',
+      mac: 'A'.repeat(43),
+    }),
   encrypt: (signer, caller) =>
     signer.encrypt(caller, { realmId: REALM_A, plaintext: Buffer.from('data') }),
   decrypt: async (signer, caller) =>
@@ -2260,17 +2381,20 @@ describe('caller policy', () => {
     expect(unwrap).not.toHaveBeenCalled();
   });
 
-  it('lets delivery sign webhooks and not client assertions; api the other way round', async () => {
+  it('lets delivery sign webhooks and not client assertions; api and web the other way round', async () => {
     const { signer } = await setup({ scoped: true });
 
     await expect(signer.signWebhook('delivery', webhook())).resolves.toMatch(/^v1,/);
-    await expect(signer.signClientAssertion('api', assertion())).resolves.toEqual(
-      expect.any(String)
-    );
-    await expect(signer.signWebhook('api', webhook())).rejects.toBeInstanceOf(
-      SignerAccessDeniedError
-    );
-    for (const caller of ['delivery', 'web', 'admin'] as const) {
+    // The two roles that serve sign-in sign a client assertion toward an upstream provider (#497).
+    for (const caller of ['api', 'web'] as const) {
+      await expect(signer.signClientAssertion(caller, assertion())).resolves.toEqual(
+        expect.any(String)
+      );
+      await expect(signer.signWebhook(caller, webhook())).rejects.toBeInstanceOf(
+        SignerAccessDeniedError
+      );
+    }
+    for (const caller of ['delivery', 'admin'] as const) {
       await expect(signer.signClientAssertion(caller, assertion())).rejects.toBeInstanceOf(
         SignerAccessDeniedError
       );

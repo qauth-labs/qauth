@@ -95,6 +95,7 @@ import {
   verifierSigningMaterial,
 } from './helpers/verifier-identity';
 import { installInternalApi, type InternalApiOptions } from './internal/listener';
+import { createAppRemoteSigner, type RemoteSignerTls } from './internal/remote-signer';
 import { enabledInternalRouteModules, publicInternalRouteProblem } from './internal/route-manifest';
 import { corsPlugin } from './plugins/cors';
 import { defaultRealmPlugin } from './plugins/default-realm';
@@ -118,6 +119,7 @@ import {
   servesAdminListener,
   servesInternalListener,
   ServiceRoleBootError,
+  signerServerSan,
 } from './service-roles';
 
 /**
@@ -278,6 +280,16 @@ export interface AppOptions {
    * the app refuses one otherwise. `modules` is test support.
    */
   internalListener?: Omit<InternalApiOptions, 'roles'> & { readonly server: FastifyInstance };
+  /**
+   * The signer client (ADR-019 Decision 9, #497) of a process without the
+   * signer role: the internal TLS files `main.ts` read at boot
+   * (`signerClientTlsFiles`), with which the app calls the signer service at
+   * SIGNER_URL. The app refuses it on a process that holds the signer.
+   * Unset on a process without the signer, every key operation answers 503:
+   * only a boot that reads no TLS file leaves it out, such as the suites
+   * that check what a split process refuses.
+   */
+  remoteSigner?: { readonly tls: RemoteSignerTls };
   /**
    * TEST SUPPORT — replaces the `import()` of an AuthMethod plugin package
    * and the first-party list (#600), for a suite that boots with fixture
@@ -658,6 +670,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     egressClientFactory,
     adminListener,
     internalListener,
+    remoteSigner,
     authMethodPlugins: authMethodPluginTestSupport,
     mfaPolicy: mfaPolicyTestSupport,
   } = opts;
@@ -870,10 +883,17 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // with the realm's keys (#491, #493).
   //
   // Only a process that holds the `signer` role loads it (#495). Any other
-  // holds no KEK and no key: its `fastify.signer` refuses every signature,
-  // encryption and secret with 503 until it can call the signer service
-  // (#497), and reads the realm's verification keys and JWKS from the
-  // published public keys, which need neither.
+  // holds no KEK and no key: its `fastify.signer` is the remote signer
+  // (#497), which calls the signer service at SIGNER_URL over mutual TLS for
+  // every signature, encryption and secret, and answers 503 while the signer
+  // does not answer; it reads the realm's verification keys and JWKS from
+  // the published public keys, which need neither, so a signer outage stops
+  // neither token verification nor the JWKS.
+  if (holdsSigner(roles) && remoteSigner !== undefined) {
+    throw new Error(
+      `The signer client runs only on a process without the signer role (SERVICE_ROLES=${describeServiceRoles(roles)})`
+    );
+  }
   if (holdsSigner(roles)) {
     await fastify.register(signerPlugin, {
       db: fastify.db,
@@ -918,13 +938,18 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       });
     }
   } else {
-    fastify.decorate(
-      'signer',
-      createUnavailableSigner(
-        env.SIGNER_URL,
-        createRepositoryPublishedKeyReader(fastify.repositories.realmPublicKeys)
-      )
-    );
+    const publishedKeys = createRepositoryPublishedKeyReader(fastify.repositories.realmPublicKeys);
+    const serverSan = signerServerSan(env);
+    if (remoteSigner !== undefined && env.SIGNER_URL !== undefined && serverSan !== undefined) {
+      const remote = createAppRemoteSigner(
+        { url: env.SIGNER_URL, serverSan, tls: remoteSigner.tls },
+        { publishedKeys, log: fastify.log.child({ component: 'signer-client' }) }
+      );
+      fastify.addHook('onClose', async () => remote.close());
+      fastify.decorate('signer', remote.signer);
+    } else {
+      fastify.decorate('signer', createUnavailableSigner(env.SIGNER_URL, publishedKeys));
+    }
     // No KEK here, so no provider key can be sealed: the admin API's
     // provider key operations answer 503 on this process (#1073).
     fastify.decorate('upstreamClientKeys', null);

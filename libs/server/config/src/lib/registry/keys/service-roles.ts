@@ -26,6 +26,15 @@ export const SERVICE_ROLE_KEYS = defineKeys([
     docs: 'The `https` URL of the signer service, required with the internal TLS files on a process whose `SERVICE_ROLES` leaves out `signer`; ignored, with a warning, where the signer runs in-process.',
   },
   {
+    name: 'SIGNER_SAN',
+    tier: 'advanced',
+    role: 'deployment',
+    owner: 'key-custody',
+    default: null,
+    since: '0.3.0',
+    docs: "The subject alternative name the signer service's certificate must hold, a DNS name or a URI such as a SPIFFE ID, for a process that calls the signer at `SIGNER_URL`: the URL's host name when unset, and required when that host is an IP address; a call to a server whose certificate does not hold it is refused before any byte is sent.",
+  },
+  {
     name: 'INTERNAL_TLS_CERT_PATH',
     tier: 'advanced',
     role: 'deployment',

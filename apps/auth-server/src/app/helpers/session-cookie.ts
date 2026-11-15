@@ -1,6 +1,13 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import {
+  COOKIE_KID_PATTERN,
+  COOKIE_MAC_LABEL,
+  COOKIE_MAC_PATTERN,
+  cookieMacInput,
+  MAX_COOKIE_PAYLOAD_LENGTH,
+} from '@qauth-labs/fastify-plugin-signer';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
 import { type CookieKey, type CookieKeyHolder, cookieKeyRing } from './cookie-keys';
@@ -22,8 +29,12 @@ import { requestRealm } from './request-realm';
  *   {@link COOKIE_MAC_LABEL}, the cookie's name, the realm id, the `kid` and
  *   the payload, NUL-separated.
  *
- * The keys are the realm's `cookie_hmac` keys, which the signer hands this
- * role (`getCookieSecrets`; see `cookie-keys.ts`). A new cookie is signed with
+ * The keys are the realm's `cookie_hmac` keys, which the signer hands the
+ * `web` role (`getCookieSecrets`; see `cookie-keys.ts`). A process that does
+ * not hold them, `api` at `/auth/logout` (#497), has the signer check a
+ * session cookie's MAC instead ({@link verifySessionCookieAtSigner}). The MAC
+ * input is the signer library's (`cookieMacInput`), so both checks are one
+ * format. A new cookie is signed with
  * the realm's current key; one presented is verified with the key its `kid`
  * names, the current or the previous one, and the MAC is compared in constant
  * time. The cookie's name in the MAC keeps one cookie from passing for
@@ -37,28 +48,43 @@ import { requestRealm } from './request-realm';
  * all but the first two.
  */
 
-/**
- * Separates the parts of the MAC input. None of them can hold it: the realm id
- * is a UUID, a `kid` is matched against the realm's own keys, and a payload
- * comes from a cookie value.
- */
-const MAC_SEPARATOR = '\u0000';
-
 /** The format of the MAC input, first in it, so another use of the key cannot collide. */
-export const COOKIE_MAC_LABEL = 'qauth-cookie/1-rc.0';
-
-/** The characters of a `kid` the format carries: base64url, which every generated and imported cookie key uses. */
-const KID_PATTERN = /^[A-Za-z0-9_-]{1,255}$/;
-
-/** A base64url HMAC-SHA256: 32 bytes, 43 characters without padding. */
-const MAC_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+export { COOKIE_MAC_LABEL };
 
 const SEPARATOR = '.';
 
 function mac(key: CookieKey, cookieName: string, realmId: string, payload: string): Buffer {
   return createHmac('sha256', key.key)
-    .update([COOKIE_MAC_LABEL, cookieName, realmId, key.kid, payload].join(MAC_SEPARATOR))
+    .update(cookieMacInput({ cookieName, realmId, kid: key.kid, payload }))
     .digest();
+}
+
+/** A signed cookie value's parts, before any key is looked up. */
+interface CookieValueParts {
+  readonly kid: string;
+  readonly payload: string;
+  readonly mac: string;
+}
+
+/**
+ * The parts of a `<kid>.<payload>.<mac>` value, or `null` when it is absent,
+ * empty or not of that shape: a `kid` of the format, a payload no longer than
+ * a cookie can be, and a MAC of 43 base64url characters.
+ */
+function splitCookieValue(cookieValue: string | undefined | null): CookieValueParts | null {
+  if (!cookieValue) return null;
+  const parts = cookieValue.split(SEPARATOR);
+  if (parts.length !== 3) return null;
+  const [kid, payload, provided] = parts;
+  if (
+    !COOKIE_KID_PATTERN.test(kid) ||
+    payload.length === 0 ||
+    payload.length > MAX_COOKIE_PAYLOAD_LENGTH ||
+    !COOKIE_MAC_PATTERN.test(provided)
+  ) {
+    return null;
+  }
+  return { kid, payload, mac: provided };
 }
 
 /**
@@ -79,7 +105,7 @@ async function signCookieValue(
     throw new Error(`A ${cookieName} payload never holds "${SEPARATOR}"`);
   }
   const { current } = await cookieKeyRing(fastify).keys(realmId);
-  if (!KID_PATTERN.test(current.kid)) {
+  if (!COOKIE_KID_PATTERN.test(current.kid)) {
     throw new Error("The realm's cookie key has a kid the cookie format cannot carry");
   }
   const signature = mac(current, cookieName, realmId, payload).toString('base64url');
@@ -119,13 +145,9 @@ async function checkCookieValue(
   realmId: string,
   cookieValue: string | undefined | null
 ): Promise<CookieValueCheck> {
-  if (!cookieValue) return INVALID;
-  const parts = cookieValue.split(SEPARATOR);
-  if (parts.length !== 3) return INVALID;
-  const [kid, payload, provided] = parts;
-  if (!KID_PATTERN.test(kid) || payload.length === 0 || !MAC_PATTERN.test(provided)) {
-    return INVALID;
-  }
+  const parts = splitCookieValue(cookieValue);
+  if (parts === null) return INVALID;
+  const { kid, payload, mac: provided } = parts;
 
   const lookup = await cookieKeyRing(fastify).find(realmId, kid);
   if (lookup.status === 'unchecked') return lookup;
@@ -282,6 +304,40 @@ export async function verifySessionCookie(
   cookieValue: string | undefined | null
 ): Promise<string | null> {
   return (await readSessionCookie(fastify, realmId, cookieValue))?.activeSessionId ?? null;
+}
+
+/** What {@link verifySessionCookieAtSigner} needs of the Fastify instance: its signer. */
+export interface CookieMacChecker {
+  readonly signer: Pick<FastifyInstance['signer'], 'verifyCookieMac'>;
+}
+
+/**
+ * {@link verifySessionCookie} with the MAC checked by the signer
+ * (`verifyCookieMac`, #497), for a process that does not hold the realm's
+ * cookie keys: `api`, which serves `/auth/logout`, may not, as whoever holds
+ * them can make a session cookie. The signer checks the MAC with the key the
+ * `kid` names, the realm's current or previous one, in constant time, and
+ * says only whether it holds.
+ *
+ * The value's shape is checked here first, so a value that cannot be a
+ * cookie this realm signed makes no signer call. One of a key the signer
+ * holds no more, or never held, is `null`, as here.
+ *
+ * @throws the signer's error when the signer cannot be reached
+ */
+export async function verifySessionCookieAtSigner(
+  fastify: CookieMacChecker,
+  realmId: string,
+  cookieValue: string | undefined | null
+): Promise<string | null> {
+  const parts = splitCookieValue(cookieValue);
+  if (parts === null) return null;
+  const valid = await fastify.signer.verifyCookieMac('local', {
+    realmId,
+    cookieName: SESSION_COOKIE_NAME,
+    ...parts,
+  });
+  return valid ? (decodeSessionPayload(parts.payload)?.activeSessionId ?? null) : null;
 }
 
 /**

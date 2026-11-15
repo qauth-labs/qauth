@@ -410,6 +410,14 @@ export interface BootAuthServerOptions {
    */
   readonly internalListener?: () => InternalListenerFixture | Promise<InternalListenerFixture>;
   /**
+   * Call the signer service at SIGNER_URL as `main.ts` has it (#497): the
+   * environment's internal TLS files are read at boot, and the app's remote
+   * signer presents them. Unset, a process without the signer answers 503
+   * to every key operation and reads no TLS file, so a suite of what a
+   * split process refuses can name paths that do not exist.
+   */
+  readonly signerClient?: { readonly reloadIntervalMs?: number };
+  /**
    * Replace the `import()` of an AuthMethod plugin package and the
    * first-party list (#600), so a suite boots with fixture plugins. The app
    * refuses it outside NODE_ENV=test.
@@ -435,6 +443,11 @@ export interface BootAuthServerOptions {
 export interface InternalListenerFixture {
   readonly modules?: readonly InternalRouteModule[];
   readonly reloadIntervalMs?: number;
+  /**
+   * The port to listen on, such as the one a signer listened on before the
+   * suite stopped it, so its callers find it again; an ephemeral one unless set.
+   */
+  readonly port?: number;
 }
 
 /**
@@ -522,6 +535,7 @@ export async function bootAuthServer(
       // variable another boot left behind, one more reason the JWT keys go.
       key === 'SERVICE_ROLES' ||
       key === 'SIGNER_URL' ||
+      key === 'SIGNER_SAN' ||
       // The internal listener (#496): its address, its TLS files and its peers.
       key.startsWith('INTERNAL_') ||
       // The plugin runtime (#600): a boot that lists no plugin loads none.
@@ -542,7 +556,7 @@ export async function bootAuthServer(
   const { createAdminServer } = await import('../app/admin/listener');
   const { createInternalServer } = await import('../app/internal/listener');
   const { readInternalTlsFiles } = await import('../app/internal/tls-files');
-  const { internalListenerPlan } = await import('../app/service-roles');
+  const { internalListenerPlan, signerClientTlsFiles } = await import('../app/service-roles');
   const { bootDefaultRealm } = await import('../app/helpers/default-realm-boot');
   const { keyVariableSettings } = await import('../app/helpers/key-variables');
   // The same module instance the app just loaded, since the registry was reset.
@@ -620,8 +634,26 @@ export async function bootAuthServer(
           }),
     });
   }
+  // As in `main.ts`: the signer client's TLS files, read at boot (#497).
+  const signerTls = options.signerClient === undefined ? undefined : signerClientTlsFiles(env);
+  if (options.signerClient !== undefined && signerTls === undefined) {
+    throw new Error('bootAuthServer: signerClient needs SIGNER_URL and the internal TLS files');
+  }
   await server.register(fp(app), {
     ...(adminOptions === undefined ? {} : { adminListener: adminOptions }),
+    ...(signerTls === undefined
+      ? {}
+      : {
+          remoteSigner: {
+            tls: {
+              files: signerTls,
+              material: readInternalTlsFiles(signerTls),
+              ...(options.signerClient?.reloadIntervalMs === undefined
+                ? {}
+                : { reloadIntervalMs: options.signerClient.reloadIntervalMs }),
+            },
+          },
+        }),
     ...(internalServer === undefined
       ? {}
       : {
@@ -653,7 +685,7 @@ export async function bootAuthServer(
   await adminServer?.ready();
   let internalUrl: string | undefined;
   if (internalServer !== undefined && internalPlan?.serves === true) {
-    await internalServer.listen({ host: internalPlan.host, port: 0 });
+    await internalServer.listen({ host: internalPlan.host, port: internalFixture?.port ?? 0 });
     const address = internalServer.server.address();
     if (address === null || typeof address === 'string') {
       throw new Error('bootAuthServer: the internal listener has no TCP address');

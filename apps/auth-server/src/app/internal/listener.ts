@@ -108,6 +108,13 @@ declare module 'fastify' {
      * {@link requestPeerRole}.
      */
     peerRole?: InternalPeerRole;
+    /**
+     * Which peer called, set with {@link peerRole}: its certificate's SHA-256
+     * fingerprint, or `loopback` for a plain-HTTP caller. Two processes with
+     * one certificate are one peer. Read it with {@link requestPeerIdentity},
+     * such as to bound a peer's rate (#497).
+     */
+    peerIdentity?: string;
   }
 }
 
@@ -150,6 +157,21 @@ export interface InternalServerOptions {
    * Unset, a plain-HTTP request has no role and is refused.
    */
   readonly plainHttpPeerRole?: InternalPeerRole;
+  /** The cap of one peer's connections, with `tls`; {@link INTERNAL_MAX_CONNECTIONS_PER_PEER} unless set. */
+  readonly maxConnectionsPerPeer?: number;
+}
+
+/**
+ * Which peer called an internal route: see `FastifyRequest.peerIdentity`.
+ *
+ * @throws Error on a request of another listener
+ */
+export function requestPeerIdentity(request: FastifyRequest): string {
+  const identity = request.peerIdentity;
+  if (identity === undefined) {
+    throw new Error('requestPeerIdentity: the request did not come through the internal listener');
+  }
+  return identity;
 }
 
 /** The parts of a connection the peer check reads: a TLS socket's, when it is one. */
@@ -169,6 +191,8 @@ export function isLoopbackAddress(address: string | undefined): boolean {
 
 /** What the listener knows of a connection's peer, resolved at its first request. */
 type SocketPeer = PeerRoleResolution & {
+  /** `FastifyRequest.peerIdentity`. */
+  readonly identity: string;
   readonly sans: string[];
   /** When the peer's certificate stops being valid, in ms since the epoch: never without one. */
   readonly notAfterMs: number;
@@ -187,13 +211,19 @@ function resolveSocketPeer(
 ): SocketPeer {
   const none: SocketPeer = {
     refused: 'no-certificate',
+    identity: 'none',
     sans: [],
     notAfterMs: Number.POSITIVE_INFINITY,
   };
   if (typeof socket.getPeerX509Certificate !== 'function') {
     // A plain-HTTP connection: no TLS socket, so no certificate at all.
     return plainHttpPeerRole !== undefined && isLoopbackAddress(socket.remoteAddress)
-      ? { role: plainHttpPeerRole, sans: [], notAfterMs: Number.POSITIVE_INFINITY }
+      ? {
+          role: plainHttpPeerRole,
+          identity: 'loopback',
+          sans: [],
+          notAfterMs: Number.POSITIVE_INFINITY,
+        }
       : none;
   }
   if (socket.authorized !== true) return none;
@@ -204,6 +234,7 @@ function resolveSocketPeer(
   const notAfterMs = certificate.validToDate.getTime();
   return {
     ...resolvePeerRole(sans, peerRoles),
+    identity: `sha256:${certificate.fingerprint256}`,
     sans: loggableSans(sans),
     notAfterMs: Number.isNaN(notAfterMs) ? 0 : notAfterMs,
   };
@@ -268,6 +299,7 @@ const peerRolePlugin = fp<{
   async (fastify, { peerRoles, plainHttpPeerRole, generations }) => {
     const resolved = new WeakMap<object, SocketPeer & { readonly generation: number }>();
     fastify.decorateRequest('peerRole', undefined);
+    fastify.decorateRequest('peerIdentity', undefined);
     fastify.addHook('onRequest', async (request, reply) => {
       const socket = request.raw.socket;
       let peer = resolved.get(socket);
@@ -296,6 +328,7 @@ const peerRolePlugin = fp<{
       }
       if ('role' in peer) {
         request.peerRole = peer.role;
+        request.peerIdentity = peer.identity;
         return;
       }
       request.log.warn(
@@ -328,6 +361,16 @@ export const INTERNAL_HANDSHAKE_TIMEOUT_MS = 10_000;
  * listener and the database pool.
  */
 export const INTERNAL_MAX_CONNECTIONS = 1_024;
+
+/**
+ * The most connections one peer certificate holds open at once, a quarter of
+ * {@link INTERNAL_MAX_CONNECTIONS}; past it, a new connection of that
+ * certificate is closed once its handshake shows who it is. So one peer, a
+ * runaway or one an attacker took over, cannot take the connections of the
+ * others: eight processes that share a certificate fit, with the internal
+ * client's default pool of 32 each.
+ */
+export const INTERNAL_MAX_CONNECTIONS_PER_PEER = 256;
 
 /** The shortest time between two log lines about refused handshakes. */
 const REFUSAL_LOG_INTERVAL_MS = 60_000;
@@ -365,6 +408,38 @@ class LogSampler {
 }
 
 /**
+ * Hold each peer certificate, by its SHA-256 fingerprint, to `max` open
+ * connections: past it, a new connection is closed once its handshake ends,
+ * before its first request is read, and a line a minute is logged.
+ */
+function limitConnectionsPerPeer(tlsServer: TlsServer, max: number, log: FastifyBaseLogger): void {
+  const open = new Map<string, number>();
+  const closedLog = new LogSampler(REFUSAL_LOG_INTERVAL_MS);
+  tlsServer.on('secureConnection', (socket: TLSSocket) => {
+    const fingerprint = socket.getPeerCertificate()?.fingerprint256;
+    if (typeof fingerprint !== 'string' || fingerprint.length === 0) return;
+    const count = open.get(fingerprint) ?? 0;
+    if (count >= max) {
+      const skipped = closedLog.take('per_peer_cap', Date.now());
+      if (skipped !== undefined) {
+        log.warn(
+          { peer: `sha256:${fingerprint}`, open: count, suppressed: skipped },
+          'Closed an internal connection: its peer certificate holds the most connections one peer may'
+        );
+      }
+      socket.destroy();
+      return;
+    }
+    open.set(fingerprint, count + 1);
+    socket.once('close', () => {
+      const left = (open.get(fingerprint) ?? 1) - 1;
+      if (left <= 0) open.delete(fingerprint);
+      else open.set(fingerprint, left);
+    });
+  });
+}
+
+/**
  * A refused connection about the client's certificate, rather than a dropped
  * one: no certificate, or one the CA file did not issue. For the second,
  * Node.js completes the handshake, then closes the connection before any
@@ -399,7 +474,9 @@ function isCertificateRefusal(
  * - every request is checked for its peer's role before anything else, and
  *   for a certificate that expired or TLS files replaced since its connection
  *   was made; each 403 closes its connection;
- * - at most {@link INTERNAL_MAX_CONNECTIONS} connections are open at once.
+ * - at most {@link INTERNAL_MAX_CONNECTIONS} connections are open at once,
+ *   and with `tls` at most {@link INTERNAL_MAX_CONNECTIONS_PER_PEER} of one
+ *   peer certificate.
  */
 export function createInternalServer(options: InternalServerOptions): FastifyInstance {
   const { tls } = options;
@@ -458,6 +535,11 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
     // Registered after the HTTP layer's own listener, and run in the same
     // emit, so before the connection's first request is read.
     tlsServer.on('secureConnection', (socket) => generations.stamp(socket));
+    limitConnectionsPerPeer(
+      tlsServer,
+      options.maxConnectionsPerPeer ?? INTERNAL_MAX_CONNECTIONS_PER_PEER,
+      server.log
+    );
     const refusalLog = new LogSampler(REFUSAL_LOG_INTERVAL_MS);
     tlsServer.on('tlsClientError', (error, socket) => {
       const fields = {

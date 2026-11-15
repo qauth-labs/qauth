@@ -31,8 +31,10 @@ import { emitUserEvent, type EventTransaction } from './user-events';
  * - **The cipher**: the signer's `data_at_rest` key of the realm, under the
  *   context `totp-secret:<realm id>:<user id>` ({@link totpSecretContext}),
  *   so a ciphertext opens only for the account it was made for. The engine
- *   runs where the `api` role's mail sender does, and calls as `api`, the one
- *   role that may decrypt this prefix (`SIGNER_POLICY`). A secret opened is
+ *   calls as `api`; where the signer runs apart, the signer service holds the
+ *   call to the role of the process's certificate, `web` for the Interaction
+ *   API and the hosted pages, and both roles that serve sign-in may seal and
+ *   open this prefix (`SIGNER_POLICY`, #497). A secret opened is
  *   copied out of the signer's buffer, which is overwritten at once.
  * - **The issuer** an authenticator app shows: the host of the realm's
  *   issuer.

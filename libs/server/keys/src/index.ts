@@ -22,6 +22,19 @@ export {
   type SecurityOperationActor,
 } from './lib/approved-operation';
 export {
+  COOKIE_DERIVED_KEY_BYTES,
+  COOKIE_DERIVED_KEY_LABELS,
+  COOKIE_KID_PATTERN,
+  COOKIE_MAC_LABEL,
+  COOKIE_MAC_PATTERN,
+  type CookieDerivedKeyLabel,
+  type CookieMacFields,
+  cookieMacInput,
+  deriveCookieKey,
+  isCookieDerivedKeyLabel,
+  MAX_COOKIE_PAYLOAD_LENGTH,
+} from './lib/cookie-derivation';
+export {
   DATA_AT_REST_CONSUMERS,
   type DataAtRestConsumer,
   dataAtRestLifetimeMs,
@@ -89,6 +102,23 @@ export {
   type PublishedKeyStore,
 } from './lib/published-keys';
 export {
+  createRemoteSigner,
+  DEFAULT_REMOTE_SIGNER_ATTEMPT_TIMEOUT_MS,
+  DEFAULT_REMOTE_SIGNER_CACHE_MS,
+  DEFAULT_REMOTE_SIGNER_FAILURE_THRESHOLD,
+  DEFAULT_REMOTE_SIGNER_OPEN_MS,
+  DEFAULT_REMOTE_SIGNER_RETRY_DELAY_MS,
+  IDEMPOTENT_SIGNER_OPERATIONS,
+  type RemoteSignerEvent,
+  type RemoteSignerFailure,
+  type RemoteSignerOptions,
+  type SignerTransport,
+  type SignerTransportRequest,
+  type SignerTransportResponse,
+} from './lib/remote-signer';
+export {
+  type CookieDerivedKey,
+  type CookieDerivedKeyRequest,
   type CookieSecret,
   type CookieSecrets,
   type CookieSecretsOptions,
@@ -104,12 +134,15 @@ export {
   type SignJwsRequest,
   type SignWebhookRequest,
   type VerificationKey,
+  type VerifyCookieMacRequest,
 } from './lib/signer';
 export {
   DATA_DECRYPTION_ERROR_MESSAGE,
   DataDecryptionError,
   isSignerError,
+  isSignerRefusalReason,
   RealmIssuerNotFoundError,
+  SIGNER_REFUSAL_REASONS,
   SignerAccessDeniedError,
   SignerError,
   type SignerErrorCode,
@@ -122,6 +155,7 @@ export {
   ADMIN_SEALED_VALUE_CONTEXT_PREFIX,
   AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
   DELIVERY_SECRET_CONTEXT_PREFIX,
+  hasSignerGrant,
   isSignerCallAllowed,
   isSignerCaller,
   OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
@@ -133,6 +167,11 @@ export {
   TOTP_SECRET_CONTEXT_PREFIX,
   UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
 } from './lib/signer-policy';
+export {
+  createSignerService,
+  type SignerService,
+  type SignerServiceAnswer,
+} from './lib/signer-service';
 export {
   CLIENT_ASSERTION_TYP,
   idTokenAlgorithm,
@@ -153,6 +192,31 @@ export {
   VERIFICATION_KEY_PURPOSES,
   type VerificationKeyPurpose,
 } from './lib/signer-typ';
+export {
+  decodeSignerError,
+  decodeSignerRequest,
+  decodeSignerResult,
+  decodeWireBytes,
+  type EncodedSignerError,
+  encodeSignerError,
+  encodeSignerRequest,
+  encodeSignerResult,
+  encodeWireBytes,
+  isSignerOperation,
+  SIGNER_MAX_ANSWER_BYTES,
+  SIGNER_REQUEST_BODY_LIMITS,
+  SIGNER_SERVICE_PATH,
+  SIGNER_SERVICE_ROUTES,
+  SIGNER_WIRE_ERROR_STATUS,
+  type SignerErrorContext,
+  type SignerOperationArgs,
+  type SignerOperationResult,
+  type SignerWireBody,
+  type SignerWireError,
+  type SignerWireErrorCode,
+  SignerWireFormatError,
+  type WireBytes,
+} from './lib/signer-wire';
 export {
   MAX_WEBHOOK_ID_LENGTH,
   WEBHOOK_SECRET_PREFIX,

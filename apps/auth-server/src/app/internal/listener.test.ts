@@ -1,6 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
-import type { ConnectionOptions } from 'node:tls';
+import { connect, type ConnectionOptions, type TLSSocket } from 'node:tls';
 
 import { internalListenerEnvSchema, SERVICE_ROLE_NAMES } from '@qauth-labs/server-config';
 import Fastify, { type FastifyInstance, type FastifyPluginAsync } from 'fastify';
@@ -30,6 +30,7 @@ import {
   createInternalServer,
   installInternalApi,
   INTERNAL_MAX_CONNECTIONS,
+  INTERNAL_MAX_CONNECTIONS_PER_PEER,
   isLoopbackAddress,
   requestPeerRole,
 } from './listener';
@@ -436,6 +437,61 @@ describe('peer roles', () => {
 
   it('caps the connections it holds open at once', () => {
     expect(internal.server.maxConnections).toBe(INTERNAL_MAX_CONNECTIONS);
+    expect(INTERNAL_MAX_CONNECTIONS_PER_PEER * 4).toBe(INTERNAL_MAX_CONNECTIONS);
+  });
+
+  it("closes a peer certificate's connection past its cap, and keeps the other peers'", async () => {
+    const capped = createInternalServer({
+      loggerInstance: recordingLogger() as never,
+      peerRoles: PEER_ROLES,
+      tls: { files: tlsDirectory.files, material: readInternalTlsFiles(tlsDirectory.files) },
+      maxConnectionsPerPeer: 2,
+    });
+    const sockets: TLSSocket[] = [];
+    try {
+      await capped.listen({ host: '127.0.0.1', port: 0 });
+      const cappedPort = (capped.server.address() as AddressInfo).port;
+      const open = (credentials: IssuedCredentials) =>
+        new Promise<TLSSocket>((resolve, reject) => {
+          const socket = connect({
+            host: '127.0.0.1',
+            port: cappedPort,
+            cert: credentials.cert,
+            key: credentials.key,
+            ca: pki.caPem,
+            checkServerIdentity: () => undefined,
+          });
+          sockets.push(socket);
+          socket.once('secureConnect', () => resolve(socket));
+          socket.on('error', reject);
+        });
+      const closed = (socket: TLSSocket) =>
+        socket.closed ? Promise.resolve() : new Promise((resolve) => socket.once('close', resolve));
+
+      const first = await open(peers.web);
+      const second = await open(peers.web);
+      const third = await open(peers.web);
+      await closed(third);
+      const other = await open(peers.api);
+      // The server closed the third alone: the others stay open a while.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect([first.closed, second.closed, other.closed]).toEqual([false, false, false]);
+      expect(
+        warnings.some((line) => line.includes('holds the most connections one peer may'))
+      ).toBe(true);
+
+      // A closed one frees its place.
+      first.destroy();
+      await closed(first);
+      await eventually(async () => {
+        const again = await open(peers.web);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return !again.closed;
+      });
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await capped.close();
+    }
   });
 
   it('registers the modules of the roles the process holds, and no other', () => {

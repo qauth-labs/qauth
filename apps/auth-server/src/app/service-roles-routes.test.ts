@@ -216,7 +216,7 @@ const PINNED_OPERATIONS: ReadonlySet<string> = new Set(
 
 /** The keys a boot sets or clears, restored after the file. */
 const BOOT_KEYS =
-  /^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|SSF_|JWT_|KEK|SERVICE_ROLES$|SIGNER_URL$|INTERNAL_|INTERACTION_UI_ENABLED$|CEREMONY_APP_DEPLOYED$)/;
+  /^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|SSF_|JWT_|KEK|SERVICE_ROLES$|SIGNER_URL$|SIGNER_SAN$|INTERNAL_|INTERACTION_UI_ENABLED$|CEREMONY_APP_DEPLOYED$)/;
 
 /** The environment of a deployment with every route-registering switch on. */
 function maximalEnvironment(serviceRoles: string): Record<string, string> {

@@ -21,7 +21,8 @@ import { createInternalClient, type InternalClient } from './internal/client';
 import type { InternalRouteModule } from './internal/route-manifest';
 
 /** The keys a boot sets or clears, restored after the file. */
-const BOOT_KEYS = /^(OID4VP_|WALLET_|SSF_|JWT_|KEK|SERVICE_ROLES$|SIGNER_URL$|INTERNAL_)/;
+const BOOT_KEYS =
+  /^(OID4VP_|WALLET_|SSF_|JWT_|KEK|SERVICE_ROLES$|SIGNER_URL$|SIGNER_SAN$|INTERNAL_)/;
 
 const FIXTURE_MODULE: InternalRouteModule = {
   module: 'fixture',

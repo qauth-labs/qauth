@@ -305,13 +305,46 @@ describe('POST /auth/logout', () => {
       expect(reply.headers['Set-Cookie']).toContain('Max-Age=0');
     });
 
-    it('still ends everything when the cookie keys cannot be read, and leaves the cookie (#493)', async () => {
-      // A process without the signer role, or a signer outage: the cookie's MAC
-      // cannot be checked, which must not stop the logout halfway.
+    it('has the signer check the cookie, and never reads the cookie keys (#497)', async () => {
+      // `/auth/logout` is the `api` role's, which may not hold the cookie keys.
+      const { fastify, ctx, sessions } = createFastifyStub();
+      const { cookie } = await signedIn(sessions, 'sess-a');
+      sessions.signer.getCookieSecrets.mockClear();
+
+      const reply = await logOut(fastify, ctx, cookie);
+
+      expect(sessions.signer.verifyCookieMac).toHaveBeenCalledWith(
+        'local',
+        expect.objectContaining({ realmId: REALM.id, cookieName: '__Host-qauth_session' })
+      );
+      expect(sessions.signer.getCookieSecrets).not.toHaveBeenCalled();
+      expect(reply.headers['Set-Cookie']).toContain('Max-Age=0');
+    });
+
+    it('leaves a cookie whose MAC the signer does not find, and asks nothing for a malformed one', async () => {
+      const { fastify, ctx, sessions } = createFastifyStub();
+      const { cookie } = await signedIn(sessions, 'sess-a');
+      const [name, value] = cookie.split('=');
+      const [kid, payload, mac] = value.split('.');
+      const forged = `${name}=${kid}.${payload}.${mac.startsWith('A') ? 'B' : 'A'}${mac.slice(1)}`;
+
+      expect((await logOut(fastify, ctx, forged)).headers['Set-Cookie']).toBeUndefined();
+      expect(sessions.signer.verifyCookieMac).toHaveBeenCalledTimes(1);
+      expect(await sessions.signer.verifyCookieMac.mock.results[0]?.value).toBe(false);
+
+      sessions.signer.verifyCookieMac.mockClear();
+      await signedIn(sessions, 'sess-b');
+      await logOut(fastify, ctx, `${name}=not-a-signed-value`);
+      expect(sessions.signer.verifyCookieMac).not.toHaveBeenCalled();
+    });
+
+    it('still ends everything when the signer cannot check the cookie, and leaves the cookie (#493)', async () => {
+      // A signer outage: the cookie's MAC cannot be checked, which must not
+      // stop the logout halfway.
       const { fastify, ctx, sessions } = createFastifyStub();
       const { cookie } = await signedIn(sessions, 'sess-a');
       const down = createFakeCookieSigner();
-      down.getCookieSecrets.mockRejectedValue(new TemporarilyUnavailableError(60));
+      down.verifyCookieMac.mockRejectedValue(new TemporarilyUnavailableError(60));
       fastify.signer = down as unknown as FastifyInstance['signer'];
 
       // Resolves: the logout completes.

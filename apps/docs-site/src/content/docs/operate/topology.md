@@ -148,22 +148,23 @@ gives the details.
   keys, which it reads without a KEK.
 - **The internal listener.** A second HTTP server of each process, on
   `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1` and `3443` by default),
-  serves what only other parts of the deployment call: today the metrics, to
-  a scraper, and once the signer service below ships, signing, to the other
-  roles. It is not routed by host, and the public port serves none of its
+  serves what only other parts of the deployment call: the signer service,
+  to the other roles, and the metrics, to a scraper. It is not routed by host, and the public port serves none of its
   paths.
 - **Mutual TLS.** While the roles are split, the internal listener speaks
   mutual TLS 1.3 only, with the certificates in `INTERNAL_TLS_CERT_PATH`,
   `INTERNAL_TLS_KEY_PATH` and `INTERNAL_TLS_CA_PATH`. `INTERNAL_PEER_ROLES`
   maps a peer certificate's SAN, such as a SPIFFE ID, to the role it calls as,
   or to `metrics` for a scraper. A peer without a mapped SAN gets `403`.
-- **The signer service.** A process without the signer reaches it at
-  `SIGNER_URL`, over mutual TLS. The signer service itself ships with
-  [#497](https://github.com/qauth-labs/qauth/issues/497): until then such a
-  process answers `503` wherever it would sign, and the browser-facing role
-  must sit with the signer.
-  [What a split deployment can do today](/operate/service-roles/#what-a-split-deployment-can-do-today)
-  gives the split that works now.
+- **The signer service.** A process without the signer signs through it, at
+  `SIGNER_URL`, over mutual TLS with its own role's certificate, and accepts
+  only a server whose certificate holds `SIGNER_SAN`. The signer holds each
+  call to the caller's role: only `web` gets the cookie keys, and only `api`
+  signs access tokens. While the signer is down, what signs answers `503`,
+  and what reads public keys (the JWKS, token verification, `/userinfo`,
+  introspection) keeps working.
+  [The signer service](/operate/service-roles/#the-signer-service) gives the
+  details and a deployment with every role apart.
 
 Every role shares one Postgres database and one Redis. Refresh-token rotation,
 single-use codes and consent revocation never split across databases.
@@ -259,9 +260,9 @@ not give is yours to revoke, and the run names it.
 
 A process whose only role is `delivery` skips the default realm's boot step,
 which writes `realms`: on a new database, start another role's process first.
-A process without the signer still cannot sign or set a signed cookie (#497):
-[Service roles](/operate/service-roles/) says which splits work in this
-release.
+A process without the signer signs through the signer service:
+[Service roles](/operate/service-roles/#the-signer-service) says how it calls
+it and what each role may ask of it.
 
 The statements for some roles are also in `@qauth-labs/infra-db`, for an
 operator who grants by hand; the map gives each role these and more:
