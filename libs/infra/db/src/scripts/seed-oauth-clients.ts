@@ -45,6 +45,14 @@
  * `client.first_party_changed` event, and removing the profile on `--rotate`
  * revokes every refresh token of the client. See `seed-clients.ts`.
  *
+ * The optional `resources` section registers the realm's protected resources
+ * (#1087): each resource indicator, the scopes it defines with their consent
+ * texts, and who may ask for them. Their scopes are granted only for that
+ * resource, to any client it is open to, CIMD and dynamically registered
+ * ones included. An entry converges the registration on the manifest; a
+ * resource the section does not list is left alone. The report lists what
+ * each entry widened or narrowed. See `protected-resource-seed.ts`.
+ *
  * The optional `system_client` section provisions the developer portal's
  * system client (#631): `private_key_jwt` with the portal's keys, the
  * `web_redirect` profile and the portal's callback. It has no secret either,
@@ -62,6 +70,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { realms } from '../lib/schema';
 import { describeSystemClientResult, provisionSystemClient } from '../lib/system-client/provision';
 import { applyCimdClientGrant, type CimdGrantResult } from './cimd-client-grants';
+import { applyResourceEntry, type ResourceSeedResult } from './protected-resource-seed';
 import { type Issued, provisionClient } from './seed-clients';
 import { type ClientSpec, firstPartyColumnsOf, parseManifest } from './seed-manifest';
 
@@ -158,6 +167,17 @@ async function main(): Promise<void> {
     reportCimdGrants(manifest.realm, granted);
 
     if (granted.some((g) => g.status === 'not_cimd')) process.exitCode = 1;
+
+    // #1087: the realm's protected resources, after the clients they may
+    // name, each entry in its own transaction.
+    const registered: ResourceSeedResult[] = [];
+    try {
+      for (const spec of manifest.resources ?? []) {
+        registered.push(await applyResourceEntry(db, realm.id, spec));
+      }
+    } finally {
+      reportResources(manifest.realm, registered);
+    }
 
     // ADR-017 phase F0 (#631): the portal's system client, last, so a refusal
     // here leaves every other entry's result printed.
@@ -303,6 +323,20 @@ function reportCimdGrants(realm: string, granted: CimdGrantResult[]): void {
         'it to the entry and run the seed again.\n'
     );
   }
+}
+
+/**
+ * What each `resources` entry did (#1087). A change of a resource's scopes or
+ * of who may ask for them changes what tokens carry, so every change is named.
+ */
+function reportResources(realm: string, results: ResourceSeedResult[]): void {
+  if (results.length === 0) return;
+  console.log(`\nProtected resources in realm "${realm}":`);
+  for (const r of results) {
+    console.log(`  ${r.resource}: ${r.status}`);
+    for (const change of r.changes) console.log(`    ${change}`);
+  }
+  console.log('');
 }
 
 main().catch((err) => {

@@ -2,7 +2,7 @@ import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm';
 
 import type { DbClient } from '../../types';
 import type { KeysetPage } from '../../types/repository';
-import { type ProtectedResourceScope, protectedResources } from '../schema/protected-resources';
+import { protectedResources, type ProtectedResourceScope } from '../schema/protected-resources';
 import { EPOCH_MS_NOW } from '../schema/sql-helpers';
 
 /**

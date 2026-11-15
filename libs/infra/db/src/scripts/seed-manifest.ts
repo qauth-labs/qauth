@@ -18,6 +18,9 @@ import {
   isReservedQauthScope,
   normaliseVerifiedDomain,
   normaliseWebAuthnOrigin,
+  protectedResourceClientsSchema,
+  protectedResourceIndicatorSchema,
+  protectedResourceScopesSchema,
   redirectTarget,
 } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
@@ -432,11 +435,33 @@ export const cimdClientSpecSchema = z
     }
   });
 
+/**
+ * A protected resource the realm registers (#1087): its RFC 8707 resource
+ * indicator, the scopes it defines with their consent texts by locale, and
+ * who may ask for them, `"any_client"` (every client of the realm, CIMD and
+ * dynamically registered ones included) or a list of `client_id`s. A scope it
+ * defines is granted only when an authorization request names the resource,
+ * to a client it is open to, whatever the client's own `scopes` hold. The
+ * rules are the admin API's (`@qauth-labs/shared-validation`).
+ */
+export const resourceSpecSchema = z
+  .object({
+    resource: protectedResourceIndicatorSchema,
+    scopes: protectedResourceScopesSchema,
+    clients: protectedResourceClientsSchema,
+  })
+  .strict();
+
 export const manifestSchema = z
   .object({
     realm: z.string().min(1),
     clients: z.array(clientSpecSchema).optional(),
     cimd_clients: z.array(cimdClientSpecSchema).optional(),
+    // #1087: the realm's protected resources. Each entry converges the
+    // realm's registration of its resource on the entry; a resource the
+    // section does not list is left alone, so removing an entry removes
+    // nothing (the admin API's `resourceServers.delete` does).
+    resources: z.array(resourceSpecSchema).optional(),
     // ADR-017 phase F0 (#631): the developer portal's system client, as a
     // `private_key_jwt` client with the `web_redirect` first-party profile
     // and the portal's callback. A section without `client_id` takes the
@@ -448,13 +473,28 @@ export const manifestSchema = z
   .strict()
   .refine(
     (m) =>
-      (m.clients?.length ?? 0) + (m.cimd_clients?.length ?? 0) > 0 || m.system_client !== undefined,
+      (m.clients?.length ?? 0) + (m.cimd_clients?.length ?? 0) + (m.resources?.length ?? 0) > 0 ||
+      m.system_client !== undefined,
     {
       message:
-        'the manifest lists no client: add an entry to clients, cimd_clients or system_client',
+        'the manifest lists nothing: add an entry to clients, cimd_clients, resources or system_client',
       path: ['clients'],
     }
   )
+  // One registration per resource indicator, as the realm holds one.
+  .superRefine((m, ctx) => {
+    const seen = new Set<string>();
+    (m.resources ?? []).forEach((entry, index) => {
+      if (seen.has(entry.resource)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `"${entry.resource}" is listed twice in resources`,
+          path: ['resources', index, 'resource'],
+        });
+      }
+      seen.add(entry.resource);
+    });
+  })
   // The system client is provisioned by its own section only, so the rules
   // of its row never meet a `clients` entry's.
   .refine(
@@ -530,6 +570,7 @@ export function registrationChallengeColumnOf(spec: ClientSpec): true | null {
   return spec.registration_challenge === true ? true : null;
 }
 export type CimdClientSpec = z.infer<typeof cimdClientSpecSchema>;
+export type ResourceSpec = z.infer<typeof resourceSpecSchema>;
 export type Manifest = z.infer<typeof manifestSchema>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
