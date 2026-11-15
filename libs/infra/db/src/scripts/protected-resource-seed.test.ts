@@ -62,6 +62,14 @@ describe('resourceChanges', () => {
     ]);
   });
 
+  it('names a change of who may ask that reads like the words for it', () => {
+    const open: ProtectedResourceSettings = { ...before, anyClient: true, clientIds: [] };
+    const named: ProtectedResourceSettings = { ...before, clientIds: ['any client'] };
+    expect(resourceChanges(open, named)).toEqual(['open to: any client -> any client']);
+    const joined: ProtectedResourceSettings = { ...before, clientIds: ['a, b'] };
+    expect(resourceChanges(before, joined)).toEqual(['open to: a, b -> a, b']);
+  });
+
   it('names every scope and who may ask for a new registration', () => {
     expect(resourceChanges(undefined, before)).toEqual([
       'scope added: files:read',

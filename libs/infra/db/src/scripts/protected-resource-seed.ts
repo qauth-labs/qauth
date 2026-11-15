@@ -88,14 +88,22 @@ export function resourceChanges(
   for (const scope of old.keys()) {
     if (!next.has(scope)) lines.push(`scope removed: ${scope}`);
   }
-  const whoBefore = before === undefined ? undefined : who(before);
-  const whoAfter = who(after);
-  if (whoBefore !== whoAfter) {
-    lines.push(
-      whoBefore === undefined ? `open to: ${whoAfter}` : `open to: ${whoBefore} -> ${whoAfter}`
-    );
+  // Compared as values, never as the report's words: a client_id may read
+  // like the words for every client, or hold the separator of a list.
+  if (before === undefined) {
+    lines.push(`open to: ${who(after)}`);
+  } else if (!sameAccess(before, after)) {
+    lines.push(`open to: ${who(before)} -> ${who(after)}`);
   }
   return lines;
+}
+
+/** Whether two registrations are open to the same clients, whatever the order of the list. */
+function sameAccess(a: ProtectedResourceSettings, b: ProtectedResourceSettings): boolean {
+  if (a.anyClient !== b.anyClient) return false;
+  const left = [...a.clientIds].sort();
+  const right = [...b.clientIds].sort();
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
 /** Who may ask, as the report names it. */
