@@ -192,13 +192,36 @@ describe('service accounts (real Postgres, #522)', () => {
       .insert(users)
       .values({ realmId: tenant })
       .returning({ id: users.id });
+    // A client of no service account yet, so the unique client id answers
+    // nothing and the foreign key is what refuses the row.
+    const [spare] = await db()
+      .insert(oauthClients)
+      .values({
+        realmId: operator,
+        clientId: 'spare',
+        clientSecretHash: 'unused',
+        name: 'Spare',
+        redirectUris: [],
+      })
+      .returning({ id: oauthClients.id });
     // The account of another realm: the composite foreign key refuses it.
     await expect(
       pool.query(
         `INSERT INTO service_accounts (realm_id, name, user_id, client_id) VALUES ($1, 'x', $2, $3)`,
-        [operator, stranger.id, client.id]
+        [operator, stranger.id, spare.id]
       )
     ).rejects.toMatchObject({ constraint: 'service_accounts_user_realm_fk' });
+    // One client is one service account's.
+    const [local] = await db()
+      .insert(users)
+      .values({ realmId: operator })
+      .returning({ id: users.id });
+    await expect(
+      pool.query(
+        `INSERT INTO service_accounts (realm_id, name, user_id, client_id) VALUES ($1, 'y', $2, $3)`,
+        [operator, local.id, client.id]
+      )
+    ).rejects.toMatchObject({ constraint: 'service_accounts_client_id_unique' });
     await expect(
       pool.query(`UPDATE service_accounts SET name = 'Not A Name' WHERE user_id = $1`, [userId])
     ).rejects.toMatchObject({ constraint: 'service_accounts_name_grammar' });
