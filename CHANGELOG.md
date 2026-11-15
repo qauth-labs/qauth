@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A realm can turn the new-factor window off** ([#1143]).
+  `accounts.newFactorWindowDays` (and `NEW_FACTOR_WINDOW_DAYS`, which seeds
+  it) now takes 0. With 0, a passkey or authenticator app bound after a
+  sign-in that proved only the password counts at once: the password alone
+  no longer signs in or removes it. The owner can then no longer undo, with
+  the password alone, a factor that an intruder with the password bound.
+  The default stays 7 days. A realm that already booted changes it through
+  the policy update, a security operation.
+
 ### Changed
 
 - **The sign-in page and the account pages name the realm's host.** Their
@@ -4599,6 +4610,7 @@ It adds migrations 0068 and 0069.
 [#1109]: https://github.com/qauth-labs/qauth/issues/1109
 [#1110]: https://github.com/qauth-labs/qauth/issues/1110
 [#1118]: https://github.com/qauth-labs/qauth/issues/1118
+[#1143]: https://github.com/qauth-labs/qauth/issues/1143
 
 ### Deprecated
 
