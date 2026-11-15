@@ -50,6 +50,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says how to write a change as expand, then switch, with no drop within
   1.x.
 
+### Changed
+
+- **Mail in QAuth's design system.** Every mail the server sends, the engine
+  mail and the registration verification and "account exists" mails alike,
+  now has the look of `@qauth-labs/ui` in place of a stock template: a square
+  card with a hairline edge on the muted page, Instrument Serif for the
+  heading, DM Sans for text, JetBrains Mono for a code, and the terracotta
+  primary for a button. Mail clients read no OKLCH and seldom load web fonts,
+  so the colours are the light-mode tokens as `#rrggbb` (an auth-server test
+  checks each against its token) and each face falls back to the nearest
+  system one. A realm that set no brand shows QAuth's logo, carried in the
+  mail as an inline image (`cid:`) rather than loaded from a server, so
+  opening a mail fetches nothing. A realm named otherwise shows its name, or
+  the logo it uploaded. The default mail brand's colours change with it, from
+  `#2563eb` on `#f6f9fc` to `#b44723` on `#f5f5f4`. `EmailOptions` gains
+  `inlineImages`, which the SMTP and Resend providers send as inline parts.
+
 ## [0.2.5] - 2026-11-14
 
 A patch release with no breaking change. A deployment can now seed each

@@ -1,6 +1,7 @@
 import React from 'react';
 
 import type {
+  EmailInlineImage,
   EmailOptions,
   EmailProvider,
   EmailResult,
@@ -8,6 +9,7 @@ import type {
   EmailServiceConfig,
   VerificationLink,
 } from '../types';
+import { DEFAULT_MAIL_BRAND, mailImagesOf } from './engine-mail/brand';
 import { type EngineMail, type EngineMailContext, renderEngineMail } from './engine-mail/registry';
 import { formatDuration } from './format-duration';
 import { AccountExistsEmail } from './templates/account-exists-email';
@@ -71,6 +73,7 @@ export function createEmailService(
       // Use custom text/html if provided, otherwise use React Email template
       let text = options?.text;
       let html = options?.html;
+      let inlineImages: readonly EmailInlineImage[] = [];
 
       if (!text && !html) {
         const template = React.createElement(VerifyEmail, {
@@ -80,6 +83,7 @@ export function createEmailService(
 
         html = await renderEmail(template);
         text = await renderEmailText(template);
+        inlineImages = mailImagesOf(DEFAULT_MAIL_BRAND);
       }
 
       return provider.sendEmail({
@@ -88,6 +92,7 @@ export function createEmailService(
         text,
         html,
         from: options?.from || defaultFrom,
+        inlineImages,
       });
     },
 
@@ -99,11 +104,13 @@ export function createEmailService(
 
       let text = options?.text;
       let html = options?.html;
+      let inlineImages: readonly EmailInlineImage[] = [];
 
       if (!text && !html) {
         const template = React.createElement(AccountExistsEmail);
         html = await renderEmail(template);
         text = await renderEmailText(template);
+        inlineImages = mailImagesOf(DEFAULT_MAIL_BRAND);
       }
 
       return provider.sendEmail({
@@ -112,6 +119,7 @@ export function createEmailService(
         text,
         html,
         from: options?.from || defaultFrom,
+        inlineImages,
       });
     },
 
@@ -120,8 +128,15 @@ export function createEmailService(
       mail: EngineMail,
       context: EngineMailContext
     ): Promise<EmailResult> {
-      const { subject, html, text } = await renderEngineMail(mail, context);
-      return provider.sendEmail({ to, subject, html, text, from: defaultFrom });
+      const { subject, html, text, images } = await renderEngineMail(mail, context);
+      return provider.sendEmail({
+        to,
+        subject,
+        html,
+        text,
+        from: defaultFrom,
+        inlineImages: images,
+      });
     },
   };
 }
