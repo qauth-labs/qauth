@@ -554,6 +554,13 @@
       "when": 1794756878474,
       "tag": "0078_service_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1794776517989,
+      "tag": "0079_users_delete_account",
+      "breakpoints": true
     }
   ]
 }

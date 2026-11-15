@@ -81,6 +81,35 @@ describe('createUsersRepository — malformed ids', () => {
     expect(queries).toEqual([]);
   });
 
+  it.each(MALFORMED_IDS)(
+    'lockForDeletion and deleteAccount answer no account for %j without querying (#681)',
+    async (id) => {
+      const { db, queries } = createRecordingDb();
+      const users = createUsersRepository(db);
+
+      await expect(users.lockForDeletion(REALM_ID, id, db)).resolves.toBe(false);
+      await expect(users.deleteAccount(REALM_ID, id, db)).resolves.toBe(false);
+
+      expect(queries).toEqual([]);
+    }
+  );
+
+  it('locks and deletes through the definer functions of migration 0079, by the realm (#681)', async () => {
+    const { db, queries } = createRecordingDb();
+    const users = createUsersRepository(db);
+    const id = '019a0b9e-4c2f-7d31-9f6e-2b8c4d5e6f70';
+
+    // The recording database returns no row: the realm holds no such account.
+    await expect(users.lockForDeletion(REALM_ID, id, db)).resolves.toBe(false);
+    await expect(users.deleteAccount(REALM_ID, id, db)).resolves.toBe(false);
+
+    expect(queries.map((query) => query.text)).toEqual([
+      'select "id" from "users_lock_for_deletion"($1::uuid, $2::uuid)',
+      'select "id" from "users_delete_account"($1::uuid, $2::uuid)',
+    ]);
+    for (const query of queries) expect(query.values).toEqual([REALM_ID, id]);
+  });
+
   it.each([
     // A uuidv7, as `users.id` defaults to.
     '019a0b9e-4c2f-7d31-9f6e-2b8c4d5e6f70',
