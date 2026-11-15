@@ -17,7 +17,7 @@ import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { adminEnrolments, realms, users } from '../schema';
+import { adminEnrolments, realms, userCredentials, users } from '../schema';
 import {
   ADMIN_ENROLMENT_DEFAULT_TTL_MS,
   type AdminEnrolmentsRepository,
@@ -66,14 +66,25 @@ describe('admin enrolments (real Postgres, #602)', () => {
     return row.id;
   }
 
-  async function issued(realmId: string, userId: string, ttl = ADMIN_ENROLMENT_DEFAULT_TTL_MS) {
-    return repository.issue({ realmId, userId, createdAt: T0, expiresAt: T0 + ttl });
+  async function issued(realmId: string, ttl = ADMIN_ENROLMENT_DEFAULT_TTL_MS) {
+    return repository.issue({
+      realmId,
+      accountId: repository.newAccountId(),
+      createdAt: T0,
+      expiresAt: T0 + ttl,
+    });
   }
 
-  it('stores only the hash of a 32-byte token, and redeems it once', async () => {
+  it('creates the account with no credential, stores only the hash of a 32-byte token, and redeems it once', async () => {
     const realmId = await realm('acme');
-    const userId = await account(realmId);
-    const { token, enrolment } = await issued(realmId, userId);
+    const { token, enrolment, account: created } = await issued(realmId);
+    const userId = created.id;
+    expect(created).toEqual({ id: userId, realmId, createdAt: T0 });
+    const [user] = await db().select().from(users).where(eq(users.id, userId));
+    expect(user).toMatchObject({ realmId, enabled: true, isServiceAccount: false, createdAt: T0 });
+    expect(
+      await db().select().from(userCredentials).where(eq(userCredentials.userId, userId))
+    ).toEqual([]);
 
     expect(Buffer.from(token, 'base64url')).toHaveLength(32);
     const [row] = await db()
@@ -108,7 +119,7 @@ describe('admin enrolments (real Postgres, #602)', () => {
 
   it('refuses an expired token, at its expiry and after, and leaves it unused', async () => {
     const realmId = await realm('acme');
-    const { token, enrolment } = await issued(realmId, await account(realmId), 60_000);
+    const { token, enrolment } = await issued(realmId, 60_000);
 
     expect(await repository.redeem(realmId, token, T0 + 60_000)).toBeUndefined();
     expect(await repository.redeem(realmId, token, T0 + 3_600_000)).toBeUndefined();
@@ -122,7 +133,7 @@ describe('admin enrolments (real Postgres, #602)', () => {
   it("refuses another realm's token, an unknown one and a malformed one alike", async () => {
     const acme = await realm('acme');
     const other = await realm('other');
-    const { token } = await issued(acme, await account(acme));
+    const { token } = await issued(acme);
 
     expect(await repository.redeem(other, token, T0 + 1)).toBeUndefined();
     const unknown = Buffer.alloc(32, 7).toString('base64url');
@@ -137,7 +148,7 @@ describe('admin enrolments (real Postgres, #602)', () => {
 
   it('lets two redemptions at once use the token once', async () => {
     const realmId = await realm('acme');
-    const { token } = await issued(realmId, await account(realmId));
+    const { token } = await issued(realmId);
     const results = await Promise.all(
       Array.from({ length: 5 }, () => repository.redeem(realmId, token, T0 + 1))
     );
@@ -146,9 +157,8 @@ describe('admin enrolments (real Postgres, #602)', () => {
 
   it('refuses, in the database, every change but one redemption before expiry', async () => {
     const realmId = await realm('acme');
-    const userId = await account(realmId);
     const other = await account(realmId);
-    const { enrolment } = await issued(realmId, userId);
+    const { enrolment } = await issued(realmId);
     const where = eq(adminEnrolments.id, enrolment.id);
     const refused = (change: Partial<typeof adminEnrolments.$inferInsert>) =>
       db().update(adminEnrolments).set(change).where(where);
@@ -179,39 +189,47 @@ describe('admin enrolments (real Postgres, #602)', () => {
   it('holds one enrolment per account, the account in the row’s realm, and a 32-byte hash', async () => {
     const acme = await realm('acme');
     const other = await realm('other');
-    const userId = await account(acme);
-    await issued(acme, userId);
-
-    await expect(issued(acme, userId)).rejects.toMatchObject({
-      cause: expect.objectContaining({ constraint: 'admin_enrolments_user_id_unique' }),
-    });
-    await expect(issued(other, await account(acme))).rejects.toMatchObject({
-      cause: expect.objectContaining({ constraint: 'admin_enrolments_user_realm_fk' }),
-    });
-    await expect(
+    const { account: created } = await issued(acme);
+    const row = (userId: string, realmId = acme, tokenHash = Buffer.alloc(32, 9)) =>
       db()
         .insert(adminEnrolments)
-        .values({
-          realmId: acme,
-          userId: await account(acme),
-          tokenHash: Buffer.alloc(16),
-          createdAt: T0,
-          expiresAt: T0 + 1,
-        })
-    ).rejects.toMatchObject({
+        .values({ realmId, userId, tokenHash, createdAt: T0, expiresAt: T0 + 1 });
+
+    await expect(row(created.id)).rejects.toMatchObject({
+      cause: expect.objectContaining({ constraint: 'admin_enrolments_user_id_unique' }),
+    });
+    await expect(row(await account(acme), other)).rejects.toMatchObject({
+      cause: expect.objectContaining({ constraint: 'admin_enrolments_user_realm_fk' }),
+    });
+    await expect(row(await account(acme), acme, Buffer.alloc(16))).rejects.toMatchObject({
       cause: expect.objectContaining({ constraint: 'admin_enrolments_token_hash_sha256' }),
     });
     await expect(
-      repository.issue({ realmId: acme, userId: await account(acme), createdAt: T0, expiresAt: T0 })
+      repository.issue({
+        realmId: acme,
+        accountId: repository.newAccountId(),
+        createdAt: T0,
+        expiresAt: T0,
+      })
     ).rejects.toThrow(RangeError);
+  });
+
+  it('writes neither the account nor the enrolment when one of them fails', async () => {
+    const acme = await realm('acme');
+    const taken = await account(acme);
+    await expect(
+      repository.issue({ realmId: acme, accountId: taken, createdAt: T0, expiresAt: T0 + 1 })
+    ).rejects.toThrow();
+    const [{ count }] = await db()
+      .select({ count: sql<number>`count(*)::int` })
+      .from(adminEnrolments);
+    expect(count).toBe(0);
   });
 
   it('goes with its account, and with its realm', async () => {
     const realmId = await realm('acme');
-    const first = await account(realmId);
-    const second = await account(realmId);
-    await issued(realmId, first);
-    await issued(realmId, second);
+    const first = (await issued(realmId)).account.id;
+    const second = (await issued(realmId)).account.id;
 
     await db().delete(users).where(eq(users.id, first));
     expect(await repository.findByUser(realmId, first)).toBeUndefined();

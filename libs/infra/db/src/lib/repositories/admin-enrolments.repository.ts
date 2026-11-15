@@ -3,7 +3,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, type InferSelectModel, isNull } from 'drizzle-orm';
 
 import type { DbClient } from '../../types';
+import { uuidv7 } from '../events/uuidv7';
 import { adminEnrolments } from '../schema/admin-enrolments';
+import { users } from '../schema/core';
 
 /** A stored admin enrolment (issue #602): never its token, only the token's hash. */
 export type AdminEnrolment = InferSelectModel<typeof adminEnrolments>;
@@ -41,8 +43,12 @@ export function adminEnrolmentTokenHash(token: string): Buffer | undefined {
 export interface NewAdminEnrolment {
   /** The realm the account lives in. */
   readonly realmId: string;
-  /** The admin account, of that realm, with no credential yet. */
-  readonly userId: string;
+  /**
+   * The id of the admin account to create, from
+   * {@link AdminEnrolmentsRepository.newAccountId}: known before anything is
+   * written, so the record of the run that writes it can name it first.
+   */
+  readonly accountId: string;
   /** Epoch ms: when the token is made. */
   readonly createdAt: number;
   /** Epoch ms: from this moment the token is refused. After `createdAt`. */
@@ -51,6 +57,8 @@ export interface NewAdminEnrolment {
 
 /** What {@link AdminEnrolmentsRepository.issue} wrote, and the token it made. */
 export interface IssuedAdminEnrolment {
+  /** The account: a user of the realm with no password and no credential. */
+  readonly account: { readonly id: string; readonly realmId: string; readonly createdAt: number };
   readonly enrolment: AdminEnrolment;
   /**
    * The token, in the form the enrolment URL carries. It exists only here:
@@ -77,9 +85,14 @@ export interface RedeemedAdminEnrolment {
  * never a hash.
  */
 export interface AdminEnrolmentsRepository {
+  /** A fresh id for an admin account {@link issue} creates: a UUIDv7, nothing written. */
+  newAccountId(): string;
+
   /**
-   * Make a token of {@link ADMIN_ENROLMENT_TOKEN_BYTES} random bytes and store
-   * its hash for the account. Only the hash is written.
+   * Create the admin account, a user of the realm with no password and no
+   * credential, and its enrolment: a token of
+   * {@link ADMIN_ENROLMENT_TOKEN_BYTES} random bytes, of which only the hash
+   * is written. Pass a transaction to write both with the account's grant.
    */
   issue(enrolment: NewAdminEnrolment, tx?: DbClient): Promise<IssuedAdminEnrolment>;
 
@@ -106,26 +119,47 @@ export interface AdminEnrolmentsRepository {
  */
 export function createAdminEnrolmentsRepository(defaultDb: DbClient): AdminEnrolmentsRepository {
   return {
+    newAccountId: () => uuidv7(),
+
     async issue(enrolment, tx) {
       if (!(enrolment.expiresAt > enrolment.createdAt)) {
         throw new RangeError('An admin enrolment expires after it is made');
+      }
+      if (!UUID.test(enrolment.realmId) || !UUID.test(enrolment.accountId)) {
+        throw new RangeError('An admin enrolment names its realm and account by id');
       }
       const bytes = randomBytes(ADMIN_ENROLMENT_TOKEN_BYTES);
       const token = bytes.toString('base64url');
       const tokenHash = createHash('sha256').update(bytes).digest();
       bytes.fill(0);
-      const [row] = await (tx ?? defaultDb)
-        .insert(adminEnrolments)
-        .values({
-          realmId: enrolment.realmId,
-          userId: enrolment.userId,
-          tokenHash,
-          createdAt: enrolment.createdAt,
-          expiresAt: enrolment.expiresAt,
-        })
-        .returning();
-      if (row === undefined) throw new Error('The admin enrolment was not written');
-      return { enrolment: row, token };
+      const write = async (db: DbClient): Promise<IssuedAdminEnrolment> => {
+        // No credential row: the account cannot sign in until the enrolment
+        // step registers its first passkey (#621).
+        const [account] = await db
+          .insert(users)
+          .values({
+            id: enrolment.accountId,
+            realmId: enrolment.realmId,
+            createdAt: enrolment.createdAt,
+            updatedAt: enrolment.createdAt,
+          })
+          .returning({ id: users.id, realmId: users.realmId, createdAt: users.createdAt });
+        const [row] = await db
+          .insert(adminEnrolments)
+          .values({
+            realmId: enrolment.realmId,
+            userId: enrolment.accountId,
+            tokenHash,
+            createdAt: enrolment.createdAt,
+            expiresAt: enrolment.expiresAt,
+          })
+          .returning();
+        if (account === undefined || row === undefined) {
+          throw new Error('The admin enrolment was not written');
+        }
+        return { account, enrolment: row, token };
+      };
+      return tx === undefined ? defaultDb.transaction(write) : write(tx);
     },
 
     async redeem(realmId, token, now, tx) {
