@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildRealmUrl, realmIssuer, tokenRealm } from './realm-url';
+import { buildRealmUrl, realmIssuer, realmIssuerHost, tokenRealm } from './realm-url';
 
 describe('realmIssuer', () => {
   it('is the stored issuer, byte for byte', () => {
@@ -12,6 +12,19 @@ describe('realmIssuer', () => {
 
   it('refuses a realm with no issuer, which the resolver never lets through', () => {
     expect(() => realmIssuer({ issuer: null })).toThrow(/no issuer/);
+  });
+});
+
+describe('realmIssuerHost', () => {
+  it("is the issuer's host, with a port and without a path", () => {
+    expect(realmIssuerHost({ issuer: 'https://auth.example.com' })).toBe('auth.example.com');
+    expect(realmIssuerHost({ issuer: 'https://example.com:8443/realms/acme' })).toBe(
+      'example.com:8443'
+    );
+  });
+
+  it('refuses a realm with no issuer, which the resolver never lets through', () => {
+    expect(() => realmIssuerHost({ issuer: null })).toThrow(/no issuer/);
   });
 });
 
