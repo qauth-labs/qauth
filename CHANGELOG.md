@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A sign-up or a password reset leaves a logout-only session**
+  ([#1144], ADR-017 Decisions 8 and 10, amended 2026-11-15). A
+  registration or a reset that finishes an authorization request still signs
+  nobody in, and its code still carries no `amr`, `auth_time` or `acr`. But
+  its ID token now has a `sid`, the id of a session no browser holds and
+  that never satisfies an authorization request. "Sign out everywhere", a
+  later reset, disabling the account, ending it on the account page (shown
+  as "A sign-up" or "A password reset") and RP-initiated logout with that ID
+  token end it. Each ending sends a logout token naming it, so an app that
+  sets `backchannel_logout_session_required` no longer keeps the session a
+  sign-up started. Migration 0075 adds `sessions.kind` and
+  `refresh_tokens.family_session_id`. It rewrites no table, and the previous
+  release keeps working on it during a rolling upgrade.
+
 ### Changed
 
 - **The sign-in page and the account pages name the realm's host.** Their
@@ -4582,6 +4598,7 @@ It adds migrations 0068 and 0069.
 [#1109]: https://github.com/qauth-labs/qauth/issues/1109
 [#1110]: https://github.com/qauth-labs/qauth/issues/1110
 [#1118]: https://github.com/qauth-labs/qauth/issues/1118
+[#1144]: https://github.com/qauth-labs/qauth/issues/1144
 
 ### Deprecated
 

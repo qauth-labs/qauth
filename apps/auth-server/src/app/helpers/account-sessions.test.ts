@@ -35,6 +35,7 @@ function server() {
     refreshTokens: {
       revokeAllForUser: vi.fn(async () => 0),
       revokeFamiliesOfSignIns: vi.fn(async () => 0),
+      revokeFamiliesOfSession: vi.fn(async () => 0),
     },
   };
   const fastify = {
@@ -124,6 +125,13 @@ describe('endAccountSession (#1110)', () => {
     expect(repositories.refreshTokens.revokeFamiliesOfSignIns).toHaveBeenCalledWith(
       USER_ID,
       [authTime],
+      'session_ended'
+    );
+    // And the families its codes started (#1144), which a logout-only
+    // session's carry no `auth_time` to find them by.
+    expect(repositories.refreshTokens.revokeFamiliesOfSession).toHaveBeenCalledWith(
+      USER_ID,
+      sid,
       'session_ended'
     );
     expect(repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();

@@ -209,7 +209,8 @@ export const interactionTransactionSchema = z.strictObject({
    * no `auth_time`. A password reset (#642) finishes the same way: the
    * mailbox proved the account, not a factor. The authorization request is
    * decided for that account, and its code carries neither `amr` nor
-   * `auth_time`.
+   * `auth_time`. Its code names a logout-only session the mint writes
+   * (#1144), so the account's session endings reach the client.
    */
   registered: z.literal(true).optional(),
   /**

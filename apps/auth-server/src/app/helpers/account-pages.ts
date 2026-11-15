@@ -219,7 +219,38 @@ function passkeyItem(passkey: AccountPasskey, csrf: string): SafeHtml {
   </div>`;
 }
 
+/**
+ * What the page calls a logout-only session (#1144): no browser holds it, so
+ * it is named for what started it, never "This browser".
+ */
+const LOGOUT_ONLY_SESSION_NAMES = {
+  registration: 'A sign-up',
+  reset: 'A password reset',
+} as const;
+
 function sessionItem(session: AccountSession, csrf: string): SafeHtml {
+  if (session.kind !== 'browser') {
+    return html`<div class="item">
+      <strong>${LOGOUT_ONLY_SESSION_NAMES[session.kind]}</strong>
+      <p class="meta">
+        Started ${shownTime(session.createdAt)}
+        ${session.ipAddress === null ? '' : html` · from ${session.ipAddress}`}
+      </p>
+      ${
+        session.clients.length === 0
+          ? ''
+          : html`<p class="meta">Signed in to: ${session.clients.join(', ')}</p>`
+      }
+      <div class="actions">
+        ${buttonForm({
+          action: `${ACCOUNT_PAGE_PATH}/sessions/${encodeURIComponent(session.sid)}/end`,
+          csrf,
+          label: 'Sign out this session',
+          secondary: true,
+        })}
+      </div>
+    </div>`;
+  }
   return html`<div class="item">
     <strong>${session.current ? 'This browser' : (session.userAgent ?? 'A browser')}</strong>
     <p class="meta">

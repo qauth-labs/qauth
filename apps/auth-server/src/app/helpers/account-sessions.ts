@@ -1,5 +1,5 @@
 import type { ActClaim } from '@qauth-labs/fastify-plugin-jwt';
-import { InvalidSessionCursorError } from '@qauth-labs/fastify-plugin-sessions';
+import { InvalidSessionCursorError, type SessionKind } from '@qauth-labs/fastify-plugin-sessions';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { InvalidCursorError } from './api-request-errors';
@@ -53,6 +53,11 @@ export interface AccountSessionOwner {
 /** One live session of the account, as the page and the API show it. */
 export interface AccountSession {
   readonly sid: string;
+  /**
+   * A browser's sign-in, or the logout-only session a registration or a
+   * password reset left (#1144), which no browser holds.
+   */
+  readonly kind: SessionKind;
   /** Whether it is the caller's own: the page's browser session, or the token's `sid`. */
   readonly current: boolean;
   readonly createdAt: number;
@@ -101,6 +106,7 @@ export async function pageAccountSessions(
   return {
     items: listed.items.map((item) => ({
       sid: item.sid,
+      kind: item.kind,
       current: page.currentSid !== undefined && item.sid === page.currentSid,
       createdAt: item.createdAt,
       lastSeenAt: item.lastSeenAt,
@@ -168,6 +174,14 @@ export async function endAccountSession(
   await fastify.repositories.refreshTokens.revokeFamiliesOfSignIns(
     userId,
     [result.session.authTime],
+    'session_ended'
+  );
+  // And the families its codes started, through their first token's link
+  // (#1144): a logout-only session's codes carry no `auth_time`, so the sweep
+  // above cannot find them. For a browser session it finds the same ones.
+  await fastify.repositories.refreshTokens.revokeFamiliesOfSession(
+    userId,
+    result.session.id,
     'session_ended'
   );
   if (result.outcome === 'already_ended') return { kind: 'not_found' };

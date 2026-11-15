@@ -429,6 +429,51 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
     },
 
     /**
+     * Revoke the refresh families the codes of one session started (#1144):
+     * every unrevoked token, expired ones too, of each family of the user
+     * whose first token links the session (`family_session_id`, set at the
+     * code exchange). A logout-only session's codes carry no `auth_time`, so
+     * {@link revokeFamiliesOfSignIns} cannot find its families; this does.
+     * Already-revoked rows keep their original reason.
+     *
+     * @returns Count of rows revoked by this call
+     */
+    async revokeFamiliesOfSession(
+      userId: string,
+      sessionId: string,
+      reason: string,
+      tx?: DbClient
+    ): Promise<number> {
+      const run = async (invoker: DbClient): Promise<number> => {
+        await lockUserTokens(invoker, 'revoke', userId);
+        const revoked = await invoker
+          .update(refreshTokens)
+          .set({ revoked: true, revokedAt: Date.now(), revokedReason: reason })
+          .where(
+            and(
+              eq(refreshTokens.userId, userId),
+              eq(refreshTokens.revoked, false),
+              inArray(
+                refreshTokens.familyId,
+                invoker
+                  .select({ familyId: refreshTokens.familyId })
+                  .from(refreshTokens)
+                  .where(
+                    and(
+                      eq(refreshTokens.userId, userId),
+                      eq(refreshTokens.familySessionId, sessionId)
+                    )
+                  )
+              )
+            )
+          )
+          .returning({ id: refreshTokens.id });
+        return revoked.length;
+      };
+      return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
+    },
+
+    /**
      * Revoke the refresh families the given sign-ins of a user opened
      * (#1064): every unrevoked token, expired ones too, of each family of the
      * user one of whose tokens carries one of `authTimes` as its `auth_time`.

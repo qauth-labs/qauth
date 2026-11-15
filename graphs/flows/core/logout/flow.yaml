@@ -33,7 +33,9 @@ summary: >-
   the app registered, matched exactly, for the client the hint or client_id names; otherwise QAuth shows an info page,
   ends nothing and never redirects. When the hint names the account of the browser's session and, by its sid, that
   session, the session ends at once: its rows, its cookie and its registry rows go, and the session's end reaches the
-  back-channel logout of its apps. In every other case a browser that is signed in gets the logout_confirm step, and
+  back-channel logout of its apps. A hint whose sid names the logout-only session a sign-up or a reset left (#1144),
+  which no browser holds, ends that session at once too. In every other case a browser that is signed in gets the
+  logout_confirm step, and
   nothing ends until the person answers it. The person signs out of this account or of every account on the browser,
   or stays signed in; either way the browser goes back to the app's registered URI with state, or to the sign-out
   status page. An app the operator did not set up is never redirected to before the browser has seen a QAuth page: the
@@ -150,6 +152,14 @@ context:
         the browser holds a live session, and no valid hint names its account, or the hint names another session of it
         by its sid or none (RP-Initiated Logout 1.0 §2 holds that request suspect), or the hint's client may no longer
         be used
+  logoutOnly:
+    values: [none, named]
+    initial: any
+    say:
+      none: "the hint's sid names no live logout-only session of its account, or there is no valid hint"
+      named: >-
+        the valid hint's sid names a live logout-only session of its account (#1144): the one a registration or a
+        password reset left, which no browser holds, and the hint's client may be used
   interactionUi:
     values: [off, on]
     initial: any
@@ -187,6 +197,7 @@ context:
         the realm names one, a path on its origin under /ui/ (#1106): a 303 to it replaces each page the logout ends on
         with no app to go back to
   sessionEnded: { values: [false, true], initial: false }
+  logoutOnlyEnded: { values: [false, true], initial: false }
   confirmed: { values: [false, true], initial: false }
   interactionOpen: { values: [false, true], initial: false }
 
@@ -200,6 +211,7 @@ guards:
 
 effects:
   endSession: { set: { sessionEnded: true } }
+  endLogoutOnlySession: { set: { logoutOnlyEnded: true } }
   confirm: { set: { confirmed: true } }
   openInteraction: { set: { interactionOpen: true } }
   finishInteraction: { set: { interactionOpen: false } }
@@ -208,6 +220,8 @@ failures:
   recordingNoSession: { from: eventStore, server: [server_error] }
   endingSession: { from: browserSessionStore, server: [server_error] }
   recordingSignOut: { from: eventStore, server: [server_error] }
+  endingLogoutOnlySession: { from: browserSessionStore, server: [server_error] }
+  recordingLogoutOnlySignOut: { from: eventStore, server: [server_error] }
   startingConfirm: { from: interactionStore, server: [server_error] }
   takingFinish:
     from: interactionStore
@@ -331,8 +345,68 @@ states:
       - guard: "returnTo == 'clientUnusable'"
         target: invalid_request.return_client_unusable
         say: 'the client is disabled or suspended; user.sign_out_failed (client_unusable) is recorded'
-      - target: findingSession
+      - target: findingLogoutOnlySession
         say: 'there is no return URI, or it is registered'
+
+  findingLogoutOnlySession:
+    title: Find a logout-only session the hint names
+    description: >-
+      #1144 (ADR-017 Decisions 8 and 10, amended 2026-11-15): a registration or a password reset signs nobody in, but
+      its code's ID token names a logout-only session, which no browser holds. A valid hint of a client that may be
+      used whose sid names a live one of its account ends it at once, on the hint alone: only the app holds that ID
+      token. The browser's own session is then found as for any request.
+    always:
+      - guard: "logoutOnly == 'named' and hintValid and account != 'hinted'"
+        target: endingLogoutOnlySession
+        say: "the hint's sid names a live logout-only session of its account"
+      - target: findingSession
+        say: 'the hint names no such session'
+
+  endingLogoutOnlySession:
+    title: End the logout-only session
+    description: >-
+      The session service revokes it, reason sign_out, by its user, as it revokes a browser's: its row is marked
+      revoked, its registry rows and unredeemed codes go with it, and one back-channel logout notice per client it
+      served is queued in the same transaction (#624). No cookie is touched, and no refresh token is revoked.
+    invoke: { external: browserSessionStore }
+    on:
+      DONE:
+        target: recordingLogoutOnlySignOut
+        effect: [endLogoutOnlySession]
+        say: 'the logout-only session is ended'
+      FAIL.server:
+        target: server_error.session_store
+        say: 'the session store fails'
+
+  recordingLogoutOnlySignOut:
+    title: Record the sign-out of the logout-only session
+    description: user.signed_out with its sid, for the user and the client the request named.
+    invoke: { external: eventStore }
+    on:
+      DONE:
+        target: findingSession
+        say: "the browser's own session is found next"
+      FAIL.server:
+        target: server_error.event_store
+        say: 'the event store fails, after the session ended'
+
+  routingSignedOut:
+    title: Send the browser on, a logout-only session ended
+    description: >-
+      The browser holds no session of its own, and the logout-only session the hint named has ended: no
+      user.sign_out_failed is recorded, and the browser goes where a sign-out sends it.
+    always:
+      - guard: canReturn
+        target: signed_out.returned
+        say: 'the request carries a registered return URI of a client the operator set up'
+      - guard: errorPageNamed
+        target: signed_out.error_page
+        say: "there is no app to send the browser back to, and the realm names its ceremony app's error page"
+      - guard: canOfferReturn
+        target: signed_out.offered
+        say: 'the request carries a registered return URI of a client the operator did not set up'
+      - target: signed_out.page
+        say: 'there is nowhere to return'
 
   findingSession:
     title: Find the browser's session
@@ -340,6 +414,9 @@ states:
       The session cookie, read as every page reads it (resolveBrowserSession): a cookie of this realm that names a live
       session of a usable account.
     always:
+      - guard: "account == 'none' and logoutOnlyEnded"
+        target: routingSignedOut
+        say: 'the browser holds no live session, and the logout-only session the hint named has ended'
       - guard: "account == 'none'"
         target: recordingNoSession
         say: 'the browser holds no live session: nothing to end'
@@ -1120,11 +1197,21 @@ assertions:
   - id: the-error-page-tells-the-truth
     never: >-
       (state == 'status.error_page_signed_out' and account != 'none') or (state == 'status.error_page_signed_in' and
-      account == 'none') or (state == 'signed_out.error_page' and not sessionEnded)
+      account == 'none') or (state == 'signed_out.error_page' and not (sessionEnded or logoutOnlyEnded))
     say: "The error page's signed_out says what is true of this browser, as the status page does"
   - id: no-step-without-a-session
     never: "interactionOpen and account == 'none'"
     say: 'The confirm step is shown only to a browser that is signed in'
+  - id: a-logout-only-session-ends-only-on-its-hint
+    never: "logoutOnlyEnded and not (hintValid and logoutOnly == 'named')"
+    say: >-
+      A logout-only session (#1144) ends here only when a valid hint of a usable client names it by its sid: no
+      cookie and no confirmation step reaches it
+  - id: a-browser-signed-out-by-its-hint-records-no-failure
+    never: "logoutOnlyEnded and state in ['nothing_to_end.returned', 'nothing_to_end.page', 'nothing_to_end.offered', 'nothing_to_end.error_page']"
+    say: >-
+      When the hint's logout-only session ended and the browser holds none of its own, the request is a sign-out, not
+      a failure: no user.sign_out_failed (no_session) is recorded
   - id: a-post-without-the-cookie-ends-nothing
     never: "state == 'resent.as_get' and (sessionEnded or interactionOpen)"
     say: 'A POST without the session cookie is only sent again as a GET: it ends nothing and starts nothing'

@@ -47,6 +47,22 @@ export const SESSION_REVOKED_REASONS = [
 export type SessionRevokedReason = (typeof SESSION_REVOKED_REASONS)[number];
 
 /**
+ * What a `sessions` row is (#1144; ADR-017 Decisions 8 and 10, amended
+ * 2026-11-15):
+ *
+ * - `browser` — a browser's sign-in, held by its session cookie.
+ * - `registration` — a logout-only session: a registration finished an
+ *   authorization interaction, and nobody signed in. The browser never holds
+ *   it, and it never satisfies an authorization request. It exists so the
+ *   code's ID token has a `sid` that the account's session endings name in
+ *   their back-channel logout tokens.
+ * - `reset` — the same, for a password reset.
+ */
+export const SESSION_KINDS = ['browser', 'registration', 'reset'] as const;
+
+export type SessionKind = (typeof SESSION_KINDS)[number];
+
+/**
  * Browser sessions (ADR-019 Decision 3, issue #468): Postgres is their source
  * of truth, and Redis a cache in front of it. ADR-014 calls this the browser
  * login session.
@@ -100,6 +116,16 @@ export const sessions = pgTable(
      * wrote.
      */
     recoveryCodeUsed: boolean('recovery_code_used').notNull().default(false),
+    /**
+     * What the row is ({@link SESSION_KINDS}, #1144): `browser` for a
+     * browser's sign-in, and for every row an older release wrote. Any other
+     * kind is a logout-only session, which the session service never hands
+     * out as a browser session: no cookie names it and no authorization
+     * request is decided for it. It lists, lapses and ends as a browser
+     * session does, so every ending of the account's sessions sends its
+     * clients a logout token with its `sid`.
+     */
+    kind: text('kind').$type<SessionKind>().notNull().default('browser'),
     /**
      * The ids of the account's new credentials (#1064) that the session's
      * sign-in bound or proved: a passkey or an authenticator app bound after
@@ -166,6 +192,10 @@ export const sessions = pgTable(
     // Both directions: a revoked session always says why, and only a revoked
     // session carries a reason.
     check('sessions_revoked_pair', sql`(${t.revokedAt} IS NULL) = (${t.revokedReason} IS NULL)`),
+    check(
+      'sessions_kind_valid',
+      sql`${t.kind} IN (${sql.raw(SESSION_KINDS.map((kind) => `'${kind}'`).join(', '))})`
+    ),
   ]
 );
 

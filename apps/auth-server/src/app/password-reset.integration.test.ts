@@ -538,20 +538,27 @@ describe('the password reset and the session epoch (#642, real containers)', () 
     // A reset signs nobody in: no browser session.
     expect(reset.jar.header() ?? '').not.toContain('qauth_session');
 
-    // Its code carries no amr and no auth_time, and binds no session.
+    // Its code carries no amr and no auth_time, and names a logout-only
+    // session (#1144), which no cookie names.
     const code = await codeOf(reset.jar, done);
     const [stored] = await query<{ auth_time: unknown; amr: unknown; session_id: unknown }>(
       'SELECT auth_time, amr, session_id FROM authorization_codes WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
       [userId]
     );
-    expect(stored).toEqual({ auth_time: null, amr: null, session_id: null });
+    expect(stored).toMatchObject({ auth_time: null, amr: null });
+    const sid = stored?.session_id;
+    if (typeof sid !== 'string') throw new Error('the code names no session');
+    expect(await query('SELECT kind, amr, revoked_at FROM sessions WHERE id = $1', [sid])).toEqual([
+      { kind: 'reset', amr: [], revoked_at: null },
+    ]);
     const tokens = await exchange(code, reset.challenge.verifier);
     expect(tokens.statusCode, tokens.body).toBe(200);
-    const idToken = decodeJwtClaims((tokens.json() as { id_token: string }).id_token);
+    const resetIdToken = (tokens.json() as { id_token: string }).id_token;
+    const idToken = decodeJwtClaims(resetIdToken);
     expect(idToken['sub']).toBe(userId);
     expect(idToken).not.toHaveProperty('auth_time');
     expect(idToken).not.toHaveProperty('amr');
-    expect(idToken).not.toHaveProperty('sid');
+    expect(idToken['sid']).toBe(sid);
     // Nor does the access token (#662): the mailbox is no sign-in.
     const accessToken = decodeJwtClaims((tokens.json() as { access_token: string }).access_token);
     expect(accessToken['sub']).toBe(userId);
@@ -579,7 +586,7 @@ describe('the password reset and the session epoch (#642, real containers)', () 
     expect(heldExchange.json()).toMatchObject({ error: 'invalid_grant' });
     // The older browser session is refused: the next request signs in again.
     const ended = await query<{ revoked_reason: string | null }>(
-      'SELECT revoked_reason FROM sessions WHERE user_id = $1',
+      "SELECT revoked_reason FROM sessions WHERE user_id = $1 AND kind = 'browser'",
       [userId]
     );
     expect(ended).toEqual([{ revoked_reason: 'reset' }]);
@@ -607,6 +614,43 @@ describe('the password reset and the session epoch (#642, real containers)', () 
     expect(withNew.statusCode, withNew.body).toBe(303);
     expect(next.jar.header() ?? '').toContain('qauth_session');
     expect(locationOf(await authorize(next.jar)).startsWith(REDIRECT_URI)).toBe(true);
+
+    // The app's RP-initiated logout with the reset's ID token ends the reset's
+    // logout-only session at once, though no browser holds it, and the client
+    // is queued a logout token naming its `sid` (#1144).
+    await query(
+      "UPDATE oauth_clients SET backchannel_logout_uri = 'https://client.example.com/backchannel', backchannel_logout_uri_source = 'admin' WHERE id = $1",
+      [clientRowId]
+    );
+    try {
+      const loggedOut = await server().inject({
+        method: 'GET',
+        url: `/oauth/end-session?${new URLSearchParams({ id_token_hint: resetIdToken }).toString()}`,
+      });
+      expect(loggedOut.statusCode, loggedOut.body).toBe(200);
+      expect(await query('SELECT revoked_reason FROM sessions WHERE id = $1', [sid])).toEqual([
+        { revoked_reason: 'sign_out' },
+      ]);
+      // The browser session the new password signed in is that browser's
+      // own, and this request carried no cookie: it lives on.
+      expect(
+        await query(
+          "SELECT count(*)::int AS live FROM sessions WHERE user_id = $1 AND kind = 'browser' AND revoked_at IS NULL",
+          [userId]
+        )
+      ).toEqual([{ live: 1 }]);
+      const notices = await query<{ data: Record<string, unknown> }>(
+        "SELECT data FROM events WHERE type = 'urn:qauth:event:user.client_session_ended:v1-rc.0' AND subject_id = $1 AND data->>'sid' = $2",
+        [userId, sid]
+      );
+      expect(notices.map((notice) => notice.data)).toEqual([{ sid, reason: 'sign_out' }]);
+      expect(await eventsOf('user.sign_out_failed', userId)).toBe(0);
+    } finally {
+      await query(
+        'UPDATE oauth_clients SET backchannel_logout_uri = NULL, backchannel_logout_uri_source = NULL WHERE id = $1',
+        [clientRowId]
+      );
+    }
   });
 
   it('offers no reset under prompt=login or max_age', async () => {

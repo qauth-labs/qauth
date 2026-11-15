@@ -463,7 +463,14 @@ async function transactionSubject(
     // consent still pending is no longer decided for the account.
     const epoch = await fastify.repositories.userSessionEpochs.find(realmId, transaction.userId);
     if ((epoch?.epoch ?? 0) > (transaction.sessionEpoch ?? 0)) return null;
-    return { registered: true, realmId, userId: transaction.userId };
+    // A new account's epoch is 0; a reset advanced the account's past it
+    // (#642). Which one names the code's logout-only session (#1144).
+    return {
+      registered: true,
+      realmId,
+      userId: transaction.userId,
+      finishedBy: (transaction.sessionEpoch ?? 0) > 0 ? 'reset' : 'registration',
+    };
   }
   if (transaction.sid === undefined) return null;
   return liveBrowserSession(fastify, realmId, transaction.sid, transaction.userId);
@@ -809,9 +816,10 @@ export async function finishConsent(
         codeChallenge: query.code_challenge,
         codeChallengeMethod: query.code_challenge_method,
         nonce: query.nonce ?? null,
-        // The session's `auth_time`, `acr`, end and `sid`, or none of them
-        // for a user just registered (#640; ADR-017 Decision 10).
-        ...subjectGrant(session),
+        // The session's `auth_time`, `acr`, end and `sid`, or none of the
+        // authentication for a user just registered or reset (#640; ADR-017
+        // Decision 10), and a logout-only session's `sid` (#1144).
+        ...subjectGrant(session, { realm, request }),
         scopes,
         resource: [...resources],
         state: query.state ?? null,

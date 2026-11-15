@@ -916,3 +916,39 @@ describe('settings', () => {
     expect(() => serviceWith(settings)).toThrow(name);
   });
 });
+
+describe('logout-only sessions (#1144)', () => {
+  it('never hands one out as a browser session, but lists and ends it', async () => {
+    const service = serviceWith();
+    const created = await service.create(signIn({ amr: [] }));
+    store.update(created.sid, { kind: 'registration' });
+    // A node whose cache never held it reads Postgres, and refuses the row.
+    const fresh = serviceWith({}, { cache: createMemorySessionCache(clock) });
+
+    expect(await fresh.get({ realmId: REALM_A, sid: created.sid })).toBeNull();
+
+    const listed = await fresh.listForUser({ realmId: REALM_A, userId: USER });
+    expect(listed.items.map((item) => [item.sid, item.kind, item.state])).toEqual([
+      [created.sid, 'registration', 'live'],
+    ]);
+
+    const ended = await fresh.revoke({
+      realmId: REALM_A,
+      sid: created.sid,
+      userId: USER,
+      reason: 'sign_out',
+      actor: USER_ACTOR,
+    });
+    expect(ended.outcome).toBe('ended');
+    expect(store.row(created.sid)?.revokedReason).toBe('sign_out');
+  });
+
+  it('lists a row with no kind as a browser session', async () => {
+    const service = serviceWith();
+    const created = await service.create(signIn());
+
+    const listed = await service.listForUser({ realmId: REALM_A, userId: USER });
+    expect(listed.items.map((item) => item.kind)).toEqual(['browser']);
+    expect(await service.get({ realmId: REALM_A, sid: created.sid })).not.toBeNull();
+  });
+});

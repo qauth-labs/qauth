@@ -1270,6 +1270,9 @@ async function handleAuthorizationCode(
           // The code that started the family, so a second redemption of it
           // finds the family and revokes it (ADR-017 Decision 10).
           authorizationCodeId: authCode.id,
+          // The session that backed the code, so ending that one session
+          // ends this family (#1144); only the first token carries it.
+          familySessionId: authCode.sessionId ?? null,
           familyCreatedAt: refresh.familyCreatedAt,
           familySessionExpiresAt: refresh.familySessionExpiresAt,
           // The sign-in behind the code, which every rotation copies (#662).
