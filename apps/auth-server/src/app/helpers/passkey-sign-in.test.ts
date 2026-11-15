@@ -121,6 +121,8 @@ describe('the server passkey ceremonies (#651)', () => {
   let fromName: string;
   let realm: typeof REALM | undefined;
   let offerAfterSignIn: boolean;
+  /** The realm's `accounts.newFactorWindowDays`. */
+  let newFactorWindowDays: number;
 
   beforeEach(() => {
     provider = {
@@ -197,6 +199,7 @@ describe('the server passkey ceremonies (#651)', () => {
     fromName = 'Example Notes';
     realm = REALM;
     offerAfterSignIn = true;
+    newFactorWindowDays = 7;
   });
 
   const build = () =>
@@ -216,7 +219,7 @@ describe('the server passkey ceremonies (#651)', () => {
               policies: {
                 mail: { fromName },
                 passkeys: { offerAfterSignIn },
-                accounts: { newFactorWindowDays: 7 },
+                accounts: { newFactorWindowDays },
               },
             };
           },
@@ -570,6 +573,20 @@ describe('the server passkey ceremonies (#651)', () => {
       // A binding that is not new writes no window.
       credentials.create.mockClear();
       await bind();
+      expect(credentials.create.mock.calls[0]?.[0]).not.toHaveProperty('newUntil');
+    });
+
+    it('binds a new passkey as not new in a realm with no window (#1143)', async () => {
+      newFactorWindowDays = 0;
+      const bound = await build().bind({
+        realmId: REALM_ID,
+        clientId: CLIENT_ID,
+        userId: USER_ID,
+        registration: JSON.stringify(ENROLMENT),
+        isNew: true,
+      });
+      expect(bound).toEqual({ kind: 'bound', credentialId: 'row-1' });
+      // No `new_until`: the passkey counts at once.
       expect(credentials.create.mock.calls[0]?.[0]).not.toHaveProperty('newUntil');
     });
 

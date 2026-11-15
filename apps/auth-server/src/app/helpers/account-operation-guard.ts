@@ -361,6 +361,9 @@ export async function tokenSessionOf(
   const session = await request.server.repositories.sessions.findById(realmId, sid);
   if (
     session === undefined ||
+    // A logout-only session (#1144) is no sign-in: its code carries no
+    // `auth_time`, so a token never matches it below either.
+    (session.kind !== undefined && session.kind !== 'browser') ||
     session.userId !== claims.sub ||
     (session.revokedAt !== null && session.revokedAt !== undefined) ||
     session.expiresAt <= now ||

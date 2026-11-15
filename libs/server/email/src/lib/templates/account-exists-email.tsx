@@ -1,6 +1,18 @@
 import * as React from 'react';
 
-import { Body, Container, Head, Html, Preview, Section, Text } from './components';
+import { DEFAULT_MAIL_BRAND, type MailBrand } from '../engine-mail/brand';
+import { MailFrame, Paragraph } from './engine/layout';
+
+/** Props for the AccountExistsEmail template. */
+export interface AccountExistsEmailProps {
+  /**
+   * The brand the mail is named after: the realm's sender name's
+   * (`EmailServiceConfig.brand`).
+   *
+   * @default DEFAULT_MAIL_BRAND (QAuth's)
+   */
+  brand?: MailBrand;
+}
 
 /**
  * React Email template sent when someone registers an address that already
@@ -13,73 +25,26 @@ import { Body, Container, Head, Html, Preview, Section, Text } from './component
  *
  * @returns React component
  */
-export function AccountExistsEmail() {
+export function AccountExistsEmail({ brand = DEFAULT_MAIL_BRAND }: AccountExistsEmailProps) {
   return (
-    <Html>
-      <Head />
-      <Preview>Someone tried to create an account with your email address</Preview>
-      <Body style={main}>
-        <Container style={container}>
-          <Section style={section}>
-            <Text style={title}>You already have an account</Text>
-            <Text style={text}>
-              Someone just tried to create a QAuth account with this email address. You already have
-              an account with it, so no new account was created and your existing account was not
-              changed.
-            </Text>
-            <Text style={text}>
-              If this was you, sign in with your existing password instead of registering again. If
-              you no longer know your password, contact the administrator of this service.
-            </Text>
-            <Text style={footer}>
-              If this was not you, you can safely ignore this email. Nobody can sign in to your
-              account without your password.
-            </Text>
-          </Section>
-        </Container>
-      </Body>
-    </Html>
+    <MailFrame
+      brand={brand}
+      preview="Someone tried to create an account with your email address"
+      title="You already have an account"
+    >
+      <Paragraph brand={brand}>
+        Someone just tried to create a {brand.name} account with this email address. You already
+        have an account with it, so no new account was created and your existing account was not
+        changed.
+      </Paragraph>
+      <Paragraph brand={brand}>
+        If this was you, sign in with your existing password instead of registering again. If you no
+        longer know your password, contact the administrator of this service.
+      </Paragraph>
+      <Paragraph brand={brand}>
+        If this was not you, you can safely ignore this email. Nobody can sign in to your account
+        without your password.
+      </Paragraph>
+    </MailFrame>
   );
 }
-
-// Styles, matching the verification email.
-const main = {
-  backgroundColor: '#f6f9fc',
-  fontFamily:
-    '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Ubuntu,sans-serif',
-};
-
-const container = {
-  backgroundColor: '#ffffff',
-  margin: '0 auto',
-  padding: '20px 0 48px',
-  marginBottom: '64px',
-};
-
-const section = {
-  padding: '0 48px',
-};
-
-const title = {
-  fontSize: '24px',
-  lineHeight: '1.3',
-  fontWeight: '700',
-  color: '#1a1a1a',
-  margin: '0 0 20px',
-};
-
-const text = {
-  fontSize: '16px',
-  lineHeight: '1.5',
-  color: '#4a5568',
-  margin: '0 0 16px',
-};
-
-const footer = {
-  fontSize: '14px',
-  lineHeight: '1.5',
-  color: '#718096',
-  margin: '32px 0 0',
-  paddingTop: '16px',
-  borderTop: '1px solid #e2e8f0',
-};

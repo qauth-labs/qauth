@@ -22,6 +22,11 @@ import { walletPageStyles } from './wallet-ui';
  *
  * Linked upstream accounts sit with the sign-in methods. Every page is sent
  * with `Cache-Control: no-store`; none puts a secret or a code in a URL.
+ *
+ * Every page names the realm by its issuer's host, in its title and in the
+ * overview's heading, so a person with accounts on several QAuth servers sees
+ * whose account this is. A realm has no display name or logo yet; the brand
+ * settings bring them (#695).
  */
 
 /** The path of the overview, and of every form's route, on the realm's origin. */
@@ -59,12 +64,20 @@ export function shownTime(at: number): string {
   return `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
-/** The page's chrome: the shared `/ui` styles, and the account pages' own, under the CSP nonce. */
-function page(opts: {
+/** What every account page takes from its request: the CSP nonce, and the realm it names. */
+export interface AccountPageChrome {
   readonly cspNonce: string;
-  readonly title: string;
-  readonly body: SafeHtml;
-}): string {
+  /** The host of the realm's issuer (`realmIssuerHost`): the realm, as the page names it. */
+  readonly realmHost: string;
+}
+
+/** The page's chrome: the shared `/ui` styles, and the account pages' own, under the CSP nonce. */
+function page(
+  opts: AccountPageChrome & {
+    readonly title: string;
+    readonly body: SafeHtml;
+  }
+): string {
   return render(
     html`<!doctype html>
       <html lang="en">
@@ -73,11 +86,14 @@ function page(opts: {
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
           <meta name="referrer" content="no-referrer" />
-          <title>${opts.title} — QAuth</title>
+          <title>${opts.title} — ${opts.realmHost}</title>
           ${walletPageStyles(opts.cspNonce)}
           <style nonce="${opts.cspNonce}">
             .card.wide {
               max-width: 35rem;
+            }
+            .domain {
+              overflow-wrap: anywhere;
             }
             h2 {
               margin: 1.75rem 0 0.5rem;
@@ -145,8 +161,7 @@ function buttonForm(opts: {
 export const ACCOUNT_TITLE = 'Your account';
 
 /** What the overview is drawn with. */
-export interface AccountPageInput {
-  readonly cspNonce: string;
+export interface AccountPageInput extends AccountPageChrome {
   readonly csrf: string;
   readonly overview: AccountOverview;
   readonly notice?: AccountNotice;
@@ -204,7 +219,38 @@ function passkeyItem(passkey: AccountPasskey, csrf: string): SafeHtml {
   </div>`;
 }
 
+/**
+ * What the page calls a logout-only session (#1144): no browser holds it, so
+ * it is named for what started it, never "This browser".
+ */
+const LOGOUT_ONLY_SESSION_NAMES = {
+  registration: 'A sign-up',
+  reset: 'A password reset',
+} as const;
+
 function sessionItem(session: AccountSession, csrf: string): SafeHtml {
+  if (session.kind !== 'browser') {
+    return html`<div class="item">
+      <strong>${LOGOUT_ONLY_SESSION_NAMES[session.kind]}</strong>
+      <p class="meta">
+        Started ${shownTime(session.createdAt)}
+        ${session.ipAddress === null ? '' : html` · from ${session.ipAddress}`}
+      </p>
+      ${
+        session.clients.length === 0
+          ? ''
+          : html`<p class="meta">Signed in to: ${session.clients.join(', ')}</p>`
+      }
+      <div class="actions">
+        ${buttonForm({
+          action: `${ACCOUNT_PAGE_PATH}/sessions/${encodeURIComponent(session.sid)}/end`,
+          csrf,
+          label: 'Sign out this session',
+          secondary: true,
+        })}
+      </div>
+    </div>`;
+  }
   return html`<div class="item">
     <strong>${session.current ? 'This browser' : (session.userAgent ?? 'A browser')}</strong>
     <p class="meta">
@@ -237,8 +283,9 @@ export function accountPage(input: AccountPageInput): string {
   const passkeysTitle = `Passkeys (${overview.passkeys.length})`;
   return page({
     cspNonce: input.cspNonce,
+    realmHost: input.realmHost,
     title: ACCOUNT_TITLE,
-    body: html`<h1>${ACCOUNT_TITLE}</h1>
+    body: html`<h1>${ACCOUNT_TITLE} on <span class="domain">${input.realmHost}</span></h1>
       ${
         overview.password.address === undefined
           ? ''
@@ -383,16 +430,18 @@ export const PASSWORD_CHANGE_TITLE = 'Change your password';
 export const CURRENT_PASSWORD_REFUSED = 'That is not your current password.';
 
 /** "Change your password": the current one, the new one, and why the last try was refused. */
-export function passwordChangePage(opts: {
-  readonly cspNonce: string;
-  readonly csrf: string;
-  readonly address?: string;
-  /** The messages of a refused try: the policy's, or the wrong current password's. */
-  readonly errors?: readonly string[];
-}): string {
+export function passwordChangePage(
+  opts: AccountPageChrome & {
+    readonly csrf: string;
+    readonly address?: string;
+    /** The messages of a refused try: the policy's, or the wrong current password's. */
+    readonly errors?: readonly string[];
+  }
+): string {
   const errors = opts.errors ?? [];
   return page({
     cspNonce: opts.cspNonce,
+    realmHost: opts.realmHost,
     title: PASSWORD_CHANGE_TITLE,
     body: html`<h1>${PASSWORD_CHANGE_TITLE}</h1>
       <p>Your other sessions are signed out once it is changed; this one stays.</p>
@@ -443,14 +492,16 @@ export function passwordChangePage(opts: {
 export const NEW_RECOVERY_CODES_TITLE = 'Your new recovery codes';
 
 /** The new set, shown once, and the confirmation that it was saved. */
-export function newRecoveryCodesPage(opts: {
-  readonly cspNonce: string;
-  readonly csrf: string;
-  readonly codes: readonly string[];
-  readonly setId: string;
-}): string {
+export function newRecoveryCodesPage(
+  opts: AccountPageChrome & {
+    readonly csrf: string;
+    readonly codes: readonly string[];
+    readonly setId: string;
+  }
+): string {
   return page({
     cspNonce: opts.cspNonce,
+    realmHost: opts.realmHost,
     title: NEW_RECOVERY_CODES_TITLE,
     body: html`<h1>${NEW_RECOVERY_CODES_TITLE}</h1>
       <p>
@@ -479,14 +530,16 @@ export const REAUTHENTICATE_TITLE = 'Confirm it’s you';
  * A change refused for want of a fresh sign-in: the factor it needs, and the
  * form that starts one. The change is made again afterwards; nothing is kept.
  */
-export function reauthenticatePage(opts: {
-  readonly cspNonce: string;
-  readonly csrf: string;
-  readonly requiredFactor: AccountFactor;
-  readonly returnTo: string;
-}): string {
+export function reauthenticatePage(
+  opts: AccountPageChrome & {
+    readonly csrf: string;
+    readonly requiredFactor: AccountFactor;
+    readonly returnTo: string;
+  }
+): string {
   return page({
     cspNonce: opts.cspNonce,
+    realmHost: opts.realmHost,
     title: REAUTHENTICATE_TITLE,
     body: html`<h1>${REAUTHENTICATE_TITLE}</h1>
       <p>
@@ -504,16 +557,18 @@ export function reauthenticatePage(opts: {
 }
 
 /** A refusal or an ending: its title, its message and the way back. */
-export function accountMessagePage(opts: {
-  readonly cspNonce: string;
-  readonly title: string;
-  readonly message: string;
-  /** The link back: the overview by default. */
-  readonly back?: { readonly href: string; readonly label: string };
-}): string {
+export function accountMessagePage(
+  opts: AccountPageChrome & {
+    readonly title: string;
+    readonly message: string;
+    /** The link back: the overview by default. */
+    readonly back?: { readonly href: string; readonly label: string };
+  }
+): string {
   const back = opts.back ?? { href: ACCOUNT_PAGE_PATH, label: 'Back to your account' };
   return page({
     cspNonce: opts.cspNonce,
+    realmHost: opts.realmHost,
     title: opts.title,
     body: html`<h1>${opts.title}</h1>
       <p>${opts.message}</p>

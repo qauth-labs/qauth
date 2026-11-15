@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { QAUTH_MAIL_LOGO_IMAGE } from '../templates/qauth-logo';
 import { DEFAULT_MAIL_BRAND, type MailBrand, resolveMailBrand } from './brand';
 import { MAIL_PASS_PATH } from './links';
 import {
@@ -50,11 +51,17 @@ const EVERY_MAIL: readonly EngineMail[] = [
   { template: 'upstream_unlinked', providerName: 'Example Corp' },
 ];
 
-/** Every `href` and `src` of the HTML, and every URL the plain text spells out. */
+/** The attached QAuth logo's reference: a part of the message, not a link out of it. */
+const ATTACHED_LOGO = `cid:${QAUTH_MAIL_LOGO_IMAGE.contentId}`;
+
+/**
+ * Every `href` and `src` of the HTML, and every URL the plain text spells out,
+ * less the attached logo's `cid:` reference.
+ */
 function linksOf(html: string, text: string): string[] {
-  const attributes = [...html.matchAll(/\b(?:href|src)\s*=\s*"([^"]*)"/gi)].map(
-    (match) => match[1]
-  );
+  const attributes = [...html.matchAll(/\b(?:href|src)\s*=\s*"([^"]*)"/gi)]
+    .map((match) => match[1])
+    .filter((link) => link !== ATTACHED_LOGO);
   const spelled = [...text.matchAll(/[a-z][a-z0-9+.-]*:\/\/[^\s\]<>"')]+/gi)].map(
     (match) => match[0]
   );
@@ -95,7 +102,7 @@ describe('the engine mail registry (#637)', () => {
   });
 
   it('loads the logo from the realm origin, with the name as its text alternative', async () => {
-    const { html } = await renderEngineMail(
+    const { html, images } = await renderEngineMail(
       { template: 'password_disabled', pass: PASS, passExpiresInSeconds: 86_400 },
       { baseUrl: BASE_URL, brand: BRANDED }
     );
@@ -104,16 +111,36 @@ describe('the engine mail registry (#637)', () => {
     expect(html).toContain('alt="Acme Login"');
     expect(html).toContain('#aa0011');
     expect(html).toContain('Acme Inc., 1 Main Street');
+    expect(html).not.toContain('cid:');
+    expect(images).toEqual([]);
   });
 
-  it('renders with the default brand when the realm set none', async () => {
-    const { html } = await renderEngineMail(
+  it('carries the QAuth mark itself, beside the name as text, when the realm set no brand', async () => {
+    const { html, text, images } = await renderEngineMail(
       { template: 'password_changed' },
       { baseUrl: BASE_URL, brand: resolveMailBrand(undefined) }
     );
 
-    expect(html).toContain('QAuth');
+    expect(html).toContain(`src="${ATTACHED_LOGO}"`);
+    // The mark is an image with no text of its own; the name is text, which a
+    // client's dark mode recolours as it does the rest of the mail.
+    expect(html).toContain('alt=""');
+    expect(html).toMatch(/<td[^>]*>QAuth<\/td>/);
+    // The only image is the attached one: nothing is fetched when the mail is opened.
+    expect([...html.matchAll(/<img\b/g)]).toHaveLength(1);
+    expect(images).toEqual([QAUTH_MAIL_LOGO_IMAGE]);
+    expect(text).not.toContain('cid:');
+  });
+
+  it('shows the name, not the QAuth logo, for a realm named otherwise with no logo', async () => {
+    const { html, images } = await renderEngineMail(
+      { template: 'password_changed' },
+      { baseUrl: BASE_URL, brand: resolveMailBrand({ name: 'Acme Login' }) }
+    );
+
+    expect(html).toContain('Acme Login');
     expect(html).not.toContain('<img');
+    expect(images).toEqual([]);
   });
 
   it('carries no link and no secret where it carries no pass', async () => {

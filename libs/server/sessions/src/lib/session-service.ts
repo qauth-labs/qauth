@@ -424,6 +424,10 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
     if (session.realmId !== realmId || session.id !== sid || session.revokedAt !== null) {
       return null;
     }
+    // A logout-only session (#1144) is no browser's: no cookie may name it,
+    // and one that does is answered as no session. It is never cached, so
+    // this read is the only way to it.
+    if ((session.kind ?? 'browser') !== 'browser') return null;
     let live: LiveSession = { record: cachedRecordOf(session), lifetimes };
     // Judged when the answer is in, not when the read began.
     const judgedAt = now();
@@ -554,6 +558,7 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       sid: session.id,
       realmId: session.realmId,
       userId: session.userId,
+      kind: session.kind ?? 'browser',
       authTime: session.authTime,
       amr: Object.freeze([...session.amr]),
       assuranceLevel: session.assuranceLevel,
