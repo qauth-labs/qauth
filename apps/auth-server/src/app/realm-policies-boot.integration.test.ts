@@ -233,9 +233,15 @@ describe('realm policies at boot on the auth server (#516)', () => {
       policies_version: 1,
     });
     // Migration 0070 (#1052) adds two nullable columns to users: every row
-    // reads them as null and keeps every column it had.
+    // reads them as null and keeps every column it had. Migration 0078
+    // (#522) adds `is_service_account`, false on every row that was there.
     expect(await users()).toEqual(
-      usersBefore.map((row) => ({ ...row, operator_verified_at: null, operator_verified_by: null }))
+      usersBefore.map((row) => ({
+        ...row,
+        operator_verified_at: null,
+        operator_verified_by: null,
+        is_service_account: false,
+      }))
     );
 
     // A later boot with other values changes nothing, and names each key once.

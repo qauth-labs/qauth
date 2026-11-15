@@ -669,9 +669,10 @@ describe('admin roles and grants (real Postgres)', () => {
         [onA.id, null],
       ]);
       expect(onTarget.map(({ account: { createdAt: _, ...state } }) => state)).toEqual([
-        { realmId: d.a, enabled: true, notValidBefore: null },
-        { realmId: d.a, enabled: true, notValidBefore: null },
-        { realmId: d.operator, enabled: true, notValidBefore: null },
+        // No account here is a service account's (#522).
+        { realmId: d.a, enabled: true, notValidBefore: null, isServiceAccount: false },
+        { realmId: d.a, enabled: true, notValidBefore: null, isServiceAccount: false },
+        { realmId: d.operator, enabled: true, notValidBefore: null, isServiceAccount: false },
       ]);
       // When each account was created, which the two-admin rule reads (#521).
       const created = await users.findById(d.a, d.adminOfA);

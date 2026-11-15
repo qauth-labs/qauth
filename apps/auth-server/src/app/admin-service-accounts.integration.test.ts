@@ -28,6 +28,7 @@ import {
 } from '../testing/e2e-harness';
 import { ageAdminAccount } from '../testing/two-admin';
 import { API_FAMILY_AUDIENCES } from './api-conventions/families';
+import { NOT_VALID_BEFORE_MARGIN_MS } from './helpers/account-validity';
 
 /**
  * SERVICE ACCOUNTS FOR THE ADMIN API (#522, ADR-019 Decision 7), against a
@@ -610,7 +611,12 @@ describe('service accounts for the admin API (#522, real containers)', () => {
     expect((await send('GET', url, again)).statusCode).toBe(200);
   });
 
-  /** Wait until a token minted now has an `iat` at or after the account's `not_valid_before`. */
+  /**
+   * Wait until a token minted now counts as issued after the account's
+   * `not_valid_before`: its whole-second `iat` past that time and the
+   * one-second margin the checks allow for rounding and clock skew
+   * (`NOT_VALID_BEFORE_MARGIN_MS`, #748).
+   */
   async function nextSecondAfterDisable(userId: string): Promise<void> {
     const { rows } = await app().dbPool.query<{ not_valid_before: string | null }>(
       'SELECT not_valid_before FROM users WHERE id = $1',
@@ -618,7 +624,7 @@ describe('service accounts for the admin API (#522, real containers)', () => {
     );
     const notValidBefore = Number(rows[0]?.not_valid_before ?? 0);
     expect(notValidBefore).toBeGreaterThan(0);
-    const from = Math.ceil(notValidBefore / 1000) * 1000;
+    const from = (Math.floor((notValidBefore + NOT_VALID_BEFORE_MARGIN_MS) / 1000) + 1) * 1000;
     while (Date.now() < from) await new Promise((resolve) => setTimeout(resolve, 50));
   }
 
