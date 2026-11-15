@@ -131,21 +131,25 @@ await app.register(resourceGuardPlugin, {
 });
 
 app.post('/mcp', { preHandler: app.requireBearer }, async (request, reply) => {
-  const { params } = request.body as { params: { name: string } };
-  const scope = TOOL_SCOPES.get(params.name);
-  if (scope === undefined) {
-    return reply.code(400).send({ error: 'unknown tool' });
-  }
-  try {
-    // A token without the tool's scope gets a 403 naming that scope only.
-    app.resourceGuard.assertScopes(request.tokenClaims!, [scope]);
-  } catch (error) {
-    if (error instanceof ResourceGuardError) {
-      return sendBearerChallenge(app.resourceGuard, reply, error);
+  const { method, params } = request.body as { method: string; params?: { name?: string } };
+  if (method === 'tools/call') {
+    // A tool the map does not name is refused, never run unchecked.
+    const scope = TOOL_SCOPES.get(params?.name ?? '');
+    if (scope === undefined) {
+      return reply.code(400).send({ error: 'unknown tool' });
     }
-    throw error;
+    try {
+      // A token without the tool's scope gets a 403 naming that scope only.
+      app.resourceGuard.assertScopes(request.tokenClaims!, [scope]);
+    } catch (error) {
+      if (error instanceof ResourceGuardError) {
+        return sendBearerChallenge(app.resourceGuard, reply, error);
+      }
+      throw error;
+    }
   }
-  // …run the tool
+  // …dispatch the request. Other methods (`initialize`, `tools/list`, …) need
+  // only the valid token checked above; give one that needs a scope its own check.
 });
 ```
 
