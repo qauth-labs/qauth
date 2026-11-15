@@ -14,12 +14,11 @@
  * The logic lives here, apart from the CLI in `seed-oauth-clients.ts`, so it
  * can be tested without running the script.
  */
-import { randomBytes } from 'node:crypto';
-
 import { and, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { oauthClients } from '../lib/schema/core';
+import { unusableSecretHash } from '../lib/unusable-secret-hash';
 import type { CimdClientSpec } from './seed-manifest';
 
 /**
@@ -49,18 +48,6 @@ export interface CimdGrantResult {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type OperatorDb = NodePgDatabase<any>;
 
-/**
- * A value for the NOT NULL `client_secret_hash` that no secret can match,
- * shaped like the auth server's own CIMD sentinel (`cimdSentinelSecretHash` in
- * `apps/auth-server/src/app/helpers/client-resolution.ts`). Re-resolution
- * never rewrites the column, so this is the value the row keeps.
- */
-function unusableSecretHash(): string {
-  const salt = randomBytes(16).toString('base64').replace(/=+$/, '');
-  const digest = randomBytes(32).toString('base64').replace(/=+$/, '');
-  return `$argon2id$v=19$m=65536,t=3,p=4$${salt}$${digest}`;
-}
-
 function sameValue(a: readonly string[] | null, b: readonly string[] | null): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -79,6 +66,10 @@ function buildPendingCimdRow(
   return {
     realmId,
     clientId: spec.client_id,
+    // Shaped like the auth server's own CIMD sentinel (`cimdSentinelSecretHash`
+    // in `apps/auth-server/src/app/helpers/client-resolution.ts`).
+    // Re-resolution never rewrites the column, so this is the value the row
+    // keeps.
     clientSecretHash: unusableSecretHash(),
     name: spec.client_id,
     description: 'CIMD client (client_id metadata document)',

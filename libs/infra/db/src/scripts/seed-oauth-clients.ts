@@ -2,10 +2,13 @@
  * Idempotent OAuth-client provisioner.
  *
  * Reads a JSON manifest and inserts (or, with `--rotate`, updates) OAuth
- * clients in an existing realm. Plaintext `client_secret` values are
- * generated per client, printed once to STDOUT, and argon2id-hashed in the
- * database. Designed for bootstrapping machine (`client_credentials`)
- * clients outside the developer portal.
+ * clients in an existing realm. A client that authenticates with a secret
+ * (`client_secret_basic`, `client_secret_post`, or no method) gets a
+ * plaintext `client_secret`, printed once to STDOUT and argon2id-hashed in
+ * the database. A `private_key_jwt` or public (`none`) client gets none: its
+ * row holds a hash no secret matches, and the report says so (#1138).
+ * Designed for bootstrapping machine (`client_credentials`) clients outside
+ * the developer portal. The report is `seed-clients-report.ts`.
  *
  * Usage (from the repo root):
  *
@@ -52,7 +55,6 @@
  * migration runner provisions the same row from its environment. See
  * `lib/system-client/provision.ts`.
  */
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import * as dotenv from 'dotenv';
@@ -63,6 +65,7 @@ import { realms } from '../lib/schema';
 import { describeSystemClientResult, provisionSystemClient } from '../lib/system-client/provision';
 import { applyCimdClientGrant, type CimdGrantResult } from './cimd-client-grants';
 import { type Issued, provisionClient } from './seed-clients';
+import { reportClients } from './seed-clients-report';
 import { type ClientSpec, firstPartyColumnsOf, parseManifest } from './seed-manifest';
 
 dotenv.config({ path: '../../../.env' });
@@ -70,10 +73,6 @@ dotenv.config({ path: '../../../.env' });
 /* ------------------------------------------------------------------------ */
 /*                                 Helpers                                  */
 /* ------------------------------------------------------------------------ */
-
-function fingerprint(secret: string): string {
-  return createHash('sha256').update(secret).digest('hex').slice(0, 8);
-}
 
 function parseArgs(argv: string[]): { manifestPath: string; rotate: boolean } {
   const rest = argv.slice(2);
@@ -146,7 +145,7 @@ async function main(): Promise<void> {
       // Print the secrets of every committed entry, even when a later entry
       // throws: each entry commits on its own, and the database keeps only
       // their hashes.
-      if (issued.length > 0) report(manifest.realm, issued);
+      if (issued.length > 0) reportClients(manifest.realm, issued);
     }
     warnPkceOff(manifest.clients ?? []);
 
@@ -179,80 +178,6 @@ async function main(): Promise<void> {
 /* ------------------------------------------------------------------------ */
 /*                                 Report                                   */
 /* ------------------------------------------------------------------------ */
-
-function report(realm: string, issued: Issued[]): void {
-  const created = issued.filter((i) => i.action === 'created');
-  const rotated = issued.filter((i) => i.action === 'rotated');
-  const skipped = issued.filter((i) => i.action === 'skipped');
-  const refused = issued.filter((i) => i.action === 'refused');
-
-  console.log(
-    `\nSeeded realm "${realm}": ` +
-      `${created.length} created, ${rotated.length} rotated, ${skipped.length} skipped.\n`
-  );
-
-  if (created.length + rotated.length > 0) {
-    console.log(
-      'Store these plaintext secrets securely — the DB only keeps argon2id hashes.\n' +
-        '  (fingerprint = first 8 chars of sha256(secret), for cross-checking)\n'
-    );
-    for (const i of [...created, ...rotated]) {
-      console.log(`  ${i.clientId}`);
-      console.log(`    secret:      ${i.secret}`);
-      console.log(`    fingerprint: ${fingerprint(i.secret)}`);
-      console.log(`    action:      ${i.action}`);
-    }
-    console.log('');
-  }
-
-  const firstParty = issued.filter((i) => i.firstPartyChanged);
-  if (firstParty.length > 0) {
-    console.log('First-party profile changed (recorded as client.first_party_changed):');
-    for (const i of firstParty) {
-      console.log(
-        `  ${i.clientId}` +
-          (i.revokedTokenCount
-            ? `: profile removed, ${i.revokedTokenCount} refresh tokens revoked`
-            : '')
-      );
-    }
-    console.log('');
-  }
-
-  const notFirstParty = refused.filter((r) => r.refusal !== 'client_credentials_scopes_dropped');
-  if (notFirstParty.length > 0) {
-    console.error(
-      'Refused, and left unchanged: these entries set first_party_profile on a client that ' +
-        'can never be first party (a developer, dynamic registration or a CIMD document wrote it):\n  ' +
-        notFirstParty.map((r) => `${r.clientId} (${r.refusal})`).join(', ') +
-        '\n'
-    );
-    process.exitCode = 1;
-  }
-
-  // #891: the stored client narrows its client_credentials grant, and the
-  // entry would lift that narrowing.
-  const scopesDropped = refused.filter((r) => r.refusal === 'client_credentials_scopes_dropped');
-  if (scopesDropped.length > 0) {
-    console.error(
-      'Refused, and left unchanged: these clients limit the scopes client_credentials may issue ' +
-        '(client_credentials_scopes), and their entries do not, so --rotate would lift the limit. ' +
-        'Add client_credentials_scopes to the entry, or to lift the limit on purpose set the ' +
-        'column to NULL first:\n  ' +
-        scopesDropped.map((r) => r.clientId).join(', ') +
-        '\n'
-    );
-    process.exitCode = 1;
-  }
-
-  if (skipped.length > 0) {
-    console.log(
-      `Skipped (already exist; pass --rotate to re-issue secrets):\n  ` +
-        skipped.map((s) => s.clientId).join(', ') +
-        '\n'
-    );
-  }
-}
 
 /**
  * ADR-017 question 11: PKCE stays required at the authorization challenge
