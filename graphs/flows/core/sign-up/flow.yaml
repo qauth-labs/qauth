@@ -67,7 +67,8 @@ scope:
     - 'the sign-in that follows for an address an account holds, drawn by flows/core/sign-in from rule 7: its
       password, and at rule 8 the address verified when it was not, since this transaction proved the mailbox'
     - "the Interaction API's finish of a registration: it sets no session, and the authorization code it mints
-      carries no auth_time, no amr and no session; the consent screen follows as for a sign-in"
+      carries no auth_time and no amr; it names a logout-only session that no browser holds (#1144), so the account's
+      session endings reach the app by back-channel logout; the consent screen follows as for a sign-in"
     - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
       round of its own'
 

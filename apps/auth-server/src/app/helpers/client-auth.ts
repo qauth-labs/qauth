@@ -43,6 +43,12 @@ export const SHED_CLIENT_SECRET_RETRY_AFTER_SECONDS = 1;
 export type OAuthClientLike = {
   id: string;
   clientId: string;
+  /**
+   * `oauth_clients.name`: the name the client declared, which access tokens
+   * carry as `client_name` (#1148). Optional for older callers; every stored
+   * row carries it.
+   */
+  name?: string;
   clientSecretHash: string;
   enabled: boolean;
   /**

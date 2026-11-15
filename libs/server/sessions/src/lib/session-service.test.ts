@@ -916,3 +916,69 @@ describe('settings', () => {
     expect(() => serviceWith(settings)).toThrow(name);
   });
 });
+
+describe('logout-only sessions (#1144)', () => {
+  it('never hands one out as a browser session, but lists and ends it', async () => {
+    const service = serviceWith();
+    const created = await service.create(signIn({ amr: [] }));
+    store.update(created.sid, { kind: 'registration' });
+    // A node whose cache never held it reads Postgres, and refuses the row.
+    const fresh = serviceWith({}, { cache: createMemorySessionCache(clock) });
+
+    expect(await fresh.get({ realmId: REALM_A, sid: created.sid })).toBeNull();
+
+    const listed = await fresh.listForUser({ realmId: REALM_A, userId: USER });
+    expect(listed.items.map((item) => [item.sid, item.kind, item.state])).toEqual([
+      [created.sid, 'registration', 'live'],
+    ]);
+
+    const ended = await fresh.revoke({
+      realmId: REALM_A,
+      sid: created.sid,
+      userId: USER,
+      reason: 'sign_out',
+      actor: USER_ACTOR,
+    });
+    expect(ended.outcome).toBe('ended');
+    expect(store.row(created.sid)?.revokedReason).toBe('sign_out');
+  });
+
+  it('ends one at its lifetime alone: the realm’s idle limit does not reach it', async () => {
+    store.putRealm(REALM_A, { idleTimeoutSeconds: 600 });
+    const service = serviceWith();
+    const created = await service.create(signIn({ amr: [] }));
+    store.update(created.sid, { kind: 'reset' });
+
+    // Long past the idle limit, which nothing can reset for it.
+    clock.advance(60 * MINUTE);
+    expect(await service.endLapsed()).toEqual({ ended: 0 });
+    const listed = await service.listForUser({ realmId: REALM_A, userId: USER });
+    expect(listed.items.map((item) => [item.state, item.idleExpiresAt])).toEqual([['live', null]]);
+    const live = await service.listLiveForUser({ realmId: REALM_A, userId: USER });
+    expect(live.items.map((item) => item.sid)).toEqual([created.sid]);
+
+    // Its absolute end, the cookie lifetime here, still ends it.
+    clock.advance(COOKIE_TTL_SECONDS * SECOND);
+    expect(await service.endLapsed()).toEqual({ ended: 1 });
+    expect(store.row(created.sid)?.revokedReason).toBe('expired');
+  });
+
+  it('still ends a browser session at the idle limit', async () => {
+    store.putRealm(REALM_A, { idleTimeoutSeconds: 600 });
+    const service = serviceWith();
+    const created = await service.create(signIn());
+
+    clock.advance(60 * MINUTE);
+    expect(await service.endLapsed()).toEqual({ ended: 1 });
+    expect(store.row(created.sid)?.revokedReason).toBe('idle');
+  });
+
+  it('lists a row with no kind as a browser session', async () => {
+    const service = serviceWith();
+    const created = await service.create(signIn());
+
+    const listed = await service.listForUser({ realmId: REALM_A, userId: USER });
+    expect(listed.items.map((item) => item.kind)).toEqual(['browser']);
+    expect(await service.get({ realmId: REALM_A, sid: created.sid })).not.toBeNull();
+  });
+});

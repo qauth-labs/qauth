@@ -80,6 +80,18 @@ export class SmtpEmailProvider implements EmailProvider {
         subject: options.subject,
         text: options.text,
         html: options.html,
+        ...(options.inlineImages !== undefined && options.inlineImages.length > 0
+          ? {
+              // Inline parts the HTML names through `cid:`, not files to open.
+              attachments: options.inlineImages.map((image) => ({
+                filename: image.filename,
+                content: image.content,
+                contentType: image.contentType,
+                cid: image.contentId,
+                contentDisposition: 'inline' as const,
+              })),
+            }
+          : {}),
       });
 
       return {

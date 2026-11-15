@@ -18,7 +18,7 @@ import { EPOCH_MS_NOW } from './sql-helpers';
  * so the nodes' own clocks never decide whether a node counts.
  *
  * No role writes the table: every role registers, marks seen, removes and
- * lists its node through the functions of migration 0076, which set the
+ * lists its node through the functions of migration 0077, which set the
  * times from the database's clock, check every value, and change only a row
  * the caller's own database user registered. A role's user holds `EXECUTE`
  * on them and nothing on the table, so even a compromised process can
@@ -62,7 +62,7 @@ export const deploymentNodes = pgTable(
     ),
     check('deployment_nodes_config_digest_hex', sql`${t.configDigest} ~ '^[0-9a-f]{64}$'`),
     // An object of at most 512 key digests, each a key name and a 64-hex
-    // digest: the function migration 0076 creates before the table.
+    // digest: the function migration 0077 creates before the table.
     check(
       'deployment_nodes_config_keys_valid',
       sql`deployment_nodes_config_keys_valid(${t.configKeys})`

@@ -1466,7 +1466,7 @@ those keys: a node whose values differ from a running node of its release
 refuses to boot and names the keys. Nodes of the previous release write no
 row, so during the rolling upgrade the new nodes compare only with each other.
 
-Migration 0076 adds the `deployment_nodes` table and four `SECURITY DEFINER`
+Migration 0077 adds the `deployment_nodes` table and four `SECURITY DEFINER`
 functions that read and write it; no role's database user holds a grant on
 the table. `EXECUTE` on the functions is revoked from `PUBLIC`; the grants give
 it to every role. A deployment whose migration runner grants the roles'

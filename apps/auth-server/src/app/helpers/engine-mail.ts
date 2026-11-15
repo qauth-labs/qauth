@@ -1,9 +1,8 @@
 import {
   type EngineMail,
   engineMailCarriesCode,
-  type EngineMailContext,
+  type EngineMailSendContext,
   type RealmEmailService,
-  resolveMailBrand,
 } from '@qauth-labs/fastify-plugin-email';
 import {
   PASSWORD_PROVIDER_TYPE,
@@ -184,10 +183,11 @@ export interface CappedMailerDependencies {
   readonly mockSends: boolean;
 }
 
-/** Where a realm's mail links point, and how it looks. */
-function contextOf(realm: MailRealm): EngineMailContext {
-  // No brand settings exist yet: every realm's mail has the default look.
-  return { ...realmMailLink(realm), brand: resolveMailBrand(undefined) };
+/** Where a realm's mail links point. */
+function contextOf(realm: MailRealm): EngineMailSendContext {
+  // No brand settings exist yet (#695), so no brand is passed: the realm's
+  // mail service names the mail after the realm's sender (`mail.fromName`).
+  return realmMailLink(realm);
 }
 
 /** The engine's mail over explicit dependencies; {@link createEngineMailer} wires the process's. */

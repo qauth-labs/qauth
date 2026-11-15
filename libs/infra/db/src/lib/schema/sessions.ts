@@ -49,6 +49,22 @@ export const SESSION_REVOKED_REASONS = [
 export type SessionRevokedReason = (typeof SESSION_REVOKED_REASONS)[number];
 
 /**
+ * What a `sessions` row is (#1144; ADR-017 Decisions 8 and 10, amended
+ * 2026-11-15):
+ *
+ * - `browser` — a browser's sign-in, held by its session cookie.
+ * - `registration` — a logout-only session: a registration finished an
+ *   authorization interaction, and nobody signed in. The browser never holds
+ *   it, and it never satisfies an authorization request. It exists so the
+ *   code's ID token has a `sid` that the account's session endings name in
+ *   their back-channel logout tokens.
+ * - `reset` — the same, for a password reset.
+ */
+export const SESSION_KINDS = ['browser', 'registration', 'reset'] as const;
+
+export type SessionKind = (typeof SESSION_KINDS)[number];
+
+/**
  * Browser sessions (ADR-019 Decision 3, issue #468): Postgres is their source
  * of truth, and Redis a cache in front of it. ADR-014 calls this the browser
  * login session.
@@ -137,6 +153,17 @@ export const sessions = pgTable(
      * throttled, so it may lag the last use by up to the throttle interval.
      */
     lastSeenAt: bigint('last_seen_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
+    /**
+     * What the row is ({@link SESSION_KINDS}, #1144): `browser` for a
+     * browser's sign-in, and for every row an older release wrote. Any other
+     * kind is a logout-only session, which the session service never hands
+     * out as a browser session: no cookie names it and no authorization
+     * request is decided for it. It lists and ends as a browser session
+     * does, so every ending of the account's sessions sends its clients a
+     * logout token with its `sid`. It lapses at its absolute end alone: no
+     * browser uses it, so the realm's idle limit does not apply.
+     */
+    kind: text('kind').$type<SessionKind>().notNull().default('browser'),
   },
   (t) => [
     foreignKey({
@@ -168,6 +195,10 @@ export const sessions = pgTable(
     // Both directions: a revoked session always says why, and only a revoked
     // session carries a reason.
     check('sessions_revoked_pair', sql`(${t.revokedAt} IS NULL) = (${t.revokedReason} IS NULL)`),
+    check(
+      'sessions_kind_valid',
+      sql`${t.kind} IN (${sql.raw(SESSION_KINDS.map((kind) => `'${kind}'`).join(', '))})`
+    ),
   ]
 );
 
@@ -196,6 +227,33 @@ export const sessionClients = pgTable(
     primaryKey({ columns: [t.sessionId, t.oauthClientId], name: 'session_clients_pk' }),
     index('idx_session_clients_oauth_client_id').on(t.oauthClientId),
   ]
+);
+
+/**
+ * The refresh-token families a logout-only session's codes started (#1144;
+ * ADR-017 Decisions 8 and 10, amended 2026-11-15): one row per session and
+ * family, written by the refresh-token repository in the transaction that
+ * stores a family's first token, and only when the code that started it names
+ * a session of kind `registration` or `reset`. Ending that one session reads
+ * it to revoke those families, whose tokens carry no `auth_time` for the
+ * sweep a browser session's end makes.
+ *
+ * A table of its own, so the refresh rows name no session (#549; ADR-014
+ * keeps a refresh-row `sid` for the Authority Tree's grant id). The session's
+ * foreign key cascades: purging the session deletes its rows. `family_id`
+ * names a family, not a row, so it has no foreign key; a purged family leaves
+ * a row that revokes nothing. The primary key, led by `session_id`, is the
+ * lookup by session and the index the cascade reads.
+ */
+export const sessionRefreshFamilies = pgTable(
+  'session_refresh_families',
+  {
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    familyId: uuid('family_id').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.sessionId, t.familyId], name: 'session_refresh_families_pk' })]
 );
 
 export const sessionsRelations = relations(sessions, ({ one, many }) => ({
