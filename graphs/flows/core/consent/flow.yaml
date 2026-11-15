@@ -295,9 +295,9 @@ states:
     title: Build the consent step from the request
     description: >-
       consentStep: the requested scopes the scope rule grants the client (grantRequestedScopes, #1087: a scope a
-      registered protected resource defines only when the request names that resource and it is open to the client,
-      any other scope by the client's allowlist), in request order, each { scope, text?, sensitive, dangerous } (text
-      is describeScope's for the scopes QAuth defines and, for a registered resource's scope, the resource's own text
+      registered protected resource defines only when each resource the request names defines it and is open to the
+      client, any other scope by the client's allowlist), in request order, each { scope, text?, sensitive, dangerous }
+      (text is describeScope's for the scopes QAuth defines and, for a registered resource's scope, the resource's own text
       in the request's ui_locales, else English; sensitive is the resource's flag, else false; dangerous is
       isDangerousScope); the request's resource indicators; when the request named none, the token's aud from the
       audience an operator configured for the client, without QAuth API audiences (userGrantDefaultAudience); agent ({}

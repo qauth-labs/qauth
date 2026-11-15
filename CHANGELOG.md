@@ -151,11 +151,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resource defines is granted only when the authorization request names that
   resource, and then to any client the resource is open to, whatever the
   client's own `scopes` hold; asked for without it, or with another, it is
-  dropped, so a token's `aud` and its resource scopes always agree. Every
-  other scope keeps the client's list as its ceiling. The user still
-  consents, recorded per resource, and the token endpoint applies the rule
-  again when it redeems a code and on every refresh, so a resource closed
-  since keeps its scopes out of the next token. The consent page and the
+  dropped, and a request that names several resources gets it only when
+  each of them grants it, so a token's `aud` and its resource scopes always
+  agree. Every other scope keeps the client's list as its ceiling. The user
+  still consents, recorded per resource: a first-party client's
+  administrative consent does not cover a scope its own list does not hold.
+  The token endpoint applies the rule again when it redeems a code and on
+  every refresh, so a resource closed since keeps its scopes out of the next
+  token; a refresh that still carries a scope removed from its resource is
+  refused, as one carrying a scope taken off the client's list is.
+  `client_credentials`, token exchange and the JWT bearer grant keep the
+  client's own list. The consent page and the
   Interaction API's consent step show the resource's text in the first
   locale of the request's new `ui_locales` parameter it has one for, else
   English. Discovery's `scopes_supported` is unchanged. A resource is

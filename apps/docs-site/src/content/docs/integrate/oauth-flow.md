@@ -165,9 +165,12 @@ that resource in `resource`, and then to any client the resource is open to,
 a CIMD or a dynamically registered client included, whatever the client's own
 `scopes` hold. The user still consents, and the consent screen shows the
 resource's own text for the scope, in the first `ui_locales` tag the resource
-has a text for, English otherwise. Asked for without its resource, with
-another resource, or by a client the resource is not open to, the scope is
-dropped like any scope outside the allowlist, so a token's `aud` and the
+has a text for, English otherwise; a first-party client's administrative
+consent does not cover the scope unless its own allowlist holds it. Asked for
+without its resource, with another resource, or by a client the resource is
+not open to, the scope is dropped like any scope outside the allowlist. A
+request that names several resources gets it only when each of them is
+registered, defines it and is open to the client. So a token's `aud` and the
 resource scopes it carries always agree. The token endpoint applies the rule
 again at the code's redemption and on every refresh: a `resource` that
 narrows the audience drops the scopes of the resources it leaves out, and a

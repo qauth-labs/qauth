@@ -349,7 +349,7 @@ function renderResourceServerDelete(input: RenderInput): RenderedOperation {
       {
         label: 'effect',
         value:
-          'The scopes are no longer bound to this resource: one no other resource server defines is granted again only to a client whose own scopes list it. Tokens already issued keep what they carry until they expire.',
+          "The scopes are no longer bound to this resource: one no other resource server defines is granted again only to a client whose own scopes list it. Tokens already issued keep what they carry until they expire; a refresh that still carries one is refused unless the client's own scopes list it.",
       },
     ],
   };

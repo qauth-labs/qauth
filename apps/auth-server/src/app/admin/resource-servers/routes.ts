@@ -459,7 +459,7 @@ export const resourceServerRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: 'Delete a resource server',
         description:
-          'Deletes the resource server: its scopes are no longer bound to its resource, so one no other resource server defines is granted again only to a client whose own scopes list it. Tokens already issued keep what they carry until they expire. A security operation: it needs resourceServers.security and an approval, filed against the resource server as it stands; If-Match names its ETag (428 without it, 412 when it moved).',
+          "Deletes the resource server: its scopes are no longer bound to its resource, so one no other resource server defines is granted again only to a client whose own scopes list it. Tokens already issued keep what they carry until they expire; a refresh that still carries one of its scopes is refused (invalid_scope) unless the client's own scopes list it. A security operation: it needs resourceServers.security and an approval, filed against the resource server as it stands; If-Match names its ETag (428 without it, 412 when it moved).",
         'x-qauth-errors': [400, 401, 403, 404, 412, 428],
         params: resourceServerParams,
         headers: ifMatchHeadersSchema,

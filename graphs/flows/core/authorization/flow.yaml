@@ -66,8 +66,8 @@ scope:
     - 'when the pending-authorization store is down, the login redirect carries the authorize URL itself in return_to
       instead of a handle'
     - "the scope rule (grantRequestedScopes, #1087): a scope a registered protected resource defines is granted only
-      when the request names that resource and the resource is open to the client, whatever the client's own list
-      holds, and is dropped otherwise; every other scope is granted when the client's allowlist holds it, and a
+      when the request names that resource, every resource it names is registered, defines the scope and is open to
+      the client, whatever the client's own list holds, and is dropped otherwise; every other scope is granted when the client's allowlist holds it, and a
       client with no allowlist and no open resource is granted none; an empty set is a request like any other"
     - "staging reads as production in every check drawn here; the environment is the stricter of the client's and its
       realm's ceiling, and a development client is spared only the dangerous-scope rule of the step-up gate"
@@ -191,7 +191,8 @@ context:
     say:
       covers: >-
         a stored consent covers every requested scope at each requested resource, or the client's administrative
-        consent does (ADR-017 Decision 9), and nothing asks for the screen
+        consent does (ADR-017 Decision 9; never for a scope only a registered resource grants it, #1087), and nothing
+        asks for the screen
       missing: >-
         no stored consent covers the request, prompt=consent asks for the screen, the request widens a prior grant, or
         the client is an AI agent, which never skips the screen (ADR-015 Decision 11)

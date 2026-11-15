@@ -61,7 +61,11 @@ export const maxAgeParamSchema = z
  */
 export const LOGIN_HINT_MAX_BYTES = 254;
 
-/** The longest `ui_locales` accepted: eight BCP 47 tags of up to 31 characters, space-separated. */
+/**
+ * The longest `ui_locales` accepted: room for eight BCP 47 tags of 31
+ * characters, space-separated. The consent step reads at most eight tags of up
+ * to 35 characters each (`uiLocalesOf`), the rest is skipped.
+ */
 export const UI_LOCALES_MAX_LENGTH = 255;
 
 /**
