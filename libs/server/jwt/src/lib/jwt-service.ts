@@ -107,6 +107,13 @@ export function buildAccessTokenClaims(payload: SignAccessTokenPayload): {
     // differently-purposed JWT signed with the same key cannot be substituted.
     token_use: 'access',
   };
+  // The name the client declared (#1148), beside `client_id`, so a resource
+  // server can name the app or agent to the person. QAuth did not verify it:
+  // a resource server shows it as declared (ADR-019 Decision 6), as the
+  // consent page does. The caller sanitises and caps it.
+  if (typeof payload.clientName === 'string' && payload.clientName.length > 0) {
+    claims['client_name'] = payload.clientName;
+  }
   if (payload.email !== undefined) {
     claims['email'] = payload.email;
   }
@@ -457,6 +464,8 @@ export async function verifyAccessToken(
     email: claims.email,
     email_verified: claims.email_verified,
     clientId: claims.client_id as string,
+    // The name the client declared (#1148): display text, never verified.
+    ...(claims.client_name === undefined ? {} : { clientName: claims.client_name }),
     scope: claims.scope,
     aud: claims.aud,
     // RFC 8693 §4.1: surface any existing `act` chain so a subject token already

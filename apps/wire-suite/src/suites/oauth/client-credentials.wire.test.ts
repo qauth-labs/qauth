@@ -61,6 +61,8 @@ describe('[POST /oauth/token] RFC 6749 §4.4 — the client credentials grant, w
       { issuer: baseUrl, typ: 'at+jwt' }
     );
     expect(payload['client_id']).toBe(client.id);
+    // The client's declared name rides beside client_id (#1148).
+    expect(payload['client_name']).toBeTypeOf('string');
     expect(String(payload['scope']).split(' ')).toContain(SEEDED_CLIENT_SCOPE);
   });
 

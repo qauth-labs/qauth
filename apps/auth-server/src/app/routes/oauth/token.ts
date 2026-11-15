@@ -38,6 +38,7 @@ import {
   unlistedReservedAudiences,
   validateScopes,
 } from '../../helpers/client-auth';
+import { clientNameClaim } from '../../helpers/client-display';
 import { isAgentClient, isCimdClient } from '../../helpers/client-resolution';
 import { consentCovers } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
@@ -1298,6 +1299,7 @@ async function handleAuthorizationCode(
       sub: user.id,
       ...emailClaims,
       clientId: client.clientId,
+      ...clientNameClaim(client),
       scope: scopeString,
       aud,
       ...dpopConfirmation(ctx),
@@ -1482,6 +1484,7 @@ async function handleClientCredentials(
   const accessToken = await issueAccessToken(fastify, requestRealm(request), {
     sub: client.clientId,
     clientId: client.clientId,
+    ...clientNameClaim(client),
     scope: scopeString,
     aud,
     ...dpopConfirmation(ctx),
@@ -1903,6 +1906,7 @@ async function handleRefreshToken(
       sub: user.id,
       ...emailClaims,
       clientId: client.clientId,
+      ...clientNameClaim(client),
       scope: scopeString,
       aud,
       ...dpopConfirmation(ctx),
@@ -2378,6 +2382,7 @@ async function handleTokenExchange(
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,
+    ...clientNameClaim(client),
     scope: scopeString,
     aud,
     act,
@@ -2914,6 +2919,7 @@ async function handleJwtBearer(
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,
+    ...clientNameClaim(client),
     scope: scopeString,
     aud,
     ...dpopConfirmation(ctx),

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Access tokens carry the client's declared `client_name`** ([#1148]),
+  beside `client_id`, so a resource server can name the app or agent to the
+  person instead of showing an opaque id. It is the name the client
+  declared, which QAuth did not verify: show it as declared, as the consent
+  page does (ADR-019 Decision 6). It is cleaned and cut to 64 characters as
+  the consent page shows it. ID tokens and introspection are unchanged.
 - **A realm can turn the new-factor window off** ([#1143]).
   `accounts.newFactorWindowDays` (and `NEW_FACTOR_WINDOW_DAYS`, which seeds
   it) now takes 0. With 0, a passkey or authenticator app bound after a
@@ -4637,6 +4643,7 @@ It adds migrations 0068 and 0069.
 [#1143]: https://github.com/qauth-labs/qauth/issues/1143
 [#1144]: https://github.com/qauth-labs/qauth/issues/1144
 [#1147]: https://github.com/qauth-labs/qauth/issues/1147
+[#1148]: https://github.com/qauth-labs/qauth/issues/1148
 
 ### Deprecated
 
