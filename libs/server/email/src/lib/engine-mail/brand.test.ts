@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_MAIL_BRAND, isSameOriginPath, resolveMailBrand } from './brand';
+import { QAUTH_MAIL_LOGO_IMAGE } from '../templates/qauth-logo';
+import { DEFAULT_MAIL_BRAND, isSameOriginPath, mailImagesOf, resolveMailBrand } from './brand';
 import { isMailBaseUrl, isMailPass, mailLink, mailPassUrl } from './links';
 
 describe('resolveMailBrand (#637)', () => {
@@ -38,16 +39,40 @@ describe('resolveMailBrand (#637)', () => {
     '',
   ])('drops a logo at %s, which could leave the realm origin', (path) => {
     expect(isSameOriginPath(path)).toBe(false);
-    expect(resolveMailBrand({ logo: { path, width: 10, height: 10 } }).logo).toBeUndefined();
+    expect(resolveMailBrand({ name: 'Acme', logo: { path, width: 10, height: 10 } }).logo).toBe(
+      undefined
+    );
+    // Under QAuth's name, QAuth's logo stands in.
+    expect(resolveMailBrand({ logo: { path, width: 10, height: 10 } }).logo).toBe(
+      DEFAULT_MAIL_BRAND.logo
+    );
   });
 
   it('drops a logo of an impossible size', () => {
     expect(
-      resolveMailBrand({ logo: { path: '/l.png', width: 0, height: 10 } }).logo
+      resolveMailBrand({ name: 'Acme', logo: { path: '/l.png', width: 0, height: 10 } }).logo
     ).toBeUndefined();
     expect(
-      resolveMailBrand({ logo: { path: '/l.png', width: 10, height: 4096 } }).logo
+      resolveMailBrand({ name: 'Acme', logo: { path: '/l.png', width: 10, height: 4096 } }).logo
     ).toBeUndefined();
+  });
+
+  it('gives QAuth’s logo to QAuth’s name only', () => {
+    expect(DEFAULT_MAIL_BRAND.logo).toMatchObject({ width: 97, height: 40 });
+    expect(mailImagesOf(DEFAULT_MAIL_BRAND)).toEqual([QAUTH_MAIL_LOGO_IMAGE]);
+    expect(resolveMailBrand({ colors: { primary: '#123456' } }).logo).toBe(DEFAULT_MAIL_BRAND.logo);
+    const acme = resolveMailBrand({ name: 'Acme' });
+    expect(acme.logo).toBeUndefined();
+    expect(mailImagesOf(acme)).toEqual([]);
+  });
+
+  it('carries QAuth’s logo as a PNG of three pixels to a point', () => {
+    const png = QAUTH_MAIL_LOGO_IMAGE.content;
+    expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    // The IHDR chunk: width, then height, big-endian, after the signature and chunk header.
+    expect(png.readUInt32BE(16)).toBe(290);
+    expect(png.readUInt32BE(20)).toBe(120);
+    expect(QAUTH_MAIL_LOGO_IMAGE.contentId).toMatch(/^[a-z0-9.-]+@[a-z0-9.-]+$/);
   });
 
   it('keeps only colours of the stored form', () => {

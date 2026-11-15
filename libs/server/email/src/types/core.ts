@@ -1,4 +1,17 @@
 /**
+ * An image the mail carries itself, shown in the HTML through
+ * `<img src="cid:{contentId}">` (RFC 2392). Nothing is fetched when the mail
+ * is opened.
+ */
+export interface EmailInlineImage {
+  /** The Content-ID the HTML names after `cid:`, in the `id@domain` form. */
+  readonly contentId: string;
+  readonly filename: string;
+  readonly contentType: string;
+  readonly content: Buffer;
+}
+
+/**
  * Email options for sending emails
  */
 export interface EmailOptions {
@@ -12,6 +25,8 @@ export interface EmailOptions {
   html?: string;
   /** Sender email address (optional, may be set by provider) */
   from?: string;
+  /** Images the HTML shows through `cid:`, sent as inline attachments. */
+  inlineImages?: readonly EmailInlineImage[];
 }
 
 /**

@@ -14,6 +14,10 @@
  * the default rather than reaching the template, so a mail is always sent.
  */
 
+import type { EmailInlineImage } from '../../types';
+import { QAUTH_MAIL_LOGO_IMAGE, QAUTH_MAIL_LOGO_SIZE } from '../templates/qauth-logo';
+import { MAIL_COLORS } from '../templates/theme';
+
 /** The realm's logo, as the brand settings name it: a path the realm origin serves. */
 export interface MailBrandLogo {
   /**
@@ -26,12 +30,25 @@ export interface MailBrandLogo {
   readonly height: number;
 }
 
+/**
+ * A logo the mail carries itself, shown through `cid:`: QAuth's own, in the
+ * mail of a realm that set no name of its own.
+ */
+export interface MailAttachedLogo {
+  readonly image: EmailInlineImage;
+  readonly width: number;
+  readonly height: number;
+}
+
 /** What a mail's look is built from. */
 export interface MailBrand {
   /** The service's display name, in the heading and as the logo's text alternative. */
   readonly name: string;
-  /** The logo an admin uploaded, served from the realm origin. Absent, the name stands in. */
-  readonly logo?: MailBrandLogo;
+  /**
+   * The logo: one an admin uploaded, served from the realm origin, or QAuth's,
+   * carried in the mail. Absent, the name stands in.
+   */
+  readonly logo?: MailBrandLogo | MailAttachedLogo;
   readonly colors: {
     /** Buttons and links. */
     readonly primary: string;
@@ -50,11 +67,25 @@ export interface MailBrandSettings {
   readonly footer?: unknown;
 }
 
-/** The look of a realm that set no brand. */
+/**
+ * The look of a realm that set no brand: QAuth's name and logo, in QAuth's
+ * design system (`templates/theme.ts`).
+ */
 export const DEFAULT_MAIL_BRAND: MailBrand = Object.freeze({
   name: 'QAuth',
-  colors: Object.freeze({ primary: '#2563eb', background: '#f6f9fc' }),
+  logo: Object.freeze({ image: QAUTH_MAIL_LOGO_IMAGE, ...QAUTH_MAIL_LOGO_SIZE }),
+  colors: Object.freeze({ primary: MAIL_COLORS.primary, background: MAIL_COLORS.muted }),
 });
+
+/** Whether `logo` is carried in the mail rather than served from the realm origin. */
+export function isAttachedLogo(logo: MailBrandLogo | MailAttachedLogo): logo is MailAttachedLogo {
+  return 'image' in logo;
+}
+
+/** The images a mail of `brand` carries, for the message's inline parts. */
+export function mailImagesOf(brand: MailBrand): readonly EmailInlineImage[] {
+  return brand.logo !== undefined && isAttachedLogo(brand.logo) ? [brand.logo.image] : [];
+}
 
 /** The longest service name, as the brand screen bounds it. */
 const NAME_MAX_LENGTH = 64;
@@ -126,7 +157,11 @@ function safeLogo(value: unknown): MailBrandLogo | undefined {
 export function resolveMailBrand(settings?: MailBrandSettings | null): MailBrand {
   if (settings === undefined || settings === null) return DEFAULT_MAIL_BRAND;
   const name = safeText(settings.name, NAME_MAX_LENGTH) ?? DEFAULT_MAIL_BRAND.name;
-  const logo = safeLogo(settings.logo);
+  // QAuth's logo goes with QAuth's name only: a realm named otherwise, with
+  // no logo of its own in shape, shows its name.
+  const logo =
+    safeLogo(settings.logo) ??
+    (name === DEFAULT_MAIL_BRAND.name ? DEFAULT_MAIL_BRAND.logo : undefined);
   const footer = safeText(settings.footer, FOOTER_MAX_LENGTH);
   return Object.freeze({
     name,

@@ -8,6 +8,8 @@ export {
   type EngineMailContext,
   EngineMailError,
   isMailPass,
+  MAIL_COLOR_TOKENS,
+  MAIL_COLORS,
   MAIL_PASS_PARAMETER,
   MAIL_PASS_PATH,
   type MailBrand,

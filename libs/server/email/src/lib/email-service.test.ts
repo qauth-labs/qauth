@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { EmailService } from '../types';
 import { createEmailService } from './email-service';
 import { MockEmailProvider } from './providers/mock.provider';
+import { QAUTH_MAIL_LOGO_IMAGE } from './templates/qauth-logo';
 
 /** Where the verification links of these mails point: the realm's issuer. */
 const LINK = { baseUrl: 'https://auth.example.com' };
@@ -47,6 +48,18 @@ describe('EmailService', () => {
       expect(sentEmails[0]?.to).toBe('user@example.com');
       expect(sentEmails[0]?.text).toContain('token123');
       expect(sentEmails[0]?.html).toContain('token123');
+    });
+
+    it('carries the QAuth logo as an inline part with the template, and none with custom HTML', async () => {
+      await service.sendVerificationEmail('user@example.com', 'token123', LINK);
+      await service.sendVerificationEmail('user@example.com', 'token123', LINK, {
+        html: '<p>custom</p>',
+      });
+
+      const [templated, custom] = mockProvider.getSentEmails();
+      expect(templated?.inlineImages).toEqual([QAUTH_MAIL_LOGO_IMAGE]);
+      expect(templated?.html).toContain(`cid:${QAUTH_MAIL_LOGO_IMAGE.contentId}`);
+      expect(custom?.inlineImages).toEqual([]);
     });
 
     it('should use default subject if not provided', async () => {

@@ -1,19 +1,26 @@
 import * as React from 'react';
 
-import type { MailBrand } from '../../engine-mail/brand';
+import { isAttachedLogo, type MailBrand } from '../../engine-mail/brand';
 import { mailLink } from '../../engine-mail/links';
 import { Body, Button, Container, Head, Html, Preview, Section, Text } from '../components';
+import { MAIL_COLORS, MAIL_FONTS } from '../theme';
 
 /**
- * The frame every engine mail shares (PRO-14, #637): the realm's logo or
- * name, the content, and the footer. The brand sets the colours, the name, the
- * logo and the footer notice; it sets no link. The logo is loaded from the
- * realm's own host: its path, after the realm's issuer.
+ * The frame every mail shares (PRO-14, #637): the realm's logo or name, the
+ * content, and the footer, in QAuth's design system (`../theme.ts`). The brand
+ * sets the name, the logo, the button and link colour, the page colour and
+ * the footer notice; it sets no link. The text colours, the faces and the
+ * square, hairline-edged card are the design system's, whatever the brand.
+ *
+ * An attached logo (QAuth's) is shown through `cid:`, and the sender adds the
+ * image as an inline part (`mailImagesOf`). An uploaded logo is loaded from
+ * the realm's own host, its path after the realm's issuer; without an issuer
+ * to start at, the name stands in.
  */
-export interface EngineMailLayoutProps {
+export interface MailFrameProps {
   readonly brand: MailBrand;
-  /** The realm's issuer: where the logo and every link start. */
-  readonly baseUrl: string;
+  /** The realm's issuer, where an uploaded logo is loaded from. */
+  readonly baseUrl?: string;
   /** The inbox preview line. */
   readonly preview: string;
   /** The heading. */
@@ -21,14 +28,9 @@ export interface EngineMailLayoutProps {
   readonly children: React.ReactNode;
 }
 
-export function EngineMailLayout({
-  brand,
-  baseUrl,
-  preview,
-  title,
-  children,
-}: EngineMailLayoutProps) {
+export function MailFrame({ brand, baseUrl, preview, title, children }: MailFrameProps) {
   const styles = stylesOf(brand);
+  const logoSrc = logoSrcOf(brand, baseUrl);
   return (
     <Html>
       <Head />
@@ -36,16 +38,18 @@ export function EngineMailLayout({
       <Body style={styles.main}>
         <Container style={styles.container}>
           <Section style={styles.section}>
-            {brand.logo === undefined ? (
+            {brand.logo === undefined || logoSrc === undefined ? (
               <Text style={styles.name}>{brand.name}</Text>
             ) : (
-              <img
-                src={mailLink(baseUrl, brand.logo.path)}
-                width={brand.logo.width}
-                height={brand.logo.height}
-                alt={brand.name}
-                style={styles.logo}
-              />
+              <Section style={styles.header}>
+                <img
+                  src={logoSrc}
+                  width={brand.logo.width}
+                  height={brand.logo.height}
+                  alt={brand.name}
+                  style={styles.logo}
+                />
+              </Section>
             )}
             <Text style={styles.title}>{title}</Text>
             {children}
@@ -66,7 +70,40 @@ export function EngineMailLayout({
   );
 }
 
-/** A paragraph of an engine mail. */
+/** Where the frame's logo comes from, or `undefined` when the name stands in. */
+function logoSrcOf(brand: MailBrand, baseUrl: string | undefined): string | undefined {
+  if (brand.logo === undefined) return undefined;
+  if (isAttachedLogo(brand.logo)) return `cid:${brand.logo.image.contentId}`;
+  return baseUrl === undefined ? undefined : mailLink(baseUrl, brand.logo.path);
+}
+
+/** The frame of an engine mail: {@link MailFrame}, on the realm's issuer. */
+export interface EngineMailLayoutProps {
+  readonly brand: MailBrand;
+  /** The realm's issuer: where the logo and every link start. */
+  readonly baseUrl: string;
+  /** The inbox preview line. */
+  readonly preview: string;
+  /** The heading. */
+  readonly title: string;
+  readonly children: React.ReactNode;
+}
+
+export function EngineMailLayout({
+  brand,
+  baseUrl,
+  preview,
+  title,
+  children,
+}: EngineMailLayoutProps) {
+  return (
+    <MailFrame brand={brand} baseUrl={baseUrl} preview={preview} title={title}>
+      {children}
+    </MailFrame>
+  );
+}
+
+/** A paragraph of a mail. */
 export function Paragraph({ brand, children }: { brand: MailBrand; children: React.ReactNode }) {
   return <Text style={stylesOf(brand).text}>{children}</Text>;
 }
@@ -94,7 +131,7 @@ export function LinkButton({
           {label}
         </Button>
       </Section>
-      <Text style={styles.text}>
+      <Text style={styles.small}>
         Or copy and paste this link into your browser:
         <br />
         <a href={href} style={styles.link}>
@@ -105,68 +142,83 @@ export function LinkButton({
   );
 }
 
+/** A hairline: the design system's edge, as a mail draws it. */
+const HAIRLINE = `1px solid ${MAIL_COLORS.border}`;
+
 function stylesOf(brand: MailBrand) {
   const { primary, background } = brand.colors;
   return {
     main: {
       backgroundColor: background,
-      fontFamily:
-        '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Ubuntu,sans-serif',
+      fontFamily: MAIL_FONTS.sans,
+      margin: '0',
+      padding: '40px 12px',
     },
     container: {
-      backgroundColor: '#ffffff',
+      backgroundColor: MAIL_COLORS.card,
+      border: HAIRLINE,
       margin: '0 auto',
-      padding: '20px 0 48px',
-      marginBottom: '64px',
     },
-    section: { padding: '0 48px' },
+    section: { padding: '36px 40px 32px' },
     name: {
-      fontSize: '18px',
-      lineHeight: '1.3',
-      fontWeight: '700',
-      color: primary,
-      margin: '0 0 24px',
+      fontFamily: MAIL_FONTS.sans,
+      fontSize: '16px',
+      lineHeight: '24px',
+      fontWeight: '600',
+      color: MAIL_COLORS.foreground,
+      margin: '0 0 32px',
+      paddingBottom: '20px',
+      borderBottom: HAIRLINE,
     },
-    logo: { display: 'block', margin: '0 0 24px', maxWidth: '100%', height: 'auto' },
+    header: { margin: '0 0 32px', paddingBottom: '20px', borderBottom: HAIRLINE },
+    logo: { display: 'block', maxWidth: '100%', height: 'auto', border: '0' },
     title: {
-      fontSize: '24px',
-      lineHeight: '1.3',
-      fontWeight: '700',
-      color: '#1a1a1a',
+      fontFamily: MAIL_FONTS.display,
+      fontSize: '36px',
+      lineHeight: '1.15',
+      fontWeight: '400',
+      letterSpacing: '-0.01em',
+      color: MAIL_COLORS.foreground,
       margin: '0 0 20px',
     },
-    text: { fontSize: '16px', lineHeight: '1.5', color: '#4a5568', margin: '0 0 16px' },
+    text: { fontSize: '16px', lineHeight: '1.65', color: MAIL_COLORS.body, margin: '0 0 16px' },
+    small: { fontSize: '14px', lineHeight: '1.6', color: MAIL_COLORS.body, margin: '0 0 16px' },
     code: {
-      fontSize: '32px',
+      display: 'inline-block',
+      fontFamily: MAIL_FONTS.mono,
+      fontSize: '28px',
       lineHeight: '1.2',
-      fontWeight: '700',
-      letterSpacing: '6px',
-      color: '#1a1a1a',
-      fontFamily: '"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace',
+      fontWeight: '500',
+      letterSpacing: '0.25em',
+      color: MAIL_COLORS.foreground,
+      backgroundColor: MAIL_COLORS.muted,
+      border: HAIRLINE,
+      // Less on the right: the spacing also follows the last digit.
+      padding: '14px 13px 14px 20px',
       margin: '8px 0 24px',
     },
-    buttonContainer: { padding: '27px 0' },
+    buttonContainer: { padding: '8px 0 24px' },
     button: {
       backgroundColor: primary,
-      borderRadius: '6px',
-      color: '#ffffff',
-      fontSize: '16px',
-      fontWeight: '600',
+      borderRadius: '0',
+      color: MAIL_COLORS.primaryForeground,
+      fontFamily: MAIL_FONTS.sans,
+      fontSize: '15px',
+      fontWeight: '500',
+      lineHeight: '20px',
       textDecoration: 'none',
       textAlign: 'center' as const,
-      display: 'block',
-      padding: '12px 24px',
-      width: 'fit-content',
-      margin: '0 auto',
+      display: 'inline-block',
+      padding: '12px 20px',
     },
     link: { color: primary, textDecoration: 'underline', wordBreak: 'break-all' as const },
     footer: {
-      fontSize: '14px',
-      lineHeight: '1.5',
-      color: '#718096',
+      fontSize: '13px',
+      lineHeight: '1.6',
+      color: MAIL_COLORS.mutedForeground,
       margin: '32px 0 0',
-      paddingTop: '16px',
-      borderTop: '1px solid #e2e8f0',
+      paddingTop: '20px',
+      borderTop: HAIRLINE,
     },
   };
 }

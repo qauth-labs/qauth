@@ -69,6 +69,35 @@ describe('ResendEmailProvider', () => {
       );
     });
 
+    it('sends inline images as attachments with a content ID', async () => {
+      const provider = new ResendEmailProvider(config);
+      const content = Buffer.from([137, 80, 78, 71]);
+      mockSend.mockResolvedValueOnce({ data: { id: 'msg_124' }, error: null });
+
+      await provider.sendEmail({
+        to: 'user@example.com',
+        subject: 'Test Subject',
+        html: '<img src="cid:logo@qauth.mail">',
+        inlineImages: [
+          { contentId: 'logo@qauth.mail', filename: 'logo.png', contentType: 'image/png', content },
+        ],
+      });
+
+      expect(mockSend).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachments: [
+            {
+              filename: 'logo.png',
+              content,
+              contentType: 'image/png',
+              contentId: 'logo@qauth.mail',
+            },
+          ],
+        }),
+        expect.anything()
+      );
+    });
+
     it('should use from address from options if provided', async () => {
       const provider = new ResendEmailProvider(config);
       const emailOptions: EmailOptions = {
