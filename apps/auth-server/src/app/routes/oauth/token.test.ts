@@ -267,6 +267,8 @@ function createFastifyStub() {
           .fn()
           .mockResolvedValue({ familyId: null, revokedCount: 0 }),
       },
+      // No registered protected resource (#1087): the client's list alone.
+      protectedResources: { listByRealm: async () => [] },
       oauthConsents: {
         // Deny-by-default: no stored consent means no refresh token on the
         // authorization_code grant, so those tests opt IN by overriding this.

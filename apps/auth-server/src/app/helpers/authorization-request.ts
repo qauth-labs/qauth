@@ -20,7 +20,6 @@ import {
   administrativeConsentFor,
   administrativeConsentScopes,
   canSkipConsent,
-  filterRequestedScopes,
   forcesLoginPrompt,
 } from './consent';
 import { MALFORMED_DPOP_JKT_DESCRIPTION, readAuthorizationDpopJkt } from './dpop';
@@ -34,6 +33,7 @@ import {
   redirectUriNotPermittedError,
   unregisteredRedirectUriError,
 } from './oauth-redirect';
+import { grantRequestedScopes, registeredResourcesOf } from './protected-resources';
 import { realmIssuer } from './realm-url';
 import { type RealmRow, requestRealm } from './request-realm';
 import { evaluateStepUp, parsePromptMode, stepUpErrorForPromptNone } from './step-up';
@@ -370,8 +370,8 @@ export async function decideAuthorization(
   // client (incl. one that omitted `is_agent`) or one over its cap is
   // rejected up front with `invalid_scope` (RFC 6749 §4.1.2.1) rather than
   // having the offending scope silently dropped, so an over-asking agent
-  // gets a clear error. `filterRequestedScopes` then applies the ordinary
-  // allowlist to whatever survives.
+  // gets a clear error. `grantRequestedScopes` then applies the ordinary
+  // allowlist, and the protected-resource rule, to whatever survives.
   const exceedingAgentScopes = findExceedingAgentScopesForClient(query.scope, client);
   if (exceedingAgentScopes.length > 0) {
     await emitUserEvent(
@@ -391,12 +391,6 @@ export async function decideAuthorization(
     };
   }
 
-  // Deny-by-default: when a client has no scope allowlist configured we
-  // grant nothing, matching `validateScopes` on the client_credentials
-  // path. Previously an empty allowlist silently over-granted every
-  // requested scope on the auth-code flow.
-  const scopes = filterRequestedScopes(query.scope, client);
-
   // RFC 8707: the requested resource set becomes the token's `aud`, so it is
   // part of what a stored consent must cover. Read once, from the VALIDATED
   // params (`resourceParamSchema` has checked every entry and normalized
@@ -406,6 +400,16 @@ export async function decideAuthorization(
   // unknown key `?resource` to Fastify's parser (stripped, never validated)
   // but `resource` to that one, which put an arbitrary string into `aud`.
   const resources = query.resource ?? [];
+
+  // Deny-by-default: when a client has no scope allowlist configured we
+  // grant nothing, matching `validateScopes` on the client_credentials
+  // path. Previously an empty allowlist silently over-granted every
+  // requested scope on the auth-code flow. A scope a registered protected
+  // resource defines (#1087) is granted only for that resource, to a client
+  // the resource is open to, whatever the client's own list holds; asked for
+  // without it, or with another, it is dropped too.
+  const registered = await registeredResourcesOf(fastify, realm.id);
+  const scopes = grantRequestedScopes(query.scope, client, resources, registered);
 
   // RFC 8707 §2 (#509): a QAuth API audience (`urn:qauth:aud:`) is issued
   // only to a client whose `audience` lists it, so a request naming one the

@@ -73,6 +73,11 @@ import {
   refreshTokenExpiresAt,
   rotatedRefreshTokenExpiresAt,
 } from '../../helpers/refresh-family';
+import {
+  registeredResourcesOf,
+  scopeCeilingAt,
+  withoutUngrantedResourceScopes,
+} from '../../helpers/protected-resources';
 import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
@@ -1160,6 +1165,18 @@ async function handleAuthorizationCode(
     throw err;
   }
 
+  // A registered protected resource's scope (#1087) only at that resource,
+  // and only while it is open to the client: a `resource` that narrows the
+  // code's binding drops the scopes of the resources it leaves out, so the
+  // token's `aud` and its resource scopes agree, and a resource closed to the
+  // client since the consent drops its own. Every other scope is the code's.
+  const codeScopes = withoutUngrantedResourceScopes(
+    authCode.scopes,
+    client,
+    effectiveResource,
+    await registeredResourcesOf(fastify, ctx.realmId)
+  );
+
   // A refresh token is standing access, and the active consent row is the
   // user's only handle on it: `/consents` lists those rows, and consent
   // revocation reaches the refresh tokens through one. So a refresh token is
@@ -1185,7 +1202,7 @@ async function handleAuthorizationCode(
     : undefined;
   const familyCreatedAt = issuedAt;
   const refresh =
-    consent && consentCovers(consent, authCode.scopes, effectiveResource)
+    consent && consentCovers(consent, codeScopes, effectiveResource)
       ? {
           ...fastify.jwtUtils.generateRefreshToken(),
           // The realm's `sso_max_lifespan` caps the family from its start,
@@ -1227,7 +1244,7 @@ async function handleAuthorizationCode(
   // applies the rule again.
   const issuedScopes = await issuableScopes(ctx, {
     userId: user.id,
-    scopes: authCode.scopes,
+    scopes: codeScopes,
     aud,
   });
 
@@ -1276,7 +1293,7 @@ async function handleAuthorizationCode(
           authTime: signIn.authTime ?? null,
           amr: signIn.amr === undefined ? null : [...signIn.amr],
           expiresAt: refresh.expiresAt,
-          scopes: authCode.scopes,
+          scopes: codeScopes,
           // RFC 8707: carry the resource set onto the refresh token so subsequent
           // refreshes produce access tokens with the same `aud`.
           resource: effectiveResource,
@@ -1316,7 +1333,7 @@ async function handleAuthorizationCode(
     // present (OIDC Core §3.1.3.6). Signed through the signer with the realm's
     // keys (RS256 when the realm has an RS256 key, #309), so the realm's JWKS
     // verifies both.
-    const idToken = authCode.scopes.includes('openid')
+    const idToken = codeScopes.includes('openid')
       ? await fastify.jwtUtils.signIdToken(requestRealm(request), {
           sub: user.id,
           audience: client.clientId,
@@ -1327,7 +1344,7 @@ async function handleAuthorizationCode(
           ...emailClaims,
           // BREAKING (#755): `name` is released only under the `profile` scope,
           // through the same helper userinfo uses, so the two cannot drift.
-          ...resolveProfileClaimsForScopes(user, authCode.scopes),
+          ...resolveProfileClaimsForScopes(user, codeScopes),
           nonce: authCode.nonce ?? undefined,
           // OIDC Core §2 `auth_time`: the real end-user authentication time
           // (session establishment), captured on the auth code at mint time. In
@@ -1727,6 +1744,23 @@ async function handleRefreshToken(
     throw new InvalidGrantError(UNUSABLE_REFRESH_TOKEN);
   }
 
+  // RFC 8707 §2.2: refresh requests MAY include `resource` to narrow the
+  // audience of the minted access token, but MUST NOT request a resource
+  // outside the set bound to the refresh token (which itself descends
+  // from the auth code). Empty request resource carries the stored set
+  // forward unchanged.
+  const storedResource = storedToken.resource ?? [];
+  const requestedResource = body.resource ?? [];
+  if (requestedResource.length > 0) {
+    const extra = requestedResource.filter((r) => !storedResource.includes(r));
+    if (extra.length > 0) {
+      await emitRequestFailed(ctx, 'invalid_target', 'resource_outside_binding', user.id);
+      throw new InvalidTargetError('requested resource is outside the refresh-token binding');
+    }
+  }
+  // Read before the scope ceiling below, which depends on it (#1087).
+  const effectiveResource = requestedResource.length > 0 ? requestedResource : storedResource;
+
   // Down-scoping: request narrower scope or keep original set.
   // Upscoping (any scope not in the original set) → invalid_scope.
   let grantedScopes: string[];
@@ -1761,28 +1795,29 @@ async function handleRefreshToken(
   // `/oauth/authorize`, client_credentials and jwt-bearer apply: a scope taken
   // off the client after the grant must not keep being minted from the refresh
   // token. `validateScopes` runs both checks.
+  //
+  // A registered protected resource's scope (#1087) has the resource as its
+  // ceiling instead: it is kept only at a resource the refresh still names
+  // and that is still open to the client, and dropped otherwise, as the code
+  // grant drops it, so a narrowed `aud` never carries another resource's
+  // scopes. The rotated refresh token keeps what is left.
+  const registered = await registeredResourcesOf(fastify, ctx.realmId);
+  grantedScopes = withoutUngrantedResourceScopes(
+    grantedScopes,
+    client,
+    effectiveResource,
+    registered
+  );
   try {
-    validateScopes(grantedScopes.join(' '), client.scopes, toAgentScopeContext(client));
+    validateScopes(
+      grantedScopes.join(' '),
+      scopeCeilingAt(client, effectiveResource, registered),
+      toAgentScopeContext(client)
+    );
   } catch (err) {
     await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_not_allowed_for_client', user.id);
     throw err;
   }
-
-  // RFC 8707 §2.2: refresh requests MAY include `resource` to narrow the
-  // audience of the minted access token, but MUST NOT request a resource
-  // outside the set bound to the refresh token (which itself descends
-  // from the auth code). Empty request resource carries the stored set
-  // forward unchanged.
-  const storedResource = storedToken.resource ?? [];
-  const requestedResource = body.resource ?? [];
-  if (requestedResource.length > 0) {
-    const extra = requestedResource.filter((r) => !storedResource.includes(r));
-    if (extra.length > 0) {
-      await emitRequestFailed(ctx, 'invalid_target', 'resource_outside_binding', user.id);
-      throw new InvalidTargetError('requested resource is outside the refresh-token binding');
-    }
-  }
-  const effectiveResource = requestedResource.length > 0 ? requestedResource : storedResource;
 
   // Rotate atomically: revoke the presented token and insert the new one
   // inside a single transaction so a crash/failure between the two steps

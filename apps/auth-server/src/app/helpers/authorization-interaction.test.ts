@@ -156,6 +156,8 @@ const transaction = vi.fn<
 const fastify = {
   db: { transaction },
   repositories: {
+    // No registered protected resource (#1087): the client's list alone.
+    protectedResources: { listByRealm: async () => [] },
     oauthConsents: { upsertGrant },
     users: { findById: findUser },
     userSessionEpochs: { find: findEpoch },

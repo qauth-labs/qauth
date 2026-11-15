@@ -61,6 +61,20 @@ export const maxAgeParamSchema = z
  */
 export const LOGIN_HINT_MAX_BYTES = 254;
 
+/** The longest `ui_locales` accepted: eight BCP 47 tags of up to 31 characters, space-separated. */
+export const UI_LOCALES_MAX_LENGTH = 255;
+
+/**
+ * OpenID Connect Core 1.0 §3.1.2.1 `ui_locales` (#1087): the person's
+ * preferred languages for the screens, as space-separated BCP 47 tags,
+ * preferred first. The consent step shows a registered protected resource's
+ * consent text in the first of them the text is given in, else in English
+ * (`helpers/protected-resources.ts`). A malformed or unsupported tag is
+ * skipped, never refused; a value longer than {@link UI_LOCALES_MAX_LENGTH}
+ * is refused with `invalid_request`, as it round-trips through the sign-in.
+ */
+export const uiLocalesParamSchema = z.string().max(UI_LOCALES_MAX_LENGTH).optional();
+
 /**
  * OpenID Connect Core 1.0 §3.1.2.1 `login_hint` (#628): a hint at the
  * identifier the person signs in with, at most {@link LOGIN_HINT_MAX_BYTES}
@@ -340,6 +354,8 @@ export const authorizeQuerySchema = z.object({
   dpop_jkt: dpopJktParamSchema,
   // OIDC Core §3.1.2.1 (#628): pre-fills the identifier step of an interaction.
   login_hint: loginHintParamSchema,
+  // OIDC Core §3.1.2.1 (#1087): the language of a protected resource's consent text.
+  ui_locales: uiLocalesParamSchema,
   // QAuth's direct-routing parameter (#639): start the realm's upstream
   // provider of this type at once.
   qauth_upstream: upstreamRouteParamSchema,
