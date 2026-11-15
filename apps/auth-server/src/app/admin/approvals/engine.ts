@@ -14,7 +14,7 @@ import {
   type ApprovalForFactor,
   type Approver,
 } from './factor';
-import { approvalStanding, shownStatus } from './standing';
+import { type ApprovalAccount, approvalStanding, shownStatus } from './standing';
 import {
   type ApproverRefusal,
   approverRefusal,
@@ -319,7 +319,12 @@ async function approvalTheApproverMayDecide(
   decision: ApprovalDecision,
   now: number,
   options: { readonly auditRefusal?: boolean } = {}
-): Promise<{ readonly approval: AdminApproval; readonly approver: Approver }> {
+): Promise<{
+  readonly approval: AdminApproval;
+  readonly approver: Approver;
+  /** Who the approver's account is: a service account never approves (#522). */
+  readonly kind: ApprovalAccount['kind'];
+}> {
   const notFound = () => new NotFoundError('Approval', decision.approvalId);
   const approval = await fastify.repositories.adminApprovals.findById(
     decision.realmId,
@@ -334,9 +339,13 @@ async function approvalTheApproverMayDecide(
   );
   if (!authority.allowed) throw notFound();
   const approver: Approver = { realmId: authority.issuerRealm.id, accountId: authority.userId };
+  // The approval page names no client, so the authority stage refuses a
+  // service account already (#522); its kind is read all the same, and a
+  // service account's standing never lets it approve.
+  const { kind } = authority;
   const standing = approvalStanding(
     approval,
-    { ...approver, kind: 'human' },
+    { ...approver, kind },
     authority.rolePermissions.has('approvals.approve')
   );
   if (!standing.mayRead) throw notFound();
@@ -347,7 +356,7 @@ async function approvalTheApproverMayDecide(
   // The requester's own step-up is the first approval; every other one comes
   // from an eligible admin (the two-admin rule, #521).
   if (!standing.isRequester) {
-    const refusal = await secondApprovalRefusal(fastify, approval, approver, null, now);
+    const refusal = await secondApprovalRefusal(fastify, approval, approver, kind, null, now);
     if (refusal !== null) {
       fastify.log.info(
         { approvalId: approval.id, reason: refusal },
@@ -361,7 +370,7 @@ async function approvalTheApproverMayDecide(
       throw new ForbiddenError(NOT_ELIGIBLE);
     }
   }
-  return { approval, approver };
+  return { approval, approver, kind };
 }
 
 /** What an approver the two-admin rule refuses is told; the reason is logged. */
@@ -384,15 +393,15 @@ async function secondApprovalRefusal(
   fastify: FastifyInstance,
   approval: AdminApproval,
   approver: Approver,
+  kind: ApprovalAccount['kind'],
   credential: { readonly registeredToRequester: boolean } | null,
   now: number
 ): Promise<ApproverRefusal | null> {
   const realm = await approvalRealm(fastify, approval);
-  // Every admin account is a person's until service accounts exist (#522):
-  // rule 1 must then read the account's kind.
+  // Rule 1 reads the account's kind: a service account never approves (#522).
   const loaded = await loadApprover(
     fastify,
-    { ...approver, kind: 'human' },
+    { ...approver, kind },
     realm,
     credential === null ? {} : { credential }
   );
@@ -483,9 +492,12 @@ export async function completeApproval(
   options: ApprovalEngineOptions = {}
 ): Promise<AdminApproval> {
   const clock = options.now ?? Date.now;
-  const { approval, approver } = await approvalTheApproverMayDecide(fastify, decision, clock(), {
-    auditRefusal: true,
-  });
+  const { approval, approver, kind } = await approvalTheApproverMayDecide(
+    fastify,
+    decision,
+    clock(),
+    { auditRefusal: true }
+  );
   const decided = { ...decision, approver };
 
   let credentialId: string;
@@ -535,7 +547,7 @@ export async function completeApproval(
       };
   const loaded = await loadApprover(
     fastify,
-    { ...approver, kind: 'human' },
+    { ...approver, kind },
     realm,
     credential === null ? {} : { credential }
   );

@@ -129,3 +129,27 @@ describe('[POST /oauth/token] RFC 6749 §2.3.1 — client password authenticatio
     );
   });
 });
+
+/**
+ * The admin API's audience is issued only to a client that authenticates
+ * with `private_key_jwt` and a DPoP proof (ADR-019 Decision 7, #522): a
+ * shared secret is a long-lived credential, and no admin token rests on one.
+ * The seeded client authenticates with a secret, so it gets no token for the
+ * admin audience, whichever way it sends its secret.
+ */
+describe('[POST /oauth/token] RFC 8707 §2 — no admin audience for a client that authenticates with a secret', () => {
+  /** The admin API's audience, as the server's discovery documents name its families. */
+  const ADMIN_AUDIENCE = 'urn:qauth:aud:admin:v1-rc.0';
+
+  it.each(['client_secret_basic', 'client_secret_post'] as const)(
+    'refuses it to %s with 400 invalid_target and no token',
+    async (authentication) => {
+      const response = await tokenRequest(
+        { grant_type: 'client_credentials', scope: SEEDED_CLIENT_SCOPE, resource: ADMIN_AUDIENCE },
+        authentication
+      );
+      // The body holds the error members alone: no token beside them.
+      await expectOAuthError(response, { status: 400, error: 'invalid_target' });
+    }
+  );
+});

@@ -34,6 +34,7 @@ import { changePreview, changePreviewSchema } from '../change-preview';
 import {
   ADMIN_SECURITY_SCHEME,
   type AdminChange,
+  adminEventActor,
   type AdminTransaction,
   adminTransaction,
   recordAdminChange,
@@ -361,7 +362,7 @@ function clientEventOptions(
     tx: adminTransaction(request),
     realmId,
     subject: { type: 'client' as const, id: client.client_id },
-    actor: { type: 'user' as const, id: requestAdminCaller(request).userId },
+    actor: adminEventActor(requestAdminCaller(request)),
   };
 }
 

@@ -4,10 +4,11 @@ import {
   InvalidScopeError,
   TemporarilyUnavailableError,
 } from '@qauth-labs/shared-errors';
-import { isReservedAudience } from '@qauth-labs/shared-validation';
+import { ADMIN_API_AUDIENCE, isReservedAudience } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
+import { mayHoldAdminAudience } from './admin-audience';
 import {
   authenticateClientAssertion,
   type ClientAssertionCredentials,
@@ -17,6 +18,8 @@ import { isAgentClient, isCimdClient, resolveClient } from './client-resolution'
 import { isClientUsable } from './client-status';
 import { systemClientId } from './oauth-client';
 import { type AgentMode, findExceedingAgentScopes, parseAgentMode } from './scope-modes';
+
+export { mayHoldAdminAudience };
 
 /** Maximum length of a single audience URI (defensive cap, RFC 8707 leaves this open). */
 const AUDIENCE_ENTRY_MAX_LENGTH = 256;
@@ -695,6 +698,23 @@ function isSelfRegisteredClient(
 }
 
 /**
+ * Whether the client's own `audience` lists the admin API's audience while
+ * the client may not hold it ({@link mayHoldAdminAudience}): what the token
+ * endpoint's refusal names, so an operator reads that the method, not the
+ * audience, is what to change.
+ */
+export function listsAdminAudienceWithoutPrivateKey(
+  client: Pick<
+    OAuthClientLike,
+    'audience' | 'metadata' | 'dynamicRegisteredAt' | 'tokenEndpointAuthMethod'
+  >
+): boolean {
+  if (mayHoldAdminAudience(client) || isSelfRegisteredClient(client)) return false;
+  const parsed = audienceSchema.safeParse(client.audience);
+  return parsed.success && parsed.data.includes(ADMIN_API_AUDIENCE);
+}
+
+/**
  * The QAuth-defined audiences (`urn:qauth:aud:`, #509) in `aud` that the
  * client's own `audience` does not list.
  *
@@ -709,14 +729,24 @@ function isSelfRegisteredClient(
  * A self-registered client (CIMD or dynamic registration) lists nothing,
  * whatever its row holds: neither registration stores an `audience`, so a row
  * that holds a reserved one was written some other way, and it fails closed.
+ *
+ * A client that does not authenticate with `private_key_jwt` lists no admin
+ * audience either, whatever its row holds (#522, {@link mayHoldAdminAudience}):
+ * every grant, the authorization endpoint and the consent step refuse it the
+ * admin API's audience, and the token endpoint withholds the admin scopes,
+ * which only a client that lists that audience gets (`admin-issuance.ts`).
  */
 export function unlistedReservedAudiences(
-  client: Pick<OAuthClientLike, 'audience' | 'metadata' | 'dynamicRegisteredAt'>,
+  client: Pick<
+    OAuthClientLike,
+    'audience' | 'metadata' | 'dynamicRegisteredAt' | 'tokenEndpointAuthMethod'
+  >,
   aud: string | readonly string[]
 ): string[] {
   const parsed = isSelfRegisteredClient(client)
     ? undefined
     : audienceSchema.safeParse(client.audience);
   const listed = new Set(parsed?.success ? parsed.data : []);
+  if (!mayHoldAdminAudience(client)) listed.delete(ADMIN_API_AUDIENCE);
   return [aud].flat().filter((value) => isReservedAudience(value) && !listed.has(value));
 }

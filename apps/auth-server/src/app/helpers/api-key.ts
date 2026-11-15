@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { ForbiddenError } from '@qauth-labs/shared-errors';
+import { ADMIN_API_AUDIENCE } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 
 import { MIN_RESPONSE_TIME_MS } from '../constants/security';
@@ -96,6 +97,32 @@ export function assertStaticApiKeysAllowed(
     throw new ForbiddenError(
       `Static API keys are disabled for ${policy.environment} clients. ` +
         'Use the OAuth client_credentials grant for machine-to-machine access in this environment.'
+    );
+  }
+}
+
+/**
+ * Whether the client's stored `audience` lists the admin API's audience
+ * (ADR-019 Decision 7, #522): a client that may get an admin token, a service
+ * account's among them. A static API key never stands for one: there are no
+ * static admin keys, so none is minted for it, and one minted before its
+ * audience changed authenticates nothing. A malformed `audience` lists
+ * nothing.
+ */
+export function clientMayGetAdminAudience(client: { readonly audience?: unknown }): boolean {
+  return Array.isArray(client.audience) && client.audience.includes(ADMIN_API_AUDIENCE);
+}
+
+/**
+ * Refuse a static API key for a client that may get the admin API's audience
+ * ({@link clientMayGetAdminAudience}), whatever its environment.
+ *
+ * @throws ForbiddenError when the client lists the admin API's audience
+ */
+export function assertNoAdminAudience(client: { readonly audience?: unknown }): void {
+  if (clientMayGetAdminAudience(client)) {
+    throw new ForbiddenError(
+      "Static API keys are never issued for a client that may get the admin API's audience: it authenticates with private_key_jwt and a DPoP proof."
     );
   }
 }
@@ -208,6 +235,11 @@ async function resolveApiKey(
   // A disabled or operator-suspended client (ANT-2026-DR5XI3LV) authenticates
   // nothing, through its API keys either.
   if (!client || !isClientUsable(client)) {
+    return null;
+  }
+  // No static admin key (#522): a key of a client that may get the admin
+  // API's audience authenticates nothing, whenever it was minted.
+  if (clientMayGetAdminAudience(client)) {
     return null;
   }
   const clientRealm = await fastify.repositories.realms.findById(client.realmId);

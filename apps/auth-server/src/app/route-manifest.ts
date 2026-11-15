@@ -496,6 +496,9 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'oauthConsents',
       'realms',
       'refreshTokens',
+      // A `client_credentials` request reads the client's service account
+      // (#522), whose token names its account.
+      'serviceAccounts',
       'userAttributes',
       'userCredentials',
       'users',

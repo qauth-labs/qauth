@@ -78,8 +78,16 @@ function liveGrant(fixture: GrantFixture) {
   };
 }
 
-/** A server whose grants are `grants`, in realms `realms`; the first operator realm is found. */
-function serverWith(realms: RealmFixture[], grants: GrantFixture[]) {
+/**
+ * A server whose grants are `grants`, in realms `realms`; the first operator
+ * realm is found. The accounts `serviceAccountUsers` names are service
+ * accounts' (#522).
+ */
+function serverWith(
+  realms: RealmFixture[],
+  grants: GrantFixture[],
+  serviceAccountUsers: readonly string[] = []
+) {
   const rows = realms.map((realm) => ({
     enabled: true,
     issuer: `https://${realm.id}.example`,
@@ -106,6 +114,14 @@ function serverWith(realms: RealmFixture[], grants: GrantFixture[]) {
   const fastify = {
     repositories: {
       adminGrants: { listLiveOnTarget, listByUser },
+      serviceAccounts: {
+        findByUser: vi.fn(async (realmId: string, userId: string, tx: unknown) => {
+          expect(tx).toBe(TX);
+          return realmId === OPERATOR && serviceAccountUsers.includes(userId)
+            ? { id: `sa-${userId}`, realmId, userId, enabled: true }
+            : undefined;
+        }),
+      },
       realms: {
         findOperator: vi.fn(async (tx: unknown) => {
           expect(tx).toBe(TX);
@@ -184,6 +200,21 @@ describe('eligibleApproverCount (#589)', () => {
       { userId: 'operator-on-other', accountRealmId: OPERATOR, target: OTHER },
     ]);
     expect(await count(fastify)).toBe(0);
+  });
+
+  // #522: a service account never approves, so it is never counted, even
+  // when its grants give approvals.approve.
+  it('never counts a service account, whatever its grants give', async () => {
+    const { fastify } = serverWith(
+      REALMS,
+      [
+        { userId: 'robot', accountRealmId: OPERATOR, target: TENANT },
+        { userId: 'robot-everywhere', accountRealmId: OPERATOR, target: null },
+        { userId: 'person', accountRealmId: OPERATOR, target: TENANT },
+      ],
+      ['robot', 'robot-everywhere']
+    );
+    expect(await count(fastify)).toBe(1);
   });
 
   it('never counts a disabled account, an account of a disabled realm or one with no issuer', async () => {

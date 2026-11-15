@@ -1,3 +1,4 @@
+import { ADMIN_API_SCOPES } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -24,6 +25,10 @@ describe('admin scopes (#507)', () => {
       'qauth:admin:write',
       'qauth:admin:security',
     ]);
+  });
+
+  it("are the shared list a service account's client is given (#522)", () => {
+    expect([...ADMIN_API_SCOPES]).toEqual([...ADMIN_SCOPE_LIST]);
   });
 
   it('each sit in the reserved qauth: namespace', () => {

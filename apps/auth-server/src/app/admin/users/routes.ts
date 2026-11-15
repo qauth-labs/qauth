@@ -13,6 +13,7 @@ import { emitUserEvent } from '../../helpers/user-events';
 import { requestClassification } from '../../plugins/admin-operations';
 import {
   ADMIN_SECURITY_SCHEME,
+  adminEventActor,
   adminTransaction,
   recordAdminChange,
   requestAdminCaller,
@@ -168,7 +169,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         request,
         'urn:qauth:event:user.verified:v1-rc.0',
         { method: 'operator' },
-        { tx, realmId, userId, actor: { type: 'user', id: caller.userId } }
+        { tx, realmId, userId, actor: adminEventActor(caller) }
       );
       const verification = accountVerificationOf(user);
       recordAdminChange(request, {
