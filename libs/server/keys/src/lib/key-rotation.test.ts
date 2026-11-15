@@ -1317,6 +1317,104 @@ describe('retireNow: an emergency retirement under an approval (#551)', () => {
     expect(await verifies(stale, oldToken)).toBe(false);
   });
 
+  it.each([
+    ['signJws', false],
+    ['signHybrid', true],
+  ])(
+    '%s never hands out a token whose key the denylist named while it loaded, and signs with the replacement',
+    async (_operation, hybrid) => {
+      const w = await world({ hybrid });
+      w.clock.now = T0 + 10 * DAY;
+      const denylist = createKidDenylist({
+        load: async () => ({
+          entries: w.keys.denied.map((entry) => {
+            const [realmId, kid] = entry.split(' ');
+            return { realmId, kid };
+          }),
+          complete: true,
+        }),
+        now: () => w.clock.now,
+      });
+      await denylist.refresh();
+      const lead = activeKid(w);
+      // The node has not loaded the key yet: its first key read waits until
+      // the retirement committed and the denylist names the key.
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let loading = false;
+      const store: MemorySignerStore = {
+        ...w.store,
+        async getWrappedKey(realmId, kid) {
+          if (!loading) {
+            loading = true;
+            await gate;
+          }
+          return w.store.getWrappedKey(realmId, kid);
+        },
+      };
+      const signer = createInProcessSigner({
+        store,
+        kekProvider: localProvider({ KEK: KEK_A }),
+        enabledSignatureAlgorithms: hybrid ? HYBRID : ED25519_ONLY,
+        hybridSigning: hybrid,
+        refreshIntervalMs: REFRESH_MS,
+        keyDenylist: denylist,
+        now: () => w.clock.now,
+      });
+      const { realmId, typ, claims } = accessToken(w.clock.now);
+      const signing = hybrid
+        ? signer.signHybrid('local', { realmId, typ, claims }).then((signed) => signed.token)
+        : signer.signJws('local', { realmId, purpose: 'token_signing', typ, claims });
+      await vi.waitFor(() => expect(loading).toBe(true));
+
+      const record = await retireNow(w, lead);
+      await denylist.refresh();
+      expect(denylist.isDenied(REALM, lead)).toBe(true);
+      release();
+
+      const token = await signing;
+      const header = decodeProtectedHeader(token);
+      expect(header.kid).toBe(record.replacements[0].kid);
+      if (hybrid) {
+        expect(header['pqc_kid']).toBe(record.replacements[1].kid);
+        expect(record.retired.map((key) => key.kid)).not.toContain(header['pqc_kid']);
+      }
+      expect(await verifies(signer, token)).toBe(true);
+    }
+  );
+
+  it('fails, rather than hand out a token, when the key it signed with is denied and none other is left', async () => {
+    const w = await world();
+    w.clock.now = T0 + 10 * DAY;
+    // A denylist that names every kid it is asked about once a key has loaded.
+    let loaded = false;
+    const denylist: KidDenylistView = {
+      isDenied: () => loaded,
+      revision: () => (loaded ? 1 : 0),
+    };
+    const store: MemorySignerStore = {
+      ...w.store,
+      async getWrappedKey(realmId, kid) {
+        loaded = true;
+        return w.store.getWrappedKey(realmId, kid);
+      },
+    };
+    const signer = createInProcessSigner({
+      store,
+      kekProvider: localProvider({ KEK: KEK_A }),
+      enabledSignatureAlgorithms: ED25519_ONLY,
+      hybridSigning: false,
+      refreshIntervalMs: REFRESH_MS,
+      keyDenylist: denylist,
+      now: () => w.clock.now,
+    });
+    await expect(signer.signJws('local', accessToken(w.clock.now))).rejects.toMatchObject({
+      name: 'SignerKeyNotFoundError',
+    });
+  });
+
   it('retires a hybrid pair as a pair, whichever key it names, and replaces it with a pair', async () => {
     const w = await world({ hybrid: true });
     w.clock.now = T0 + DAY;
