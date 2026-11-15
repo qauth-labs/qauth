@@ -32,6 +32,14 @@ export const RESERVED_AUDIENCE_PREFIX = 'urn:qauth:aud:';
  */
 export const DEVELOPER_API_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
 
+/**
+ * The admin API's audience (ADR-019 Decision 7, #509): the auth server's
+ * `API_FAMILY_AUDIENCES.admin`. It is here so the service accounts
+ * repository (`@qauth-labs/infra-db`, #522) gives a service account's client
+ * the same one without the auth server.
+ */
+export const ADMIN_API_AUDIENCE = 'urn:qauth:aud:admin:v1-rc.0';
+
 const RESERVED_AUDIENCE = /^\s*urn:qauth:aud:/i;
 
 /** Whether `value` is an audience in QAuth's reserved namespace, in any case. */

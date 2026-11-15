@@ -14,6 +14,7 @@ export * from './keys';
 export * from './oid4vp';
 export * from './realm-secrets';
 export * from './roles';
+export * from './service-accounts';
 export * from './sessions';
 export * from './sql-helpers';
 export * from './ssf';

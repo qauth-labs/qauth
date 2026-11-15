@@ -136,6 +136,40 @@ describe('manifestSchema', () => {
     });
   });
 
+  // #522: only a private_key_jwt client may hold the admin API's audience.
+  it.each(['client_secret_basic', 'client_secret_post', 'none', undefined])(
+    'refuses a %s client that lists the admin audience, naming it',
+    (method) => {
+      const entry: Record<string, unknown> = {
+        ...machineClient,
+        audience: ['http://localhost:8088', 'urn:qauth:aud:admin:v1-rc.0'],
+      };
+      if (method === undefined) delete entry['token_endpoint_auth_method'];
+      else entry['token_endpoint_auth_method'] = method;
+      const result = manifestSchema.safeParse({ realm: 'master', clients: [entry] });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]).toMatchObject({
+        path: ['clients', 0, 'audience'],
+        message: expect.stringContaining(
+          'only a client with token_endpoint_auth_method=private_key_jwt'
+        ),
+      });
+    }
+  );
+
+  it('lets a private_key_jwt client list the admin audience (#522)', () => {
+    const keyed = {
+      ...machineClient,
+      audience: ['urn:qauth:aud:admin:v1-rc.0'],
+      token_endpoint_auth_method: 'private_key_jwt',
+      jwks_uri: 'https://ci.example.com/jwks.json',
+    };
+    expect(manifestSchema.parse({ realm: 'master', clients: [keyed] })).toEqual({
+      realm: 'master',
+      clients: [keyed],
+    });
+  });
+
   it('requires a CIMD entry to state its scopes', () => {
     const withoutScopes = { client_id: cimdClient.client_id, audience: cimdClient.audience };
     expect(

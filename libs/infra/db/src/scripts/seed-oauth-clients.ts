@@ -219,12 +219,28 @@ function report(realm: string, issued: Issued[]): void {
     console.log('');
   }
 
-  const notFirstParty = refused.filter((r) => r.refusal !== 'client_credentials_scopes_dropped');
+  const notFirstParty = refused.filter(
+    (r) => r.refusal !== 'client_credentials_scopes_dropped' && r.refusal !== 'service_account'
+  );
   if (notFirstParty.length > 0) {
     console.error(
       'Refused, and left unchanged: these entries set first_party_profile on a client that ' +
         'can never be first party (a developer, dynamic registration or a CIMD document wrote it):\n  ' +
         notFirstParty.map((r) => `${r.clientId} (${r.refusal})`).join(', ') +
+        '\n'
+    );
+    process.exitCode = 1;
+  }
+
+  // #522: the client is a service account's, which the service-accounts
+  // command writes; an entry never rewrites it.
+  const serviceAccountClients = refused.filter((r) => r.refusal === 'service_account');
+  if (serviceAccountClients.length > 0) {
+    console.error(
+      "Refused, and left unchanged: these clients are service accounts' clients, which " +
+        'authenticate with private_key_jwt and hold no secret. Manage them with ' +
+        '`pnpm nx run auth-server:service-accounts`, and remove them from the manifest:\n  ' +
+        serviceAccountClients.map((r) => r.clientId).join(', ') +
         '\n'
     );
     process.exitCode = 1;

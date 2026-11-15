@@ -60,9 +60,10 @@ export const adminAuditLog = pgTable(
     rowHash: bytea('row_hash').notNull(),
     actorKind: adminActorKindEnum('actor_kind').notNull(),
     /**
-     * The actor: an account id for a human admin, a `client_id` for a service
-     * account, the operating-system user for the break-glass CLI or a host
-     * tool.
+     * The actor: an account id for a human admin, the account's user id for a
+     * service account (#522: a service account is a user with no credential,
+     * which its approvals and grants name too), the operating-system user for
+     * the break-glass CLI or a host tool.
      */
     actorId: varchar('actor_id', { length: 255 }).notNull(),
     /**

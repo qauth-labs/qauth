@@ -547,6 +547,13 @@
       "when": 1794750805045,
       "tag": "0077_deployment_nodes",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1794752623665,
+      "tag": "0078_service_accounts",
+      "breakpoints": true
     }
   ]
 }

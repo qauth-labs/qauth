@@ -12,7 +12,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { ownershipRefusalOf, recordFirstPartyChange } from '../lib/first-party/first-party-change';
-import { oauthClients } from '../lib/schema';
+import { oauthClients, serviceAccounts } from '../lib/schema';
 import type { Database, DbTransaction } from '../types';
 import {
   type ClientSpec,
@@ -42,8 +42,16 @@ export type Issued = {
    * - `client_credentials_scopes_dropped` (#891): the stored client narrows
    *   its `client_credentials` grant and the entry has no
    *   `client_credentials_scopes`, so the rewrite would lift the narrowing.
+   * - `service_account` (#522): the stored client is a service account's,
+   *   which the host's `service-accounts` command writes whole; a rewrite
+   *   from the entry would give it a secret and another configuration.
    */
-  refusal?: 'developer_owned' | 'dynamic' | 'cimd' | 'client_credentials_scopes_dropped';
+  refusal?:
+    | 'developer_owned'
+    | 'dynamic'
+    | 'cimd'
+    | 'client_credentials_scopes_dropped'
+    | 'service_account';
   /** Whether the write changed the client's first-party profile, policy or reason (#631). */
   firstPartyChanged?: boolean;
   /** How many refresh tokens removing the client's profile revoked (#631). */
@@ -98,6 +106,26 @@ export async function provisionClient(
 
     if (existing && !rotate) {
       return { clientId: spec.client_id, secret: '', action: 'skipped' as const };
+    }
+
+    // #522: a service account's client is written whole by the host's
+    // `service-accounts` command, `private_key_jwt` with no secret anyone
+    // holds; a rotation from an entry would issue it a secret. Refused, by
+    // name, before one is made.
+    if (existing) {
+      const [owner] = await tx
+        .select({ id: serviceAccounts.id })
+        .from(serviceAccounts)
+        .where(eq(serviceAccounts.clientId, existing.id))
+        .limit(1);
+      if (owner !== undefined) {
+        return {
+          clientId: spec.client_id,
+          secret: '',
+          action: 'refused' as const,
+          refusal: 'service_account' as const,
+        };
+      }
     }
 
     // A row the profile's CHECK would refuse is refused here, by name, before

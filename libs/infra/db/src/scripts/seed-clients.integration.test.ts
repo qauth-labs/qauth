@@ -16,7 +16,11 @@ import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { FIRST_PARTY_REMOVED_REVOKE_REASON } from '../lib/first-party/first-party-change';
-import { createRealmsRepository, createRefreshTokensRepository } from '../lib/repositories';
+import {
+  createRealmsRepository,
+  createRefreshTokensRepository,
+  createServiceAccountsRepository,
+} from '../lib/repositories';
 import { type IntegrationDb, setupIntegrationDb } from '../lib/repositories/integration-setup';
 import { oauthClients } from '../lib/schema/core';
 import { events } from '../lib/schema/events';
@@ -391,5 +395,42 @@ describe('seed-oauth-clients first-party profile (real Postgres)', () => {
     );
     expect((await provisionClient(db(), realmId, spec(RECEIVER), true)).action).toBe('rotated');
     expect((await client(realmId, 'notes-app')).clientCredentialsScopes).toBeNull();
+  });
+
+  // #522: a service account's client is written whole by the host's
+  // service-accounts command, private_key_jwt with no secret anyone holds.
+  it("refuses, before issuing a secret, a --rotate entry for a service account's client", async () => {
+    const realms = createRealmsRepository(db());
+    const operator = (await realms.create({ name: 'ops' })).id;
+    await realms.setOperator(operator, true);
+    await createServiceAccountsRepository(db()).create({
+      realmId: operator,
+      name: 'ci',
+      clientId: 'ci',
+      jwks: KEYS,
+      createdBy: null,
+    });
+    const before = await client(operator, 'ci');
+
+    const refused = await provisionClient(
+      db(),
+      operator,
+      spec({
+        client_id: 'ci',
+        name: 'CI',
+        grant_types: ['client_credentials'],
+        scopes: ['ci:run'],
+        token_endpoint_auth_method: 'client_secret_basic',
+      }),
+      true
+    );
+
+    expect(refused).toEqual({
+      clientId: 'ci',
+      secret: '',
+      action: 'refused',
+      refusal: 'service_account',
+    });
+    expect(await client(operator, 'ci')).toEqual(before);
   });
 });

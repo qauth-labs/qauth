@@ -156,6 +156,13 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // first-party profile an admin removed (#632), an `UPDATE … RETURNING`.
   refresh_tokens: { web: SIU, api: SIUD, admin: SU },
   roles: {},
+  // The service accounts of the admin API (#522): the token endpoint, on
+  // `api`, reads a client's service account for every `client_credentials`
+  // request, and the admin API, on `admin`, reads a caller's on every call.
+  // `web` reads it too, as it reads `admin_grants`: the approval page (#617)
+  // resolves its approver as the admin API resolves a caller. Written by no
+  // role: the host's `service-accounts` command writes it as the owner.
+  service_accounts: { web: S, api: S, admin: S },
   session_clients: { web: SID, api: SID },
   // The refresh families a logout-only session's codes started (#1144): the
   // code exchange, on `api`, links a family's first token; ending one session
