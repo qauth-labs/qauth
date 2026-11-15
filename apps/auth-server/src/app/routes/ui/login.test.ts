@@ -216,6 +216,22 @@ describe('UI /ui/login — CSRF defence', () => {
     expect(state.body as string).toContain(`value="${rawToken}"`);
   });
 
+  it('GET names the realm by its issuer’s host, in the title and the heading', async () => {
+    const { fastify, ctx } = makeFastify();
+    await loginRoute(fastify);
+    if (!ctx.get) throw new Error('Handler missing');
+
+    const { reply, state } = createReply();
+    await ctx.get({ query: {}, headers: {}, ip: '127.0.0.1' }, reply);
+
+    // The test realm's issuer is https://auth.example.com.
+    expect(state.body as string).toContain('<title>Sign in — auth.example.com</title>');
+    expect(state.body as string).toContain(
+      '<h1>Sign in to <span class="domain">auth.example.com</span></h1>'
+    );
+    expect(state.body as string).not.toContain('Sign in to QAuth');
+  });
+
   it('GET never renders caller-supplied text in the error banner (01VEX7C3)', async () => {
     const { fastify, ctx } = makeFastify();
     await loginRoute(fastify);
