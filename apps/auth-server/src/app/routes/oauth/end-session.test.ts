@@ -173,6 +173,8 @@ const sessionRows = new Map<
 let app: FastifyInstance;
 let sessions: BrowserSessionFixture;
 let verifyIdTokenHint: ReturnType<typeof vi.fn>;
+/** The sweep of a logout-only session's refresh families (#1144). */
+let revokeFamiliesOfSession: ReturnType<typeof vi.fn>;
 
 const mutableEnv = env as { INTERACTION_UI_ENABLED: boolean };
 /** The realm's ceremony app error page (#1106): none unless a test sets one. */
@@ -201,6 +203,7 @@ async function buildApp(): Promise<FastifyInstance> {
     'policyStore',
     testPolicyStore({}, { ceremonyApp: { errorPage } }) as unknown as FastifyInstance['policyStore']
   );
+  revokeFamiliesOfSession = vi.fn(async () => 0);
   verifyIdTokenHint = vi.fn(async (_realm: unknown, token: string) => {
     const hint = HINTS[token];
     if (hint === undefined) throw new JWTInvalidError('the hint does not verify');
@@ -220,6 +223,7 @@ async function buildApp(): Promise<FastifyInstance> {
         return row?.realmId === realmId ? row : undefined;
       }),
     },
+    refreshTokens: { revokeFamiliesOfSession },
   } as unknown as FastifyInstance['repositories']);
   await instance.register(endSessionRoutes, { prefix: '/oauth' });
   await instance.ready();
@@ -608,6 +612,29 @@ describe('a logout-only session the hint names (#1144)', () => {
       sid: LOGOUT_ONLY_SID,
     });
     expect(eventTypes()).not.toContain('urn:qauth:event:user.sign_out_failed:v1-rc.0');
+  });
+
+  it('revokes its refresh families before it ends the session, and leaves it live when that fails', async () => {
+    signUpSession();
+    const order: string[] = [];
+    revokeFamiliesOfSession.mockImplementationOnce(async () => {
+      order.push('families');
+      return 1;
+    });
+    sessions.service.revoke.mockImplementationOnce(async () => {
+      order.push('session');
+      return { outcome: 'ended', session: {} as never };
+    });
+    await endSession({ id_token_hint: 'hint.alice.sign-up' });
+    expect(revokeFamiliesOfSession).toHaveBeenCalledWith(USER_ID, LOGOUT_ONLY_SID, 'session_ended');
+    expect(order).toEqual(['families', 'session']);
+
+    // A failed sweep ends nothing, so a retried hint runs it again.
+    sessions.service.revoke.mockClear();
+    revokeFamiliesOfSession.mockRejectedValueOnce(new Error('the store is down'));
+    const failed = await endSession({ id_token_hint: 'hint.alice.sign-up' });
+    expect(failed.statusCode).toBe(500);
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
   });
 
   it('ends it, then asks before ending the browser’s own session', async () => {

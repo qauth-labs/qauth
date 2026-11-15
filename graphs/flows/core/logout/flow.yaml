@@ -64,8 +64,9 @@ scope:
       delivery role sends to each client that registered a backchannel_logout_uri as a logout token. The event
       user.signed_out carries the session's sid, so its CAEP session-revoked SET names the user and the session
       together"
-    - 'refresh tokens: this route revokes none (an app revokes its own at /oauth/revoke before it sends the browser
-      here, ADR-017 F0); POST /auth/logout, core.logout-token, still revokes every one of the user'
+    - 'refresh tokens: this route revokes none of a browser session (an app revokes its own at /oauth/revoke before
+      it sends the browser here, ADR-017 F0); a logout-only session the hint names (#1144) takes the refresh families
+      session_refresh_families links to it; POST /auth/logout, core.logout-token, still revokes every one of the user'
     - 'the realm resolver and the rate limit of the status page, which refuse as those of the end-session route do'
     - 'a store failure while the request is checked (the client, the session, the user) answers 500 before anything is
       ended, and a failure to record the event of a refusal turns that refusal into a 500'
@@ -365,9 +366,11 @@ states:
   endingLogoutOnlySession:
     title: End the logout-only session
     description: >-
-      The session service revokes it, reason sign_out, by its user, as it revokes a browser's: its row is marked
-      revoked, its registry rows and unredeemed codes go with it, and one back-channel logout notice per client it
-      served is queued in the same transaction (#624). No cookie is touched, and no refresh token is revoked.
+      First the refresh families session_refresh_families links to it are revoked (reason session_ended), so a
+      failure leaves the session live and a retried hint runs the sweep again. Then the session service revokes it,
+      reason sign_out, by its user, as it revokes a browser's: its row is marked revoked, its registry rows and
+      unredeemed codes go with it, and one back-channel logout notice per client it served is queued in the same
+      transaction (#624). No cookie is touched.
     invoke: { external: browserSessionStore }
     on:
       DONE:

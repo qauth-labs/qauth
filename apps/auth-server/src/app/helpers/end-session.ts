@@ -70,9 +70,11 @@ import { emitUserEvent } from './user-events';
  * - **Ending it.** The session service revokes the one session (`sign_out`):
  *   its row is marked revoked, its cache entry tombstoned, its registry rows
  *   and unredeemed codes go with it, and its listeners hear of it with the
- *   clients it served, for back-channel logout (#624). No refresh token is
- *   revoked: an app revokes its own at `/oauth/revoke` before it sends the
- *   browser here. The response clears the session cookie.
+ *   clients it served, for back-channel logout (#624). No refresh token of
+ *   a browser session is revoked: an app revokes its own at `/oauth/revoke`
+ *   before it sends the browser here. A logout-only session (#1144) that the
+ *   hint names takes its linked refresh families with it. The response
+ *   clears the session cookie.
  * - **Audit.** `user.signed_out` with the ended session's `sid`, or
  *   `user.sign_out_failed` with why nothing ended.
  *
@@ -379,6 +381,16 @@ async function endHintedLogoutOnlySession(
   ) {
     return null;
   }
+  // Its refresh families end with it (#861), before the session does: a
+  // sweep that fails leaves the session live, so a retried hint runs it
+  // again, while one after the end would never be retried (the revoked row
+  // returns above). The sweep is idempotent. A browser session's families
+  // are not revoked on this path; the app revokes its own at /oauth/revoke.
+  await fastify.repositories.refreshTokens.revokeFamiliesOfSession(
+    row.userId,
+    row.id,
+    'session_ended'
+  );
   // Only an end this request made counts: a concurrent one that won between
   // the read and the revoke recorded its own sign-out.
   const outcome = await endBrowserSession(
