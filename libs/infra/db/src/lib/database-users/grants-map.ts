@@ -144,6 +144,11 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   refresh_tokens: { web: SIU, api: SIUD, admin: SU },
   roles: {},
   session_clients: { web: SID, api: SID },
+  // The refresh families a logout-only session's codes started (#1144): the
+  // code exchange, on `api`, links a family's first token; ending one session
+  // reads the links, on `web` (the hosted account page) and on `api` (the
+  // account API). Purging a session deletes its rows through the cascade.
+  session_refresh_families: { web: S, api: SI },
   // Only the session purge, on `web`, deletes a session (`session-purge.ts`).
   sessions: { web: SIUD, api: SIU },
   // The SSF streams (#410): managed on `api`, read by the delivery route.

@@ -1,5 +1,5 @@
 {
-  "id": "243aea53-ecdb-464f-b1f1-515b41b01703",
+  "id": "f92ffe6a-956c-4719-b39c-bced20c8e094",
   "prevId": "a65918fd-c18b-4b20-b9e6-e986210d8081",
   "version": "7",
   "dialect": "postgresql",
@@ -4663,6 +4663,46 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.session_refresh_families": {
+      "name": "session_refresh_families",
+      "schema": "",
+      "columns": {
+        "session_id": {
+          "name": "session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "family_id": {
+          "name": "family_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "session_refresh_families_session_id_sessions_id_fk": {
+          "name": "session_refresh_families_session_id_sessions_id_fk",
+          "tableFrom": "session_refresh_families",
+          "tableTo": "sessions",
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "session_refresh_families_pk": {
+          "name": "session_refresh_families_pk",
+          "columns": ["session_id", "family_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.sessions": {
       "name": "sessions",
       "schema": "",
@@ -4705,13 +4745,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'browser'"
         },
         "new_credential_ids": {
           "name": "new_credential_ids",
@@ -4769,6 +4802,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'browser'"
         }
       },
       "indexes": {
@@ -5619,12 +5659,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "family_session_id": {
-          "name": "family_session_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "bigint",
@@ -5756,22 +5790,6 @@
           ],
           "isUnique": true,
           "where": "\"refresh_tokens\".\"authorization_code_id\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_refresh_tokens_family_session_id": {
-          "name": "idx_refresh_tokens_family_session_id",
-          "columns": [
-            {
-              "expression": "family_session_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"refresh_tokens\".\"family_session_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}

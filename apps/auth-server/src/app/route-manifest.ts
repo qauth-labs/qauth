@@ -438,7 +438,15 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/oauth',
     roles: ['web'],
     plugins: ['egress', 'jwt', 'sessions'],
-    repositories: ['adminGrants', 'events', 'oauthClients', 'realms', 'userCredentials', 'users'],
+    repositories: [
+      'adminGrants',
+      'events',
+      'oauthClients',
+      'realms',
+      'sessions',
+      'userCredentials',
+      'users',
+    ],
     load: () => import('./routes/oauth/end-session'),
   },
   {

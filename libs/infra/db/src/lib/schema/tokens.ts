@@ -337,22 +337,6 @@ export const refreshTokens = pgTable(
     }),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     lastUsedAt: bigint('last_used_at', { mode: 'number' }),
-    /**
-     * The session that backed the code whose exchange started the family
-     * (`authorization_codes.session_id`, #1144), so ending that one session
-     * ends the families its codes started. Set, like `authorization_code_id`,
-     * on the family's first token only: rotations leave it NULL, and the purge
-     * deletes a family only whole, so the first token keeps it while the
-     * family lives.
-     *
-     * No foreign key: a session row the purge deletes leaves the id behind,
-     * where it names no session and ends nothing. A family whose code no
-     * session backed, one started before migration 0075, and one the previous
-     * release started during a rolling upgrade carry NULL, and a single
-     * session's end does not find them: the account's other endings (sign out
-     * everywhere, a reset) still end them.
-     */
-    familySessionId: uuid('family_session_id'),
   },
   (t) => [
     index('idx_refresh_tokens_active')
@@ -371,10 +355,6 @@ export const refreshTokens = pgTable(
     uniqueIndex('idx_refresh_tokens_authorization_code_id')
       .on(t.authorizationCodeId)
       .where(sql`${t.authorizationCodeId} IS NOT NULL`),
-    // The families one session's end revokes (#1144).
-    index('idx_refresh_tokens_family_session_id')
-      .on(t.familySessionId)
-      .where(sql`${t.familySessionId} IS NOT NULL`),
     check(
       'refresh_tokens_cnf_jkt_format',
       sql`${t.cnfJkt} IS NULL OR ${t.cnfJkt} ~ '^[A-Za-z0-9_-]{43}$'`

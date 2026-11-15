@@ -227,6 +227,33 @@ export const sessionClients = pgTable(
   ]
 );
 
+/**
+ * The refresh-token families a logout-only session's codes started (#1144;
+ * ADR-017 Decisions 8 and 10, amended 2026-11-15): one row per session and
+ * family, written by the refresh-token repository in the transaction that
+ * stores a family's first token, and only when the code that started it names
+ * a session of kind `registration` or `reset`. Ending that one session reads
+ * it to revoke those families, whose tokens carry no `auth_time` for the
+ * sweep a browser session's end makes.
+ *
+ * A table of its own, so the refresh rows name no session (#549; ADR-014
+ * keeps a refresh-row `sid` for the Authority Tree's grant id). The session's
+ * foreign key cascades: purging the session deletes its rows. `family_id`
+ * names a family, not a row, so it has no foreign key; a purged family leaves
+ * a row that revokes nothing. The primary key, led by `session_id`, is the
+ * lookup by session and the index the cascade reads.
+ */
+export const sessionRefreshFamilies = pgTable(
+  'session_refresh_families',
+  {
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    familyId: uuid('family_id').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.sessionId, t.familyId], name: 'session_refresh_families_pk' })]
+);
+
 export const sessionsRelations = relations(sessions, ({ one, many }) => ({
   realm: one(realms, { fields: [sessions.realmId], references: [realms.id] }),
   user: one(users, { fields: [sessions.userId], references: [users.id] }),

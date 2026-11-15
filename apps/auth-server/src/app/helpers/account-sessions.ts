@@ -176,9 +176,10 @@ export async function endAccountSession(
     [result.session.authTime],
     'session_ended'
   );
-  // And the families its codes started, through their first token's link
-  // (#1144): a logout-only session's codes carry no `auth_time`, so the sweep
-  // above cannot find them. For a browser session it finds the same ones.
+  // And, for a logout-only session (#1144), the families its codes started,
+  // which `session_refresh_families` links to it: its codes carry no
+  // `auth_time`, so the sweep above cannot find them. A browser session has
+  // no links, and this ends nothing more for it.
   await fastify.repositories.refreshTokens.revokeFamiliesOfSession(
     userId,
     result.session.id,

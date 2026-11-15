@@ -20,9 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token end it. Each ending sends a logout token naming it, so an app that
   sets `backchannel_logout_session_required` no longer keeps the session a
   sign-up started. It ends at the session lifetime; the realm's idle limit
-  does not apply, since no browser uses it. Migration 0075 adds `sessions.kind` and
-  `refresh_tokens.family_session_id`. It rewrites no table, and the previous
-  release keeps working on it during a rolling upgrade.
+  does not apply, since no browser uses it. Ending it alone revokes the
+  refresh families its codes started. Migration 0075 adds `sessions.kind`
+  and the `session_refresh_families` table, which links such a session to
+  its families; refresh rows still name no session. It rewrites no table,
+  and the previous release keeps working on it during a rolling upgrade.
 
 ### Changed
 

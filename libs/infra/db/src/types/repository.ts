@@ -835,8 +835,9 @@ export interface RefreshTokensRepository {
   ): Promise<number>;
   /**
    * Revoke the refresh families the codes of one session started (#1144):
-   * every unrevoked token, expired ones too, of each family of the user whose
-   * first token's `familySessionId` is `sessionId`.
+   * every unrevoked token of the user, expired ones too, of each family
+   * `session_refresh_families` links to `sessionId`. Only a logout-only
+   * session's families are linked, at the code exchange that starts them.
    *
    * @returns Count of rows revoked by this call.
    */

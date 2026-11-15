@@ -553,6 +553,20 @@ describe('the password reset and the session epoch (#642, real containers)', () 
     ]);
     const tokens = await exchange(code, reset.challenge.verifier);
     expect(tokens.statusCode, tokens.body).toBe(200);
+    // Its refresh family is linked to the reset's session in a table of its
+    // own; the browser sign-in's family before it is not, and no refresh row
+    // names a session (#549).
+    const families = await query<{ family_id: string }>(
+      'SELECT r.family_id FROM refresh_tokens r JOIN authorization_codes c ON c.id = r.authorization_code_id WHERE c.session_id = $1',
+      [sid]
+    );
+    expect(families).toHaveLength(1);
+    expect(
+      await query<{ family_id: string }>(
+        'SELECT l.family_id FROM session_refresh_families l JOIN sessions s ON s.id = l.session_id WHERE s.user_id = $1',
+        [userId]
+      )
+    ).toEqual(families);
     const resetIdToken = (tokens.json() as { id_token: string }).id_token;
     const idToken = decodeJwtClaims(resetIdToken);
     expect(idToken['sub']).toBe(userId);

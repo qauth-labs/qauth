@@ -1,10 +1,11 @@
 /**
  * Migration 0075 adds the logout-only sessions of #1144 (ADR-017 Decisions 8
  * and 10, amended 2026-11-15): `sessions.kind`, with a constant default of
- * `browser`, and `refresh_tokens.family_session_id`, a nullable link with no
- * default and no foreign key. Postgres adds both without rewriting either
- * table, every existing session reads as a browser's and every existing token
- * as unlinked, and a release before this one keeps inserting both during a
+ * `browser`, and `session_refresh_families`, a new table that links a
+ * logout-only session to the refresh families its codes started. Refresh rows
+ * name no session (#549). Postgres adds the column without rewriting
+ * `sessions`, every existing session reads as a browser's, and a release
+ * before this one keeps inserting sessions and refresh tokens during a
  * rolling upgrade.
  */
 import { readFileSync } from 'node:fs';
@@ -13,7 +14,7 @@ import path from 'node:path';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 
-import { SESSION_KINDS, sessions } from './sessions';
+import { SESSION_KINDS, sessionRefreshFamilies, sessions } from './sessions';
 import { refreshTokens } from './tokens';
 
 const DRIZZLE_DIR = path.resolve(__dirname, '..', '..', '..', 'drizzle');
@@ -53,27 +54,9 @@ describe('migration 0075 (logout-only sessions)', () => {
     expect(journal.entries[MIGRATION_IDX - 1]?.tag).toBe('0074_admin_grants_security_change');
   });
 
-  it('adds two columns and an index that rewrite no table, and touches no row', () => {
-    expect(statements.slice(0, 3)).toEqual([
-      'ALTER TABLE "refresh_tokens" ADD COLUMN "family_session_id" uuid;',
-      'CREATE INDEX "idx_refresh_tokens_family_session_id" ON "refresh_tokens" USING btree ("family_session_id") WHERE "refresh_tokens"."family_session_id" IS NOT NULL;',
+  it('alters `sessions` first, without rewriting it, and keeps the kind to the known ones', () => {
+    expect(statements.slice(0, 2)).toEqual([
       `ALTER TABLE "sessions" ADD COLUMN "kind" text DEFAULT 'browser' NOT NULL;`,
-    ]);
-    expect(statements.join('\n')).not.toMatch(/\b(DROP|UPDATE|DELETE|INSERT|RENAME)\b/);
-  });
-
-  it('locks `sessions` last, never while the index build scans `refresh_tokens`', () => {
-    const firstSessions = statements.findIndex((statement) =>
-      statement.startsWith('ALTER TABLE "sessions"')
-    );
-    const index = statements.findIndex((statement) => statement.startsWith('CREATE INDEX'));
-    expect(index).toBeGreaterThanOrEqual(0);
-    expect(firstSessions).toBeGreaterThan(index);
-    expect(statements.slice(firstSessions).every((s) => s.includes('"sessions"'))).toBe(true);
-  });
-
-  it('keeps the kind to the known ones, with a CHECK the schema holds, not validated', () => {
-    expect(statements.slice(3)).toEqual([
       `ALTER TABLE "sessions" ADD CONSTRAINT "sessions_kind_valid" CHECK ("sessions"."kind" IN ('browser', 'registration', 'reset')) NOT VALID;`,
     ]);
     expect(SESSION_KINDS).toEqual(['browser', 'registration', 'reset']);
@@ -82,15 +65,39 @@ describe('migration 0075 (logout-only sessions)', () => {
     );
   });
 
+  it('creates the link table, whose session foreign key cascades', () => {
+    expect(statements.slice(2)).toEqual([
+      'CREATE TABLE "session_refresh_families" ( "session_id" uuid NOT NULL, "family_id" uuid NOT NULL, CONSTRAINT "session_refresh_families_pk" PRIMARY KEY("session_id","family_id") );',
+      'ALTER TABLE "session_refresh_families" ADD CONSTRAINT "session_refresh_families_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."sessions"("id") ON DELETE cascade ON UPDATE no action;',
+    ]);
+  });
+
+  it('touches no row and drops nothing', () => {
+    // A foreign key's referential actions name DELETE and UPDATE; no statement does.
+    const statementsOnly = statements.map((statement) =>
+      statement.replace(/ON DELETE \w+ ON UPDATE no action/, '')
+    );
+    expect(statementsOnly.join('\n')).not.toMatch(/\b(DROP|UPDATE|DELETE|INSERT|RENAME)\b/);
+  });
+
+  it('puts no session link on refresh rows (#549)', () => {
+    expect(statements.join('\n')).not.toContain('"refresh_tokens"');
+    expect(getTableConfig(refreshTokens).columns.map((column) => column.name)).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/session_id|sid/)])
+    );
+  });
+
   it('is what the schema declares', () => {
     const kind = getTableConfig(sessions).columns.find((column) => column.name === 'kind');
     expect(kind?.notNull).toBe(true);
     expect(kind?.default).toBe('browser');
-    const link = getTableConfig(refreshTokens).columns.find(
-      (column) => column.name === 'family_session_id'
-    );
-    expect(link?.notNull).toBe(false);
-    expect(link?.hasDefault).toBe(false);
-    expect(getTableConfig(refreshTokens).foreignKeys).toHaveLength(3);
+    const links = getTableConfig(sessionRefreshFamilies);
+    expect(links.name).toBe('session_refresh_families');
+    expect(links.columns.map((column) => [column.name, column.notNull])).toEqual([
+      ['session_id', true],
+      ['family_id', true],
+    ]);
+    expect(links.primaryKeys.map((key) => key.getName())).toEqual(['session_refresh_families_pk']);
+    expect(links.foreignKeys).toHaveLength(1);
   });
 });

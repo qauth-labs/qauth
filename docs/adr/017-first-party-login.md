@@ -275,7 +275,10 @@
 >   a back-channel logout URI. RP-initiated logout ends it at once on that ID token alone, since no
 >   browser holds it.
 > - The refresh family its code starts ends no later than it (#861), and ending it alone revokes
->   that family through the family's first token (`refresh_tokens.family_session_id`).
+>   that family. The code exchange links the family to it in a table of its own,
+>   `session_refresh_families`, since its codes carry no `auth_time` for the sweep a browser
+>   session's end makes. Refresh rows still name no session (#549; ADR-014 keeps a refresh-row
+>   `sid` for the Authority Tree's grant id).
 
 ## Context
 

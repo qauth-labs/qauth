@@ -7,30 +7,35 @@
 -- `sessions.kind` says what a row is: `browser` for a browser's sign-in, and
 -- `registration` or `reset` for a logout-only session, which no cookie names
 -- and the session service never hands out as a browser session.
--- `refresh_tokens.family_session_id` links a family's first token to the
--- session that backed its code, so ending that one session ends the families
--- its codes started.
+-- `session_refresh_families` links a logout-only session to the refresh
+-- families its codes started, so ending that one session ends them. A table of
+-- its own: refresh rows name no session (#549; ADR-014 keeps a refresh-row
+-- `sid` for the Authority Tree's grant id).
 --
--- One column with a constant default and one nullable column with no default:
--- Postgres adds both without rewriting either table. Every existing session
--- reads `browser`, and every existing token NULL. The previous release, which
--- never names the columns, keeps inserting browser sessions (the default) and
--- refresh tokens (unlinked) during a rolling upgrade. Forward-only: nothing is
--- rewritten. No foreign key on the link: a purged session leaves an id that
--- names no row and ends nothing.
+-- One column with a constant default and a new, empty table: Postgres adds
+-- the column without rewriting `sessions`, every existing session reads
+-- `browser`, and the previous release, which never names either, keeps
+-- inserting browser sessions (the default) and refresh tokens (unlinked)
+-- during a rolling upgrade. Forward-only: nothing is rewritten.
 --
--- The index is partial, so it holds only linked first tokens. The CHECK is
--- added NOT VALID: every row already in `sessions` reads `browser`, which it
--- accepts, so a validating scan could find nothing and would only hold the
--- table's lock while it read it. Every row written or updated from now on is
--- checked. Hand-edited: drizzle-kit models no NOT VALID.
+-- The CHECK is added NOT VALID: every row already in `sessions` reads
+-- `browser`, which it accepts, so a validating scan could find nothing and
+-- would only hold the table's lock while it read it. Every row written or
+-- updated from now on is checked. Hand-edited: drizzle-kit models no NOT VALID.
 --
--- Order: the migration runs in one transaction, and every lock it takes is
--- held to its commit. `refresh_tokens` goes first, its index build included,
--- which scans the whole table; `sessions` goes last, so the ACCESS EXCLUSIVE
--- lock its ALTERs take, which stops every session read, is held only for two
--- catalog changes and the commit, never during that scan.
-ALTER TABLE "refresh_tokens" ADD COLUMN "family_session_id" uuid;--> statement-breakpoint
-CREATE INDEX "idx_refresh_tokens_family_session_id" ON "refresh_tokens" USING btree ("family_session_id") WHERE "refresh_tokens"."family_session_id" IS NOT NULL;--> statement-breakpoint
+-- Order: the migration runs in one transaction and holds every lock to its
+-- commit, and nothing in it scans a table. `sessions` is altered first, so its
+-- ACCESS EXCLUSIVE lock is taken once, up front: the foreign key's SHARE ROW
+-- EXCLUSIVE lock on `sessions`, taken first, would have to be upgraded, and a
+-- session revocation holding a row lock while it waits to write could then
+-- deadlock with the upgrade. Every statement after it is a catalog change,
+-- and the foreign key validates against an empty table.
 ALTER TABLE "sessions" ADD COLUMN "kind" text DEFAULT 'browser' NOT NULL;--> statement-breakpoint
-ALTER TABLE "sessions" ADD CONSTRAINT "sessions_kind_valid" CHECK ("sessions"."kind" IN ('browser', 'registration', 'reset')) NOT VALID;
+ALTER TABLE "sessions" ADD CONSTRAINT "sessions_kind_valid" CHECK ("sessions"."kind" IN ('browser', 'registration', 'reset')) NOT VALID;--> statement-breakpoint
+CREATE TABLE "session_refresh_families" (
+	"session_id" uuid NOT NULL,
+	"family_id" uuid NOT NULL,
+	CONSTRAINT "session_refresh_families_pk" PRIMARY KEY("session_id","family_id")
+);
+--> statement-breakpoint
+ALTER TABLE "session_refresh_families" ADD CONSTRAINT "session_refresh_families_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."sessions"("id") ON DELETE cascade ON UPDATE no action;
