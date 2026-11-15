@@ -177,6 +177,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to. [Service roles](https://docs.qauth.dev/operate/service-roles/#the-signer-service)
   has the details and a deployment with every role apart.
 
+### Security
+
+- **The seed issues and prints no secret for a `private_key_jwt` or public
+  client** ([#1138]). `db:seed-oauth-clients` issued a secret for every
+  `clients` entry, whatever its `token_endpoint_auth_method`, stored its hash
+  and printed it under "Store these plaintext secrets securely", on creation
+  and on every `--rotate`. The auth server refuses that secret while the
+  client's method is `private_key_jwt` or `none`, but the admin API's
+  `clients.update` may change the method and leaves the hash as it is:
+  switched to `client_secret_basic`, the client would accept a secret that
+  had sat in terminals and logs since the seed. Such an entry now gets the
+  hash no secret matches that the admin API, the system client and CIMD
+  clients already hold, and the report names it on one line,
+  `<client_id>: created, no secret (authenticates with private_key_jwt)`,
+  with no `secret:` or `fingerprint:` line. An entry with
+  `client_secret_basic`, `client_secret_post` or no method gets its secret as
+  before, in the same block. **If 0.2.5 or earlier seeded a
+  `private_key_jwt` or `none` client, run its entry once more with
+  `--rotate`:** the rotation replaces the hash, and the secret printed then
+  verifies nowhere.
+
 ## [0.2.5] - 2026-11-14
 
 A patch release with no breaking change. A deployment can now seed each
@@ -4673,6 +4694,7 @@ It adds migrations 0068 and 0069.
 [#1109]: https://github.com/qauth-labs/qauth/issues/1109
 [#1110]: https://github.com/qauth-labs/qauth/issues/1110
 [#1118]: https://github.com/qauth-labs/qauth/issues/1118
+[#1138]: https://github.com/qauth-labs/qauth/issues/1138
 
 ### Deprecated
 
