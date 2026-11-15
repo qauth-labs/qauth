@@ -206,7 +206,7 @@ free password failures is no longer locked out by the bot challenge.
   `<client_id>: created, no secret (authenticates with private_key_jwt)`,
   with no `secret:` or `fingerprint:` line. An entry with
   `client_secret_basic`, `client_secret_post` or no method gets its secret as
-  before, in the same block. **If 0.2.5 or earlier seeded a
+  before, in the same block. **If 0.2.6 or earlier seeded a
   `private_key_jwt` or `none` client, run its entry once more with
   `--rotate`:** the rotation replaces the hash, and the secret printed then
   verifies nowhere.
