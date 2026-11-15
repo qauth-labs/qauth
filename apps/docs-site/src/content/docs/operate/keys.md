@@ -510,7 +510,11 @@ Decision 9).
    ```
 
    It prints the stored keys per `kek_ref` and changes nothing. The line that
-   says `wraps new keys` is the new KEK; the other is the old one.
+   says `wraps new keys` is the new KEK; the other is the old one. It lists
+   only references that stored keys name, so right after pass 2 the output
+   may show the old reference alone: no key is wrapped under the new KEK yet.
+   That one line is the old KEK's reference, the `--from` of the next step;
+   there is no need to create a key first.
 
 3. **Re-wrap.** On the same host:
 
