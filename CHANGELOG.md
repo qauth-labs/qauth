@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An address past its free password failures is no longer locked out by
+  the bot challenge** ([#1147]). When the address arrived as an identifier
+  answer, with no `login_hint`, the challenge it made due was offered, but
+  its answer named no address, so it was never checked and the identifier
+  step raised the challenge again, without end: neither the password step
+  nor "Forgot your password?" was reached. A challenge the engine offered
+  stays due until it is answered, so its answer is checked, and a right one
+  lets the address through to the password step.
 - **A realm's mail is named after its sender, not QAuth.** Since 0.2.6
   every mail showed QAuth's name and logo, and the verification and
   "account exists" mails said "QAuth" in their text, even for a realm that
@@ -4628,6 +4636,7 @@ It adds migrations 0068 and 0069.
 [#1118]: https://github.com/qauth-labs/qauth/issues/1118
 [#1143]: https://github.com/qauth-labs/qauth/issues/1143
 [#1144]: https://github.com/qauth-labs/qauth/issues/1144
+[#1147]: https://github.com/qauth-labs/qauth/issues/1147
 
 ### Deprecated
 

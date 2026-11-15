@@ -3369,6 +3369,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       // would throw the proof away and send the person back to the provider.
       // The rounds after it meet this rule as any other.
       if (upstreamRound.proof !== undefined) return null;
+      // A challenge offered and not yet answered stays due (#1147). Its
+      // answer names no address: the identifier answer that made it due was
+      // dropped, so without this the threshold below reads nothing, the
+      // answer is never checked, and the identifier step makes it due again.
+      if (state.transaction.captcha !== undefined) return 'threshold';
       if (limitsSoft || (await ladderSoft()) || (await accountLadderSoft())) return 'threshold';
       if (botChallenge === undefined) return null;
       const verdict = await fromStore('botChallenge', () => botChallenge(hookRound));
