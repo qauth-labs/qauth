@@ -2,8 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import * as net from 'node:net';
 
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { requireDockerOrSkip, truncateDomainTablesStatement } from '@qauth-labs/shared-testing';
-import type { FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -16,6 +17,7 @@ import {
   type PemKeyPair,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import type { BreakGlassHost } from './helpers/break-glass-host';
 
 /**
  * THE BREAK-GLASS CLI (ADR-019 Decisions 7 and 9, issue #602), against a
@@ -30,8 +32,11 @@ import {
  * listening socket. The enrolled admin is refused as an approver for 7 days,
  * by the two-admin rule read at a given clock.
  *
- * The commands run over a booted server's plugins (`breakGlassDependencies`),
- * and once as their own process (`runBreakGlassProcess`), in this one. App
+ * The commands run over a database plugin of their own, as the CLI process
+ * registers one, and the booted server's Redis and session service
+ * (`breakGlassDependencies`); and once as their own process
+ * (`runBreakGlassProcess`), in this one. The server builds only the
+ * repositories its service roles read, which the enrolments one is not. App
  * modules are imported after each boot, so they are the instances the
  * server loaded.
  *
@@ -55,6 +60,8 @@ describe('the break-glass CLI (#602)', () => {
   let jwt: PemKeyPair | undefined;
   let dockerUp = false;
   const booted: BootedAuthServer[] = [];
+  /** The database plugins of the commands, closed after each test. */
+  const commandDatabases: FastifyInstance[] = [];
 
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
@@ -80,6 +87,7 @@ describe('the break-glass CLI (#602)', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    await Promise.all(commandDatabases.splice(0).map(async (database) => database.close()));
     await Promise.all(booted.splice(0).map(async (server) => server.close()));
   });
 
@@ -104,14 +112,33 @@ describe('the break-glass CLI (#602)', () => {
     return realm;
   }
 
-  /** The group's commands over the booted server's plugins, and what they print. */
+  /**
+   * The group's commands, and what they print: over a database plugin of
+   * their own with every repository, as the CLI process registers it, and
+   * the booted server's Redis and session service.
+   */
   async function cli(app: FastifyInstance) {
     const { breakGlassDependencies } = await import('./helpers/break-glass-host');
     const { parseBreakGlassArguments, runBreakGlass } = await import('./helpers/break-glass');
+    const { ADMIN_ROLE_CATALOG } = await import('./helpers/admin-roles');
     const { env } = await import('../config/env');
+    const database = Fastify({ logger: false });
+    commandDatabases.push(database);
+    await database.register(databasePlugin, {
+      config: { connectionString: variables()['DATABASE_URL'] ?? '', pool: { max: 2, min: 0 } },
+      adminRoleCatalog: ADMIN_ROLE_CATALOG,
+    });
+    await database.ready();
+    const host: BreakGlassHost = {
+      db: database.db,
+      log: database.log,
+      repositories: database.repositories,
+      redis: app.redis,
+      sessionService: app.sessionService,
+    };
     const out: string[] = [];
     const err: string[] = [];
-    const deps = breakGlassDependencies(app, {
+    const deps = breakGlassDependencies(host, {
       kekEnv: process.env,
       signing: {
         enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
@@ -124,6 +151,8 @@ describe('the break-glass CLI (#602)', () => {
     return {
       out,
       err,
+      /** The enrolments repository, which the booted server does not build. */
+      enrolments: database.repositories.adminEnrolments,
       run: async (...argv: string[]): Promise<number> => {
         const command = parseBreakGlassArguments(argv);
         if (command === 'help') throw new Error('not a command');
@@ -190,7 +219,7 @@ describe('the break-glass CLI (#602)', () => {
   it('enrol-admin creates an account with no credential, its grant, and a token that works once, stored only as its hash', async () => {
     const app = await boot();
     const realm = await realmOf(app);
-    const { run, out, err } = await cli(app);
+    const { run, out, err, enrolments: enrolled } = await cli(app);
 
     expect(await run('enrol-admin', '--realm', E2E_REALM_NAME, '--role', 'security-admin')).toBe(0);
     expect(err).toEqual([]);
@@ -255,7 +284,6 @@ describe('the break-glass CLI (#602)', () => {
     expect(recorded[0]?.row).not.toContain(token);
 
     // The token works once.
-    const enrolled = app.repositories.adminEnrolments;
     expect(await enrolled.redeem(realm.id, token, Date.now())).toMatchObject({
       userId: accountId,
       realmId: realm.id,
@@ -266,7 +294,7 @@ describe('the break-glass CLI (#602)', () => {
   it('refuses an expired token, and a used one, alike', async () => {
     const app = await boot();
     const realm = await realmOf(app);
-    const { run, out } = await cli(app);
+    const { run, out, enrolments: enrolled } = await cli(app);
 
     expect(
       await run('enrol-admin', '--realm', E2E_REALM_NAME, '--role', 'viewer', '--expires-in', '1')
@@ -278,7 +306,6 @@ describe('the break-glass CLI (#602)', () => {
     const createdAt = Number(rows[0]?.created_at);
     expect(Number(rows[0]?.expires_at)).toBe(createdAt + 60_000);
 
-    const enrolled = app.repositories.adminEnrolments;
     expect(await enrolled.redeem(realm.id, token, createdAt + 60_000)).toBeUndefined();
     expect(await enrolled.redeem(realm.id, token, createdAt + DAY)).toBeUndefined();
     // Before it expires it works, once.
