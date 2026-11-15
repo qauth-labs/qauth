@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-15
+
+A patch release with no breaking change, no migration and no new setting.
+Every mail the server sends now has QAuth's look, and a realm that set no
+brand shows QAuth's logo, carried in the mail itself, so opening a mail
+fetches nothing. The key library can rotate a realm's key before it is due,
+under an approval of that rotation; no route calls it yet. CI
+refuses a migration that would break the previous release.
+
 ### Added
 
 - **Manual key rotation, as a security operation** ([#544], ADR-019
@@ -5422,7 +5431,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/qauth-labs/qauth/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/qauth-labs/qauth/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/qauth-labs/qauth/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/qauth-labs/qauth/compare/v0.2.2...v0.2.3
