@@ -538,6 +538,72 @@ describe('rule 5: the answer', () => {
   });
 });
 
+describe('rule 5: a challenge raised before the round names an address (#1147)', () => {
+  /** An engine whose identifier is past its ladder's free failures. */
+  async function pastFreeFailures() {
+    const clock = manualClock();
+    const ladder = createMemoryLadder(() => clock.now());
+    const built = build({ hooks: { ladder }, clock });
+    for (let i = 0; i < PASSWORD_LADDER_POLICY.freeFailures; i += 1) {
+      await built.engine.advance(null, passwordAnswer(WRONG, IDENTIFIER), context());
+      clock.advance(60 * 60_000);
+    }
+    return built;
+  }
+
+  it.each([
+    ['an identifier answer', () => answer('identifier', { login_hint: IDENTIFIER })],
+    ['a password answer that names its account', () => passwordAnswer(PASSWORD, IDENTIFIER)],
+  ])('checks the challenge %s raised, then reaches the password step', async (_label, first) => {
+    const built = await pastFreeFailures();
+    const verifications = built.passwords.verifications;
+    // No login_hint: the address comes only in the answer, which rule 5 drops.
+    const challenged = await built.engine.advance(null, first(), context());
+    const params = offered(challenged);
+    // The captcha's answer names no address; it is checked all the same.
+    const passed = await built.engine.advance(
+      kept(challenged),
+      tokenAnswer(solve(params)),
+      context()
+    );
+    expect(kept(passed).captchaPassed).toBe(true);
+    expect(kept(passed).captcha).toBeUndefined();
+    expect(passed).toMatchObject({ offer: { current: { step: 'identifier' } } });
+    // The address again: the pass holds, so the password step comes, not another challenge.
+    const identified = await built.engine.advance(
+      kept(passed),
+      answer('identifier', { login_hint: IDENTIFIER }),
+      context()
+    );
+    expect(identified).toMatchObject({ offer: { current: { step: 'password' } } });
+    expect(built.provider.puzzles).toBe(1);
+    expect(
+      await built.engine.advance(kept(identified), passwordAnswer(PASSWORD), context())
+    ).toMatchObject({ kind: 'complete' });
+    expect(built.passwords.verifications).toBe(verifications + 1);
+  });
+
+  it('refuses a wrong answer to it with captcha_failed and a new puzzle', async () => {
+    const built = await pastFreeFailures();
+    const challenged = await built.engine.advance(
+      null,
+      answer('identifier', { login_hint: IDENTIFIER }),
+      context()
+    );
+    const params = offered(challenged);
+    const wrong = await built.engine.advance(
+      kept(challenged),
+      tokenAnswer(miss(params)),
+      context()
+    );
+    expect(wrong).toMatchObject({
+      offer: { current: { step: 'captcha', error: 'captcha_failed' } },
+    });
+    expect(offered(wrong)).not.toEqual(params);
+    expect(kept(wrong).captchaPassed).toBeUndefined();
+  });
+});
+
 describe('rule 5: a challenge that cannot be answered', () => {
   const due: SignInHooks = { botChallenge: async () => ({ kind: 'due' }) };
 
