@@ -1,4 +1,4 @@
-import type { CachedSessionRecord, RealmSessionLifetimes } from './types';
+import type { CachedSessionRecord, RealmSessionLifetimes, SessionKind } from './types';
 
 /** Where a session stands at a given moment. */
 export type SessionVerdict = 'live' | 'ended' | 'idle';
@@ -10,7 +10,10 @@ export interface SessionEnds {
    * maximum lifespan (or `SESSION_COOKIE_TTL` without one) now ends it sooner.
    */
   absolute: number;
-  /** The idle end, from the stored `last_seen_at`; `null` without an idle limit. */
+  /**
+   * The idle end, from the stored `last_seen_at`; `null` without an idle
+   * limit, and for a logout-only session (#1144), which no browser uses.
+   */
   idle: number | null;
 }
 
@@ -21,19 +24,26 @@ export interface SessionEnds {
  * creation, so a realm that shortens it shortens its live sessions too. A
  * longer one never extends a session past the `expires_at` it was given.
  *
+ * A logout-only session (#1144) has no idle end: no browser holds it, so
+ * nothing ever marks it used, and the realm's idle limit would end it however
+ * busy the app it signed in to. It ends at its absolute end alone.
+ *
  * @param defaultMaxLifespanSeconds - `SESSION_COOKIE_TTL`, for a realm with no
  * `sso_max_lifespan`
  */
 export function sessionEnds(
-  record: Pick<CachedSessionRecord, 'createdAt' | 'expiresAt' | 'lastSeenAt'>,
+  record: Pick<CachedSessionRecord, 'createdAt' | 'expiresAt' | 'lastSeenAt'> & {
+    readonly kind?: SessionKind;
+  },
   lifetimes: RealmSessionLifetimes,
   defaultMaxLifespanSeconds: number
 ): SessionEnds {
   const maxLifespanMs = (lifetimes.maxLifespanSeconds ?? defaultMaxLifespanSeconds) * 1000;
+  const browser = record.kind === undefined || record.kind === 'browser';
   return {
     absolute: Math.min(record.expiresAt, record.createdAt + maxLifespanMs),
     idle:
-      lifetimes.idleTimeoutSeconds === null
+      lifetimes.idleTimeoutSeconds === null || !browser
         ? null
         : record.lastSeenAt + lifetimes.idleTimeoutSeconds * 1000,
   };

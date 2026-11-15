@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the password alone, a factor that an intruder with the password bound.
   The default stays 7 days. A realm that already booted changes it through
   the policy update, a security operation.
+- **A sign-up or a password reset leaves a logout-only session**
+  ([#1144], ADR-017 Decisions 8 and 10, amended 2026-11-15). A
+  registration or a reset that finishes an authorization request still signs
+  nobody in, and its code still carries no `amr`, `auth_time` or `acr`. But
+  its ID token now has a `sid`, the id of a session no browser holds and
+  that never satisfies an authorization request. "Sign out everywhere", a
+  later reset, disabling the account, ending it on the account page (shown
+  as "A sign-up" or "A password reset") and RP-initiated logout with that ID
+  token end it. Each ending sends a logout token naming it, so an app that
+  sets `backchannel_logout_session_required` no longer keeps the session a
+  sign-up started. It ends at the session lifetime; the realm's idle limit
+  does not apply, since no browser uses it. Ending it alone revokes the
+  refresh families its codes started. Migration 0075 adds `sessions.kind`
+  and the `session_refresh_families` table, which links such a session to
+  its families; refresh rows still name no session. It rewrites no table,
+  and the previous release keeps working on it during a rolling upgrade.
 
 ### Changed
 
@@ -36,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An address past its free password failures is no longer locked out by
+  the bot challenge** ([#1147]). When the address arrived as an identifier
+  answer, with no `login_hint`, the challenge it made due was offered, but
+  its answer named no address, so it was never checked and the identifier
+  step raised the challenge again, without end: neither the password step
+  nor "Forgot your password?" was reached. A challenge the engine offered
+  stays due until it is answered, so its answer is checked, and a right one
+  lets the address through to the password step.
 - **A realm's mail is named after its sender, not QAuth.** Since 0.2.6
   every mail showed QAuth's name and logo, and the verification and
   "account exists" mails said "QAuth" in their text, even for a realm that
@@ -4617,6 +4641,8 @@ It adds migrations 0068 and 0069.
 [#1110]: https://github.com/qauth-labs/qauth/issues/1110
 [#1118]: https://github.com/qauth-labs/qauth/issues/1118
 [#1143]: https://github.com/qauth-labs/qauth/issues/1143
+[#1144]: https://github.com/qauth-labs/qauth/issues/1144
+[#1147]: https://github.com/qauth-labs/qauth/issues/1147
 [#1148]: https://github.com/qauth-labs/qauth/issues/1148
 
 ### Deprecated

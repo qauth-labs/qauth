@@ -455,7 +455,16 @@ describe('registration through prompt=create (#640, real containers)', () => {
       'SELECT auth_time, amr, session_id FROM authorization_codes WHERE user_id = $1',
       [userId]
     );
-    expect(stored).toEqual({ auth_time: null, amr: null, session_id: null });
+    // No authentication, but a logout-only session (#1144): no cookie names
+    // it, and the code carries its `sid`.
+    expect(stored).toMatchObject({ auth_time: null, amr: null });
+    const sid = stored?.session_id;
+    if (typeof sid !== 'string') throw new Error('the code names no session');
+    const logoutOnly = await query<{ kind: string; amr: unknown; revoked_at: unknown }>(
+      'SELECT kind, amr, revoked_at FROM sessions WHERE id = $1',
+      [sid]
+    );
+    expect(logoutOnly).toEqual([{ kind: 'registration', amr: [], revoked_at: null }]);
 
     const token = await server().inject({
       method: 'POST',
@@ -474,12 +483,57 @@ describe('registration through prompt=create (#640, real containers)', () => {
     expect(idToken['sub']).toBe(userId);
     expect(idToken).not.toHaveProperty('auth_time');
     expect(idToken).not.toHaveProperty('amr');
-    expect(idToken).not.toHaveProperty('sid');
+    // The logout-only session's `sid`, which back-channel logout names (#1144).
+    expect(idToken['sid']).toBe(sid);
     // Nor does the access token (#662): a registration is no sign-in.
     const accessToken = decodeJwtClaims((token.json() as { access_token: string }).access_token);
     expect(accessToken['sub']).toBe(userId);
     expect(accessToken).not.toHaveProperty('auth_time');
     expect(accessToken).not.toHaveProperty('amr');
+
+    // No browser holds it: the same browser's next request meets the sign-in.
+    const again = await server().inject({
+      method: 'GET',
+      url: `/oauth/authorize?${new URLSearchParams({
+        response_type: 'code',
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        scope: 'openid email',
+        code_challenge: pkcePair().challenge,
+        code_challenge_method: 'S256',
+        state: 'after-registration',
+      }).toString()}`,
+      headers: jar.header() === undefined ? {} : { cookie: jar.header() as string },
+    });
+    jar.absorb(again.headers['set-cookie']);
+    expect((await read(interactionIdOf(again))).step).toBe(IDENTIFIER);
+
+    // Signing out everywhere ends it, and queues the client a logout token
+    // naming its `sid` (#1144, #624).
+    await query(
+      "UPDATE oauth_clients SET backchannel_logout_uri = 'https://client.example.com/backchannel', backchannel_logout_uri_source = 'admin' WHERE client_id = $1",
+      [CLIENT_ID]
+    );
+    try {
+      await server().sessionService.revokeAllForUser({
+        realmId,
+        userId,
+        reason: 'sign_out_everywhere',
+        actor: { type: 'user', id: userId },
+      });
+      const notices = await query<{ data: Record<string, unknown> }>(
+        "SELECT data FROM events WHERE type = 'urn:qauth:event:user.client_session_ended:v1-rc.0' AND subject_id = $1",
+        [userId]
+      );
+      expect(notices.map((notice) => notice.data)).toEqual([
+        { sid, reason: 'sign_out_everywhere' },
+      ]);
+    } finally {
+      await query(
+        'UPDATE oauth_clients SET backchannel_logout_uri = NULL, backchannel_logout_uri_source = NULL WHERE client_id = $1',
+        [CLIENT_ID]
+      );
+    }
   });
 
   it('helps the owner of an existing verified account sign in after the code, creating nothing', async () => {

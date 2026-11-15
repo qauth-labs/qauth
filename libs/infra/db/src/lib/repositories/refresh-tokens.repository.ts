@@ -21,7 +21,8 @@ import type {
 } from '../../types';
 import { DbClient } from '../db';
 import { oauthClients } from '../schema/core';
-import { refreshTokens } from '../schema/tokens';
+import { sessionRefreshFamilies, sessions } from '../schema/sessions';
+import { authorizationCodes, refreshTokens } from '../schema/tokens';
 
 /**
  * Serialise refresh-token rotation against bulk revocation for one user.
@@ -128,6 +129,22 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
       const run = async (invoker: DbClient): Promise<RefreshToken> => {
         await lockClientTokens(invoker, 'issue', data.oauthClientId);
         const [token] = await invoker.insert(refreshTokens).values(data).returning();
+        // A family's first token, from a code (#1144): when the code's session
+        // is a logout-only one (a registration's or a reset's), link the family
+        // to it, so ending that one session ends the family. A browser
+        // session's families carry its `auth_time` instead, and the refresh
+        // row itself names no session (#549).
+        if (data.authorizationCodeId !== undefined && data.authorizationCodeId !== null) {
+          await invoker.execute(
+            sql`insert into ${sessionRefreshFamilies} (${sql.identifier('session_id')}, ${sql.identifier('family_id')})
+                select ${sessions.id}, ${data.familyId ?? token.familyId}::uuid
+                  from ${authorizationCodes}
+                  join ${sessions} on ${sessions.id} = ${authorizationCodes.sessionId}
+                 where ${authorizationCodes.id} = ${data.authorizationCodeId}
+                   and ${sessions.kind} <> 'browser'
+                on conflict do nothing`
+          );
+        }
         return token;
       };
       return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
@@ -425,6 +442,47 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
           );
       };
 
+      return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
+    },
+
+    /**
+     * Revoke the refresh families the codes of one session started (#1144):
+     * every unrevoked token of the user, expired ones too, of each family
+     * `session_refresh_families` links to the session (written at the code
+     * exchange, for a logout-only session only). A logout-only session's codes
+     * carry no `auth_time`, so {@link revokeFamiliesOfSignIns} cannot find its
+     * families; this does. The user's id bounds it to that account's tokens.
+     * Already-revoked rows keep their original reason.
+     *
+     * @returns Count of rows revoked by this call
+     */
+    async revokeFamiliesOfSession(
+      userId: string,
+      sessionId: string,
+      reason: string,
+      tx?: DbClient
+    ): Promise<number> {
+      const run = async (invoker: DbClient): Promise<number> => {
+        await lockUserTokens(invoker, 'revoke', userId);
+        const revoked = await invoker
+          .update(refreshTokens)
+          .set({ revoked: true, revokedAt: Date.now(), revokedReason: reason })
+          .where(
+            and(
+              eq(refreshTokens.userId, userId),
+              eq(refreshTokens.revoked, false),
+              inArray(
+                refreshTokens.familyId,
+                invoker
+                  .select({ familyId: sessionRefreshFamilies.familyId })
+                  .from(sessionRefreshFamilies)
+                  .where(eq(sessionRefreshFamilies.sessionId, sessionId))
+              )
+            )
+          )
+          .returning({ id: refreshTokens.id });
+        return revoked.length;
+      };
       return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
     },
 
