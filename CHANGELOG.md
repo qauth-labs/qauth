@@ -46,6 +46,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserved security operations of the admin API, beside
   `serviceAccounts.create`); no secret is made or printed
   ([Service accounts](https://docs.qauth.dev/operate/service-accounts/)).
+- **The break-glass CLI** ([#602], ADR-019 Decisions 7 and 9). `pnpm nx run
+  auth-server:break-glass` is the way in when no admin can act, run on a
+  host that holds the database credentials and the KEK, and has exactly two
+  commands: `enrol-admin --realm <name> --role <role>` creates an admin
+  account with no password and no credential, its built-in role grant on
+  the realm and a one-time enrolment URL on the realm's issuer, printed once;
+  `retire-key --realm <name> --kid <kid> --confirm` runs the emergency key
+  retirement of `keys:retire`. No command sets a password or imports a key.
+  It starts only when `DATABASE_URL` is set and the KEK opens a stored key
+  (exit code 4 otherwise), registers no route and never listens. The
+  enrolment token is 32 random bytes, stored only as its SHA-256 hash in the
+  new `admin_enrolments` table (migration 0079), single use, valid an hour
+  by default (`--expires-in`, up to a day), and carried in the URL's
+  fragment. The enrolled admin cannot approve another admin's request for 7
+  days, by the two-admin rule. Before a run changes anything, and in its
+  transaction, it writes an admin audit row of the realm
+  (`breakGlass.enrolAdmin` or `breakGlass.retireKey`, actor kind
+  `break_glass_operator`, with the operating-system user and uid, the host
+  name, the command and its arguments) and the new critical
+  `admin.break_glass_used` event, which every event route sends, SSF
+  streams as `urn:qauth:secevent:break-glass-used:v1-rc.0`; if either fails,
+  nothing changes. The page that turns the URL into a first passkey is
+  [#621]
+  ([Break-glass](https://docs.qauth.dev/operate/break-glass/)).
 
 ### Changed
 
@@ -4782,6 +4806,7 @@ It adds migrations 0068 and 0069.
 [#615]: https://github.com/qauth-labs/qauth/issues/615
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#618]: https://github.com/qauth-labs/qauth/issues/618
+[#621]: https://github.com/qauth-labs/qauth/issues/621
 [#624]: https://github.com/qauth-labs/qauth/issues/624
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
