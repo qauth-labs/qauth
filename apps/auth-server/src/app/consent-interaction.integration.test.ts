@@ -1442,4 +1442,84 @@ describe('the consent step of the Interaction API (#629, real containers)', () =
     expect(consentParams(step)['agent']).toEqual({});
     expect(await codeRows(agentRowId)).toEqual([]);
   });
+
+  describe("a registered protected resource's scopes (#1087)", () => {
+    const RESOURCE = 'https://files.example.com/mcp';
+
+    /** The files resource of the realm, open to every client. */
+    async function registerResource(): Promise<void> {
+      const row = await server().repositories.protectedResources.create(realmId, RESOURCE, {
+        scopes: [
+          {
+            scope: 'files:read',
+            text: { en: 'Read your files', tr: 'Dosyalarınızı okusun' },
+            sensitive: false,
+          },
+          { scope: 'files:write', text: { en: 'Change your files' }, sensitive: true },
+        ],
+        anyClient: true,
+        clientIds: [],
+      });
+      if (row === undefined) throw new Error('resource not registered');
+    }
+
+    /** The step's entries of the resource's scopes. */
+    function resourceEntries(step: StepRead): Record<string, unknown>[] {
+      return (consentParams(step)['scopes'] as Record<string, unknown>[]).filter((entry) =>
+        String(entry['scope']).startsWith('files:')
+      );
+    }
+
+    it("carries the resource's text in the interaction's locale, English otherwise, and the scopes the realm marks sensitive", async () => {
+      await registerResource();
+      const jar = await signInWithPassword(server(), EMAIL);
+
+      const turkish = await consentStep(jar, {
+        scope: 'openid files:read files:write',
+        resource: RESOURCE,
+        ui_locales: 'tr',
+      });
+      expect(resourceEntries(turkish.step)).toEqual([
+        { scope: 'files:read', text: 'Dosyalarınızı okusun', sensitive: false, dangerous: false },
+        { scope: 'files:write', text: 'Change your files', sensitive: true, dangerous: false },
+      ]);
+      expect(consentParams(turkish.step)['resources']).toEqual([RESOURCE]);
+
+      const german = await consentStep(jar, {
+        scope: 'openid files:read',
+        resource: RESOURCE,
+        ui_locales: 'de',
+      });
+      expect(resourceEntries(german.step)).toEqual([
+        { scope: 'files:read', text: 'Read your files', sensitive: false, dangerous: false },
+      ]);
+    });
+
+    it('grants the scopes the step showed for the resource, and none without it', async () => {
+      await registerResource();
+      const jar = await signInWithPassword(server(), EMAIL);
+
+      const without = await consentStep(jar, { scope: 'openid files:read' });
+      expect(resourceEntries(without.step)).toEqual([]);
+
+      const pkce = pkcePair();
+      const { id, step } = await consentStep(
+        jar,
+        { scope: 'openid files:read files:write', resource: RESOURCE },
+        pkce.challenge
+      );
+      expect(resourceEntries(step).map((entry) => entry['scope'])).toEqual([
+        'files:read',
+        'files:write',
+      ]);
+      const code = callbackOf(await decide(jar, id, 'allow')).get('code');
+      const token = await redeem(code as string, pkce.verifier);
+      expect(token.statusCode, token.body).toBe(200);
+      expect(String((token.json() as { scope?: string }).scope).split(' ')).toEqual([
+        'openid',
+        'files:read',
+        'files:write',
+      ]);
+    });
+  });
 });
