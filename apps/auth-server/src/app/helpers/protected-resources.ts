@@ -18,7 +18,13 @@ import type { FastifyInstance } from 'fastify';
  * - asked for without its resource, or with another, it is dropped, so a
  *   token's `aud` and the resource scopes it carries always agree. A client
  *   the resource is not open to gets none of its scopes, its own list
- *   notwithstanding.
+ *   notwithstanding;
+ * - a request that names several resources gets it only when each of them is
+ *   a registered resource that defines it and is open to the client. A token
+ *   is one credential for every audience it names, so a scope one of them
+ *   granted would otherwise reach another that never did: one that defines a
+ *   scope of the same name but is closed to the client, or one QAuth does not
+ *   know.
  *
  * Every other scope keeps the client's own `scopes` list as its ceiling. With
  * no registered resource, the rule is the client list alone, as before.
@@ -81,9 +87,11 @@ export function isResourceBoundScope(scope: string, registered: RegisteredResour
 }
 
 /**
- * The entry of `scope` at the first of `resources` that defines it and is
- * open to the client, or `undefined`: the registration that grants the scope
- * to this request, whose consent text the consent step shows.
+ * The entry of `scope` that grants it to this request, or `undefined`. It is
+ * granted only when the request names at least one resource and every one of
+ * them is a registered resource that defines the scope and is open to the
+ * client; the entry is the first named resource's, whose consent text the
+ * consent step shows.
  */
 export function grantingEntry(
   scope: string,
@@ -91,21 +99,22 @@ export function grantingEntry(
   resources: readonly string[],
   registered: RegisteredResources
 ): RegisteredResourceScope | undefined {
+  let granting: RegisteredResourceScope | undefined;
   for (const indicator of resources) {
-    for (const resource of registered) {
-      if (resource.resource !== indicator || !openTo(resource, client.clientId)) continue;
-      const entry = resource.scopes.find((candidate) => candidate.scope === scope);
-      if (entry !== undefined) return entry;
-    }
+    const resource = registered.find((candidate) => candidate.resource === indicator);
+    if (resource === undefined || !openTo(resource, client.clientId)) return undefined;
+    const entry = resource.scopes.find((candidate) => candidate.scope === scope);
+    if (entry === undefined) return undefined;
+    granting ??= entry;
   }
-  return undefined;
+  return granting;
 }
 
 /**
  * Whether the rule grants `scope` to the client for a request that names
- * `resources`: by a registered resource the request names and that is open
- * to the client when a registered resource defines the scope, by the client's
- * own list otherwise.
+ * `resources`: when a registered resource defines the scope, by the
+ * registrations of the resources the request names ({@link grantingEntry}),
+ * by the client's own list otherwise.
  */
 export function isScopeGrantable(
   scope: string,
@@ -166,6 +175,22 @@ export function withoutUngrantedResourceScopes(
 }
 
 /**
+ * The granted `scopes` the client gets through a registered resource alone,
+ * which its own list does not hold. No operator vouched for this client
+ * having them, so a first-party client's administrative consent does not
+ * cover them: only the user's consent does.
+ */
+export function scopesOnlyAResourceGrants(
+  scopes: readonly string[],
+  client: ScopeRuleClient,
+  registered: RegisteredResources
+): string[] {
+  return scopes.filter(
+    (scope) => isResourceBoundScope(scope, registered) && !client.scopes.includes(scope)
+  );
+}
+
+/**
  * The client's scope ceiling at `resources`: its own list without the scopes a
  * registered resource defines, and with those the rule grants it there. The
  * refresh grant checks the family's scopes against it.
@@ -178,10 +203,11 @@ export function scopeCeilingAt(
   const ceiling = new Set(
     client.scopes.filter((scope) => !isResourceBoundScope(scope, registered))
   );
-  for (const indicator of resources) {
-    for (const resource of registered) {
-      if (resource.resource !== indicator || !openTo(resource, client.clientId)) continue;
-      for (const entry of resource.scopes) ceiling.add(entry.scope);
+  // Only a scope the first named resource defines can be granted at all.
+  const first = registered.find((resource) => resource.resource === resources[0]);
+  for (const entry of first?.scopes ?? []) {
+    if (grantingEntry(entry.scope, client, resources, registered) !== undefined) {
+      ceiling.add(entry.scope);
     }
   }
   return [...ceiling];

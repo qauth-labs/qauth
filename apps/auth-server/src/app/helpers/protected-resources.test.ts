@@ -96,14 +96,37 @@ describe('grantRequestedScopes', () => {
     ]);
   });
 
-  it('grants each resource its own scopes when the request names several', () => {
+  it('grants a scope for several resources only when each of them grants it', () => {
+    // Each resource defines a scope the other does not: neither reaches a
+    // token whose `aud` names the other one too.
     const listed = { clientId: 'mail-app', scopes: [] };
     expect(grantRequestedScopes('files:read mail:send', listed, [FILES, MAIL], registered)).toEqual(
-      ['files:read', 'mail:send']
+      []
     );
-    expect(grantRequestedScopes('files:read mail:send', cimd, [FILES, MAIL], registered)).toEqual([
+    // Two resources that both define it and are both open to the client.
+    const MIRROR = 'https://mirror.example/mcp';
+    const mirror: RegisteredResource = { ...files, resource: MIRROR };
+    expect(grantRequestedScopes('files:read', cimd, [FILES, MIRROR], [files, mirror])).toEqual([
       'files:read',
     ]);
+    expect(scopeCeilingAt(cimd, [FILES, MIRROR], [files, mirror])).toContain('files:read');
+    // A resource of the same scope name closed to the client, or one the realm
+    // does not know, lets nothing through.
+    const closedMirror: RegisteredResource = {
+      ...mirror,
+      anyClient: false,
+      clientIds: ['trusted'],
+    };
+    expect(
+      grantRequestedScopes('files:read', cimd, [FILES, MIRROR], [files, closedMirror])
+    ).toEqual([]);
+    expect(
+      grantRequestedScopes('files:read', cimd, [FILES, 'https://unknown.example/'], registered)
+    ).toEqual([]);
+    expect(withoutUngrantedResourceScopes(['files:read'], cimd, [FILES, MAIL], registered)).toEqual(
+      []
+    );
+    expect(scopeCeilingAt(cimd, [FILES, MAIL], registered)).toEqual([]);
   });
 
   it('keeps the request order and lists each scope once', () => {

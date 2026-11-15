@@ -233,7 +233,7 @@ describe('the scopes of a registered protected resource (#1087, real containers)
    */
   async function authorize(
     clientId: string,
-    params: { scope: string; resource?: string; ui_locales?: string }
+    params: { scope: string; resource?: string | readonly string[]; ui_locales?: string }
   ): Promise<{ shown: Record<string, string>; code: string; verifier: string }> {
     const app = server();
     const pkce = pkcePair();
@@ -246,7 +246,7 @@ describe('the scopes of a registered protected resource (#1087, real containers)
       code_challenge_method: 'S256',
       state: 'protected-resource-state',
     });
-    if (params.resource !== undefined) query.set('resource', params.resource);
+    for (const resource of [params.resource ?? []].flat()) query.append('resource', resource);
     if (params.ui_locales !== undefined) query.set('ui_locales', params.ui_locales);
     const response = await app.inject({
       method: 'GET',
@@ -368,6 +368,17 @@ describe('the scopes of a registered protected resource (#1087, real containers)
     expect(none.shown).toEqual({});
     const noneTokens = await exchange(CIMD_ID, none.code, none.verifier);
     expect(scopesOf(noneTokens.access_token)).toEqual([]);
+
+    // With its resource and another one, the token would carry the scope to
+    // an audience that never granted it: it is dropped too.
+    const both = await authorize(CIMD_ID, {
+      scope: 'files:read',
+      resource: [RESOURCE, OTHER_RESOURCE],
+    });
+    expect(both.shown).toEqual({});
+    const bothTokens = await exchange(CIMD_ID, both.code, both.verifier);
+    expect(scopesOf(bothTokens.access_token)).toEqual([]);
+    expect(audienceOf(bothTokens.access_token)).toEqual([RESOURCE, OTHER_RESOURCE]);
   });
 
   it('drops the scope without its resource even for a client that lists it itself', async () => {
