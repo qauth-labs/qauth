@@ -161,36 +161,42 @@ export function deletedAccountAudit(
   };
 }
 
-/** The account operations the routes serve. */
+/** The account operations the routes serve, each one the registry holds. */
 interface UserOperations {
-  readonly verify: AdminOperation;
-  readonly delete: AdminOperation;
+  readonly verify?: AdminOperation;
+  readonly delete?: AdminOperation;
 }
 
 /**
- * The account operations in the pipeline's registry, or `undefined` when it
- * holds none: a test registry built from fixture operations alone serves no
- * account route, and the server's own registry (`OPERATION_REGISTRY`) holds
- * them all.
+ * The account operations in the pipeline's registry: a test registry built
+ * from fixture operations alone holds none and serves no account route, and
+ * the server's own registry (`OPERATION_REGISTRY`) holds them all. Each route
+ * is registered when its operation is held.
  */
-function userOperations(fastify: FastifyInstance): UserOperations | undefined {
-  const verify = fastify.adminApi.registry.get(USER_OPERATION_IDS.verify);
-  const remove = fastify.adminApi.registry.get(USER_OPERATION_IDS.delete);
-  return verify === undefined || remove === undefined ? undefined : { verify, delete: remove };
+function userOperations(fastify: FastifyInstance): UserOperations {
+  const { registry } = fastify.adminApi;
+  return {
+    verify: registry.get(USER_OPERATION_IDS.verify),
+    delete: registry.get(USER_OPERATION_IDS.delete),
+  };
 }
 
 /** Register the account routes behind the admin pipeline. */
 export const userRoutes: FastifyPluginAsync = async (fastify) => {
-  const typed = fastify.withTypeProvider<ZodTypeProvider>();
   const operations = userOperations(fastify);
-  if (operations === undefined) return;
+  if (operations.verify !== undefined) verificationRoute(fastify, operations.verify);
+  if (operations.delete !== undefined) deletionRoute(fastify, operations.delete);
+};
 
+/** `users.verify`'s route (#1052). */
+function verificationRoute(fastify: FastifyInstance, verify: AdminOperation): void {
+  const typed = fastify.withTypeProvider<ZodTypeProvider>();
   typed.post(
     VERIFICATION_PATH,
     {
-      config: { operation: operations.verify.id },
+      config: { operation: verify.id },
       schema: {
-        ...operationSchemaExtensions(operations.verify),
+        ...operationSchemaExtensions(verify),
         'x-qauth-stability': 'experimental' as const,
         // A DPoP-bound admin token (#520).
         security: [{ [ADMIN_SECURITY_SCHEME]: [] }],
@@ -215,7 +221,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       // again in the transaction the verification commits in.
       const state = await readAccountVerificationState(request.server, realmId, userId, tx);
       if (accountVerificationStateVersion(state) !== stateVersion) {
-        throw new PreconditionFailedError({ operation: operations.verify.id });
+        throw new PreconditionFailedError({ operation: verify.id });
       }
       // Through `users_record_operator_verification` (migration 0070): the
       // admin role writes these two columns of the account and no other.
@@ -227,7 +233,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       );
       // Disabled, or verified by another call, since the read.
       if (user === undefined) {
-        throw new PreconditionFailedError({ operation: operations.verify.id });
+        throw new PreconditionFailedError({ operation: verify.id });
       }
 
       await emitUserEvent(
@@ -251,13 +257,17 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       return verification;
     }
   );
+}
 
+/** `users.delete`'s route (#681). */
+function deletionRoute(fastify: FastifyInstance, remove: AdminOperation): void {
+  const typed = fastify.withTypeProvider<ZodTypeProvider>();
   typed.delete(
     ACCOUNT_PATH,
     {
-      config: { operation: operations.delete.id },
+      config: { operation: remove.id },
       schema: {
-        ...operationSchemaExtensions(operations.delete),
+        ...operationSchemaExtensions(remove),
         'x-qauth-stability': 'experimental' as const,
         // A DPoP-bound admin token (#520).
         security: [{ [ADMIN_SECURITY_SCHEME]: [] }],
@@ -304,4 +314,4 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       return undefined;
     }
   );
-};
+}
