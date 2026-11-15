@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-11-15
+
+A patch release with no breaking change of the stable surface. It has three
+non-destructive migrations: 0075 (`sessions.kind` and
+`session_refresh_families`), 0076 (`realm_key_denylist`) and 0077
+(`deployment_nodes`). A deployment that applies its database grants by hand
+grants the new tables before it starts the new version
+([upgrade guide](https://docs.qauth.dev/operate/upgrades/)). There are two
+new settings, `CONFIG_DIGEST_ROLLOUT` and `SIGNER_SAN`, and
+`NEW_FACTOR_WINDOW_DAYS` now takes 0. A node refuses to boot when its
+deployment-wide settings differ from those of a running node of the same
+release. With split roles, every process signs through the signer over mutual
+TLS, and an operator can retire a key in an emergency. A realm's mail is named
+after its sender, access tokens carry the client's declared name, a sign-up or
+reset session can be ended by back-channel logout, and an address past its
+free password failures is no longer locked out by the bot challenge.
+
 ### Added
 
 - **A configuration digest check at boot** ([#499], ADR-019 Decision 8).
@@ -5653,7 +5670,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/qauth-labs/qauth/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/qauth-labs/qauth/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/qauth-labs/qauth/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/qauth-labs/qauth/compare/v0.2.3...v0.2.4
