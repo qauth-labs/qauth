@@ -269,6 +269,34 @@ function isCommandName(name: string): name is BreakGlassCommandName {
 }
 
 /**
+ * The command's arguments with every `--option value` of a string option
+ * written `--option=value`, so a value that starts with `-`, as a base64url
+ * kid may, reads as the value and not as an option. An argument that names
+ * one of the command's options is never taken as a value: a missing value
+ * stays a usage error.
+ */
+function joinedOptionValues(args: readonly string[], spec: BreakGlassCommandSpec): string[] {
+  const options = Object.entries(spec.options);
+  const takesValue = new Set(
+    options.filter(([, { type }]) => type === 'string').map(([option]) => `--${option}`)
+  );
+  const namesOption = (arg: string) =>
+    options.some(([option]) => arg === `--${option}` || arg.startsWith(`--${option}=`));
+  const joined: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] as string;
+    const next = args[index + 1];
+    if (takesValue.has(arg) && next !== undefined && !namesOption(next)) {
+      joined.push(`${arg}=${next}`);
+      index += 1;
+    } else {
+      joined.push(arg);
+    }
+  }
+  return joined;
+}
+
+/**
  * Read the group's arguments: the command, then its options.
  *
  * @returns `'help'` for no command, `help`, `--help` or `-h`
@@ -287,7 +315,7 @@ export function parseBreakGlassArguments(argv: readonly string[]): BreakGlassCom
   let values: Record<string, string | boolean | undefined>;
   try {
     values = parseArgs({
-      args: rest,
+      args: joinedOptionValues(rest, spec),
       options: Object.fromEntries(
         Object.entries(spec.options).map(([option, { type }]) => [option, { type }])
       ),
@@ -632,7 +660,8 @@ export async function runBreakGlass(
         'before the key changes.'
     );
     return runKeysRetire(
-      ['--kid', command.kid, '--realm', command.realmName, '--yes'],
+      // One argument each, so a kid that starts with `-` is read as the kid.
+      [`--kid=${command.kid}`, `--realm=${command.realmName}`, '--yes'],
       command.realmName,
       deps.keysRetire(),
       {

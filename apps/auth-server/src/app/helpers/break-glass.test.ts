@@ -137,9 +137,19 @@ describe('parseBreakGlassArguments', () => {
       kid: KID,
       arguments: { values: { realm: 'acme', kid: KID, confirm: true }, annotations: {} },
     });
+    // A base64url kid may start with `-`: it is read as the kid, either way.
+    for (const argv of [
+      ['retire-key', '--realm', 'acme', '--kid', '-Ab_c-1', '--confirm'],
+      ['retire-key', '--realm', 'acme', '--kid=-Ab_c-1', '--confirm'],
+    ]) {
+      expect(parsed(argv), argv.join(' ')).toMatchObject({ kid: '-Ab_c-1', realmName: 'acme' });
+    }
     for (const argv of [
       ['retire-key', '--realm', 'acme', '--kid', KID],
       ['retire-key', '--kid', KID, '--confirm'],
+      // An option never stands for a missing value.
+      ['retire-key', '--realm', '--kid', KID, '--confirm'],
+      ['retire-key', '--realm', 'acme', '--kid', '--confirm'],
       ['retire-key', '--realm', 'acme', '--kid', 'bad\u0007kid', '--confirm'],
       ['retire-key', '--realm', 'acme', '--kid', KID, '--confirm=yes'],
       ['retire-key', '--realm', 'acme', '--kid', KID, '--confirm', '--yes'],
@@ -557,6 +567,22 @@ describe('runBreakGlass: retire-key', () => {
       },
     });
     expect(emit.mock.calls[0]?.[1]).toMatchObject({ data: { command: 'retire-key' } });
+  });
+
+  it('hands the retirement a kid that starts with `-` as the kid', async () => {
+    const { appendAdminAudit, emit, keysRetire, retireKeyNow } = retireFakes([]);
+    const deps = dependencies({
+      records: () => ({ adminAuditLog: { appendAdminAudit }, events: { emit } }),
+      keysRetire: () => keysRetire,
+    });
+
+    expect(
+      await runBreakGlass(
+        parsed(['retire-key', '--realm', 'acme', '--kid', '-Ab_c-1', '--confirm']),
+        deps
+      )
+    ).toBe(BREAK_GLASS_EXIT.done);
+    expect(retireKeyNow.mock.calls[0]?.[0]).toMatchObject({ realmId: REALM_ID, kid: '-Ab_c-1' });
   });
 
   it('changes nothing when its record cannot be written', async () => {
