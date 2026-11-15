@@ -5,7 +5,7 @@ import {
   type FixtureServer,
 } from '@qauth-labs/fastify-plugin-egress/src/testing/egress-fixtures';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { createLocalJWKSet, type JSONWebKeySet, type JWTPayload, jwtVerify } from 'jose';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -111,87 +111,100 @@ function challengeOf(header: unknown): Record<string, string> {
   );
 }
 
+/** A request to the stand-in MCP server, in the shape `inject` takes. */
+interface StandInRequest {
+  readonly method: 'GET' | 'PUT';
+  readonly url: string;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly payload?: { readonly value: string };
+}
+
+/** A response of the stand-in MCP server, in the shape `inject` answers. */
+interface StandInResponse {
+  readonly statusCode: number;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: string;
+  json<T = unknown>(): T;
+}
+
+/** The stand-in MCP server, called in process as `inject` calls an app. */
+interface StandInMcpServer {
+  inject(request: StandInRequest): Promise<StandInResponse>;
+}
+
+function respond(
+  statusCode: number,
+  body?: unknown,
+  headers: Record<string, string> = {}
+): StandInResponse {
+  const text = body === undefined ? '' : JSON.stringify(body);
+  return { statusCode, headers, body: text, json: <T>() => JSON.parse(text) as T };
+}
+
 /**
  * The quickstart's MCP server, as `memory-mcp` with `resource-guard` in `jwt`
  * mode: `GET /mcp/memory` needs `mcp:read`, `PUT /mcp/memory/:key` needs
- * `mcp:read` and `mcp:write`.
+ * `mcp:read` and `mcp:write`. It is a plain dispatcher rather than an HTTP
+ * server: the test only calls it in process, and a listener here would be
+ * one more route to serve.
  */
-async function mcpServer(issuer: string, jwks: JSONWebKeySet): Promise<FastifyInstance> {
+function mcpServer(issuer: string, jwks: JSONWebKeySet): StandInMcpServer {
   const keys = createLocalJWKSet(jwks);
   const store = new Map<string, string>();
-  const app = Fastify();
 
-  app.get('/.well-known/oauth-protected-resource', async () => ({
-    resource: MCP_RESOURCE,
-    authorization_servers: [issuer],
-    scopes_supported: ['mcp:read', 'mcp:write'],
-    bearer_methods_supported: ['header'],
-  }));
-
-  /** The token's scopes, or the reply's challenge when it has none or not the ones needed. */
+  /** The token's subject, or the challenge when it has none or not the scopes needed. */
   async function guard(
-    request: FastifyRequest,
-    reply: FastifyReply,
+    authorization: string | undefined,
     needed: readonly string[]
-  ): Promise<string | undefined> {
+  ): Promise<{ readonly subject: string } | StandInResponse> {
     const scope = needed.join(' ');
-    const header = request.headers.authorization;
-    if (header === undefined || !header.startsWith('Bearer ')) {
-      await reply
-        .code(401)
-        .header('WWW-Authenticate', `Bearer scope="${scope}", resource_metadata="${METADATA_URL}"`)
-        .send();
-      return undefined;
+    const challenge = (error?: string) =>
+      `Bearer ${error === undefined ? '' : `error="${error}", `}scope="${scope}", resource_metadata="${METADATA_URL}"`;
+    if (authorization === undefined || !authorization.startsWith('Bearer ')) {
+      return respond(401, undefined, { 'www-authenticate': challenge() });
     }
     let claims: JWTPayload;
     try {
-      ({ payload: claims } = await jwtVerify(header.slice('Bearer '.length), keys, {
+      ({ payload: claims } = await jwtVerify(authorization.slice('Bearer '.length), keys, {
         issuer,
         audience: MCP_RESOURCE,
         algorithms: ['EdDSA'],
       }));
     } catch {
-      await reply
-        .code(401)
-        .header(
-          'WWW-Authenticate',
-          `Bearer error="invalid_token", scope="${scope}", resource_metadata="${METADATA_URL}"`
-        )
-        .send();
-      return undefined;
+      return respond(401, undefined, { 'www-authenticate': challenge('invalid_token') });
     }
     const held = new Set((typeof claims['scope'] === 'string' ? claims['scope'] : '').split(' '));
     if (!needed.every((one) => held.has(one))) {
-      await reply
-        .code(403)
-        .header(
-          'WWW-Authenticate',
-          `Bearer error="insufficient_scope", scope="${scope}", resource_metadata="${METADATA_URL}"`
-        )
-        .send();
-      return undefined;
+      return respond(403, undefined, { 'www-authenticate': challenge('insufficient_scope') });
     }
-    return claims.sub;
+    return { subject: claims.sub ?? '' };
   }
 
-  app.get('/mcp/memory', async (request, reply) => {
-    const subject = await guard(request, reply, ['mcp:read']);
-    if (subject === undefined) return reply;
-    return { subject, items: Object.fromEntries(store) };
-  });
-
-  app.put<{ Params: { key: string }; Body: { value: string } }>(
-    '/mcp/memory/:key',
-    async (request, reply) => {
-      const subject = await guard(request, reply, ['mcp:read', 'mcp:write']);
-      if (subject === undefined) return reply;
-      store.set(request.params.key, request.body.value);
-      return { ok: true, key: request.params.key };
-    }
-  );
-
-  await app.ready();
-  return app;
+  return {
+    async inject(request) {
+      if (request.method === 'GET' && request.url === '/.well-known/oauth-protected-resource') {
+        return respond(200, {
+          resource: MCP_RESOURCE,
+          authorization_servers: [issuer],
+          scopes_supported: ['mcp:read', 'mcp:write'],
+          bearer_methods_supported: ['header'],
+        });
+      }
+      if (request.method === 'GET' && request.url === '/mcp/memory') {
+        const checked = await guard(request.headers?.['authorization'], ['mcp:read']);
+        if ('statusCode' in checked) return checked;
+        return respond(200, { subject: checked.subject, items: Object.fromEntries(store) });
+      }
+      const key = /^\/mcp\/memory\/([^/]+)$/.exec(request.url)?.[1];
+      if (request.method === 'PUT' && key !== undefined) {
+        const checked = await guard(request.headers?.['authorization'], ['mcp:read', 'mcp:write']);
+        if ('statusCode' in checked) return checked;
+        store.set(key, request.payload?.value ?? '');
+        return respond(200, { ok: true, key });
+      }
+      return respond(404);
+    },
+  };
 }
 
 describe('the MCP quickstart: an MCP server whose scopes any CIMD client can be granted (#1087, real containers)', () => {
@@ -199,7 +212,7 @@ describe('the MCP quickstart: an MCP server whose scopes any CIMD client can be 
   let net: FixtureNetwork | undefined;
   let documentHost: FixtureServer;
   let booted: BootedAuthServer | undefined;
-  let mcp: FastifyInstance | undefined;
+  let mcp: StandInMcpServer | undefined;
   let dockerUp = false;
   let cookie = '';
 
@@ -219,7 +232,6 @@ describe('the MCP quickstart: an MCP server whose scopes any CIMD client can be 
   }, 240_000);
 
   afterAll(async () => {
-    await mcp?.close();
     await booted?.close();
     await net?.close();
     await infra?.teardown();
@@ -275,8 +287,7 @@ describe('the MCP quickstart: an MCP server whose scopes any CIMD client can be 
     const issuer = discovery.json<{ issuer: string }>().issuer;
     const jwks = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
     expect(jwks.statusCode, jwks.body).toBe(200);
-    await mcp?.close();
-    mcp = await mcpServer(issuer, jwks.json<JSONWebKeySet>());
+    mcp = mcpServer(issuer, jwks.json<JSONWebKeySet>());
   }, 120_000);
 
   afterEach(() => {
@@ -288,7 +299,7 @@ describe('the MCP quickstart: an MCP server whose scopes any CIMD client can be 
     return booted.app;
   }
 
-  function resourceServer(): FastifyInstance {
+  function resourceServer(): StandInMcpServer {
     if (mcp === undefined) throw new Error('MCP server not started');
     return mcp;
   }

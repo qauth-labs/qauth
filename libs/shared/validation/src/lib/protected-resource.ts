@@ -38,8 +38,11 @@ export const PROTECTED_RESOURCE_FALLBACK_LOCALE = 'en';
 /** Who may ask for a resource's scopes when it is open to every client of the realm. */
 export const ANY_CLIENT = 'any_client';
 
-/** RFC 6749 §3.3 scope characters, without `<` and `>`: the consent step's scope alphabet. */
-const SCOPE_TOKEN = /^[!#-;=?-[\]-~]+$/;
+/**
+ * RFC 6749 §3.3 scope characters (%x21 / %x23-5B / %x5D-7E), without `<` and
+ * `>`: the consent step's scope alphabet, spelled out character by character.
+ */
+const SCOPE_TOKEN = /^[!#$%&'()*+,\-./0-9:;=?@A-Z[\]^_`a-z{|}~]+$/;
 
 /** A BCP 47 language tag, as the Interaction API's `uiLocales` carries one. */
 export const LOCALE_TAG_PATTERN = /^[a-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/;
