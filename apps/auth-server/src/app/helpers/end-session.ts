@@ -361,7 +361,8 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * End the logout-only session a valid hint names (#1144): a registration's or
  * a reset's, live, of the hint's account. No browser holds one, so the
  * browser's own session is not what decides; the hint alone, an ID token only
- * the app holds, does. `null` when the hint names no such session.
+ * the app holds, does. `null` when the hint names no such session, or when
+ * another request ended it first.
  */
 async function endHintedLogoutOnlySession(
   fastify: FastifyInstance,
@@ -378,9 +379,17 @@ async function endHintedLogoutOnlySession(
   ) {
     return null;
   }
-  const carried: CarriedSession = { userId: row.userId, sid: row.id };
-  await endLogoutSession(fastify, realmId, carried);
-  return carried;
+  // Only an end this request made counts: a concurrent one that won between
+  // the read and the revoke recorded its own sign-out.
+  const outcome = await endBrowserSession(
+    fastify,
+    realmId,
+    row.id,
+    'sign_out',
+    { type: 'user', id: row.userId },
+    row.userId
+  );
+  return outcome === 'ended' ? { userId: row.userId, sid: row.id } : null;
 }
 
 /** Record the sign-out of one session, naming it, so its SET names the session (#889). */

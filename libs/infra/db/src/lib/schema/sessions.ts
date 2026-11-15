@@ -117,16 +117,6 @@ export const sessions = pgTable(
      */
     recoveryCodeUsed: boolean('recovery_code_used').notNull().default(false),
     /**
-     * What the row is ({@link SESSION_KINDS}, #1144): `browser` for a
-     * browser's sign-in, and for every row an older release wrote. Any other
-     * kind is a logout-only session, which the session service never hands
-     * out as a browser session: no cookie names it and no authorization
-     * request is decided for it. It lists, lapses and ends as a browser
-     * session does, so every ending of the account's sessions sends its
-     * clients a logout token with its `sid`.
-     */
-    kind: text('kind').$type<SessionKind>().notNull().default('browser'),
-    /**
      * The ids of the account's new credentials (#1064) that the session's
      * sign-in bound or proved: a passkey or an authenticator app bound after
      * a sign-in that proved only the password, still inside its window when
@@ -161,6 +151,17 @@ export const sessions = pgTable(
      * throttled, so it may lag the last use by up to the throttle interval.
      */
     lastSeenAt: bigint('last_seen_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
+    /**
+     * What the row is ({@link SESSION_KINDS}, #1144): `browser` for a
+     * browser's sign-in, and for every row an older release wrote. Any other
+     * kind is a logout-only session, which the session service never hands
+     * out as a browser session: no cookie names it and no authorization
+     * request is decided for it. It lists and ends as a browser session
+     * does, so every ending of the account's sessions sends its clients a
+     * logout token with its `sid`. It lapses at its absolute end alone: no
+     * browser uses it, so the realm's idle limit does not apply.
+     */
+    kind: text('kind').$type<SessionKind>().notNull().default('browser'),
   },
   (t) => [
     foreignKey({

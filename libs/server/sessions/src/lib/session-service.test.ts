@@ -943,6 +943,36 @@ describe('logout-only sessions (#1144)', () => {
     expect(store.row(created.sid)?.revokedReason).toBe('sign_out');
   });
 
+  it('ends one at its lifetime alone: the realm’s idle limit does not reach it', async () => {
+    store.putRealm(REALM_A, { idleTimeoutSeconds: 600 });
+    const service = serviceWith();
+    const created = await service.create(signIn({ amr: [] }));
+    store.update(created.sid, { kind: 'reset' });
+
+    // Long past the idle limit, which nothing can reset for it.
+    clock.advance(60 * MINUTE);
+    expect(await service.endLapsed()).toEqual({ ended: 0 });
+    const listed = await service.listForUser({ realmId: REALM_A, userId: USER });
+    expect(listed.items.map((item) => [item.state, item.idleExpiresAt])).toEqual([['live', null]]);
+    const live = await service.listLiveForUser({ realmId: REALM_A, userId: USER });
+    expect(live.items.map((item) => item.sid)).toEqual([created.sid]);
+
+    // Its absolute end, the cookie lifetime here, still ends it.
+    clock.advance(COOKIE_TTL_SECONDS * SECOND);
+    expect(await service.endLapsed()).toEqual({ ended: 1 });
+    expect(store.row(created.sid)?.revokedReason).toBe('expired');
+  });
+
+  it('still ends a browser session at the idle limit', async () => {
+    store.putRealm(REALM_A, { idleTimeoutSeconds: 600 });
+    const service = serviceWith();
+    const created = await service.create(signIn());
+
+    clock.advance(60 * MINUTE);
+    expect(await service.endLapsed()).toEqual({ ended: 1 });
+    expect(store.row(created.sid)?.revokedReason).toBe('idle');
+  });
+
   it('lists a row with no kind as a browser session', async () => {
     const service = serviceWith();
     const created = await service.create(signIn());

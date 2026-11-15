@@ -37,6 +37,13 @@ function server() {
       revokeFamiliesOfSignIns: vi.fn(async () => 0),
       revokeFamiliesOfSession: vi.fn(async () => 0),
     },
+    // The rows behind the fixture's sessions: browser sessions unless a test
+    // says otherwise (#1144).
+    sessions: {
+      findById: vi.fn<(realmId: string, id: string) => Promise<{ kind: string } | undefined>>(
+        async () => undefined
+      ),
+    },
   };
   const fastify = {
     sessionService: sessions.service,
@@ -248,6 +255,30 @@ describe('endAllAccountSessions (#1110)', () => {
     const recorded = emitUserEvent.mock.calls.map((call) => call[2] as { sid?: string });
     expect(recorded.map((data) => data.sid).sort()).toEqual([one, two].sort());
     expect(recorded.every((data) => Object.keys(data).length === 1)).toBe(true);
+  });
+
+  it('keeps no logout-only session the token names: it ends with the rest (#1144)', async () => {
+    const { fastify, sessions, repositories, signIn } = server();
+    const signUp = signIn({});
+    const one = signIn({});
+    repositories.sessions.findById.mockImplementation(async (_realmId, id) =>
+      id === signUp ? { kind: 'registration' } : undefined
+    );
+
+    const ended = await endAllAccountSessions(fastify, REQUEST, OWNER, { keepSid: signUp });
+
+    expect([...ended].sort()).toEqual([signUp, one].sort());
+    expect(repositories.sessions.findById).toHaveBeenCalledWith(REALM_ID, signUp);
+    expect(sessions.service.revokeAllForUser).toHaveBeenCalledWith({
+      realmId: REALM_ID,
+      userId: USER_ID,
+      reason: 'sign_out_everywhere',
+      actor: { type: 'user', id: USER_ID },
+    });
+    expect(sessions.service.sessions.size).toBe(0);
+    // Every session ended: one sign-out without a sid.
+    expect(emitUserEvent).toHaveBeenCalledTimes(1);
+    expect(emitUserEvent).toHaveBeenCalledWith(REQUEST, SIGNED_OUT, {}, expect.any(Object));
   });
 
   it('keeps nothing when the session asked for has ended, and records one sign-out without a sid', async () => {

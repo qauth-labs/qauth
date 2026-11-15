@@ -55,11 +55,21 @@ describe('migration 0075 (logout-only sessions)', () => {
 
   it('adds two columns and an index that rewrite no table, and touches no row', () => {
     expect(statements.slice(0, 3)).toEqual([
-      `ALTER TABLE "sessions" ADD COLUMN "kind" text DEFAULT 'browser' NOT NULL;`,
       'ALTER TABLE "refresh_tokens" ADD COLUMN "family_session_id" uuid;',
       'CREATE INDEX "idx_refresh_tokens_family_session_id" ON "refresh_tokens" USING btree ("family_session_id") WHERE "refresh_tokens"."family_session_id" IS NOT NULL;',
+      `ALTER TABLE "sessions" ADD COLUMN "kind" text DEFAULT 'browser' NOT NULL;`,
     ]);
     expect(statements.join('\n')).not.toMatch(/\b(DROP|UPDATE|DELETE|INSERT|RENAME)\b/);
+  });
+
+  it('locks `sessions` last, never while the index build scans `refresh_tokens`', () => {
+    const firstSessions = statements.findIndex((statement) =>
+      statement.startsWith('ALTER TABLE "sessions"')
+    );
+    const index = statements.findIndex((statement) => statement.startsWith('CREATE INDEX'));
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(firstSessions).toBeGreaterThan(index);
+    expect(statements.slice(firstSessions).every((s) => s.includes('"sessions"'))).toBe(true);
   });
 
   it('keeps the kind to the known ones, with a CHECK the schema holds, not validated', () => {

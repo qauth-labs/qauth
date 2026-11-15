@@ -335,6 +335,8 @@ export const refreshTokens = pgTable(
     authorizationCodeId: uuid('authorization_code_id').references(() => authorizationCodes.id, {
       onDelete: 'set null',
     }),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
+    lastUsedAt: bigint('last_used_at', { mode: 'number' }),
     /**
      * The session that backed the code whose exchange started the family
      * (`authorization_codes.session_id`, #1144), so ending that one session
@@ -351,8 +353,6 @@ export const refreshTokens = pgTable(
      * everywhere, a reset) still end them.
      */
     familySessionId: uuid('family_session_id'),
-    createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
-    lastUsedAt: bigint('last_used_at', { mode: 'number' }),
   },
   (t) => [
     index('idx_refresh_tokens_active')

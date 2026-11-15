@@ -267,11 +267,13 @@
 >   satisfies an authorization request, and no other client is signed in on the mailbox's proof.
 >   It cannot stand as the recent sign-in behind an account API token, whose code carried no
 >   `auth_time`.
-> - It lists, lapses and ends as a browser session does. "Sign out everywhere", ending it on the
->   account page (where it shows as "A sign-up" or "A password reset"), a later reset, a disable,
->   and RP-initiated logout with an ID token that names it all end it. Each ending queues a logout
->   token with its `sid` to each of its clients that has a back-channel logout URI. RP-initiated
->   logout ends it at once on that ID token alone, since no browser holds it.
+> - It ends at the session lifetime and is not subject to the realm's idle limit, because no
+>   browser ever uses it: nothing could mark it used. It lists and ends as a browser session does.
+>   "Sign out everywhere", ending it on the account page (where it shows as "A sign-up" or "A
+>   password reset"), a later reset, a disable, and RP-initiated logout with an ID token that names
+>   it all end it. Each ending queues a logout token with its `sid` to each of its clients that has
+>   a back-channel logout URI. RP-initiated logout ends it at once on that ID token alone, since no
+>   browser holds it.
 > - The refresh family its code starts ends no later than it (#861), and ending it alone revokes
 >   that family through the family's first token (`refresh_tokens.family_session_id`).
 

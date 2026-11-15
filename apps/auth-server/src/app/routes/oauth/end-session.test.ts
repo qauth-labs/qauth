@@ -575,13 +575,16 @@ describe('the client and the return URI (RP-Initiated Logout 1.0 §2, #675)', ()
 
 describe('a logout-only session the hint names (#1144)', () => {
   function signUpSession(changes: { kind?: string; userId?: string; revokedAt?: number } = {}) {
+    const userId = changes.userId ?? USER_ID;
     sessionRows.set(LOGOUT_ONLY_SID, {
       id: LOGOUT_ONLY_SID,
       realmId: REALM.id,
-      userId: changes.userId ?? USER_ID,
+      userId,
       kind: changes.kind ?? 'registration',
       revokedAt: changes.revokedAt ?? null,
     });
+    // The session service ends it by its row; no cookie names it.
+    sessions.service.seed({ sid: LOGOUT_ONLY_SID, realmId: REALM.id, userId });
   }
 
   it('ends it at once, with no browser session, and goes back to the app', async () => {
@@ -621,6 +624,27 @@ describe('a logout-only session the hint names (#1144)', () => {
       expect.objectContaining({ sid: LOGOUT_ONLY_SID })
     );
     expect(sessions.service.sessions.has(SID)).toBe(true);
+  });
+
+  it('records no sign-out when another request ended it first', async () => {
+    signUpSession();
+    // The read sees it live; a concurrent end wins before the revoke.
+    sessions.service.revoke.mockResolvedValueOnce({
+      outcome: 'already_ended',
+      session: {} as never,
+    });
+    const response = await endSession({
+      id_token_hint: 'hint.alice.sign-up',
+      post_logout_redirect_uri: RETURN_URI,
+      state: STATE,
+    });
+
+    expect(response.statusCode).toBe(303);
+    expect(sessions.service.revoke).toHaveBeenCalledTimes(1);
+    expect(eventTypes()).not.toContain('urn:qauth:event:user.signed_out:v1-rc.0');
+    expect(eventOf('urn:qauth:event:user.sign_out_failed:v1-rc.0').data).toEqual({
+      reason: 'no_session',
+    });
   });
 
   for (const [name, changes] of [

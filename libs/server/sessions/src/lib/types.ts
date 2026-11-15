@@ -28,8 +28,9 @@ export type SessionRevokedReason = (typeof SESSION_REVOKED_REASONS)[number];
  *   password reset finished an authorization interaction and signed nobody
  *   in (ADR-017 Decisions 8 and 10). It carries the code's `sid` so the
  *   account's session endings reach the client by back-channel logout. The
- *   service never hands one out as a {@link BrowserSession}; it lists, lapses
- *   and ends as a browser session does.
+ *   service never hands one out as a {@link BrowserSession}; it lists and
+ *   ends as a browser session does, and lapses at its absolute end alone,
+ *   since no browser uses it to keep it from going idle.
  */
 export const SESSION_KINDS = ['browser', 'registration', 'reset'] as const;
 

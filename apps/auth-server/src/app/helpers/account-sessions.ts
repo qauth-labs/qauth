@@ -211,23 +211,42 @@ export async function endAllAccountSessions(
   options: { readonly keepSid?: string } = {}
 ): Promise<readonly string[]> {
   const { realmId, userId } = owner;
+  // A logout-only session (#1144) is no caller's own to keep: no browser holds
+  // it, and signing out everywhere ends it with its logout tokens, even when
+  // the caller's token names it.
+  const keepSid =
+    options.keepSid === undefined || (await isLogoutOnlySession(fastify, realmId, options.keepSid))
+      ? undefined
+      : options.keepSid;
   const ended = await endBrowserSessions(fastify, realmId, userId, {
     reason: 'sign_out_everywhere',
-    ...(options.keepSid === undefined ? {} : { exceptSid: options.keepSid }),
+    ...(keepSid === undefined ? {} : { exceptSid: keepSid }),
   });
   // Codes first: one redeemed after the sweep below would mint a refresh
   // token that survives it.
   await fastify.repositories.authorizationCodes.invalidateForUser(userId);
   await fastify.repositories.refreshTokens.revokeAllForUser(userId, 'logout');
-  const kept =
-    options.keepSid !== undefined &&
-    (await isLiveSessionOf(fastify, realmId, userId, options.keepSid));
+  const kept = keepSid !== undefined && (await isLiveSessionOf(fastify, realmId, userId, keepSid));
   if (kept) {
     for (const sid of ended) await recordSignedOut(request, owner, sid);
   } else {
     await recordSignedOut(request, owner, undefined);
   }
   return ended;
+}
+
+/** A session id as the tokens carry it: a UUID. */
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Whether `sid` names a logout-only session of the realm (#1144), whatever its state. */
+async function isLogoutOnlySession(
+  fastify: FastifyInstance,
+  realmId: string,
+  sid: string
+): Promise<boolean> {
+  if (!SESSION_ID.test(sid)) return false;
+  const row = await fastify.repositories.sessions.findById(realmId, sid.toLowerCase());
+  return row?.kind !== undefined && row.kind !== 'browser';
 }
 
 /** Whether `sid` names a live session of the user in the realm. */

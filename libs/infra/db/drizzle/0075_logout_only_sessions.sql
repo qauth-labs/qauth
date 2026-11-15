@@ -24,7 +24,13 @@
 -- accepts, so a validating scan could find nothing and would only hold the
 -- table's lock while it read it. Every row written or updated from now on is
 -- checked. Hand-edited: drizzle-kit models no NOT VALID.
-ALTER TABLE "sessions" ADD COLUMN "kind" text DEFAULT 'browser' NOT NULL;--> statement-breakpoint
+--
+-- Order: the migration runs in one transaction, and every lock it takes is
+-- held to its commit. `refresh_tokens` goes first, its index build included,
+-- which scans the whole table; `sessions` goes last, so the ACCESS EXCLUSIVE
+-- lock its ALTERs take, which stops every session read, is held only for two
+-- catalog changes and the commit, never during that scan.
 ALTER TABLE "refresh_tokens" ADD COLUMN "family_session_id" uuid;--> statement-breakpoint
 CREATE INDEX "idx_refresh_tokens_family_session_id" ON "refresh_tokens" USING btree ("family_session_id") WHERE "refresh_tokens"."family_session_id" IS NOT NULL;--> statement-breakpoint
+ALTER TABLE "sessions" ADD COLUMN "kind" text DEFAULT 'browser' NOT NULL;--> statement-breakpoint
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_kind_valid" CHECK ("sessions"."kind" IN ('browser', 'registration', 'reset')) NOT VALID;

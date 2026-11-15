@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as "A sign-up" or "A password reset") and RP-initiated logout with that ID
   token end it. Each ending sends a logout token naming it, so an app that
   sets `backchannel_logout_session_required` no longer keeps the session a
-  sign-up started. Migration 0075 adds `sessions.kind` and
+  sign-up started. It ends at the session lifetime; the realm's idle limit
+  does not apply, since no browser uses it. Migration 0075 adds `sessions.kind` and
   `refresh_tokens.family_session_id`. It rewrites no table, and the previous
   release keeps working on it during a rolling upgrade.
 
