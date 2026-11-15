@@ -623,7 +623,7 @@ describe('a logout-only session the hint names (#1144)', () => {
     });
     sessions.service.revoke.mockImplementationOnce(async () => {
       order.push('session');
-      return { outcome: 'ended', session: {} as never };
+      return { outcome: 'ended' as const, session: {} as never, clients: [] };
     });
     await endSession({ id_token_hint: 'hint.alice.sign-up' });
     expect(revokeFamiliesOfSession).toHaveBeenCalledWith(USER_ID, LOGOUT_ONLY_SID, 'session_ended');
