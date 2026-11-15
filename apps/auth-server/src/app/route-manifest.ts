@@ -443,6 +443,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'events',
       'oauthClients',
       'realms',
+      'refreshTokens',
       'sessions',
       'userCredentials',
       'users',
