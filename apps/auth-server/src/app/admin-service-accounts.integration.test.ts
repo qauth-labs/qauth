@@ -125,12 +125,16 @@ describe('service accounts for the admin API (#522, real containers)', () => {
   }
 
   /** A service account with `role` on the operator realm, as the host's command creates one. */
-  async function serviceAccount(role: 'viewer' | 'security-admin' = 'security-admin') {
+  async function serviceAccount(
+    role: 'viewer' | 'security-admin' = 'security-admin',
+    name = 'ci-realm-import',
+    clientId = SA_CLIENT_ID
+  ) {
     const realm = await operatorRealm();
     const created = await app().repositories.serviceAccounts.create({
       realmId: realm.id,
-      name: 'ci-realm-import',
-      clientId: SA_CLIENT_ID,
+      name,
+      clientId,
       jwks: { keys: [clientKey.jwk as Record<string, unknown>] },
       createdBy: null,
     });
@@ -419,6 +423,10 @@ describe('service accounts for the admin API (#522, real containers)', () => {
     // A key of a client that may get the admin audience authenticates
     // nothing, whenever it was written.
     const { client } = await serviceAccount();
+    // In development, as the key's own client is: only the admin rule refuses it.
+    await app().dbPool.query(`UPDATE oauth_clients SET environment = 'development' WHERE id = $1`, [
+      client.id,
+    ]);
     await expect(authenticateApiKey(app(), realmRow, await keyFor(client.id))).resolves.toBeNull();
   });
 
@@ -554,12 +562,14 @@ describe('service accounts for the admin API (#522, real containers)', () => {
     ]);
   });
 
-  it('files nothing a human cannot approve: a realm whose only approver is the service account fails closed', async () => {
+  it('files nothing a human cannot approve: another service account never counts as an approver', async () => {
     const realm = await operatorRealm();
-    const { userId: robot } = await serviceAccount();
-    // Old enough to approve, were it a person: it never counts all the same
-    // (the two-admin rule's rule 1).
-    await ageAdminAccount(app().dbPool, robot);
+    await serviceAccount();
+    // Another service account with security-admin on the realm, old enough
+    // to approve were it a person's: it never counts all the same (the
+    // two-admin rule's rule 1), so no one could approve.
+    const { userId: other } = await serviceAccount('security-admin', 'other-robot', 'other-robot');
+    await ageAdminAccount(app().dbPool, other);
     const token = await adminTokenOf();
     const target = await unconfirmedAccount('nobody-to-approve@example.com');
 
