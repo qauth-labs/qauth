@@ -154,6 +154,8 @@ describe('what each role loads (the boot-time list)', () => {
       // credentials and records `user.verified`.
       'userCredentials',
       'events',
+      // An admin's deletion of an account ends its sessions first (#681).
+      'sessions',
       'adminGrants',
       'adminAuditLog',
       'adminApprovals',

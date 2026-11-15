@@ -35,6 +35,7 @@ import {
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
 
+import { AccountDeletionConflictError } from '../helpers/account-deletion-errors';
 import {
   AccountFactorConflictError,
   DelegatedTokenRefusedError,
@@ -269,6 +270,13 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // operator already verified (#1052).
   {
     errorClass: AccountVerificationConflictError,
+    code: 'conflict',
+    oauthError: 'invalid_request',
+  },
+  // An admin's deletion of a service account's account, or of an account
+  // that holds an admin grant (#681).
+  {
+    errorClass: AccountDeletionConflictError,
     code: 'conflict',
     oauthError: 'invalid_request',
   },

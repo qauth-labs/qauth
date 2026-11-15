@@ -235,6 +235,7 @@ describe('effectivePermissions (#507)', () => {
       'realms.policies.security',
       'plugins.security',
       'users.security',
+      'users.delete',
       'clients.security',
       'approvals.approve',
     ]);
