@@ -18,8 +18,11 @@ import { buildRealmUrl } from './realm-url';
 
 /**
  * THE BREAK-GLASS CLI (ADR-019 Decisions 7 and 9, issue #602):
- * `auth-server:break-glass`, the way in when no admin can act, run on a host
- * that holds the database credentials and the KEK.
+ * `src/break-glass.ts` of the auth server, the way in when no admin can act,
+ * run on a host that holds the database credentials and the KEK. It is run
+ * with `tsx` directly, never as an Nx task: Nx keeps every task's terminal
+ * output on disk, and `enrol-admin` prints a live token
+ * (`runBreakGlassProcess` refuses it under Nx).
  *
  * It has two commands and no other (`BREAK_GLASS_COMMANDS`):
  *
@@ -33,8 +36,9 @@ import { buildRealmUrl } from './realm-url';
  *   `keys:retire` does, and nothing else.
  *
  * No command sets a password or imports a key. The process opens no
- * listener and makes no HTTP call: it connects to the database, and for
- * `retire-key` to Redis, whose sessions the retirement ends.
+ * listener and makes no HTTP call of its own: it connects to the database,
+ * for `retire-key` to Redis, whose sessions the retirement ends, and to the
+ * key service a KEK adapter uses, when the KEK is held there.
  *
  * It starts only when `DATABASE_URL` is set and the KEK provider opens a
  * stored key (`proveHostKeyCustody`). Whoever holds the host and the KEK
@@ -43,8 +47,11 @@ import { buildRealmUrl } from './realm-url';
  * it, an admin audit row of the realm (actor kind `break_glass_operator`,
  * the operating-system user and uid, the host name, the command and its
  * arguments, a secret one masked) and a critical `admin.break_glass_used`
- * event, which every event route of the realm sends. If either cannot be
- * written, the run aborts with nothing changed. A run refused before any
+ * event in the realm's event store, which every route that reads the store
+ * sends: the event API, webhooks and SSF streams. OpenTelemetry export is
+ * not one: a node exports the events it writes itself, after their commit,
+ * and this process exports nothing, as it makes no outbound call. If either
+ * cannot be written, the run aborts with nothing changed. A run refused before any
  * change (an unknown realm or kid, a usage error, a KEK that opens nothing)
  * writes nothing.
  *
@@ -187,16 +194,21 @@ retire-key    ${BREAK_GLASS_COMMANDS['retire-key'].summary}
 
 Every run that changes anything writes, before the change and in its transaction, an admin audit
 row of the realm (the operating-system user and uid, the host name, the command and its arguments)
-and a critical admin.break_glass_used event, which every event route of the realm sends. If either
-cannot be written, nothing changes. No command sets a password or imports a key.
+and a critical admin.break_glass_used event in the realm's event store, which the event API,
+webhooks and SSF streams send. If either cannot be written, nothing changes. No command sets a
+password or imports a key.
+
+Run it with tsx directly, in an interactive shell: enrol-admin prints a live token, which an Nx task
+keeps on disk (it refuses to run under Nx) and a one-off container or job sends to its log.
 
 Exit codes: 0 done, 1 refused or failed with nothing changed, 2 a usage error or no DATABASE_URL,
 3 retire-key must run again (the key is retired, or may be, but its sessions were not all ended),
 4 the KEK does not open a stored key.
 
-Example:
+Examples, from apps/auth-server in a checkout, and from /app in the auth-server image:
 
-  pnpm nx run auth-server:break-glass -- enrol-admin --realm=operator --role=security-admin`;
+  pnpm exec tsx src/break-glass.ts enrol-admin --realm operator --role security-admin
+  tsx src/break-glass.ts retire-key --realm acme --kid <kid> --confirm`;
 
 /** Thrown for arguments the group does not take; the message ends with the usage. */
 export class BreakGlassUsageError extends Error {
@@ -340,6 +352,18 @@ export interface BreakGlassOperator {
   readonly name: string;
   /** The user's id, or `null` where the platform has none. */
   readonly uid: number | null;
+  /**
+   * The audit login uid of the process (Linux, `/proc/self/loginuid`): the
+   * user who logged in, which `sudo` and `su` keep. `null` where the kernel
+   * sets none.
+   */
+  readonly loginUid: number | null;
+  /**
+   * The user `sudo` reports it ran the command for (`SUDO_USER`), as
+   * reported: the environment can set it, so it is a lead, not a proof.
+   * `null` when the command did not run under `sudo`.
+   */
+  readonly sudoUser: string | null;
   /** The host's name. */
   readonly host: string;
 }
@@ -389,7 +413,12 @@ export function breakGlassAuditEntry(
           run: {
             command: command.name,
             arguments: { ...command.arguments.values },
-            operatingSystemUser: { name: operator.name, uid: operator.uid },
+            operatingSystemUser: {
+              name: operator.name,
+              uid: operator.uid,
+              loginUid: operator.loginUid,
+              sudoUser: operator.sudoUser,
+            },
             host: operator.host,
           },
           ...change,
@@ -597,6 +626,11 @@ export async function runBreakGlass(
 
   if (command.name === 'retire-key') {
     const records = deps.records();
+    deps.out(
+      `break-glass retire-key, run ${run.id} by ${run.operator.name} on ${run.operator.host}: ` +
+        'the run is recorded as breakGlass.retireKey and announced as admin.break_glass_used ' +
+        'before the key changes.'
+    );
     return runKeysRetire(
       ['--kid', command.kid, '--realm', command.realmName, '--yes'],
       command.realmName,

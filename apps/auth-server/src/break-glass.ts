@@ -1,6 +1,6 @@
 /**
- * `auth-server:break-glass`: the break-glass CLI (ADR-019 Decisions 7 and 9,
- * issue #602), the way in when no admin can act. Two commands and no other:
+ * The break-glass CLI (ADR-019 Decisions 7 and 9, issue #602), the way in
+ * when no admin can act. Two commands and no other:
  * `enrol-admin` creates an admin account with no password, its grant and a
  * one-time enrolment URL; `retire-key` retires a token-signing key that may
  * be compromised.
@@ -9,10 +9,16 @@
  * server's own environment: `DATABASE_URL` (the owner's role, not one process
  * role's in a split deployment), the KEK (`KEK`, `KEK_PATH` or a key service
  * adapter's settings), and for `retire-key` Redis. It starts only when the
- * KEK opens a stored key, opens no listening port and makes no HTTP call.
+ * KEK opens a stored key, opens no listening port and makes no HTTP call of
+ * its own.
+ *
+ * Run it with `tsx` directly, in an interactive shell, never as an Nx task:
+ * Nx keeps every task's terminal output on disk, and `enrol-admin` prints a
+ * live token, so it refuses to run under Nx.
  *
  * ```console
- * pnpm nx run auth-server:break-glass -- enrol-admin --realm=operator --role=security-admin
+ * # From apps/auth-server in a checkout:
+ * pnpm exec tsx src/break-glass.ts enrol-admin --realm operator --role security-admin
  * # In the auth-server image, from /app:
  * tsx src/break-glass.ts retire-key --realm <name> --kid <kid> --confirm
  * ```

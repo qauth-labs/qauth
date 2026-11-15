@@ -31,7 +31,13 @@ const ISSUER = 'https://acme.example.com';
 const TOKEN = 'A'.repeat(43);
 const NOW = 1_800_000_000_000;
 const TX = { tx: 'the transaction' };
-const OPERATOR = Object.freeze({ name: 'ops', uid: 1001, host: 'db-host-1' });
+const OPERATOR = Object.freeze({
+  name: 'ops',
+  uid: 1001,
+  loginUid: 1000,
+  sudoUser: 'alice',
+  host: 'db-host-1',
+});
 const KID = 'kid-1';
 const DIGEST = Buffer.alloc(32, 7);
 
@@ -169,7 +175,7 @@ describe('the record of a run', () => {
             run: {
               command: 'enrol-admin',
               arguments: { realm: 'acme', role: 'security-admin' },
-              operatingSystemUser: { name: 'ops', uid: 1001 },
+              operatingSystemUser: { name: 'ops', uid: 1001, loginUid: 1000, sudoUser: 'alice' },
               host: 'db-host-1',
             },
             account: { id: ACCOUNT_ID },
@@ -210,11 +216,19 @@ describe('the record of a run', () => {
     expect(entry.diff?.annotations).toEqual({ 'run.arguments.token': 'secret' });
   });
 
-  it('reads the operator from the operating system', () => {
-    const operator = hostOperator();
+  it('reads the operator from the operating system, and the sudo user as reported', () => {
+    const operator = hostOperator({});
     expect(operator.name).not.toBe('');
     expect(operator.host).not.toBe('');
     expect(operator.uid === null || Number.isInteger(operator.uid)).toBe(true);
+    expect(operator.loginUid === null || Number.isInteger(operator.loginUid)).toBe(true);
+    expect(operator.sudoUser).toBeNull();
+    // The user name never comes from the environment.
+    expect(hostOperator({ USER: 'someone-else', LOGNAME: 'someone-else' }).name).toBe(
+      operator.name
+    );
+    expect(hostOperator({ SUDO_USER: 'alice' }).sudoUser).toBe('alice');
+    expect(hostOperator({ SUDO_USER: ' ' }).sudoUser).toBeNull();
   });
 });
 
@@ -520,6 +534,9 @@ describe('runBreakGlass: retire-key', () => {
     });
 
     expect(await runBreakGlass(command(), deps)).toBe(BREAK_GLASS_EXIT.done);
+    expect(deps.out).toHaveBeenCalledWith(
+      expect.stringMatching(/^break-glass retire-key, run run-1 by ops on db-host-1: /)
+    );
     expect(retireKeyNow).toHaveBeenCalledTimes(1);
     expect(retireKeyNow.mock.calls[0]?.[0]).toMatchObject({ realmId: REALM_ID, kid: KID });
     expect(log).toEqual(['audit:true', 'event:true', 'retired']);
@@ -571,6 +588,34 @@ describe('runBreakGlassProcess', () => {
       await runBreakGlassProcess(['set-password', '--realm', 'acme'], { DATABASE_URL: 'x' }, usage)
     ).toBe(BREAK_GLASS_EXIT.usage);
     expect(usage.err).toHaveBeenCalledWith(expect.stringContaining('is not a break-glass command'));
+  });
+
+  it('refuses enrol-admin as an Nx task, which keeps the printed token on disk', async () => {
+    for (const variable of ['NX_TASK_TARGET_PROJECT', 'NX_TASK_TARGET_TARGET', 'NX_TASK_HASH']) {
+      const written = io();
+      expect(
+        await runBreakGlassProcess(
+          ['enrol-admin', '--realm', 'acme', '--role', 'security-admin'],
+          { DATABASE_URL: 'postgres://unused', [variable]: 'x' },
+          written
+        )
+      ).toBe(BREAK_GLASS_EXIT.usage);
+      expect(written.err).toHaveBeenCalledWith(
+        expect.stringMatching(/^break-glass: enrol-admin prints a live enrolment token/)
+      );
+    }
+    // retire-key prints no secret: it goes on, here to the missing DATABASE_URL.
+    const retire = io();
+    expect(
+      await runBreakGlassProcess(
+        ['retire-key', '--realm', 'acme', '--kid', KID, '--confirm'],
+        { NX_TASK_HASH: 'x' },
+        retire
+      )
+    ).toBe(BREAK_GLASS_EXIT.usage);
+    expect(retire.err).toHaveBeenCalledWith(
+      expect.stringMatching(/^break-glass: set DATABASE_URL/)
+    );
   });
 
   it('exits 2 without DATABASE_URL, before it connects', async () => {

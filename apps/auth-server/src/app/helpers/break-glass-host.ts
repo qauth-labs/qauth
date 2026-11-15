@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { hostname, userInfo } from 'node:os';
 
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
@@ -24,21 +25,38 @@ import {
 
 /**
  * The break-glass CLI's process (#602): what `src/break-glass.ts` runs, and
- * what the integration test runs in its own process to check it opens no
+ * what the integration test runs in the test's process to check it opens no
  * listener.
  *
  * The process registers the database plugin and, for `retire-key`, the
  * cache and session plugins, whose Redis the retirement ends the realm's
  * sessions through. It registers no route and never calls `listen`: no
- * port is opened. It makes no HTTP call. It reads the environment twice:
+ * port is opened. It makes no HTTP call of its own (a KEK adapter calls its
+ * key service). It reads the environment twice:
  * `DATABASE_URL` and the KEK provider's settings from `environ`, before
  * anything connects; for `retire-key` the server's configuration
  * (`config/env`), loaded only then, for the signing algorithms, Redis and
  * the session settings.
  */
 
-/** Who runs the command and where, from the operating system: never from the environment. */
-export function hostOperator(): BreakGlassOperator {
+/** The process's audit login uid, or `null` where the kernel keeps none. */
+function loginUid(): number | null {
+  try {
+    const value = readFileSync('/proc/self/loginuid', 'utf8').trim();
+    // 4294967295, (uid_t)-1, is "not set".
+    return /^[0-9]{1,10}$/.test(value) && Number(value) < 4_294_967_295 ? Number(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Who runs the command and where, from the operating system. Only the sudo
+ * user comes from the environment, and is recorded as reported.
+ */
+export function hostOperator(
+  environ: Readonly<Record<string, string | undefined>> = process.env
+): BreakGlassOperator {
   let name = '';
   let uid: number | null = null;
   try {
@@ -50,7 +68,14 @@ export function hostOperator(): BreakGlassOperator {
   }
   if (uid === null) uid = process.getuid?.() ?? null;
   if (name === '') name = uid === null ? 'unknown' : `uid:${uid}`;
-  return Object.freeze({ name: name.slice(0, 255), uid, host: hostname() });
+  const sudoUser = environ['SUDO_USER']?.trim().slice(0, 255);
+  return Object.freeze({
+    name: name.slice(0, 255),
+    uid,
+    loginUid: loginUid(),
+    sudoUser: sudoUser ? sudoUser : null,
+    host: hostname(),
+  });
 }
 
 /** The decorators of the process the group reads. */
@@ -127,6 +152,13 @@ export function breakGlassDependencies(
   };
 }
 
+/** Whether the process runs as an Nx task, which sets these for every task it runs. */
+export function runsUnderNx(environ: Readonly<Record<string, string | undefined>>): boolean {
+  return ['NX_TASK_TARGET_PROJECT', 'NX_TASK_TARGET_TARGET', 'NX_TASK_HASH'].some(
+    (variable) => environ[variable] !== undefined
+  );
+}
+
 /** Where the process writes. */
 export interface BreakGlassIo {
   readonly out: (line: string) => void;
@@ -156,6 +188,16 @@ export async function runBreakGlassProcess(
   if (command === 'help') {
     io.out(BREAK_GLASS_USAGE);
     return BREAK_GLASS_EXIT.done;
+  }
+  // Nx keeps every task's terminal output on disk: the enrolment URL, the
+  // only copy of a live token, would outlive the run there.
+  if (command.name === 'enrol-admin' && runsUnderNx(environ)) {
+    io.err(
+      'break-glass: enrol-admin prints a live enrolment token, which Nx keeps on disk with the ' +
+        "task's output. Run it with tsx directly (pnpm exec tsx src/break-glass.ts from " +
+        'apps/auth-server, or tsx src/break-glass.ts in the image). Nothing was done.'
+    );
+    return BREAK_GLASS_EXIT.usage;
   }
   const databaseUrl = environ['DATABASE_URL']?.trim();
   if (!databaseUrl) {
@@ -208,7 +250,7 @@ export async function runBreakGlassProcess(
       breakGlassDependencies(server, {
         kekEnv: environ,
         ...(signing === undefined ? {} : { signing }),
-        operator: hostOperator,
+        operator: () => hostOperator(environ),
         out: io.out,
         err: io.err,
       })

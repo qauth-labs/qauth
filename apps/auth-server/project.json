@@ -157,15 +157,6 @@
       },
       "description": "Retire a token-signing key at once because it may be compromised (ADR-019 Decision 9, #551): mark it and its hybrid partner compromised, drop them from the JWKS, deny their kids at every verifier, sign with a new key, revoke the realm's refresh token families and end its sessions used since the key began to sign. `pnpm nx run auth-server:keys:retire --kid=<kid> --yes`; `--realm=<name>` for a realm other than DEFAULT_REALM_NAME. Run it on a host that holds the KEK, with the server's environment (DATABASE_URL of a role that may write the keys, tokens, sessions and audit log, REDIS_*, KEK or KEK_PATH)."
     },
-    "break-glass": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "tsx src/break-glass.ts",
-        "cwd": "apps/auth-server",
-        "forwardAllArgs": true
-      },
-      "description": "The break-glass CLI (ADR-019 Decision 7, #602), the way in when no admin can act: `enrol-admin --realm=<name> --role=<role>` creates an admin account with no password, its grant and a one-time enrolment URL printed once; `retire-key --realm=<name> --kid=<kid> --confirm` retires a token-signing key as keys:retire does. `pnpm nx run auth-server:break-glass -- enrol-admin --realm=operator --role=security-admin`. Run it on a host that holds the database credentials and the KEK, with the server's environment (DATABASE_URL of the owner's role, KEK or KEK_PATH, REDIS_* for retire-key); it starts only when the KEK opens a stored key, and records and announces every run before it changes anything."
-    },
     "service-accounts": {
       "executor": "nx:run-commands",
       "options": {
