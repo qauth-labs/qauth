@@ -33,7 +33,11 @@ import {
   redirectUriNotPermittedError,
   unregisteredRedirectUriError,
 } from './oauth-redirect';
-import { grantRequestedScopes, registeredResourcesOf } from './protected-resources';
+import {
+  grantRequestedScopes,
+  registeredResourcesOf,
+  scopesOnlyAResourceGrants,
+} from './protected-resources';
 import { realmIssuer } from './realm-url';
 import { type RealmRow, requestRealm } from './request-realm';
 import { evaluateStepUp, parsePromptMode, stepUpErrorForPromptNone } from './step-up';
@@ -445,7 +449,11 @@ export async function decideAuthorization(
   // scopes when none of them is dangerous, and writes no `oauth_consents`
   // row; `null` for every other client and request. Every code it lets
   // through is audited below, in the transaction that mints the code.
-  const administrativeConsent = administrativeConsentFor(client, scopes);
+  // A scope the client gets through a registered resource alone (#1087) is
+  // one no operator vouched for this client having: only the user's own
+  // consent covers it, never the administrative one.
+  const userConsentOnly = scopesOnlyAResourceGrants(scopes, client, registered);
+  const administrativeConsent = administrativeConsentFor(client, scopes, userConsentOnly);
 
   // Show the consent screen unless a previous grant already covers the
   // requested scopes. An agent client always sees it (ADR-015 Decision
@@ -516,7 +524,9 @@ export async function decideAuthorization(
     const oidcError = forcedLogin
       ? 'login_required'
       : (stepUpErrorForPromptNone(stepUp) ??
-        (canSkipConsent(existingConsent, client, scopes, resources) ? null : 'consent_required'));
+        (canSkipConsent(existingConsent, client, scopes, resources, userConsentOnly)
+          ? null
+          : 'consent_required'));
     if (oidcError) {
       await emitUserEvent(
         request,
@@ -574,7 +584,8 @@ export async function decideAuthorization(
   // (`prompt=none` already returned consent_required above if needed.)
   if (
     prompt !== 'none' &&
-    (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes, resources))
+    (stepUp.requiresConsent ||
+      !canSkipConsent(existingConsent, client, scopes, resources, userConsentOnly))
   ) {
     if (stepUp.elevated.length > 0) {
       await emitUserEvent(
@@ -618,7 +629,7 @@ export async function decideAuthorization(
       client.id,
       tx
     );
-    if (!canSkipConsent(lockedConsent, client, scopes, resources)) {
+    if (!canSkipConsent(lockedConsent, client, scopes, resources, userConsentOnly)) {
       return 'consent_withdrawn' as const;
     }
     const minted = await mintAuthorizationCode(
