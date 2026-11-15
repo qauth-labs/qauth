@@ -66,7 +66,7 @@ type FamiliesRevocation = Awaited<
 type SessionsRevocation = Awaited<ReturnType<SessionService['revokeAllForRealm']>>;
 
 /** The effects of `keys.retire`, as the reserved operation ids name them. */
-const KEY_RETIRE_EFFECTS = (() => {
+export const KEY_RETIRE_EFFECTS = (() => {
   const reserved = RESERVED_OPERATIONS.find((entry) => entry.id === KEY_RETIRE_OPERATION);
   if (reserved === undefined) throw new Error(`'${KEY_RETIRE_OPERATION}' is not reserved`);
   return reserved.effects;
@@ -231,7 +231,8 @@ export function keyRetirementRepeatAuditEntry(repeat: KeyRetirementRepeat): Admi
 /**
  * Record a run again in one transaction: its admin audit row and the
  * critical `key.emergency_retired` event of the key, which every event route
- * sends again.
+ * sends again. `before`, when given, writes first in the same transaction:
+ * the break-glass CLI's record of its run (#602).
  */
 export async function recordKeyRetirementRepeat(
   deps: {
@@ -239,9 +240,11 @@ export async function recordKeyRetirementRepeat(
     readonly events: Pick<Repositories['events'], 'emit'>;
     readonly adminAuditLog: Pick<AdminAuditLog, 'appendAdminAudit'>;
   },
-  repeat: KeyRetirementRepeat
+  repeat: KeyRetirementRepeat,
+  before?: (tx: DbTransaction) => Promise<void>
 ): Promise<void> {
   await deps.transaction(async (tx) => {
+    await before?.(tx);
     await deps.events.emit(
       tx,
       emergencyRetiredEvent({ ...repeat, purpose: 'token_signing' }, repeat.kid)
