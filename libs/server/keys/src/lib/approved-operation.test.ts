@@ -4,17 +4,23 @@ import {
   canonicalOperationBytes,
   checkedApproval,
   isKekRef,
+  isKid,
   isOperationNonce,
   isSecurityOperationActor,
   KEK_ROTATE_OPERATION,
   kekRotationOperation,
   type KekRotationOperationInput,
   type KekRotationOperationRecord,
+  KEY_RETIRE_OPERATION,
   KEY_ROTATE_OPERATION,
+  keyRetirementOperation,
+  type KeyRetirementOperationInput,
+  type KeyRetirementOperationRecord,
   keyRotationOperation,
   type KeyRotationOperationInput,
   type KeyRotationOperationRecord,
   MAX_KEK_REF_LENGTH,
+  MAX_KID_LENGTH,
   newOperationNonce,
   OPERATION_NONCE_BYTES,
   OperationApprovalError,
@@ -115,7 +121,10 @@ describe('the canonical record of a manual key rotation', () => {
     } as unknown as KeyRotationOperationRecord;
     expect(canonicalOperationBytes(padded)).toEqual(canonicalOperationBytes(record));
     // A record of another operation is not hashed as this one.
-    const retire = { ...record, op: 'keys.retire' } as unknown as KeyRotationOperationRecord;
+    const other = { ...record, op: 'keys.disable' } as unknown as KeyRotationOperationRecord;
+    expect(() => canonicalOperationBytes(other)).toThrow(TypeError);
+    // Nor is a rotation's record relabelled as a retirement: it names no kid.
+    const retire = { ...record, op: KEY_RETIRE_OPERATION } as unknown as KeyRotationOperationRecord;
     expect(() => canonicalOperationBytes(retire)).toThrow(TypeError);
   });
 
@@ -238,6 +247,103 @@ describe('the canonical record of a KEK rotation (#545)', () => {
     expect(isKekRef('a'.repeat(MAX_KEK_REF_LENGTH))).toBe(true);
     expect(isKekRef(42)).toBe(false);
     expect(isKekRef(undefined)).toBe(false);
+  });
+});
+
+const KID = 'Zr9kq2v_Y3lJm8T0dWbXo1sNcPfQhUaE-4gRiKxL7';
+
+function retireInput(
+  overrides: Partial<KeyRetirementOperationInput> = {}
+): KeyRetirementOperationInput {
+  return { realmId: REALM, kid: KID, requester: ADMIN, nonce: NONCE, ...overrides };
+}
+
+describe('the canonical record of an emergency key retirement (#551)', () => {
+  it('has stable bytes: a golden test pins them, and the digest taken over them', () => {
+    // The realm id in upper case is the same realm: the record holds it in lower case.
+    const record = keyRetirementOperation(retireInput({ realmId: REALM.toUpperCase() }));
+    expect(canonicalOperationBytes(record).toString('utf8')).toBe(
+      '{"kid":"Zr9kq2v_Y3lJm8T0dWbXo1sNcPfQhUaE-4gRiKxL7",' +
+        '"nonce":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","op":"keys.retire",' +
+        '"realm":"0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01",' +
+        '"requester":{"accountId":"0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6eaa","kind":"human",' +
+        '"realmId":"0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e00"}}'
+    );
+    expect(operationDigest(record).toString('hex')).toBe(
+      'd0a759d2bf4f0d6c657cc63fbded4b712fefa6ec45036237ded5e703b867f7df'
+    );
+  });
+
+  it("pins the break-glass CLI's record too", () => {
+    const record = keyRetirementOperation(
+      retireInput({ requester: { kind: 'break_glass', operatingSystemUser: 'qauth-ops' } })
+    );
+    expect(canonicalOperationBytes(record).toString('utf8')).toBe(
+      '{"kid":"Zr9kq2v_Y3lJm8T0dWbXo1sNcPfQhUaE-4gRiKxL7",' +
+        '"nonce":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","op":"keys.retire",' +
+        '"realm":"0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01",' +
+        '"requester":{"kind":"break_glass","operatingSystemUser":"qauth-ops"}}'
+    );
+    expect(operationDigest(record).toString('hex')).toBe(
+      '9cc0824fceae90b8a87aa0139d453635107bcf052946a6dec15e28264aacf1d4'
+    );
+  });
+
+  it('contains the operation, realm, kid, requester and nonce, and nothing else', () => {
+    const record = keyRetirementOperation(retireInput());
+    expect(record).toEqual({
+      op: KEY_RETIRE_OPERATION,
+      realm: REALM,
+      kid: KID,
+      requester: ADMIN,
+      nonce: NONCE,
+    });
+    expect(Object.isFrozen(record)).toBe(true);
+  });
+
+  it('binds every member: another realm, kid, requester or nonce is another digest', () => {
+    const base = operationDigest(keyRetirementOperation(retireInput())).toString('hex');
+    const others = [
+      retireInput({ realmId: '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e02' }),
+      // A kid is compared byte for byte: another case is another key.
+      retireInput({ kid: KID.toLowerCase() }),
+      retireInput({ requester: { kind: 'break_glass', operatingSystemUser: 'root' } }),
+      retireInput({ nonce: newOperationNonce() }),
+    ].map((each) => operationDigest(keyRetirementOperation(each)).toString('hex'));
+    expect(others).not.toContain(base);
+    expect(new Set(others).size).toBe(others.length);
+    // No rotation of the same realm hashes to a retirement's digest.
+    expect(others).not.toContain(operationDigest(keyRotationOperation(input())).toString('hex'));
+  });
+
+  it('hashes only the members of a record, whatever else the object carries', () => {
+    const record = keyRetirementOperation(retireInput());
+    const padded = {
+      ...record,
+      purpose: 'token_signing',
+      requester: { ...record.requester, extra: 'x' },
+    } as unknown as KeyRetirementOperationRecord;
+    expect(canonicalOperationBytes(padded)).toEqual(canonicalOperationBytes(record));
+  });
+
+  it.each([
+    ['a realm id that is not a UUID', retireInput({ realmId: 'realm-1' })],
+    ['an empty kid', retireInput({ kid: '' })],
+    ['a kid over the length limit', retireInput({ kid: 'k'.repeat(MAX_KID_LENGTH + 1) })],
+    ['a kid with a control character', retireInput({ kid: 'kid\n' })],
+    ['a kid with a lone surrogate', retireInput({ kid: 'kid\ud800' })],
+    ['a kid that is no text', retireInput({ kid: 42 as never })],
+    ['a requester of no known kind', retireInput({ requester: { kind: 'robot' } as never })],
+    ['a short nonce', retireInput({ nonce: NONCE.slice(0, 40) })],
+  ])('refuses %s', (_name, value) => {
+    expect(() => keyRetirementOperation(value)).toThrow(TypeError);
+  });
+
+  it('reads a kid of at most 255 characters', () => {
+    expect(isKid(KID)).toBe(true);
+    expect(isKid('k'.repeat(MAX_KID_LENGTH))).toBe(true);
+    expect(isKid(' ')).toBe(true);
+    expect(isKid(undefined)).toBe(false);
   });
 });
 

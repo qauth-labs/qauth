@@ -178,7 +178,19 @@ export type KeyChangeRefusalReason =
    * Activating the `next` key would split a hybrid pair (ADR-005): with hybrid
    * signing on, the next EdDSA key has no ML-DSA-65 partner. Nothing changed.
    */
-  | 'SPLIT_HYBRID_PAIR';
+  | 'SPLIT_HYBRID_PAIR'
+  /** An emergency retirement (#551) names a `kid` that could not be stored: empty, too long or not text. */
+  | 'INVALID_KID'
+  /** An emergency retirement names a `kid` the realm holds no key of. */
+  | 'UNKNOWN_KEY'
+  /**
+   * An emergency retirement names a key of a purpose it does not retire: only
+   * `token_signing` keys, whose tokens every verify site checks against the
+   * `kid` denylist, retire this way.
+   */
+  | 'NOT_A_RETIRABLE_PURPOSE'
+  /** An emergency retirement names a key that is `compromised` already. Nothing changed. */
+  | 'ALREADY_COMPROMISED';
 
 /** The reasons that describe the stored keys rather than the request. */
 const KEY_STATE_REASONS: readonly KeyChangeRefusalReason[] = [
@@ -188,11 +200,13 @@ const KEY_STATE_REASONS: readonly KeyChangeRefusalReason[] = [
   'KEY_CHANGED',
   'AMBIGUOUS_KEYS',
   'SPLIT_HYBRID_PAIR',
+  'ALREADY_COMPROMISED',
 ];
 
 /**
- * A rotation step (`activateNextKey`, `rotateNow`) or a scope deletion
- * (`deleteScopedKeys`) the factory or the rotation does not run. Nothing was changed. Branch on {@link reason}.
+ * A rotation step (`activateNextKey`, `rotateNow`), an emergency retirement
+ * (`retireNow`) or a scope deletion (`deleteScopedKeys`) the factory or the
+ * rotation does not run. Nothing was changed. Branch on {@link reason}.
  */
 export class KeyChangeRefusedError extends Error {
   readonly code = 'KEY_CHANGE_REFUSED';

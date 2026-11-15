@@ -27,7 +27,9 @@ import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY } from './sql-helpers';
  * - `admin` — an admin ended it.
  * - `reset` — a password or credential reset ended the sessions created before
  *   it.
- * - `key_retired` — the cookie key that signed it was retired.
+ * - `key_retired` — a key it rested on was retired: the cookie key that signed
+ *   it, or a token-signing key retired in an emergency while the session was in
+ *   use (#551).
  * - `browser_limit` — the browser held more account sessions than allowed, and
  *   this one was the oldest.
  * - `idle` — the realm's idle limit (`sso_idle_timeout`) passed.

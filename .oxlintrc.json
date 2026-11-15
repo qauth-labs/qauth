@@ -439,8 +439,9 @@
     //   anywhere (a declaration, an import, a mock, an object key);
     // - `DEFAULT_REALM_NAME` only names the default realm at boot, so reading it
     //   is refused outside the boot step: `app.ts`, which hands it to the
-    //   default realm's and the realm keys' boot steps, and `keys-create.ts`,
-    //   the operator command whose `--realm` defaults to it. A key of that name
+    //   default realm's and the realm keys' boot steps, and `keys-create.ts`
+    //   and `keys-retire.ts`, the operator commands whose `--realm` defaults
+    //   to it. A key of that name
     //   in an object literal (a configuration schema, a test's environment) is
     //   not a read and passes.
     //
@@ -473,7 +474,11 @@
         "**/*.cjs",
         "**/*.mjs"
       ],
-      "excludeFiles": ["apps/auth-server/src/app/app.ts", "apps/auth-server/src/keys-create.ts"],
+      "excludeFiles": [
+        "apps/auth-server/src/app/app.ts",
+        "apps/auth-server/src/keys-create.ts",
+        "apps/auth-server/src/keys-retire.ts"
+      ],
       "rules": {
         "no-restricted-properties": [
           "error",

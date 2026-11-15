@@ -125,6 +125,10 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // Each realm's AuthMethod plugins (#600): enabled and configured by admin.
   realm_auth_method_plugins: { web: S, admin: SIU },
   realm_hosts: { web: SI, api: SI, admin: SI, signer: SI },
+  // The kids an emergency retirement denied (#551): every role's verifiers
+  // and key readers check them; only the signer, which marks the key
+  // compromised in the same transaction, writes one.
+  realm_key_denylist: { web: S, api: S, admin: S, signer: SI, delivery: S },
   // The private keys, wrapped under the KEK: the signer's alone.
   realm_keys: { signer: SIUD },
   // The published keys: every role verifies with them; only the signer

@@ -75,10 +75,17 @@ describe('KeyChangeRefusedError', () => {
     expect(error.notBefore).toBeUndefined();
   });
 
-  it.each(['NO_NEXT_KEY', 'OVERLAP_NOT_ELAPSED', 'KEY_CHANGED'] as const)(
+  it.each(['NO_NEXT_KEY', 'OVERLAP_NOT_ELAPSED', 'KEY_CHANGED', 'ALREADY_COMPROMISED'] as const)(
     'reports %s, a state of the stored keys, as a conflict',
     (reason) => {
       expect(new KeyChangeRefusedError(reason, 'refused', 1).statusCode).toBe(409);
+    }
+  );
+
+  it.each(['INVALID_KID', 'UNKNOWN_KEY', 'NOT_A_RETIRABLE_PURPOSE'] as const)(
+    'reports %s, a retirement that names no retirable key, as a client error',
+    (reason) => {
+      expect(new KeyChangeRefusedError(reason, 'refused').statusCode).toBe(400);
     }
   );
 

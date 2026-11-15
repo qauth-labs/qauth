@@ -3,8 +3,12 @@ import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import {
   type ApprovedOperation,
   checkedApproval,
+  isKid,
   isOperationApprovalRefusal,
+  KEY_RETIRE_OPERATION,
   KEY_ROTATE_OPERATION,
+  keyRetirementOperation,
+  type KeyRetireOperation,
   type KeyRotateOperation,
   keyRotationOperation,
   OperationApprovalError,
@@ -14,6 +18,7 @@ import {
 import type { KekProvider } from './kek-provider';
 import { KeyChangeRefusedError } from './key-creation-errors';
 import { createRotationKeyFactory, type KeyFactory, type RotationKeyFactory } from './key-factory';
+import { isAllowedBySigningMode } from './key-generation';
 import {
   isKeyPurpose,
   KEY_PURPOSES,
@@ -27,6 +32,7 @@ import {
   type KeyRotationNowPlan,
   type KeyRotationSettings,
   type KeyRotationStep,
+  keySignedSince,
   type NextKeyCreatedStep,
   planKeyRotation,
   planKeyRotationNow,
@@ -34,7 +40,7 @@ import {
   resolveKeyRotationSettings,
   type RotatedKey,
 } from './key-rotation-plan';
-import type { RealmKeyStore, StoredKeySummary } from './key-store';
+import type { RealmKeyStore, StoredKeyStatus, StoredKeySummary } from './key-store';
 import { isRealmId } from './realm-id';
 
 /**
@@ -42,8 +48,9 @@ import { isRealmId } from './realm-id';
  * `key-rotation-plan.ts` for every rotating purpose of every realm, and writes
  * what it decides. Beside it, the manual rotation of #544
  * ({@link KeyRotation.rotateNow}) starts one purpose's rotation before it is
- * due, under an approval. Key custody: it creates keys, so only the signer's
- * wiring builds it.
+ * due, under an approval, and the emergency retirement of #551
+ * ({@link KeyRotation.retireNow}) takes a key out at once. Key custody: it
+ * creates keys, so only the signer's wiring builds it.
  */
 
 /** The store the rotation works through: the key factory's, plus a lock and the realms that hold keys. */
@@ -58,6 +65,22 @@ export interface KeyRotationStore<Tx> extends RealmKeyStore<Tx> {
    * order, after `afterRealmId` (from the first when `null`).
    */
   listRealmIds(afterRealmId: string | null, limit: number): Promise<readonly string[]>;
+  /**
+   * Retire the key with `kid` in an emergency (#551), and its public row
+   * with it: mark it `compromised` at `compromisedAt` from any other status,
+   * end its signing and its JWKS window at that moment, and put its `kid` on
+   * the realm's denylist, which every verifier reads. The realm keys
+   * repository's `markCompromised`.
+   *
+   * @returns the key, or `undefined` when the realm holds no key with `kid`,
+   *   or holds it compromised already.
+   */
+  markCompromised(
+    realmId: string,
+    kid: string,
+    compromisedAt: number,
+    tx: Tx
+  ): Promise<object | undefined>;
 }
 
 /** What a rotation is built from. */
@@ -174,6 +197,75 @@ export interface KeyRotationNowRecord {
   readonly next: readonly RotatedNowKeys[];
 }
 
+/** An emergency retirement: which key, under which approval, and the hook it calls. */
+export interface RetireNowInput<Tx> {
+  readonly realmId: string;
+  /**
+   * The `kid` of the `token_signing` key to retire, of any status but
+   * `compromised`. Both keys of its hybrid pair retire together, whichever of
+   * the two it names.
+   */
+  readonly kid: string;
+  /**
+   * The approval of exactly this retirement (`keys.retire`). It is consumed in
+   * the transaction that retires the key.
+   */
+  readonly approval: ApprovedOperation<KeyRetireOperation, Tx>;
+  /** The clock, in epoch ms. Defaults to `Date.now`. */
+  readonly now?: () => number;
+  /**
+   * Called once, inside the transaction, after the keys changed and the
+   * approval was consumed: the place to write the audit row and the events,
+   * and to revoke what the transaction can reach (the refresh families). A
+   * throw rolls the whole operation back.
+   */
+  readonly onRetired: (record: KeyRetirementRecord, tx: Tx) => Promise<void>;
+}
+
+/** A key an emergency retirement marked `compromised`. */
+export interface RetiredNowKey {
+  readonly kid: string;
+  readonly algorithm: KeyAlgorithm;
+  /** The status it had: what it was doing when it was retired. */
+  readonly previousStatus: Exclude<StoredKeyStatus, 'compromised'>;
+  /** Epoch ms. When it started, or was to start, to sign; `null` for a `next` key without a plan. */
+  readonly activateAt: number | null;
+}
+
+/** What an emergency retirement did, as its hook records it and `retireNow` returns it. */
+export interface KeyRetirementRecord {
+  readonly operation: KeyRetireOperation;
+  /** The approval it ran under. */
+  readonly approvalId: string;
+  /** Who asked for it. */
+  readonly actor: SecurityOperationActor;
+  /** SHA-256 of the operation's canonical record: the digest the approval was consumed for. */
+  readonly operationDigest: Buffer;
+  readonly realmId: string;
+  readonly purpose: KeyPurpose;
+  /** The `kid` the operation named. */
+  readonly kid: string;
+  /** Epoch ms. The moment the keys were marked `compromised`, and left the JWKS. */
+  readonly retiredAt: number;
+  /** The keys marked `compromised`: the named key, then its hybrid partner if it has one. */
+  readonly retired: readonly RetiredNowKey[];
+  /**
+   * The `active` keys created in their place, which sign at once with no
+   * pre-publication: one per algorithm a retired key was signing with, the
+   * lead key then its hybrid companion. Empty when the retired keys were not
+   * the realm's active ones (a `next` or `retired` key).
+   */
+  readonly replacements: readonly RotatedKey[];
+  /**
+   * Epoch ms. The earliest moment a retired key may have signed
+   * ({@link keySignedSince}), never later than {@link retiredAt}: every
+   * session and refresh family created or used since then may rest on a
+   * token it signed, so the caller revokes them. `null` when no retired key
+   * ever signed (a `next` key), and nothing is revoked.
+   */
+  readonly signedSince: number | null;
+}
+
 /** The scheduled rotation. See {@link createKeyRotation}. */
 export interface KeyRotation<Tx> {
   /** The windows it runs with. */
@@ -216,7 +308,42 @@ export interface KeyRotation<Tx> {
    *   `SPLIT_HYBRID_PAIR`), with nothing changed and the approval unused
    */
   rotateNow(input: RotateNowInput<Tx>): Promise<KeyRotationNowRecord>;
+  /**
+   * Retire a `token_signing` key in an emergency (ADR-019 Decision 9, #551),
+   * under an approval of exactly that retirement. It is a security operation
+   * (ADR-019 Decision 7).
+   *
+   * In one transaction, under the realm's key lock, it marks the key and its
+   * hybrid partner `compromised`, which takes them out of the JWKS and the
+   * verification set at once and puts their `kid`s on the realm's denylist;
+   * for each algorithm a retired key was the realm's `active` key of, it
+   * creates a new `active` key (a hybrid pair when hybrid signing is on),
+   * which signs at once with no pre-publication. A `next` key that waited
+   * keeps waiting. Then it calls the hook, which revokes the refresh families
+   * and writes the audit row and the events in the same transaction.
+   *
+   * A retired key that still signed through a pending switch hands signing to
+   * the active key it was to give way to; a retired key that signed no more
+   * and a `next` key need no replacement.
+   *
+   * Nodes see the change through the denylist: a caller invalidates its
+   * cached copy after the commit.
+   *
+   * @throws OperationApprovalError before anything is read when the approval
+   *   is missing, malformed or for another operation; and when
+   *   {@link ApprovedOperation.consume} refuses it, with nothing changed.
+   *   Any other error of `consume` is passed on as it is, with nothing changed.
+   * @throws KeyChangeRefusedError for a malformed realm id or `kid`
+   *   (`INVALID_REALM_ID`, `INVALID_KID`), a `kid` the realm holds no key of
+   *   (`UNKNOWN_KEY`), a key of another purpose (`NOT_A_RETIRABLE_PURPOSE`)
+   *   and a key compromised already (`ALREADY_COMPROMISED`), with nothing
+   *   changed and the approval unused
+   */
+  retireNow(input: RetireNowInput<Tx>): Promise<KeyRetirementRecord>;
 }
+
+/** The purpose an emergency retirement retires: the keys every verify site checks the denylist for. */
+const RETIRABLE_PURPOSE: KeyPurpose = 'token_signing';
 
 const DEFAULT_PAGE_SIZE = 100;
 
@@ -498,9 +625,141 @@ export function createKeyRotation<Tx>(options: KeyRotationOptions<Tx>): KeyRotat
     });
   }
 
+  async function retireNow(input: RetireNowInput<Tx>): Promise<KeyRetirementRecord> {
+    const approval = checkedApproval<Tx>(
+      input?.approval,
+      KEY_RETIRE_OPERATION,
+      'An emergency retirement needs an approval'
+    );
+    const { realmId, kid } = retireNowTarget(input);
+    if (typeof input.onRetired !== 'function') {
+      throw new TypeError('An emergency retirement needs its hook');
+    }
+    const now = input.now ?? Date.now;
+    // The record is built from what this call does, never handed in.
+    const operation = keyRetirementOperation({
+      realmId,
+      kid,
+      requester: approval.requester,
+      nonce: approval.nonce,
+    });
+    const digest = operationDigest(operation);
+    const purpose = RETIRABLE_PURPOSE;
+    const definition: KeyPurposeDefinition = KEY_PURPOSES[purpose];
+    const factory = factoryFor(now);
+
+    return store.transaction(async (tx) => {
+      await store.lockRealm(realmId, tx);
+      const keys = await store.listByRealm(realmId, { purpose, scopeId: null }, tx);
+      const named = keys.find((key) => key.kid === kid);
+      if (named === undefined) {
+        // Asked only to tell the two refusals apart: nothing is changed either way.
+        const other = await store.findByKid(realmId, kid, tx);
+        throw other === undefined
+          ? new KeyChangeRefusedError('UNKNOWN_KEY', 'The realm holds no key with that kid')
+          : new KeyChangeRefusedError(
+              'NOT_A_RETIRABLE_PURPOSE',
+              `Only a '${purpose}' key is retired in an emergency`
+            );
+      }
+      if (named.status === 'compromised') {
+        throw new KeyChangeRefusedError(
+          'ALREADY_COMPROMISED',
+          'The key is compromised already; nothing was changed'
+        );
+      }
+      // Both keys of a hybrid pair go (ADR-019 Decision 9): the named key
+      // first, then its partner, unless the partner went already.
+      const retiring = [
+        named,
+        ...keys.filter(
+          (key) =>
+            named.pairId !== null &&
+            key.pairId === named.pairId &&
+            key.kid !== named.kid &&
+            key.status !== 'compromised'
+        ),
+      ];
+      // The algorithms the realm loses its active key of: each gets a new
+      // one. A hybrid companion comes with its lead key's.
+      const replaced = [
+        ...new Set(
+          retiring
+            .filter(
+              (key) => key.status === 'active' && key.algorithm !== definition.hybridCompanion
+            )
+            .map((key) => key.algorithm as KeyAlgorithm)
+        ),
+      ].filter((algorithm) => isAllowedBySigningMode(algorithm, enabledSignatureAlgorithms));
+      try {
+        await approval.consume(Buffer.from(digest), tx);
+      } catch (error) {
+        if (!isOperationApprovalRefusal(error)) throw error;
+        throw new OperationApprovalError(
+          'refused',
+          `Approval ${approval.id} does not approve this retirement`,
+          { cause: error }
+        );
+      }
+
+      const at = now();
+      const signed = retiring.filter((key) => key.status === 'active' || key.status === 'retired');
+      // Never later than now: an active key whose switch is still ahead may
+      // sign already (`keySignedSince`).
+      const signedSince =
+        signed.length === 0
+          ? null
+          : Math.min(at, ...signed.map((key) => keySignedSince(key, settings.activationDelayMs)));
+      // Out first: the one-active index allows no moment with two.
+      for (const key of retiring) {
+        const moved = await store.markCompromised(realmId, key.kid, at, tx);
+        if (moved === undefined) throw keyChanged(purpose);
+      }
+      const replacements: RotatedKey[] = [];
+      for (const algorithm of replaced) {
+        const created = await factory.createKey({
+          realmId,
+          purpose,
+          algorithm,
+          status: 'active',
+          tx,
+        });
+        replacements.push(
+          ...created.map((key) => Object.freeze({ kid: key.kid, algorithm: key.algorithm }))
+        );
+      }
+
+      const record: KeyRetirementRecord = Object.freeze({
+        operation: KEY_RETIRE_OPERATION,
+        approvalId: approval.id,
+        actor: operation.requester,
+        operationDigest: Buffer.from(digest),
+        realmId,
+        purpose,
+        kid,
+        retiredAt: at,
+        retired: Object.freeze(
+          retiring.map((key) =>
+            Object.freeze({
+              kid: key.kid,
+              algorithm: key.algorithm as KeyAlgorithm,
+              previousStatus: key.status as RetiredNowKey['previousStatus'],
+              activateAt: key.activateAt,
+            })
+          )
+        ),
+        replacements: Object.freeze(replacements),
+        signedSince,
+      });
+      await input.onRetired(record, tx);
+      return record;
+    });
+  }
+
   return Object.freeze({
     settings,
     rotateNow,
+    retireNow,
 
     async rotateRealm(realmId: string, run: KeyRotationRunOptions<Tx>): Promise<KeyRotationReport> {
       if (typeof realmId !== 'string' || !isRealmId(realmId)) {
@@ -581,4 +840,24 @@ function rotateNowTarget(input: Pick<RotateNowInput<unknown>, 'realmId' | 'purpo
     );
   }
   return { realmId: realmId.toLowerCase(), purpose };
+}
+
+/**
+ * The realm and `kid` an emergency retirement acts on: a UUID realm id in
+ * lower case, and a `kid` that could be stored, as given.
+ *
+ * @throws KeyChangeRefusedError otherwise
+ */
+function retireNowTarget(input: Pick<RetireNowInput<unknown>, 'realmId' | 'kid'>): {
+  readonly realmId: string;
+  readonly kid: string;
+} {
+  const { realmId, kid } = input;
+  if (typeof realmId !== 'string' || !isRealmId(realmId)) {
+    throw new KeyChangeRefusedError('INVALID_REALM_ID', 'A realm id is a UUID');
+  }
+  if (!isKid(kid)) {
+    throw new KeyChangeRefusedError('INVALID_KID', 'A kid is not well formed');
+  }
+  return { realmId: realmId.toLowerCase(), kid };
 }

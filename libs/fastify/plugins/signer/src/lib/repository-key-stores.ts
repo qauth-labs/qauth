@@ -7,7 +7,11 @@ import {
   type DbTransaction,
   type RealmPublicKeysRepository,
 } from '@qauth-labs/infra-db';
-import { createPublishedKeyReader, type PublishedKeyReader } from '@qauth-labs/server-keys';
+import {
+  createPublishedKeyReader,
+  type KidDenylistView,
+  type PublishedKeyReader,
+} from '@qauth-labs/server-keys';
 import type {
   KekRewrapStore,
   KeyRotationStore,
@@ -100,11 +104,13 @@ export function createRepositoryKekCanaryStore(db: DbClient): KekCanaryStore {
  * @param realmPublicKeys - the database plugin's `realmPublicKeys` repository
  */
 export function createRepositoryPublishedKeyReader(
-  realmPublicKeys: Pick<RealmPublicKeysRepository, 'listByRealm'>
+  realmPublicKeys: Pick<RealmPublicKeysRepository, 'listByRealm'>,
+  options: { readonly keyDenylist?: KidDenylistView } = {}
 ): PublishedKeyReader {
-  return createPublishedKeyReader({
-    listPublicKeys: (realmId: string) => realmPublicKeys.listByRealm(realmId),
-  });
+  return createPublishedKeyReader(
+    { listPublicKeys: (realmId: string) => realmPublicKeys.listByRealm(realmId) },
+    options.keyDenylist === undefined ? {} : { keyDenylist: options.keyDenylist }
+  );
 }
 
 /**
@@ -114,7 +120,8 @@ export function createRepositoryPublishedKeyReader(
  * can be created together, and a subscription or provider deleted with its
  * keys (`deleteScopedKeys`). `lockRealm` is the repository's advisory lock on
  * a realm's keys. The key rotation job (#542) writes through it too, and
- * pages through the realms with `listRealmIds`.
+ * pages through the realms with `listRealmIds`; an emergency retirement
+ * (#551) marks a key compromised with `markCompromised`.
  */
 export function createRepositoryKeyStore(
   db: DbClient
@@ -127,6 +134,7 @@ export function createRepositoryKeyStore(
     listByRealm: keys.listByRealm,
     create: keys.create,
     updateStatus: keys.updateStatus,
+    markCompromised: keys.markCompromised,
     deleteByScope: keys.deleteByScope,
     lockRealm: keys.lockRealm,
     listRealmIds: (afterRealmId: string | null, limit: number) =>

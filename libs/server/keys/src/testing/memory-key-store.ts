@@ -30,6 +30,7 @@ export interface MemoryStoredKey extends Omit<NewStoredKeyRow, 'status'> {
   readonly status: StoredKeyStatus;
   readonly retireAt?: number | null;
   readonly unpublishAt?: number | null;
+  readonly compromisedAt?: number | null;
 }
 
 /** A stored row, with its public JWK when one was written. */
@@ -41,6 +42,8 @@ export interface MemoryKeyRow {
 export interface MemoryKeyStore extends RealmKeyBootStore<MemoryTx>, KeyRotationStore<MemoryTx> {
   /** The committed rows, oldest first. */
   readonly rows: MemoryKeyRow[];
+  /** The denied `kid`s, as `<realm id> <kid>`, in the order they were denied (#551). */
+  readonly denied: string[];
   /** Every call, in order, with the transaction it ran in. */
   readonly calls: { readonly method: string; readonly tx?: MemoryTx }[];
   /** The `outer` argument of each `transaction` call. */
@@ -57,6 +60,7 @@ export interface MemoryKeyStoreOptions {
 
 export function createMemoryKeyStore(options: MemoryKeyStoreOptions = {}): MemoryKeyStore {
   const rows: MemoryKeyRow[] = [];
+  const denied: string[] = [];
   const calls: { method: string; tx?: MemoryTx }[] = [];
   const outerTransactions: (MemoryTx | undefined)[] = [];
   let nextTx = 1;
@@ -64,6 +68,7 @@ export function createMemoryKeyStore(options: MemoryKeyStoreOptions = {}): Memor
 
   return {
     rows,
+    denied,
     calls,
     outerTransactions,
 
@@ -71,10 +76,12 @@ export function createMemoryKeyStore(options: MemoryKeyStoreOptions = {}): Memor
       calls.push({ method: 'transaction', tx: outer });
       outerTransactions.push(outer);
       const snapshot = [...rows];
+      const deniedSnapshot = [...denied];
       try {
         return await work({ id: nextTx++ });
       } catch (error) {
         rows.splice(0, rows.length, ...snapshot);
+        denied.splice(0, denied.length, ...deniedSnapshot);
         throw error;
       }
     },
@@ -222,6 +229,27 @@ export function createMemoryKeyStore(options: MemoryKeyStoreOptions = {}): Memor
               unpublishAt: change.unpublishAt,
             };
       rows[index] = { ...rows[index], key: updated };
+      return updated;
+    },
+
+    async markCompromised(realmId, kid, compromisedAt, tx: MemoryTx): Promise<object | undefined> {
+      calls.push({ method: 'markCompromised', tx });
+      const index = rows.findIndex(
+        (row) =>
+          row.key.realmId === realmId && row.key.kid === kid && row.key.status !== 'compromised'
+      );
+      if (index === -1) return undefined;
+      const { key } = rows[index];
+      const updated: MemoryStoredKey = {
+        ...key,
+        status: 'compromised',
+        compromisedAt,
+        retireAt: Math.min(key.retireAt ?? compromisedAt, compromisedAt),
+        unpublishAt: Math.max(key.publishAt ?? compromisedAt, compromisedAt),
+      };
+      rows[index] = { ...rows[index], key: updated };
+      const entry = `${realmId} ${kid}`;
+      if (!denied.includes(entry)) denied.push(entry);
       return updated;
     },
 

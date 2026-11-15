@@ -198,7 +198,11 @@ The server picks the key by the token's `kid` and `alg` together, from the
 realm's verification set: its active keys, and its retired keys until their
 retention ends. A `next` key and a `compromised` key verify nothing. A hybrid
 token's ML-DSA-65 key is found the same way, by its `pqc_kid`. Every process
-reads a realm's key list again at most every 60 seconds.
+reads a realm's key list again at most every 60 seconds, and refuses the
+tokens of a key [retired in an emergency](#emergency-retirement) within 10
+seconds. When the retiring host cannot write to Redis, that takes up to 13
+seconds while the database answers each node within 5 seconds, and longer
+when it does not.
 
 A token issued before the upgrade to 0.2 carries no `kid`. It still verifies,
 but only against the Ed25519 key that `JWT_PRIVATE_KEY` or `JWT_PUBLIC_KEY`
@@ -328,32 +332,110 @@ the whole window.
 
 ### Emergency retirement
 
-An emergency retirement will retire a key that may be compromised as soon as
-the retirement is approved, without the overlap
-([#551](https://github.com/qauth-labs/qauth/issues/551)):
+An emergency retirement retires a token-signing key that may be compromised at
+once, without the overlap
+([#551](https://github.com/qauth-labs/qauth/issues/551)). Run it on a host that
+holds the database credentials and the KEK, with the server's environment:
 
-- the key leaves the JWKS at once, and a new key starts signing;
-- its `kid` goes on a denylist that every verifier inside the auth server
-  checks, whatever a JWKS cache holds, and introspection answers
-  `active: false` for a token it signed;
-- every session and refresh-token family issued under the key is revoked, with
-  back-channel logout;
-- a critical admin event and a security event naming the `kid` go out on every
-  event route;
-- it needs `qauth:admin:security`, a fresh passkey and the second admin where
-  the realm requires one. When no second admin can approve in time, the
-  break-glass CLI on a host that holds the database credentials and the KEK
-  does it.
+```bash
+# From a checkout, with the server's environment:
+pnpm nx run auth-server:keys:retire --kid=<kid> --yes
 
-None of this is in this release. To cut off a signing key that may be
-compromised today, replace it through its variable
-([below](#replacing-a-signing-key)) and restart **every** node: the old key
-leaves the JWKS and stops verifying at once on a restarted node, and within a
-minute on one that keeps running. Tokens it signed stop verifying at QAuth's
-endpoints. A relying party stops trusting it once its own JWKS cache expires,
-at most 5 minutes later if it follows [the JWKS rule](#what-relying-parties-do-with-the-jwks).
-Refresh tokens are not signed, so the replacement does not end them. For a
-leaked cookie secret, see [Replacing the cookie key](#replacing-the-cookie-key).
+# A realm other than DEFAULT_REALM_NAME:
+pnpm nx run auth-server:keys:retire --kid=<kid> --realm=<name> --yes
+
+# In the auth-server image, from /app:
+tsx src/keys-retire.ts --kid <kid> --yes
+```
+
+In one transaction:
+
+- the key is marked `compromised` and leaves the JWKS. When it is one key of a
+  hybrid pair, its partner goes with it;
+- its `kid` goes on the realm's denylist, which every token verification checks;
+- where it was the realm's active key of its algorithm, a new key of that
+  algorithm signs at once, with no pre-publication (with its ML-DSA-65
+  companion when hybrid signing is on). A `next` or a `retired` key needs no
+  replacement;
+- every refresh-token family of the realm created or used since the key may
+  have signed is revoked, Authority Trees included. That moment is the key's
+  activation time less the 2-minute activation delay, as a switch is written
+  that far ahead, and never before the key was made;
+- a critical `key.emergency_retired` event names each retired `kid`: an admin
+  event in the realm's audit chain, and a security event for every
+  [SSF stream](/reference/ssf-events/) of the realm that requested it;
+- the run is recorded in the realm's admin audit log as a `keys.retire`
+  operation by the operating-system user that ran it, with the keys before and
+  after, the operation digest and the approval id.
+
+Then every browser session of the realm used since that moment is ended, with
+back-channel logout to the clients it served. A session's last use is stored
+at most `SESSION_LAST_SEEN_INTERVAL` late, so a session last seen that long
+before the moment ends too. The command prints the
+retired and the new `kid`s and what it revoked. No key material is ever
+printed.
+
+How fast the key stops working:
+
+- **On QAuth's own servers, within 10 seconds while Redis works.** Every node
+  keeps a copy of the denylist and reads it every 2 seconds, mostly from a
+  Redis snapshot that lives 5 seconds. It reads the database instead when
+  Redis has no snapshot or does not answer within 250 ms, and at least every 8
+  seconds whatever Redis holds. Only a database read can take a `kid` off the
+  node's copy. Every token verification checks the copy once the signature
+  verified, an expired token's included: a bearer token on any protected
+  route, userinfo (`401`), introspection (`active: false`), revocation, logout
+  and the end-session hint. The signer stops signing with the key and the JWKS
+  drops it in the same time, without waiting for the 60-second key refresh.
+  After the commit, the command stores the database's list as the snapshot, so
+  the other nodes see the change at their next read. When it cannot store the
+  snapshot, each node sees the change at its first database read that begins
+  after the commit. That read begins within 8 seconds of the commit, and a
+  node waits at most 5 seconds for it: while the database answers in that
+  time, the key stops working within 13 seconds. A read that only waited for a
+  query begun earlier counts from when that query began, so it never passes
+  for a later one. While no database read succeeds, the 30-second bound below
+  applies.
+- **On a node that cannot read the denylist, within 30 seconds.** A node that
+  has not read it, from Redis or the database, for 30 seconds refuses every
+  token until it can again, and logs a warning. The denylist lives in the
+  database, so it survives a restart, and Redis being down only costs
+  database reads.
+- **At a relying party, when its JWKS cache expires.** That is at most 5
+  minutes later if it follows [the JWKS rule](#what-relying-parties-do-with-the-jwks),
+  or at once if it acts on the `key.emergency_retired` security event.
+
+Only `token_signing` keys are retired this way; the command refuses a key of
+another purpose and changes nothing. For a leaked cookie secret, see
+[Replacing the cookie key](#replacing-the-cookie-key).
+
+It exits `0` once the key is retired and the sessions ended. It exits `3` when
+the key is retired but ending the sessions failed, or when the run failed and
+whether the key was retired cannot be read, as when the database connection
+drops: run the same command again, for the same `kid`, once the database
+answers.
+For a key retired already, it changes no key and ends the realm's sessions
+again, from the key's activation time less the delay, or from when the key was
+made if it has no activation time. That run is recorded in the admin audit
+log and announced as `key.emergency_retired` too. A usage error, such as a missing
+`--yes`, exits `2`. Any other error, such as a `kid` the realm does not hold,
+exits `1` with nothing changed.
+
+| Flag      | Default              | Meaning                                                             |
+| --------- | -------------------- | ------------------------------------------------------------------- |
+| `--kid`   | required             | The `kid` of the key to retire, as the realm's JWKS lists it.       |
+| `--realm` | `DEFAULT_REALM_NAME` | The realm's name.                                                   |
+| `--yes`   | required             | Confirms it: the key leaves at once and the sessions it served end. |
+
+The command runs where the database credentials and the KEK are, so it needs
+no admin's approval: whoever holds them can replace every stored key anyway,
+and ADR-019 Decision 7 puts that holder outside the approval rule on the
+condition that each use is recorded and announced. Its database user must be
+allowed to write the keys, the refresh tokens, the sessions, the event log and
+the audit log: in a deployment that splits the roles, the owner's, not one
+process role's. Started from the admin API, the retirement will need
+`qauth:admin:security`, a fresh passkey and the second admin where the realm
+requires one; no admin API route starts it yet.
 
 ### Replacing a signing key
 
@@ -727,8 +809,10 @@ details.
 
 The 7-day pre-publication and the 14-day retention are far longer than this
 cache, so a rotation through the store will change nothing for a relying party
-that follows the rule. A key replaced through its variable leaves the JWKS at
-once: such a relying party refuses the old key's tokens within 5 minutes.
+that follows the rule. A key replaced through its variable, or retired in an
+emergency, leaves the JWKS at once: such a relying party refuses the old key's
+tokens within 5 minutes, and an SSF receiver can drop it on the
+`key.emergency_retired` security event.
 
 The token keys sign
 [back-channel logout tokens](/integrate/oauth-flow/#back-channel-logout) too,

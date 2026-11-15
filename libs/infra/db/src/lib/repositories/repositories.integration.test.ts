@@ -1224,6 +1224,104 @@ describe('repository integration (real Postgres)', () => {
       expect(first?.revokedReason).toBe('new_credential_removed');
     });
 
+    it('revokeFamiliesOfRealmActiveSince revokes the realm families used since a moment, and only them (#551)', async () => {
+      const realm = await seedRealm();
+      const otherRealm = await seedRealm('other');
+      const user = await seedUser(realm.id);
+      const stranger = await seedUser(otherRealm.id);
+      const client = await seedClient(realm.id);
+      const secondClient = await seedClient(realm.id, 'client-b');
+      const otherClient = await seedClient(otherRealm.id, 'client-c');
+      const tokens = createRefreshTokensRepository(db().database.db);
+      const since = Date.now() - 3_600_000;
+      const seedToken = (
+        tokenHash: string,
+        times: { createdAt: number; lastUsedAt?: number },
+        family: { familyId?: string; userId?: string; oauthClientId?: string } = {}
+      ) =>
+        tokens.create({
+          tokenHash,
+          userId: family.userId ?? user.id,
+          oauthClientId: family.oauthClientId ?? client.id,
+          familyCreatedAt: times.createdAt,
+          familySessionExpiresAt: null,
+          authTime: null,
+          amr: null,
+          scopes: ['read:foo'],
+          expiresAt: Date.now() + 600_000,
+          createdAt: times.createdAt,
+          ...(times.lastUsedAt === undefined ? {} : { lastUsedAt: times.lastUsedAt }),
+          ...(family.familyId === undefined ? {} : { familyId: family.familyId }),
+        });
+      // A family opened before the moment and rotated after it: the whole family goes.
+      const oldRoot = await seedToken('old-root', { createdAt: since - 60_000 });
+      const rotatedChild = await seedToken(
+        'rotated-child',
+        { createdAt: since + 1_000 },
+        { familyId: oldRoot.familyId }
+      );
+      // One opened before and used after.
+      const usedSince = await seedToken('used-since', {
+        createdAt: since - 60_000,
+        lastUsedAt: since + 5_000,
+      });
+      // One opened after, of the realm's second client.
+      const fresh = await seedToken(
+        'fresh',
+        { createdAt: since + 10_000 },
+        { oauthClientId: secondClient.id }
+      );
+      // One opened before and never used since stays.
+      const untouched = await seedToken('untouched', {
+        createdAt: since - 60_000,
+        lastUsedAt: since - 1_000,
+      });
+      // Another realm's family stays, whenever it was used.
+      const elsewhere = await seedToken(
+        'elsewhere',
+        { createdAt: since + 10_000 },
+        { userId: stranger.id, oauthClientId: otherClient.id }
+      );
+
+      await expect(
+        tokens.revokeFamiliesOfRealmActiveSince(realm.id, since, 'key_retired')
+      ).resolves.toEqual({ families: 3, tokens: 4 });
+      const rows = await db()
+        .database.db.select({
+          id: refreshTokens.id,
+          revoked: refreshTokens.revoked,
+          revokedReason: refreshTokens.revokedReason,
+        })
+        .from(refreshTokens);
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      for (const token of [oldRoot, rotatedChild, usedSince, fresh]) {
+        expect(byId.get(token.id)).toMatchObject({ revoked: true, revokedReason: 'key_retired' });
+      }
+      for (const token of [untouched, elsewhere]) {
+        expect(byId.get(token.id)).toMatchObject({ revoked: false });
+      }
+      // A second sweep finds nothing more; `null` takes every family of the realm.
+      await expect(
+        tokens.revokeFamiliesOfRealmActiveSince(realm.id, since, 'key_retired')
+      ).resolves.toEqual({ families: 0, tokens: 0 });
+      await expect(
+        tokens.revokeFamiliesOfRealmActiveSince(realm.id, null, 'key_retired')
+      ).resolves.toEqual({ families: 1, tokens: 1 });
+      expect(
+        (
+          await db()
+            .database.db.select()
+            .from(refreshTokens)
+            .where(eq(refreshTokens.id, elsewhere.id))
+        )[0]?.revoked
+      ).toBe(false);
+      // A realm without clients holds no family.
+      const empty = await seedRealm('empty');
+      await expect(
+        tokens.revokeFamiliesOfRealmActiveSince(empty.id, null, 'key_retired')
+      ).resolves.toEqual({ families: 0, tokens: 0 });
+    });
+
     it('listNamingCredential finds the sessions that name a credential, ended ones too, of one user in one realm', async () => {
       const realm = await seedRealm();
       const otherRealm = await seedRealm('other');

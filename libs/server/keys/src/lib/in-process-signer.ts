@@ -44,6 +44,7 @@ import { eventTokenClaimsProblem, isEventTokenTyp } from './event-token-claims';
 import type { KekProvider } from './kek-provider';
 import { isScopeId, MAX_SCOPE_ID_LENGTH } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
+import type { KidDenylistView } from './kid-denylist';
 import {
   DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS,
   describePurpose,
@@ -132,9 +133,14 @@ import {
  * own verification set does not list. Two nodes can still disagree for up to
  * one interval, which the rotation's schedule must allow for. A key marked
  * `compromised` likewise stops signing, decrypting and appearing in the JWKS
- * at each node's next read; emergency retirement (#551) needs an invalidation
- * that reaches every node at once. The realm's issuer never changes once set,
- * so it is read once.
+ * at each node's next read. An emergency retirement (#551) does not wait for
+ * it: with the node's copy of the `kid` denylist ({@link
+ * InProcessSignerOptions.keyDenylist}), every list cached before the
+ * denylist changed is read again on the next call, and a denied `kid` never
+ * signs, verifies or is published. A token whose key the denylist names by
+ * the time it is signed, as when the retirement lands while the key loads, is
+ * dropped, and the key picked again. The realm's issuer never changes once
+ * set, so it is read once.
  *
  * ## What it never does
  *
@@ -170,6 +176,15 @@ export const DEFAULT_SIGNER_REFRESH_INTERVAL_MS = DEFAULT_PUBLISHED_KEY_REFRESH_
  */
 const MIN_FORCED_READ_INTERVAL_MS = 1_000;
 
+/**
+ * How many times a token signature picks its key, when the denylist names the
+ * key it picked before the token is handed out (#551): an emergency
+ * retirement can land while the key loads. Each pick reads the key list under
+ * the denylist's new revision, so the second finds the replacement; the third
+ * allows for one more retirement meanwhile.
+ */
+const SIGNING_KEY_PICKS = 3;
+
 /** Options of {@link createInProcessSigner}. */
 export interface InProcessSignerOptions {
   /** Where the keys and realms are read. See {@link SignerKeyStore}. */
@@ -194,6 +209,13 @@ export interface InProcessSignerOptions {
    * call.
    */
   readonly refreshIntervalMs?: number;
+  /**
+   * The node's copy of the `kid` denylist (#551). When its revision changes,
+   * every key list cached before is read again on the next call, and a
+   * denied `kid` is left out of every list. Without it, a compromised key
+   * goes at the next refresh.
+   */
+  readonly keyDenylist?: KidDenylistView;
   /** The clock, in epoch ms. Defaults to `Date.now`. */
   readonly now?: () => number;
 }
@@ -216,14 +238,33 @@ type LoadedKey =
   | { readonly kind: 'hmac-key'; readonly key: CryptoKey }
   | { readonly kind: 'aes'; readonly key: CryptoKey };
 
-/** A store answer and when it was read. */
+/**
+ * A store answer, when it was read, and, for a key list, the denylist
+ * revision it was read under.
+ */
 interface Timed<T> {
   readonly value: T;
   readonly readAt: number;
+  readonly revision?: number;
+}
+
+/** A realm's key list, as the cache holds it: read under a denylist revision. */
+interface RevisedTimed<T> extends Timed<T> {
+  readonly revision: number;
+}
+
+/**
+ * Whether an answer read at `readAt` under `revision` may replace `current`:
+ * a newer revision always does, an older one never, and within one revision
+ * the later read does.
+ */
+function replaces(current: RevisedTimed<unknown> | undefined, readAt: number, revision: number) {
+  if (current === undefined || current.revision < revision) return true;
+  return current.revision === revision && current.readAt <= readAt;
 }
 
 /** A realm's key list, and whether a forced read (a miss on a named key) read it. */
-interface KeyList extends Timed<readonly SignerKeyRecord[]> {
+interface KeyList extends RevisedTimed<readonly SignerKeyRecord[]> {
   readonly forced: boolean;
 }
 
@@ -303,7 +344,9 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   const keys = new BoundedCache<string, LoadedKey>(keyCacheSize);
   const pendingKeys = new Map<string, Promise<LoadedKey>>();
   const keyLists = new BoundedCache<string, KeyList>(keyCacheSize);
-  const publicLists = new BoundedCache<string, Timed<readonly PublicKeyRecord[]>>(keyCacheSize);
+  const publicLists = new BoundedCache<string, RevisedTimed<readonly PublicKeyRecord[]>>(
+    keyCacheSize
+  );
   // Raised each time a key-list read drops a realm's published keys, so a
   // published-key read already running cannot store its older answer. A plain
   // map: an evicted count would restart at 0 and let that read in. An entry
@@ -314,8 +357,40 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   const issuers = new BoundedCache<string, string>(keyCacheSize);
   const upstreamClients = new BoundedCache<string, Timed<UpstreamClientRecord>>(keyCacheSize);
 
+  const keyDenylist = options.keyDenylist;
+
+  /** The denylist revision now: a list read under another is not trusted. */
+  function denylistRevision(): number {
+    return keyDenylist?.revision() ?? 0;
+  }
+
+  /** `records` without a `kid` the realm denies. */
+  function withoutDenied<T extends { readonly kid: string }>(
+    realmId: string,
+    records: readonly T[]
+  ): readonly T[] {
+    if (keyDenylist === undefined) return Object.freeze([...records]);
+    return Object.freeze(records.filter((record) => !keyDenylist.isDenied(realmId, record.kid)));
+  }
+
+  /**
+   * Whether the denylist names one of `records` now. A token signed with a key
+   * picked before the denylist named it is never handed out: the caller picks
+   * again, up to {@link SIGNING_KEY_PICKS} times, then fails.
+   */
+  function deniedNow(realmId: string, records: readonly { readonly kid: string }[]): boolean {
+    return (
+      keyDenylist !== undefined &&
+      records.some((record) => keyDenylist.isDenied(realmId, record.kid))
+    );
+  }
+
   function isFresh(entry: Timed<unknown> | undefined): boolean {
-    return entry !== undefined && now() - entry.readAt < refreshIntervalMs;
+    return (
+      entry !== undefined &&
+      (entry.revision === undefined || entry.revision === denylistRevision()) &&
+      now() - entry.readAt < refreshIntervalMs
+    );
   }
 
   /** The realm's issuer, read once. */
@@ -358,8 +433,9 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     forceRead = false
   ): Promise<readonly SignerKeyRecord[]> {
     const slot = `keys\u0000${realmId}\u0000${purpose}\u0000${scopeId ?? ''}`;
+    const revision = denylistRevision();
     const cached = keyLists.get(slot);
-    if (cached !== undefined) {
+    if (cached !== undefined && cached.revision === revision) {
       const age = now() - cached.readAt;
       const trusted = !forceRead
         ? refreshIntervalMs
@@ -370,10 +446,12 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         return cached.value;
       }
     }
-    return sharedRead(slot, async (readAt) => {
-      const value = Object.freeze([...(await store.listKeys(realmId, { purpose, scopeId }))]);
+    // A read shared across a denylist change would hand a caller after the
+    // change a list read before it.
+    return sharedRead(`${slot}\u0000${revision}`, async (readAt) => {
+      const value = withoutDenied(realmId, await store.listKeys(realmId, { purpose, scopeId }));
       const current = keyLists.get(slot);
-      if (current === undefined || current.readAt <= readAt) {
+      if (replaces(current, readAt, revision)) {
         // A key changed status, or there is no earlier list to compare (a
         // first read, or one evicted): the published keys this node holds may
         // be older than this list, so read them again too. Otherwise this node
@@ -382,7 +460,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
           publicLists.delete(realmId);
           publicGenerations.set(realmId, (publicGenerations.get(realmId) ?? 0) + 1);
         }
-        keyLists.set(slot, { value, readAt, forced: forceRead });
+        keyLists.set(slot, { value, readAt, revision, forced: forceRead });
       }
       return value;
     });
@@ -429,17 +507,18 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   async function listPublicKeys(realmId: string): Promise<readonly PublicKeyRecord[]> {
     const cached = publicLists.get(realmId);
     if (cached !== undefined && isFresh(cached)) return cached.value;
-    return sharedRead(`public\u0000${realmId}`, async (readAt) => {
+    const revision = denylistRevision();
+    return sharedRead(`public\u0000${realmId}\u0000${revision}`, async (readAt) => {
       const generation = publicGenerations.get(realmId) ?? 0;
-      const value = Object.freeze([...(await store.listPublicKeys(realmId))]);
+      const value = withoutDenied(realmId, await store.listPublicKeys(realmId));
       const current = publicLists.get(realmId);
-      // One read per realm runs at a time, so removing the count after a store
-      // cannot make an older read match it.
+      // One read per realm and revision runs at a time, so removing the count
+      // after a store cannot make an older read match it.
       if (
         (publicGenerations.get(realmId) ?? 0) === generation &&
-        (current === undefined || current.readAt <= readAt)
+        replaces(current, readAt, revision)
       ) {
-        publicLists.set(realmId, { value, readAt });
+        publicLists.set(realmId, { value, readAt, revision });
         publicGenerations.delete(realmId);
       }
       return value;
@@ -752,13 +831,23 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       }
 
       const issuer = await realmIssuer(realmId);
-      const record = await activeKey(realmId, purpose, algorithm);
-      const key = await jwsKey(realmId, purpose, record);
-      return signJwt({ iss: issuer, ...claims } as JWTPayload, key, {
-        alg: algorithm,
-        kid: record.kid,
-        typ,
-      });
+      for (let pick = 1; ; pick += 1) {
+        const record = await activeKey(realmId, purpose, algorithm);
+        const key = await jwsKey(realmId, purpose, record);
+        const token = await signJwt({ iss: issuer, ...claims } as JWTPayload, key, {
+          alg: algorithm,
+          kid: record.kid,
+          typ,
+        });
+        // The key may have been denied while it loaded or signed (#551).
+        if (!deniedNow(realmId, [record])) return token;
+        if (pick === SIGNING_KEY_PICKS) {
+          throw new SignerKeyNotFoundError(realmId, purpose, {
+            algorithm,
+            detail: 'each key picked was denied before it signed',
+          });
+        }
+      }
     },
 
     async signHybrid(caller: SignerCaller, request: SignHybridRequest): Promise<HybridSignedToken> {
@@ -786,44 +875,55 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       const claims = resolveClaims(fields['claims']);
 
       const issuer = await realmIssuer(realmId);
-      // Both halves of a pair switch at the same moment, so the keys that sign
-      // now are one pair, before and after a scheduled switch alike.
-      const records = await listKeys(realmId, 'token_signing', null);
-      const at = now();
-      const edRecord = signingKeyOf(records, 'EdDSA', at);
-      const mlDsaRecord = signingKeyOf(records, PQC_ALG_ML_DSA_65, at);
-      if (
-        edRecord === undefined ||
-        mlDsaRecord === undefined ||
-        edRecord.pairId === null ||
-        edRecord.pairId !== mlDsaRecord.pairId
-      ) {
-        throw new SignerKeyNotFoundError(realmId, 'token_signing', {
-          algorithm: `EdDSA+${PQC_ALG_ML_DSA_65}`,
-          detail: 'no complete hybrid pair',
+      for (let pick = 1; ; pick += 1) {
+        // Both halves of a pair switch at the same moment, so the keys that
+        // sign now are one pair, before and after a scheduled switch alike.
+        const records = await listKeys(realmId, 'token_signing', null);
+        const at = now();
+        const edRecord = signingKeyOf(records, 'EdDSA', at);
+        const mlDsaRecord = signingKeyOf(records, PQC_ALG_ML_DSA_65, at);
+        if (
+          edRecord === undefined ||
+          mlDsaRecord === undefined ||
+          edRecord.pairId === null ||
+          edRecord.pairId !== mlDsaRecord.pairId
+        ) {
+          throw new SignerKeyNotFoundError(realmId, 'token_signing', {
+            algorithm: `EdDSA+${PQC_ALG_ML_DSA_65}`,
+            detail: 'no complete hybrid pair',
+          });
+        }
+
+        // Resolved before anything is signed, so a disabled backend never
+        // leaves a classical-only token behind.
+        const backend = getSignatureBackend(PQC_ALG_ML_DSA_65, enabledSignatureAlgorithms);
+        const edKey = await jwsKey(realmId, 'token_signing', edRecord);
+        const mlDsa = await loadKey(identityOf(realmId, 'token_signing', mlDsaRecord));
+        if (mlDsa.kind !== 'ml-dsa') {
+          throw new KeyDecryptionError({ detail: 'not an ML-DSA-65 key' });
+        }
+
+        const token = await signJwt({ iss: issuer, ...claims } as JWTPayload, edKey, {
+          alg: 'EdDSA',
+          kid: edRecord.kid,
+          typ,
+          [PQC_HEADER_ALG_MEMBER]: PQC_ALG_ML_DSA_65,
+          [PQC_HEADER_KID_MEMBER]: mlDsaRecord.kid,
         });
+        const pqcSignature = Buffer.from(
+          backend.sign(mlDsa.key, extractJwsSigningInput(token))
+        ).toString('base64url');
+        // Either key may have been denied while the pair loaded or signed (#551).
+        if (!deniedNow(realmId, [edRecord, mlDsaRecord])) {
+          return Object.freeze({ token, pqcSignature, pqcAlg: PQC_ALG_ML_DSA_65 });
+        }
+        if (pick === SIGNING_KEY_PICKS) {
+          throw new SignerKeyNotFoundError(realmId, 'token_signing', {
+            algorithm: `EdDSA+${PQC_ALG_ML_DSA_65}`,
+            detail: 'each pair picked was denied before it signed',
+          });
+        }
       }
-
-      // Resolved before anything is signed, so a disabled backend never leaves
-      // a classical-only token behind.
-      const backend = getSignatureBackend(PQC_ALG_ML_DSA_65, enabledSignatureAlgorithms);
-      const edKey = await jwsKey(realmId, 'token_signing', edRecord);
-      const mlDsa = await loadKey(identityOf(realmId, 'token_signing', mlDsaRecord));
-      if (mlDsa.kind !== 'ml-dsa') {
-        throw new KeyDecryptionError({ detail: 'not an ML-DSA-65 key' });
-      }
-
-      const token = await signJwt({ iss: issuer, ...claims } as JWTPayload, edKey, {
-        alg: 'EdDSA',
-        kid: edRecord.kid,
-        typ,
-        [PQC_HEADER_ALG_MEMBER]: PQC_ALG_ML_DSA_65,
-        [PQC_HEADER_KID_MEMBER]: mlDsaRecord.kid,
-      });
-      const pqcSignature = Buffer.from(
-        backend.sign(mlDsa.key, extractJwsSigningInput(token))
-      ).toString('base64url');
-      return Object.freeze({ token, pqcSignature, pqcAlg: PQC_ALG_ML_DSA_65 });
     },
 
     async signWebhook(caller: SignerCaller, request: SignWebhookRequest): Promise<string> {

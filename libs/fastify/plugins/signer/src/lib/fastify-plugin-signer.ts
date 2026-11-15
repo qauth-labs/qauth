@@ -37,8 +37,9 @@ declare module 'fastify' {
     upstreamClientKeys: UpstreamClientKeys | null;
     /**
      * The scheduled rotation of the realms' keys (#542), which the key
-     * rotation job runs on the signer role. A process that does not hold the
-     * signer role decorates it `null`.
+     * rotation job runs on the signer role, with the manual rotation (#544)
+     * and the emergency retirement (#551) beside it. A process that does not
+     * hold the signer role decorates it `null`.
      */
     keyRotation: ScheduledKeyRotation | null;
   }
@@ -148,6 +149,7 @@ export const signerPlugin = fp<SignerPluginOptions>(
         ...(options.refreshIntervalMs !== undefined
           ? { refreshIntervalMs: options.refreshIntervalMs }
           : {}),
+        ...(options.keyDenylist !== undefined ? { keyDenylist: options.keyDenylist } : {}),
       })
     );
   },

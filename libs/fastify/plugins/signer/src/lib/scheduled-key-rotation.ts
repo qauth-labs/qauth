@@ -14,8 +14,10 @@ import {
   createKeyRotation,
   DEFAULT_SIGNER_REFRESH_INTERVAL_MS,
   type KekProvider,
+  type KeyRetirementRecord,
   type KeyRotationNowRecord,
   type KeyRotationReport,
+  type RetireNowInput,
   type RotateNowInput,
 } from '@qauth-labs/server-keys/custody';
 
@@ -38,6 +40,10 @@ import { createRepositoryKeyStore } from './repository-key-stores';
  * one purpose's rotation before it is due, under an approval, with the same
  * windows: the scheduled run then switches to its key. The admin API's route
  * and the break-glass CLI call it; neither ships yet.
+ *
+ * The emergency retirement of #551 ({@link ScheduledKeyRotation.retireNow})
+ * takes a `token_signing` key out at once, and a new key signs in its place
+ * with no pre-publication.
  */
 
 /** One run of {@link ScheduledKeyRotation.run}. */
@@ -73,6 +79,15 @@ export interface ScheduledKeyRotation {
    * `@qauth-labs/server-keys`.
    */
   rotateNow(input: RotateNowInput<DbClient>): Promise<KeyRotationNowRecord>;
+  /**
+   * Retire a `token_signing` key in an emergency, under an approval of
+   * exactly that retirement (`keys.retire`): the key and its hybrid partner
+   * are marked `compromised` and denied, and a new active key signs at once
+   * in place of an active one. The approval is consumed, and the hook
+   * called, in that transaction. See `KeyRotation.retireNow` of
+   * `@qauth-labs/server-keys`.
+   */
+  retireNow(input: RetireNowInput<DbClient>): Promise<KeyRetirementRecord>;
 }
 
 /** What {@link createScheduledKeyRotation} is built from. */
@@ -123,5 +138,6 @@ export function createScheduledKeyRotation(
     settings: rotation.settings,
     run: (run: ScheduledKeyRotationRun) => rotation.rotateAll(run),
     rotateNow: (input: RotateNowInput<DbClient>) => rotation.rotateNow(input),
+    retireNow: (input: RetireNowInput<DbClient>) => rotation.retireNow(input),
   });
 }

@@ -60,7 +60,7 @@ export const keyEmergencyRetired = defineEventType({
     members: { kid: { data: 'keyId' }, purpose: { data: 'purpose' } },
   },
   ssfNote:
-    'Defined ahead of emergency retirement itself (#551), which emits it; nothing emits it before then.',
+    "Recorded once per retired `kid` by the emergency retirement (`auth-server:keys:retire`, #551): retiring one key of a hybrid pair retires both, and sends two events. A receiver that caches the realm's JWKS drops the key on it, without waiting for its cache to expire.",
 });
 
 /**

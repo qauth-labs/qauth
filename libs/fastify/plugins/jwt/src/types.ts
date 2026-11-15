@@ -6,7 +6,7 @@ import type {
   IdTokenHint,
   JWTPayload,
 } from '@qauth-labs/server-jwt';
-import type { RealmJwks, Signer } from '@qauth-labs/server-keys';
+import type { KidDenylistView, RealmJwks, Signer } from '@qauth-labs/server-keys';
 import type { FastifyPluginOptions, FastifyRequest } from 'fastify';
 
 /**
@@ -137,6 +137,22 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    * way (RFC 9449 §7.2).
    */
   verifyDpopProof?: (request: FastifyRequest, token: string, claims: JWTPayload) => Promise<void>;
+  /**
+   * The node's copy of the realms' `kid` denylist (emergency key retirement,
+   * ADR-019 Decision 9, #551). When set, every verification in this plugin
+   * (`verifyAccessToken`, `verifyHybridAccessToken`, `verifyIdTokenHint`,
+   * `requireJwt` and `verifyRequestAccessToken`) checks the `kid` of the key
+   * that verified the signature against it, and refuses a denied one as an
+   * invalid token. It fails closed: while the copy is not current (never
+   * read, or not read for 30 s), every token is refused.
+   */
+  keyDenylist?: KeyDenylistCheck;
+}
+
+/** What the JWT plugin reads of the `kid` denylist (`createKidDenylist` of the signer's wiring). */
+export interface KeyDenylistCheck extends Pick<KidDenylistView, 'isDenied'> {
+  /** Whether the copy may be trusted now. */
+  isCurrent(): boolean;
 }
 
 /**

@@ -119,6 +119,40 @@ describe('createPublishedKeyReader (#491, #495)', () => {
     expect(listPublicKeys).toHaveBeenCalledTimes(2);
   });
 
+  it('reads again when the denylist changes, and leaves a denied kid out, before the interval ends (#551)', async () => {
+    const { store } = await setup();
+    const listPublicKeys = vi.fn(store.listPublicKeys);
+    const denied = new Set<string>();
+    let revision = 0;
+    const reader = createPublishedKeyReader(
+      { listPublicKeys },
+      {
+        now: () => NOW,
+        keyDenylist: {
+          isDenied: (realmId, kid) => denied.has(`${realmId} ${kid}`),
+          revision: () => revision,
+        },
+      }
+    );
+    const [key] = await reader.getVerificationKeys('local', REALM_A, 'token_signing');
+    expect(listPublicKeys).toHaveBeenCalledTimes(1);
+    await reader.getJwks('local', REALM_A);
+    expect(listPublicKeys).toHaveBeenCalledTimes(1);
+
+    // Denied, though the store still calls it active: the reader trusts the denylist.
+    denied.add(`${REALM_A} ${key.kid}`);
+    revision += 1;
+    const after = await reader.getVerificationKeys('local', REALM_A, 'token_signing');
+    expect(listPublicKeys).toHaveBeenCalledTimes(2);
+    expect(after.map((each) => each.kid)).not.toContain(key.kid);
+    expect((await reader.getJwks('local', REALM_A)).keys.map((jwk) => jwk.kid)).not.toContain(
+      key.kid
+    );
+    expect(listPublicKeys).toHaveBeenCalledTimes(2);
+    // Another realm's keys are read again too, and keep theirs.
+    expect(await reader.getVerificationKeys('local', REALM_B, 'token_signing')).not.toEqual([]);
+  });
+
   it('refuses a purpose with no verification keys, a bad realm id and an unknown caller', async () => {
     const { store } = await setup();
     const reader = createPublishedKeyReader(store, { now: () => NOW });

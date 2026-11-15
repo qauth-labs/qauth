@@ -261,6 +261,35 @@ export function createPgKeyStore(
       return rows[0];
     },
 
+    async markCompromised(
+      realmId,
+      kid,
+      compromisedAt,
+      tx: PoolClient
+    ): Promise<object | undefined> {
+      const { rows } = await tx.query<{ kid: string; purpose: string; algorithm: string }>(
+        `UPDATE realm_keys SET status = 'compromised', compromised_at = $3,
+           retire_at = least(coalesce(retire_at, $3), $3),
+           unpublish_at = greatest(coalesce(publish_at, $3), $3)
+         WHERE realm_id = $1 AND kid = $2 AND status <> 'compromised'
+         RETURNING kid, purpose, algorithm`,
+        [realmId, kid, compromisedAt]
+      );
+      const [key] = rows;
+      if (key === undefined) return undefined;
+      await tx.query(
+        `UPDATE realm_public_keys SET unpublish_at = greatest(publish_at, $3::bigint)
+         WHERE realm_id = $1 AND kid = $2`,
+        [realmId, kid, compromisedAt]
+      );
+      await tx.query(
+        `INSERT INTO realm_key_denylist (realm_id, kid, purpose, algorithm, denied_at)
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+        [realmId, kid, key.purpose, key.algorithm, compromisedAt]
+      );
+      return key;
+    },
+
     async deleteByScope(realmId, purpose, scopeId, tx: PoolClient): Promise<readonly string[]> {
       const { rows } = await tx.query<{ kid: string }>(
         'DELETE FROM realm_keys WHERE realm_id = $1 AND purpose = $2 AND scope_id = $3 RETURNING kid',

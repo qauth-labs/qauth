@@ -1949,3 +1949,170 @@ describe('verifyIdTokenHint (RP-Initiated Logout 1.0 §2, #675)', () => {
     }
   });
 });
+
+describe('the kid denylist of emergency key retirement (ADR-019 Decision 9, #551)', () => {
+  /** A copy of the denylist the test drives: the `realm kid` pairs it denies, and whether it is current. */
+  function denylist() {
+    const denied = new Set<string>();
+    const state = { current: true };
+    return {
+      denied,
+      state,
+      check: {
+        isDenied: (realmId: string, kid: string) => denied.has(`${realmId} ${kid}`),
+        isCurrent: () => state.current,
+      },
+    };
+  }
+
+  async function invalid(promise: Promise<unknown>, message: string): Promise<void> {
+    const error = await promise.then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(error).toBeInstanceOf(JWTInvalidError);
+    expect((error as Error).message).toContain(message);
+  }
+
+  it('refuses an access token of a denied key after its signature verified, everywhere it is checked', async () => {
+    const realms = await createRealms();
+    const list = denylist();
+    const app = await buildTestApp(realms, { keyDenylist: list.check });
+    try {
+      const token = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).resolves.toMatchObject({
+        sub: 'user-1',
+      });
+      const kid = String(header(token)['kid']);
+      list.denied.add(`${realms.a.id} ${kid}`);
+
+      await invalid(app.jwtUtils.verifyAccessToken(realms.a, token), 'was retired');
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ code: 'INVALID_ACCESS_TOKEN' });
+      // The same kid in another realm is another key.
+      const other = await app.jwtUtils.signAccessToken(realms.b, { sub: 'user-2', clientId: 'c' });
+      list.denied.add(`${realms.b.id} ${kid}`);
+      await expect(app.jwtUtils.verifyAccessToken(realms.b, other)).resolves.toMatchObject({
+        sub: 'user-2',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("checks the key that verified a token without a kid: the imported key's", async () => {
+    const realms = await createRealms();
+    const list = denylist();
+    const app = await buildTestApp(realms, { keyDenylist: list.check });
+    try {
+      const token = await signWithPem(realms.realmAKey, { iss: ISSUER_A });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).resolves.toMatchObject({
+        sub: 'user-1',
+      });
+      list.denied.add(`${realms.a.id} ${String(realms.realmAKeyKid)}`);
+      await invalid(app.jwtUtils.verifyAccessToken(realms.a, token), 'was retired');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses every token while the copy is not current: it fails closed', async () => {
+    const realms = await createRealms();
+    const list = denylist();
+    const app = await buildTestApp(realms, { keyDenylist: list.check });
+    try {
+      const token = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      list.state.current = false;
+      await invalid(app.jwtUtils.verifyAccessToken(realms.a, token), 'cannot be checked');
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.statusCode).toBe(401);
+      list.state.current = true;
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).resolves.toBeDefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses an ID token hint of a denied key, expired or not', async () => {
+    const realms = await createRealms();
+    const list = denylist();
+    const app = await buildTestApp(realms, { keyDenylist: list.check });
+    try {
+      const idToken = await app.jwtUtils.signIdToken(realms.a, {
+        sub: 'user-1',
+        audience: 'client-1',
+        sid: 'session-1',
+      });
+      await expect(app.jwtUtils.verifyIdTokenHint(realms.a, idToken)).resolves.toMatchObject({
+        sub: 'user-1',
+      });
+      list.denied.add(`${realms.a.id} ${String(header(idToken)['kid'])}`);
+      await invalid(app.jwtUtils.verifyIdTokenHint(realms.a, idToken), 'was retired');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a hybrid access token whose Ed25519 key is denied', async () => {
+    const realms = await createRealms({ hybridSigning: true });
+    const list = denylist();
+    const app = await buildTestApp(realms, {
+      hybridSigningEnabled: true,
+      enabledSignatureAlgorithms: PQC_ENABLED,
+      keyDenylist: list.check,
+    });
+    try {
+      const hybrid = await app.jwtUtils.signHybridAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      await expect(
+        app.jwtUtils.verifyHybridAccessToken(realms.a, hybrid, { requirePqc: true })
+      ).resolves.toMatchObject({ sub: 'user-1' });
+      list.denied.add(`${realms.a.id} ${String(header(hybrid.token)['kid'])}`);
+      await invalid(
+        app.jwtUtils.verifyHybridAccessToken(realms.a, hybrid, { requirePqc: true }),
+        'was retired'
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses an expired token as expired only once its key passed the denylist, so a logout never reads a denied key as expired', async () => {
+    const realms = await createRealms();
+    const list = denylist();
+    const app = await buildTestApp(realms, { keyDenylist: list.check });
+    try {
+      const token = await signWithPem(realms.realmAKey, {
+        iss: ISSUER_A,
+        exp: Math.floor(Date.now() / 1000) - 60,
+      });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).rejects.toBeInstanceOf(
+        JWTExpiredError
+      );
+      list.state.current = false;
+      await invalid(app.jwtUtils.verifyAccessToken(realms.a, token), 'cannot be checked');
+      list.state.current = true;
+      list.denied.add(`${realms.a.id} ${String(realms.realmAKeyKid)}`);
+      await invalid(app.jwtUtils.verifyAccessToken(realms.a, token), 'was retired');
+    } finally {
+      await app.close();
+    }
+  });
+});

@@ -233,6 +233,43 @@ export const realmPublicKeys = pgTable(
   ]
 );
 
+/**
+ * The `kid`s retired in an emergency (ADR-019 Decision 9, issue #551): the
+ * keys that may be compromised, which no verifier inside the auth server
+ * accepts, whatever its key cache holds.
+ *
+ * A key's status says the same (`compromised`), but only the signer reads
+ * `realm_keys`, and every process caches its key lists for a minute. This
+ * table is what every role reads, through a Redis copy and memory, every few
+ * seconds, so a retirement reaches every node at once; a node that cannot
+ * read it for 30 seconds refuses every token.
+ *
+ * The emergency retirement writes a row in the transaction that marks the key
+ * `compromised`, and nothing ever removes one: a denied `kid` stays denied,
+ * also once its key row is gone. Keyed by `(realm_id, kid)`, as a `kid` names
+ * one key within a realm; no foreign key to the key row, so that its deletion
+ * leaves the denial in place. A deleted realm takes its rows with it.
+ *
+ * Every role may read it; only the signer writes it.
+ */
+export const realmKeyDenylist = pgTable(
+  'realm_key_denylist',
+  {
+    realmId: uuid('realm_id')
+      .notNull()
+      .references(() => realms.id, { onDelete: 'cascade' }),
+    /** The `kid` of the retired key. */
+    kid: varchar('kid', { length: 255 }).notNull(),
+    /** The key's purpose, e.g. `token_signing`. */
+    purpose: varchar('purpose', { length: 64 }).notNull(),
+    /** The key's algorithm, e.g. `EdDSA` or `ML-DSA-65`. */
+    algorithm: varchar('algorithm', { length: 32 }).notNull(),
+    /** When the key was retired, in epoch ms: its `compromised_at`. */
+    deniedAt: bigint('denied_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
+  },
+  (t) => [primaryKey({ columns: [t.realmId, t.kid], name: 'realm_key_denylist_pk' })]
+);
+
 export const realmKeysRelations = relations(realmKeys, ({ one }) => ({
   realm: one(realms, {
     fields: [realmKeys.realmId],

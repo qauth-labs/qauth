@@ -105,6 +105,21 @@ describe('signerPlugin', () => {
     await app.close();
   });
 
+  it('decorates the emergency retirement, which refuses a call without an approval before it reads anything (#551)', async () => {
+    const app = Fastify({ logger: false });
+    await app.register(signerPlugin, options());
+    await app.ready();
+
+    await expect(
+      app.keyRotation?.retireNow({
+        realmId: '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01',
+        kid: 'kid-1',
+        onRetired: async () => undefined,
+      } as never)
+    ).rejects.toMatchObject({ name: 'OperationApprovalError', reason: 'missing' });
+    await app.close();
+  });
+
   it('puts a switch two signer refresh intervals ahead when the interval is longer', async () => {
     const app = Fastify({ logger: false });
     await app.register(signerPlugin, options({ refreshIntervalMs: 5 * 60_000 }));
