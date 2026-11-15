@@ -31,9 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it once the signature verified, an expired token's included, so
   introspection answers `active: false` and userinfo `401`, and the signer and
   the JWKS drop the key, within 10 seconds on every node rather than after the
-  60-second key refresh (one database read more when the retiring host cannot
-  write to Redis). A node that cannot read the denylist for 30 seconds
-  refuses every token. In the key library, `retireNow({ realmId, kid,
+  60-second key refresh. When the retiring host cannot write to Redis, that
+  takes up to 13 seconds while the database answers each node within 5
+  seconds. A node that cannot read the denylist for 30 seconds refuses every
+  token. In the key library, `retireNow({ realmId, kid,
   approval })` runs only under an `ApprovedOperation` of `keys.retire`, for
   the SHA-256 of the canonical record `{ op, realm, kid, requester, nonce }`;
   only `token_signing` keys are retired this way. No admin API route starts it
