@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A realm registers a protected resource's scopes, open to any client the
+  user brings** ([#1087], ADR-007, ADR-019 Decision 7, ADR-020 §3). An MCP
+  server whose clients are whatever CIMD or dynamically registered client
+  its users bring could not get them its scopes: a CIMD client starts with
+  none, a dynamic client keeps only the realm-wide scopes it registered
+  with, so the MCP step-up (`403 insufficient_scope`, then authorize with
+  the challenged scope) never ended. A realm now holds protected resources
+  (the `protected_resources` table, migration 0078): a resource indicator
+  (RFC 8707, matched exactly), the scopes it defines with a consent text per
+  locale (English always among them) and a `sensitive` flag, and who may ask
+  for them, `any_client` or a list of `client_id`s. A scope a registered
+  resource defines is granted only when the authorization request names that
+  resource, and then to any client the resource is open to, whatever the
+  client's own `scopes` hold; asked for without it, or with another, it is
+  dropped, and a request that names several resources gets it only when
+  each of them grants it, so a token's `aud` and its resource scopes always
+  agree. Every other scope keeps the client's list as its ceiling. The user
+  still consents, recorded per resource: a first-party client's
+  administrative consent does not cover a scope its own list does not hold.
+  The token endpoint applies the rule again when it redeems a code and on
+  every refresh, so a resource closed since keeps its scopes out of the next
+  token; a refresh that still carries a scope removed from its resource is
+  refused, as one carrying a scope taken off the client's list is.
+  `client_credentials`, token exchange and the JWT bearer grant keep the
+  client's own list. The consent page and the
+  Interaction API's consent step show the resource's text in the first
+  locale of the request's new `ui_locales` parameter it has one for, else
+  English. Discovery's `scopes_supported` is unchanged. A resource is
+  registered from the seed manifest's new `resources` section (the realm
+  file's subset today), and listed, previewed, created, changed and removed
+  through the admin API's `resourceServers.*` operations
+  (`/admin/v1-rc.0/realms/{realmId}/resource-servers`); every write is a
+  security operation of the `token-content` class, with a dry-run diff, and
+  needs the new `resourceServers.security` permission, reads
+  `resourceServers.read`. Register a resource only once every node runs this
+  release: a node of an earlier release grants by the client's list alone
+  ([Docker](https://docs.qauth.dev/operate/docker/#registering-a-protected-resources-scopes),
+  [MCP quickstart](https://docs.qauth.dev/integrate/mcp-quickstart/#register-the-mcp-servers-scopes)).
+
 ## [0.2.7] - 2026-11-15
 
 A patch release with no breaking change of the stable surface. It has three
@@ -154,44 +195,6 @@ free password failures is no longer locked out by the bot challenge.
   and the `session_refresh_families` table, which links such a session to
   its families; refresh rows still name no session. It rewrites no table,
   and the previous release keeps working on it during a rolling upgrade.
-- **A realm registers a protected resource's scopes, open to any client the
-  user brings** ([#1087], ADR-007, ADR-019 Decision 7, ADR-020 §3). An MCP
-  server whose clients are whatever CIMD or dynamically registered client
-  its users bring could not get them its scopes: a CIMD client starts with
-  none, a dynamic client keeps only the realm-wide scopes it registered
-  with, so the MCP step-up (`403 insufficient_scope`, then authorize with
-  the challenged scope) never ended. A realm now holds protected resources
-  (the `protected_resources` table, migration 0078): a resource indicator
-  (RFC 8707, matched exactly), the scopes it defines with a consent text per
-  locale (English always among them) and a `sensitive` flag, and who may ask
-  for them, `any_client` or a list of `client_id`s. A scope a registered
-  resource defines is granted only when the authorization request names that
-  resource, and then to any client the resource is open to, whatever the
-  client's own `scopes` hold; asked for without it, or with another, it is
-  dropped, and a request that names several resources gets it only when
-  each of them grants it, so a token's `aud` and its resource scopes always
-  agree. Every other scope keeps the client's list as its ceiling. The user
-  still consents, recorded per resource: a first-party client's
-  administrative consent does not cover a scope its own list does not hold.
-  The token endpoint applies the rule again when it redeems a code and on
-  every refresh, so a resource closed since keeps its scopes out of the next
-  token; a refresh that still carries a scope removed from its resource is
-  refused, as one carrying a scope taken off the client's list is.
-  `client_credentials`, token exchange and the JWT bearer grant keep the
-  client's own list. The consent page and the
-  Interaction API's consent step show the resource's text in the first
-  locale of the request's new `ui_locales` parameter it has one for, else
-  English. Discovery's `scopes_supported` is unchanged. A resource is
-  registered from the seed manifest's new `resources` section (the realm
-  file's subset today), and listed, previewed, created, changed and removed
-  through the admin API's `resourceServers.*` operations
-  (`/admin/v1-rc.0/realms/{realmId}/resource-servers`); every write is a
-  security operation of the `token-content` class, with a dry-run diff, and
-  needs the new `resourceServers.security` permission, reads
-  `resourceServers.read`. Register a resource only once every node runs this
-  release: a node of an earlier release grants by the client's list alone
-  ([Docker](https://docs.qauth.dev/operate/docker/#registering-a-protected-resources-scopes),
-  [MCP quickstart](https://docs.qauth.dev/integrate/mcp-quickstart/#register-the-mcp-servers-scopes)).
 
 ### Changed
 
