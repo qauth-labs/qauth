@@ -58,7 +58,7 @@ describe('resolveMailBrand (#637)', () => {
   });
 
   it('gives QAuth’s logo to QAuth’s name only', () => {
-    expect(DEFAULT_MAIL_BRAND.logo).toMatchObject({ width: 97, height: 40 });
+    expect(DEFAULT_MAIL_BRAND.logo).toMatchObject({ width: 28, height: 28 });
     expect(mailImagesOf(DEFAULT_MAIL_BRAND)).toEqual([QAUTH_MAIL_LOGO_IMAGE]);
     expect(resolveMailBrand({ colors: { primary: '#123456' } }).logo).toBe(DEFAULT_MAIL_BRAND.logo);
     const acme = resolveMailBrand({ name: 'Acme' });
@@ -70,9 +70,18 @@ describe('resolveMailBrand (#637)', () => {
     const png = QAUTH_MAIL_LOGO_IMAGE.content;
     expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     // The IHDR chunk: width, then height, big-endian, after the signature and chunk header.
-    expect(png.readUInt32BE(16)).toBe(290);
-    expect(png.readUInt32BE(20)).toBe(120);
+    expect(png.readUInt32BE(16)).toBe(84);
+    expect(png.readUInt32BE(20)).toBe(84);
     expect(QAUTH_MAIL_LOGO_IMAGE.contentId).toMatch(/^[a-z0-9.-]+@[a-z0-9.-]+$/);
+  });
+
+  it('keeps a name as long as the realm’s sender name may be', () => {
+    // `mail.fromName` takes up to 100 characters; none falls back to QAuth's name and mark.
+    const name = 'n'.repeat(100);
+    expect(resolveMailBrand({ name })).toMatchObject({ name });
+    expect(resolveMailBrand({ name }).logo).toBeUndefined();
+    expect(resolveMailBrand({ name: 'delur.io' })).toMatchObject({ name: 'delur.io' });
+    expect(resolveMailBrand({ name: 'delur.io' }).logo).toBeUndefined();
   });
 
   it('keeps only colours of the stored form', () => {

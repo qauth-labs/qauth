@@ -147,6 +147,17 @@ export interface EngineMailContext {
   readonly brand: MailBrand;
 }
 
+/**
+ * What a sender is given to send an engine mail: the realm's issuer, and a
+ * brand only when the caller has one. Without it the sender's own brand is
+ * used, the one its realm's sender name (`mail.fromName`) gives
+ * (`createRealmMailService`).
+ */
+export interface EngineMailSendContext {
+  readonly baseUrl: string;
+  readonly brand?: MailBrand;
+}
+
 /** A rendered mail, ready for a transport. */
 export interface RenderedEngineMail {
   readonly subject: string;

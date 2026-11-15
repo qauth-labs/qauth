@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { EmailService } from '../types';
 import { createEmailService } from './email-service';
+import { resolveMailBrand } from './engine-mail/brand';
 import { MockEmailProvider } from './providers/mock.provider';
 import { QAUTH_MAIL_LOGO_IMAGE } from './templates/qauth-logo';
 
@@ -232,6 +233,48 @@ describe('EmailService', () => {
       const sent = customProvider.getSentEmails();
       expect(sent[0]?.from).toBe('noreply@example.com');
       expect(sent[0]?.subject).toBe('Custom');
+    });
+  });
+
+  describe('the brand of the mail', () => {
+    it('renders an engine mail with the service’s brand when it is given none', async () => {
+      const provider = new MockEmailProvider();
+      const named = createEmailService(provider, { brand: resolveMailBrand({ name: 'delur.io' }) });
+
+      await named.sendEngineMail('a@example.com', { template: 'password_changed' }, LINK);
+
+      const [mail] = provider.getSentEmails();
+      expect(mail?.html).toContain('This email was sent by delur.io');
+      expect(mail?.html).not.toContain('QAuth');
+      expect(mail?.inlineImages).toEqual([]);
+    });
+
+    it('uses the brand an engine mail is sent with over the service’s', async () => {
+      const provider = new MockEmailProvider();
+      const named = createEmailService(provider, { brand: resolveMailBrand({ name: 'delur.io' }) });
+
+      await named.sendEngineMail(
+        'a@example.com',
+        { template: 'password_changed' },
+        { ...LINK, brand: resolveMailBrand({ name: 'Acme Login' }) }
+      );
+
+      const [mail] = provider.getSentEmails();
+      expect(mail?.html).toContain('This email was sent by Acme Login');
+      expect(mail?.html).not.toContain('delur.io');
+    });
+
+    it('names a mail QAuth, with QAuth’s mark, when the service has no brand', async () => {
+      const provider = new MockEmailProvider();
+      await createEmailService(provider).sendEngineMail(
+        'a@example.com',
+        { template: 'password_changed' },
+        LINK
+      );
+
+      const [mail] = provider.getSentEmails();
+      expect(mail?.html).toContain('This email was sent by QAuth');
+      expect(mail?.inlineImages).toEqual([QAUTH_MAIL_LOGO_IMAGE]);
     });
   });
 });

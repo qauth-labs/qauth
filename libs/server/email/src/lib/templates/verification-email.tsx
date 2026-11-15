@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { DEFAULT_MAIL_BRAND } from '../engine-mail/brand';
+import { DEFAULT_MAIL_BRAND, type MailBrand } from '../engine-mail/brand';
 import { LinkButton, MailFrame, Paragraph } from './engine/layout';
 
 /**
@@ -15,6 +15,13 @@ export interface VerifyEmailProps {
    * Expiration time description (e.g., "24 hours", "1 hour")
    */
   expiresIn: string;
+  /**
+   * The brand the mail is named after: the realm's sender name's
+   * (`EmailServiceConfig.brand`).
+   *
+   * @default DEFAULT_MAIL_BRAND (QAuth's)
+   */
+  brand?: MailBrand;
 }
 
 /**
@@ -23,19 +30,23 @@ export interface VerifyEmailProps {
  * @param props - Template props
  * @returns React component
  */
-export function VerifyEmail({ verificationUrl, expiresIn }: VerifyEmailProps) {
+export function VerifyEmail({
+  verificationUrl,
+  expiresIn,
+  brand = DEFAULT_MAIL_BRAND,
+}: VerifyEmailProps) {
   return (
     <MailFrame
-      brand={DEFAULT_MAIL_BRAND}
+      brand={brand}
       preview="Verify your email address to complete your registration"
       title="Verify Your Email Address"
     >
-      <Paragraph brand={DEFAULT_MAIL_BRAND}>
-        Thank you for registering with QAuth. Please verify your email address by clicking the
-        button below:
+      <Paragraph brand={brand}>
+        Thank you for registering with {brand.name}. Please verify your email address by clicking
+        the button below:
       </Paragraph>
-      <LinkButton brand={DEFAULT_MAIL_BRAND} href={verificationUrl} label="Verify Email" />
-      <Paragraph brand={DEFAULT_MAIL_BRAND}>
+      <LinkButton brand={brand} href={verificationUrl} label="Verify Email" />
+      <Paragraph brand={brand}>
         This verification link will expire in {expiresIn}. If you did not create an account, you can
         safely ignore this email.
       </Paragraph>

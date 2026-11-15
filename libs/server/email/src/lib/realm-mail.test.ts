@@ -197,6 +197,36 @@ describe('createRealmMailService (#529)', () => {
     expect(built[0]?.sent[0]?.text).toContain('token-a');
   });
 
+  it('names each realm’s mail after its sender, and carries QAuth’s mark only under QAuth’s name', async () => {
+    const { source } = fakeSource({
+      [REALM_A]: { version: 1, mail: { ...MOCK, fromName: 'delur.io' }, secrets: {} },
+      [REALM_B]: { version: 1, mail: MOCK, secrets: {} },
+    });
+    const { built, createProvider } = recordingProviders();
+    const service = createRealmMailService({ source, createProvider });
+
+    await service.sendEngineMail(REALM_A, 'a@example.com', { template: 'password_changed' }, LINK);
+    await service.sendVerificationEmail(REALM_A, 'a@example.com', 'token-a', LINK);
+    await service.sendAccountExistsEmail(REALM_A, 'a@example.com');
+    await service.sendEngineMail(REALM_B, 'b@example.com', { template: 'password_changed' }, LINK);
+
+    const [engine, verification, exists] = built[0]?.sent ?? [];
+    for (const mail of [engine, verification, exists]) {
+      expect(mail?.from).toBe('delur.io <no-reply@example.com>');
+      expect(mail?.html).toContain('delur.io');
+      expect(mail?.html).not.toContain('QAuth');
+      expect(mail?.text).not.toContain('QAuth');
+      expect(mail?.html).not.toContain('cid:');
+      expect(mail?.inlineImages).toEqual([]);
+    }
+    expect(verification?.text).toContain('Thank you for registering with delur.io.');
+    expect(exists?.text).toContain('create a delur.io account');
+
+    const qauth = built[1]?.sent[0];
+    expect(qauth?.html).toContain('cid:');
+    expect(qauth?.inlineImages).toHaveLength(1);
+  });
+
   it('keeps a realm sender for its policy counter, and builds it anew when the counter moves', async () => {
     const realm: FakeRealm = {
       version: 4,
