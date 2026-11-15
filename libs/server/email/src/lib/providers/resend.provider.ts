@@ -49,7 +49,9 @@ type Attempt =
  * answer's JSON body as it came, so neither is trusted to have its type.
  */
 function failureOf(error: unknown): Failure {
-  if (typeof error !== 'object' || error === null) return { statusCode: undefined, name: undefined };
+  if (typeof error !== 'object' || error === null) {
+    return { statusCode: undefined, name: undefined };
+  }
   const { statusCode, name } = error as Record<string, unknown>;
   return {
     statusCode:
