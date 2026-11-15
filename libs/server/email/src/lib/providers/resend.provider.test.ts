@@ -251,7 +251,9 @@ describe('ResendEmailProvider', () => {
 
     it('sends once more with the same idempotency key after a 429 rate_limit_exceeded', async () => {
       const provider = new ResendEmailProvider(config);
-      mockSend.mockResolvedValueOnce(failed(429, 'rate_limit_exceeded')).mockResolvedValueOnce(sent);
+      mockSend
+        .mockResolvedValueOnce(failed(429, 'rate_limit_exceeded'))
+        .mockResolvedValueOnce(sent);
 
       const result = await sendWithTimers(provider);
 
