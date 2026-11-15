@@ -1,6 +1,6 @@
 {
-  "id": "48d377a4-f9d5-4437-aa52-91c9a5119e75",
-  "prevId": "661fd688-d70f-40d5-9521-e50803bacabd",
+  "id": "ac43663f-b10f-4922-98f7-afa45f27270b",
+  "prevId": "d5b6529b-11e8-408f-8d4f-bcf8f2dee273",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4398,117 +4398,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.protected_resources": {
-      "name": "protected_resources",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "uuidv7()"
-        },
-        "realm_id": {
-          "name": "realm_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "resource": {
-          "name": "resource",
-          "type": "varchar(2048)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scopes": {
-          "name": "scopes",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "any_client": {
-          "name": "any_client",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "client_ids": {
-          "name": "client_ids",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "protected_resources_realm_id_realms_id_fk": {
-          "name": "protected_resources_realm_id_realms_id_fk",
-          "tableFrom": "protected_resources",
-          "tableTo": "realms",
-          "columnsFrom": ["realm_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "protected_resources_realm_resource": {
-          "name": "protected_resources_realm_resource",
-          "nullsNotDistinct": false,
-          "columns": ["realm_id", "resource"]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "protected_resources_resource_form": {
-          "name": "protected_resources_resource_form",
-          "value": "\"protected_resources\".\"resource\" <> '' AND strpos(\"protected_resources\".\"resource\", '#') = 0"
-        },
-        "protected_resources_scopes_array": {
-          "name": "protected_resources_scopes_array",
-          "value": "jsonb_typeof(\"protected_resources\".\"scopes\") = 'array'"
-        },
-        "protected_resources_client_ids_array": {
-          "name": "protected_resources_client_ids_array",
-          "value": "jsonb_typeof(\"protected_resources\".\"client_ids\") = 'array'"
-        },
-        "protected_resources_any_client_lists_none": {
-          "name": "protected_resources_any_client_lists_none",
-          "value": "NOT \"protected_resources\".\"any_client\" OR \"protected_resources\".\"client_ids\" = '[]'::jsonb"
-        },
-        "protected_resources_version_positive": {
-          "name": "protected_resources_version_positive",
-          "value": "\"protected_resources\".\"version\" > 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.realm_secrets": {
       "name": "realm_secrets",
       "schema": "",
@@ -4918,6 +4807,46 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.session_refresh_families": {
+      "name": "session_refresh_families",
+      "schema": "",
+      "columns": {
+        "session_id": {
+          "name": "session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "family_id": {
+          "name": "family_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "session_refresh_families_session_id_sessions_id_fk": {
+          "name": "session_refresh_families_session_id_sessions_id_fk",
+          "tableFrom": "session_refresh_families",
+          "tableTo": "sessions",
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "session_refresh_families_pk": {
+          "name": "session_refresh_families_pk",
+          "columns": ["session_id", "family_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.sessions": {
       "name": "sessions",
       "schema": "",
@@ -5017,6 +4946,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'browser'"
         }
       },
       "indexes": {
@@ -5116,6 +5052,10 @@
         "sessions_revoked_pair": {
           "name": "sessions_revoked_pair",
           "value": "(\"sessions\".\"revoked_at\" IS NULL) = (\"sessions\".\"revoked_reason\" IS NULL)"
+        },
+        "sessions_kind_valid": {
+          "name": "sessions_kind_valid",
+          "value": "\"sessions\".\"kind\" IN ('browser', 'registration', 'reset')"
         }
       },
       "isRLSEnabled": false

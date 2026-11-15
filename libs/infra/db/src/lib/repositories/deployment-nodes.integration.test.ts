@@ -1,7 +1,7 @@
 /**
  * Real-DB integration tests for the node list repository (#499).
  *
- * Exercises what a unit test cannot: the functions of migration 0076 the
+ * Exercises what a unit test cannot: the functions of migration 0077 the
  * repository calls, the database's clock deciding which nodes are live, the
  * removal of the stale ones at a registration, never of a node seen within
  * two minutes, the advisory lock that makes two registrations at once, or a

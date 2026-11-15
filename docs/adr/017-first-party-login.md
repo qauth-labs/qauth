@@ -223,8 +223,8 @@
 > promised in place of the mailed code. Decision 8's binding bullet is edited in place:
 >
 > - A passkey or TOTP bound after a sign-in that proved only the account's password is _new_ for
->   the realm's `accounts.newFactorWindowDays` (default 7, from 1 to 30). The credential stores
->   when its window ends. A factor bound after a sign-in that proved a settled factor beyond the
+>   the realm's `accounts.newFactorWindowDays` (default 7, from 0 to 30; 0, since #1143, is no
+>   window: the factor is never new). The credential stores when its window ends. A factor bound after a sign-in that proved a settled factor beyond the
 >   password is never new, and neither is one bound on an account that holds no password. A
 >   recovery code counts as a settled factor, for this rule as for a reset or a forced password
 >   update, only on an account that holds no new factor: the first binding shows the set, so while
@@ -251,6 +251,34 @@
 >   user. The account page shows the binding to the account's other live sessions, with "Not you?
 >   Remove it" while the factor is new. Mail is one more channel, never the only one, and no
 >   binding step asks for a mailed code or a phone number.
+>
+> **Amended 2026-11-15** with #1144, the maintainer's decision of that day ("Logout-only sid"):
+> a registration or a reset that finishes an authorization request leaves a logout-only session.
+> Decisions 8 and 10 stand. The registration and the reset still sign nobody in, and their code
+> still carries no `amr`, no `auth_time` and no `acr`. Before this, the code named no session at
+> all, so no logout token could name the app session it started. A client that requires a `sid`
+> (`backchannel_logout_session_required`) kept that session through "sign out everywhere", a later
+> reset or a disable. Now:
+>
+> - The code mint writes a session row of kind `registration` or `reset` for the account. It
+>   holds no `amr`, and its end is a browser session's lifetime from now. Its `sid` is stored on
+>   the code, the ID token carries it, and the client is recorded on it.
+> - No cookie names it. The session service never hands it out as a browser session, so it never
+>   satisfies an authorization request, and no other client is signed in on the mailbox's proof.
+>   It cannot stand as the recent sign-in behind an account API token, whose code carried no
+>   `auth_time`.
+> - It ends at the session lifetime and is not subject to the realm's idle limit, because no
+>   browser ever uses it: nothing could mark it used. It lists and ends as a browser session does.
+>   "Sign out everywhere", ending it on the account page (where it shows as "A sign-up" or "A
+>   password reset"), a later reset, a disable, and RP-initiated logout with an ID token that names
+>   it all end it. Each ending queues a logout token with its `sid` to each of its clients that has
+>   a back-channel logout URI. RP-initiated logout ends it at once on that ID token alone, since no
+>   browser holds it.
+> - The refresh family its code starts ends no later than it (#861), and ending it alone revokes
+>   that family. The code exchange links the family to it in a table of its own,
+>   `session_refresh_families`, since its codes carry no `auth_time` for the sweep a browser
+>   session's end makes. Refresh rows still name no session (#549; ADR-014 keeps a refresh-row
+>   `sid` for the Authority Tree's grant id).
 
 ## Context
 

@@ -1,6 +1,6 @@
 /**
  * Real-Postgres integration tests for the protected resources of each realm
- * (`protected_resources`, migration 0077, issue #1087).
+ * (`protected_resources`, migration 0078, issue #1087).
  *
  * The rules under test live in the DDL and the repository: one row per realm
  * and resource indicator, a client list only when the resource is not open

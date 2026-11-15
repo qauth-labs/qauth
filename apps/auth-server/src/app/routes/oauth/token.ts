@@ -38,6 +38,7 @@ import {
   unlistedReservedAudiences,
   validateScopes,
 } from '../../helpers/client-auth';
+import { clientNameClaim } from '../../helpers/client-display';
 import { isAgentClient, isCimdClient } from '../../helpers/client-resolution';
 import { consentCovers } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
@@ -1286,6 +1287,9 @@ async function handleAuthorizationCode(
           familyId: refresh.familyId,
           // The code that started the family, so a second redemption of it
           // finds the family and revokes it (ADR-017 Decision 10).
+          // A logout-only session behind the code (#1144) is linked to the
+          // family by the repository, in this transaction, through this
+          // code: the refresh row names no session (#549).
           authorizationCodeId: authCode.id,
           familyCreatedAt: refresh.familyCreatedAt,
           familySessionExpiresAt: refresh.familySessionExpiresAt,
@@ -1312,6 +1316,7 @@ async function handleAuthorizationCode(
       sub: user.id,
       ...emailClaims,
       clientId: client.clientId,
+      ...clientNameClaim(client),
       scope: scopeString,
       aud,
       ...dpopConfirmation(ctx),
@@ -1496,6 +1501,7 @@ async function handleClientCredentials(
   const accessToken = await issueAccessToken(fastify, requestRealm(request), {
     sub: client.clientId,
     clientId: client.clientId,
+    ...clientNameClaim(client),
     scope: scopeString,
     aud,
     ...dpopConfirmation(ctx),
@@ -1935,6 +1941,7 @@ async function handleRefreshToken(
       sub: user.id,
       ...emailClaims,
       clientId: client.clientId,
+      ...clientNameClaim(client),
       scope: scopeString,
       aud,
       ...dpopConfirmation(ctx),
@@ -2410,6 +2417,7 @@ async function handleTokenExchange(
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,
+    ...clientNameClaim(client),
     scope: scopeString,
     aud,
     act,
@@ -2946,6 +2954,7 @@ async function handleJwtBearer(
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,
+    ...clientNameClaim(client),
     scope: scopeString,
     aud,
     ...dpopConfirmation(ctx),

@@ -136,6 +136,21 @@ function limitMarks(text: string): string {
 }
 
 /**
+ * The `client_name` an access token carries (#1148): the client's declared
+ * name, sanitised and capped exactly as the consent page shows it
+ * ({@link declaredText}, {@link DECLARED_NAME_MAX_LENGTH}), so a resource
+ * server names the app with what the person saw. It is a declared name that
+ * QAuth did not verify (ADR-019 Decision 6). No name, or one that sanitises
+ * to nothing, gives no claim.
+ */
+export function clientNameClaim(client: { readonly name?: string | null }): {
+  clientName?: string;
+} {
+  const clientName = declaredText(client.name, DECLARED_NAME_MAX_LENGTH);
+  return clientName === undefined ? {} : { clientName };
+}
+
+/**
  * A value a client declared, made fit to show as plain text: line breaks
  * become spaces; control, format, private-use and unassigned characters,
  * markup brackets and blank-rendering characters are removed; the text is

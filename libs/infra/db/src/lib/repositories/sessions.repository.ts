@@ -6,7 +6,6 @@ import {
   getTableColumns,
   gt,
   gte,
-  isNotNull,
   isNull,
   lt,
   lte,
@@ -588,7 +587,8 @@ export function createSessionsRepository(
             eq(sessions.userId, userId),
             isNull(sessions.revokedAt),
             sql`${absoluteEnd} > ${page.now}::bigint`,
-            or(isNull(realms.ssoIdleTimeout), sql`${idleEnd} > ${page.now}::bigint`),
+            // NULL without an idle limit, and for a logout-only session (#1144).
+            sql`(${idleEnd} IS NULL OR ${idleEnd} > ${page.now}::bigint)`,
             after
           )
         )
@@ -653,9 +653,11 @@ export function createSessionsRepository(
       // is the stored `last_seen_at` plus the realm's idle limit. Each end is
       // the first moment the session is no longer live.
       const { absoluteEnd, idleEnd } = sessionEndsOf(batch.defaultMaxLifespanMs);
+      // A NULL idle end (no idle limit, or a logout-only session, #1144) is
+      // never reached.
       const lapsed = or(
         sql`${absoluteEnd} <= ${batch.now}::bigint`,
-        and(isNotNull(realms.ssoIdleTimeout), sql`${idleEnd} <= ${batch.now}::bigint`)
+        sql`(${idleEnd} IS NOT NULL AND ${idleEnd} <= ${batch.now}::bigint)`
       );
       return inReadCommitted('sessions.revokeLapsedBatch', async (t) => {
         const locked = await t
@@ -747,13 +749,14 @@ export function createSessionsRepository(
  * `expires_at`, or earlier when the realm's current maximum lifespan
  * (`defaultMaxLifespanMs` for a realm without one) ends it sooner; the idle
  * end is the stored `last_seen_at` plus the realm's idle limit, NULL for a
- * realm without one. Each end is the first moment the session is no longer
- * live.
+ * realm without one, and NULL for a logout-only session (#1144), which no
+ * browser uses and which ends at its absolute end alone. Each end is the first
+ * moment the session is no longer live.
  */
 function sessionEndsOf(defaultMaxLifespanMs: number): { absoluteEnd: SQL; idleEnd: SQL } {
   return {
     absoluteEnd: sql`least(${sessions.expiresAt}, ${sessions.createdAt} + coalesce(${realms.ssoMaxLifespan} * 1000, ${defaultMaxLifespanMs}::bigint))`,
-    idleEnd: sql`${sessions.lastSeenAt} + ${realms.ssoIdleTimeout} * 1000`,
+    idleEnd: sql`(case when ${sessions.kind} = 'browser' then ${sessions.lastSeenAt} + ${realms.ssoIdleTimeout} * 1000 end)`,
   };
 }
 

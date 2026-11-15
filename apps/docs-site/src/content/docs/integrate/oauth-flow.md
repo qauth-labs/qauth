@@ -429,9 +429,15 @@ Beyond the standard `iss` / `sub` / `aud` / `exp` / `iat`, `id_token` carries
 
 `sid` names the browser session the user signed in with on the auth server,
 and is what back-channel logout will name when that session ends (ADR-019
-Decisions 3 and 4). A code from the headless Bearer hand-off of
-`/oauth/authorize` has no browser session, so its ID token has no `sid`. A
-sign-out spends the codes minted under the session that are not yet redeemed.
+Decisions 3 and 4). After a registration or a password reset nobody signed
+in, but the ID token still has a `sid`: it names a logout-only session that
+no browser holds and that signs nobody in (ADR-017, amended 2026-11-15).
+"Sign out everywhere", a later reset, disabling the account and RP-initiated
+logout with that ID token end it, and back-channel logout names it, so your
+app's session from the sign-up ends with the account's other sessions. A
+code from the headless Bearer hand-off of `/oauth/authorize` has no browser
+session, so its ID token has no `sid`. A sign-out spends the codes minted
+under the session that are not yet redeemed.
 The access token, the introspection response and the refresh token never
 carry `sid`, and discovery does not advertise it yet.
 
@@ -454,6 +460,16 @@ The access token of the code flow also carries the ID token's `auth_time` and
 issued, so a resource server can require a recent sign-in or a given method.
 Discovery lists both in `claims_supported`. The tokens of the other grants
 carry neither.
+
+Every access token also carries the client's `client_name` beside its
+`client_id`, so a resource server can name the app or agent to the person:
+in a list of connected apps, or in a security mail. It is the name the
+client **declared** when it registered (RFC 7591 §2), which QAuth did not
+verify. Show it as declared, as QAuth's consent page does ("calls itself
+Notes Agent"), and never as a verified identity: anyone can register a
+client under any name. It is cleaned and cut to 64 characters as the
+consent page shows it, and is absent for a client with no name left after
+that.
 
 ### 4. Call a protected resource
 
@@ -906,6 +922,10 @@ What happens:
   or one without `sid` (an ID token minted before ID tokens carried it), is
   suspect (§2) and gets the confirmation step. So does a hint of an app that
   was deleted, disabled or suspended since.
+- **The hint is a sign-up's or a reset's ID token.** Its `sid` names a
+  logout-only session, which no browser holds. That session ends at once on
+  the hint alone, and the browser goes back to the registered URI. A session
+  the browser holds itself is then handled as above.
 - **Any other signed-in browser** gets a confirmation step: sign out, sign out
   of all accounts, or stay signed in. Nothing ends until the person answers.
   So a request without a valid hint, such as a cross-site image tag, ends

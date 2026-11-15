@@ -50,6 +50,12 @@ export interface SignAccessTokenPayload {
   /** OAuth client identifier */
   clientId: string;
   /**
+   * The name the client declared (#1148), as the consent page shows it:
+   * sanitised and capped by the caller. Emitted as the `client_name` claim, a
+   * declared name that QAuth did not verify. Absent, the token has no claim.
+   */
+  clientName?: string;
+  /**
    * Space-separated OAuth scopes (RFC 8693 `scope` claim).
    * Omitted when no scopes were granted.
    */

@@ -1,5 +1,6 @@
 import { createElement, type ReactElement } from 'react';
 
+import type { EmailInlineImage } from '../../types';
 import { formatDuration } from '../format-duration';
 import {
   ENGINE_ACCOUNT_EXISTS_SUBJECT,
@@ -49,7 +50,7 @@ import {
   UpstreamUnlinkedEmail,
 } from '../templates/engine/upstream-account';
 import { renderEmail, renderEmailText } from '../templates/render';
-import type { MailBrand } from './brand';
+import { type MailBrand, mailImagesOf } from './brand';
 import { isMailBaseUrl, isMailPass, mailPassUrl } from './links';
 
 /**
@@ -146,11 +147,24 @@ export interface EngineMailContext {
   readonly brand: MailBrand;
 }
 
+/**
+ * What a sender is given to send an engine mail: the realm's issuer, and a
+ * brand only when the caller has one. Without it the sender's own brand is
+ * used, the one its realm's sender name (`mail.fromName`) gives
+ * (`createRealmMailService`).
+ */
+export interface EngineMailSendContext {
+  readonly baseUrl: string;
+  readonly brand?: MailBrand;
+}
+
 /** A rendered mail, ready for a transport. */
 export interface RenderedEngineMail {
   readonly subject: string;
   readonly html: string;
   readonly text: string;
+  /** The images the HTML shows through `cid:`, to send as inline parts. */
+  readonly images: readonly EmailInlineImage[];
 }
 
 /** A mail whose data does not fit its template: a caller's bug, never sent. */
@@ -469,5 +483,10 @@ export async function renderEngineMail(
   const template = templateOf(mail as MailOf<EngineMailName>);
   const element = template.element(mail as never, context);
   const [html, text] = await Promise.all([renderEmail(element), renderEmailText(element)]);
-  return { subject: template.subject(mail as never), html, text };
+  return {
+    subject: template.subject(mail as never),
+    html,
+    text,
+    images: mailImagesOf(context.brand),
+  };
 }

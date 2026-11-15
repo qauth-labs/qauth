@@ -329,7 +329,7 @@ booting node registers, so whichever of the two comes second compares with
 the other; until its comparison succeeds, `config_digest` fails.
 
 No role's database user reads or writes the `deployment_nodes` table: every
-role calls the four `SECURITY DEFINER` functions of migration 0076, which take
+role calls the four `SECURITY DEFINER` functions of migration 0077, which take
 the times from the database's clock, and a row is marked seen or removed only
 by the database user that registered it. A setting held in a
 file, such as `EGRESS_ALLOWLIST_PATH`, is compared by its path's class, not

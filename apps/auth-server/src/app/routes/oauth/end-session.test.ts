@@ -130,6 +130,8 @@ const CLIENTS: Record<string, ReturnType<typeof clientRow>> = {
 };
 
 const SID = '44444444-4444-4444-8444-444444444444';
+/** A registration's logout-only session (#1144). */
+const LOGOUT_ONLY_SID = '66666666-6666-4666-8666-666666666666';
 
 /** The hints the stand-in verifier accepts: anything else does not verify. */
 const HINTS: Record<string, IdTokenHint> = {
@@ -157,11 +159,22 @@ const HINTS: Record<string, IdTokenHint> = {
   'hint.alice.suspended-app': { sub: USER_ID, aud: ['suspended-app'], expired: false },
   // A client deleted since: the realm resolves no such client.
   'hint.alice.deleted-app': { sub: USER_ID, aud: ['deleted-app'], expired: false },
+  // The ID token a registration's code gave the app (#1144): it names a
+  // logout-only session, which no browser holds.
+  'hint.alice.sign-up': { sub: USER_ID, aud: ['notes-app'], sid: LOGOUT_ONLY_SID, expired: false },
 };
+
+/** The `sessions` rows the repository holds beside the fixture's browser sessions (#1144). */
+const sessionRows = new Map<
+  string,
+  { id: string; realmId: string; userId: string; kind: string; revokedAt: number | null }
+>();
 
 let app: FastifyInstance;
 let sessions: BrowserSessionFixture;
 let verifyIdTokenHint: ReturnType<typeof vi.fn>;
+/** The sweep of a logout-only session's refresh families (#1144). */
+let revokeFamiliesOfSession: ReturnType<typeof vi.fn>;
 
 const mutableEnv = env as { INTERACTION_UI_ENABLED: boolean };
 /** The realm's ceremony app error page (#1106): none unless a test sets one. */
@@ -190,6 +203,7 @@ async function buildApp(): Promise<FastifyInstance> {
     'policyStore',
     testPolicyStore({}, { ceremonyApp: { errorPage } }) as unknown as FastifyInstance['policyStore']
   );
+  revokeFamiliesOfSession = vi.fn(async () => 0);
   verifyIdTokenHint = vi.fn(async (_realm: unknown, token: string) => {
     const hint = HINTS[token];
     if (hint === undefined) throw new JWTInvalidError('the hint does not verify');
@@ -203,6 +217,13 @@ async function buildApp(): Promise<FastifyInstance> {
     users: {
       findById: vi.fn(async (realmId: string, id: string) => ({ id, realmId, enabled: true })),
     },
+    sessions: {
+      findById: vi.fn(async (realmId: string, id: string) => {
+        const row = sessionRows.get(id);
+        return row?.realmId === realmId ? row : undefined;
+      }),
+    },
+    refreshTokens: { revokeFamiliesOfSession },
   } as unknown as FastifyInstance['repositories']);
   await instance.register(endSessionRoutes, { prefix: '/oauth' });
   await instance.ready();
@@ -211,6 +232,7 @@ async function buildApp(): Promise<FastifyInstance> {
 
 beforeEach(async () => {
   vi.mocked(emitUserEvent).mockClear();
+  sessionRows.clear();
   mutableEnv.INTERACTION_UI_ENABLED = false;
   app = await buildApp();
 });
@@ -553,6 +575,125 @@ describe('the client and the return URI (RP-Initiated Logout 1.0 §2, #675)', ()
     expect(response.body).not.toContain('st<b>ate');
     expect(response.body).not.toContain('notes-app');
   });
+});
+
+describe('a logout-only session the hint names (#1144)', () => {
+  function signUpSession(changes: { kind?: string; userId?: string; revokedAt?: number } = {}) {
+    const userId = changes.userId ?? USER_ID;
+    sessionRows.set(LOGOUT_ONLY_SID, {
+      id: LOGOUT_ONLY_SID,
+      realmId: REALM.id,
+      userId,
+      kind: changes.kind ?? 'registration',
+      revokedAt: changes.revokedAt ?? null,
+    });
+    // The session service ends it by its row; no cookie names it.
+    sessions.service.seed({ sid: LOGOUT_ONLY_SID, realmId: REALM.id, userId });
+  }
+
+  it('ends it at once, with no browser session, and goes back to the app', async () => {
+    signUpSession();
+    const response = await endSession({
+      id_token_hint: 'hint.alice.sign-up',
+      post_logout_redirect_uri: RETURN_URI,
+      state: STATE,
+    });
+
+    expect(response.statusCode).toBe(303);
+    expect(response.headers.location).toBe(`${RETURN_URI}?state=${STATE}`);
+    expect(sessions.service.revoke).toHaveBeenCalledWith({
+      realmId: REALM.id,
+      sid: LOGOUT_ONLY_SID,
+      reason: 'sign_out',
+      actor: { type: 'user', id: USER_ID },
+      userId: USER_ID,
+    });
+    expect(eventOf('urn:qauth:event:user.signed_out:v1-rc.0').data).toEqual({
+      sid: LOGOUT_ONLY_SID,
+    });
+    expect(eventTypes()).not.toContain('urn:qauth:event:user.sign_out_failed:v1-rc.0');
+  });
+
+  it('revokes its refresh families before it ends the session, and leaves it live when that fails', async () => {
+    signUpSession();
+    const order: string[] = [];
+    revokeFamiliesOfSession.mockImplementationOnce(async () => {
+      order.push('families');
+      return 1;
+    });
+    sessions.service.revoke.mockImplementationOnce(async () => {
+      order.push('session');
+      return { outcome: 'ended' as const, session: {} as never, clients: [] };
+    });
+    await endSession({ id_token_hint: 'hint.alice.sign-up' });
+    expect(revokeFamiliesOfSession).toHaveBeenCalledWith(USER_ID, LOGOUT_ONLY_SID, 'session_ended');
+    expect(order).toEqual(['families', 'session']);
+
+    // A failed sweep ends nothing, so a retried hint runs it again.
+    sessions.service.revoke.mockClear();
+    revokeFamiliesOfSession.mockRejectedValueOnce(new Error('the store is down'));
+    const failed = await endSession({ id_token_hint: 'hint.alice.sign-up' });
+    expect(failed.statusCode).toBe(500);
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+  });
+
+  it('ends it, then asks before ending the browser’s own session', async () => {
+    signUpSession();
+    const cookie = await signedIn();
+    const response = await endSession(
+      { id_token_hint: 'hint.alice.sign-up', post_logout_redirect_uri: RETURN_URI },
+      cookie
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(sessions.service.revoke).toHaveBeenCalledTimes(1);
+    expect(sessions.service.revoke).toHaveBeenCalledWith(
+      expect.objectContaining({ sid: LOGOUT_ONLY_SID })
+    );
+    expect(sessions.service.sessions.has(SID)).toBe(true);
+  });
+
+  it('records no sign-out when another request ended it first', async () => {
+    signUpSession();
+    // The read sees it live; a concurrent end wins before the revoke.
+    sessions.service.revoke.mockResolvedValueOnce({
+      outcome: 'already_ended',
+      session: {} as never,
+    });
+    const response = await endSession({
+      id_token_hint: 'hint.alice.sign-up',
+      post_logout_redirect_uri: RETURN_URI,
+      state: STATE,
+    });
+
+    expect(response.statusCode).toBe(303);
+    expect(sessions.service.revoke).toHaveBeenCalledTimes(1);
+    expect(eventTypes()).not.toContain('urn:qauth:event:user.signed_out:v1-rc.0');
+    expect(eventOf('urn:qauth:event:user.sign_out_failed:v1-rc.0').data).toEqual({
+      reason: 'no_session',
+    });
+  });
+
+  for (const [name, changes] of [
+    ['a browser session', { kind: 'browser' }],
+    ['another account’s', { userId: OTHER_USER_ID }],
+    ['one that has ended', { revokedAt: 1_700_000_000_000 }],
+  ] as const) {
+    it(`ends nothing for ${name}`, async () => {
+      signUpSession(changes);
+      const response = await endSession({
+        id_token_hint: 'hint.alice.sign-up',
+        post_logout_redirect_uri: RETURN_URI,
+        state: STATE,
+      });
+
+      expect(response.statusCode).toBe(303);
+      expect(sessions.service.revoke).not.toHaveBeenCalled();
+      expect(eventOf('urn:qauth:event:user.sign_out_failed:v1-rc.0').data).toEqual({
+        reason: 'no_session',
+      });
+    });
+  }
 });
 
 describe('no session to end (RP-Initiated Logout 1.0 §4, #675)', () => {

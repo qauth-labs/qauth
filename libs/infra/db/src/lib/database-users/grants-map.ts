@@ -33,7 +33,7 @@ import { DATABASE_ROLES, type DatabaseRole } from './roles';
  *   default realm boot step, so it never writes `realms`. Like every role,
  *   it registers in the node list (#499), through its functions alone.
  * - `deployment_nodes`, the node list: no role holds anything on the table.
- *   Every role executes the four functions of migration 0076, which set the
+ *   Every role executes the four functions of migration 0077, which set the
  *   times from the database's clock and mark seen or remove only the rows
  *   the caller's own database user registered.
  * - `admin_grants`, who administers: every role that reads it only reads it.
@@ -111,7 +111,7 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   authorization_codes: { web: SIU, api: SIUD },
   // The node list (#499): no role holds anything on it. Every node
   // registers, marks seen, removes and lists itself through the functions of
-  // migration 0076 (FUNCTION_GRANTS below).
+  // migration 0077 (FUNCTION_GRANTS below).
   deployment_nodes: {},
   email_verification_tokens: { web: SIU, api: SIUD },
   // The retention job's anchor of each realm's admin chain (#536).
@@ -161,6 +161,11 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   refresh_tokens: { web: SIU, api: SIUD, admin: SU },
   roles: {},
   session_clients: { web: SID, api: SID },
+  // The refresh families a logout-only session's codes started (#1144): the
+  // code exchange, on `api`, links a family's first token; ending one session
+  // reads the links, on `web` (the hosted account page) and on `api` (the
+  // account API). Purging a session deletes its rows through the cascade.
+  session_refresh_families: { web: S, api: SI },
   // Only the session purge, on `web`, deletes a session (`session-purge.ts`).
   sessions: { web: SIUD, api: SIU },
   // The SSF streams (#410): managed on `api`, read by the delivery route.
@@ -256,7 +261,7 @@ export const COLUMN_GRANTS: ColumnGrants = Object.freeze({
 });
 
 /**
- * The node list's functions (migration 0076, #499): list the live nodes,
+ * The node list's functions (migration 0077, #499): list the live nodes,
  * register a node, mark it seen, and remove it. Every role executes them.
  */
 export const DEPLOYMENT_NODE_FUNCTIONS = Object.freeze([
@@ -290,7 +295,7 @@ export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // Whether an event about a user can still reach an SSF stream (migration
   // 0055): the subject sweep, an `api` job.
   '"ssf_subject_events_pending"(uuid, text)': ['api'],
-  // The node list (migration 0076, #499): every node, whatever its roles,
+  // The node list (migration 0077, #499): every node, whatever its roles,
   // registers itself at boot, marks itself seen every 30 seconds, removes
   // itself when it closes and lists the live nodes to compare its
   // configuration digest. The functions set the times from the database's

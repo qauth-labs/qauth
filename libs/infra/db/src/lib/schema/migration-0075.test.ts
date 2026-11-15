@@ -1,9 +1,12 @@
 /**
- * Migration 0075 adds `realm_key_denylist` (#551): the `kid`s an emergency
- * retirement denied, which every role reads. A new, empty table that a
- * release before this one never names, so nothing is rewritten and a rolling
- * upgrade is safe. Its behaviour against a real Postgres is held by
- * `repositories/realm-keys.integration.test.ts`.
+ * Migration 0075 adds the logout-only sessions of #1144 (ADR-017 Decisions 8
+ * and 10, amended 2026-11-15): `sessions.kind`, with a constant default of
+ * `browser`, and `session_refresh_families`, a new table that links a
+ * logout-only session to the refresh families its codes started. Refresh rows
+ * name no session (#549). Postgres adds the column without rewriting
+ * `sessions`, every existing session reads as a browser's, and a release
+ * before this one keeps inserting sessions and refresh tokens during a
+ * rolling upgrade.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -11,10 +14,11 @@ import path from 'node:path';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 
-import { realmKeyDenylist } from './keys';
+import { SESSION_KINDS, sessionRefreshFamilies, sessions } from './sessions';
+import { refreshTokens } from './tokens';
 
 const DRIZZLE_DIR = path.resolve(__dirname, '..', '..', '..', 'drizzle');
-const MIGRATION_TAG = '0075_key_denylist';
+const MIGRATION_TAG = '0075_logout_only_sessions';
 const MIGRATION_IDX = 75;
 
 interface JournalEntry {
@@ -37,10 +41,11 @@ function statementsOf(tag: string): string[] {
         .join('\n')
         .trim()
     )
-    .filter((statement) => statement !== '');
+    .filter((statement) => statement !== '')
+    .map((statement) => statement.replace(/\s+/g, ' '));
 }
 
-describe('migration 0075 (the kid denylist of emergency key retirement)', () => {
+describe('migration 0075 (logout-only sessions)', () => {
   const statements = statementsOf(MIGRATION_TAG);
 
   it('is in the journal, after 0074', () => {
@@ -49,23 +54,50 @@ describe('migration 0075 (the kid denylist of emergency key retirement)', () => 
     expect(journal.entries[MIGRATION_IDX - 1]?.tag).toBe('0074_admin_grants_security_change');
   });
 
-  it('creates one new table and its realm foreign key, and touches no other table', () => {
-    expect(statements).toHaveLength(2);
-    expect(statements[0]).toMatch(/^CREATE TABLE "realm_key_denylist" \(/);
-    expect(statements[1]).toMatch(
-      /^ALTER TABLE "realm_key_denylist" ADD CONSTRAINT "realm_key_denylist_realm_id_realms_id_fk" FOREIGN KEY \("realm_id"\) REFERENCES "public"\."realms"\("id"\) ON DELETE cascade/
-    );
-    expect(statements.join('\n')).not.toMatch(
-      /\b(DROP|DELETE FROM|INSERT INTO|RENAME)\b|^UPDATE\b/m
+  it('alters `sessions` first, without rewriting it, and keeps the kind to the known ones', () => {
+    expect(statements.slice(0, 2)).toEqual([
+      `ALTER TABLE "sessions" ADD COLUMN "kind" text DEFAULT 'browser' NOT NULL;`,
+      `ALTER TABLE "sessions" ADD CONSTRAINT "sessions_kind_valid" CHECK ("sessions"."kind" IN ('browser', 'registration', 'reset')) NOT VALID;`,
+    ]);
+    expect(SESSION_KINDS).toEqual(['browser', 'registration', 'reset']);
+    expect(getTableConfig(sessions).checks.map((check) => check.name)).toContain(
+      'sessions_kind_valid'
     );
   });
 
-  it('keys a row by realm and kid, with no foreign key to the key row', () => {
-    expect(statements[0]).toContain(
-      'CONSTRAINT "realm_key_denylist_pk" PRIMARY KEY("realm_id","kid")'
+  it('creates the link table, whose session foreign key cascades', () => {
+    expect(statements.slice(2)).toEqual([
+      'CREATE TABLE "session_refresh_families" ( "session_id" uuid NOT NULL, "family_id" uuid NOT NULL, CONSTRAINT "session_refresh_families_pk" PRIMARY KEY("session_id","family_id") );',
+      'ALTER TABLE "session_refresh_families" ADD CONSTRAINT "session_refresh_families_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."sessions"("id") ON DELETE cascade ON UPDATE no action;',
+    ]);
+  });
+
+  it('touches no row and drops nothing', () => {
+    // A foreign key's referential actions name DELETE and UPDATE; no statement does.
+    const statementsOnly = statements.map((statement) =>
+      statement.replace(/ON DELETE \w+ ON UPDATE no action/, '')
     );
-    const config = getTableConfig(realmKeyDenylist);
-    expect(config.foreignKeys.map((fk) => fk.reference().foreignTable)).toHaveLength(1);
-    expect(statements.join('\n')).not.toContain('"realm_keys"');
+    expect(statementsOnly.join('\n')).not.toMatch(/\b(DROP|UPDATE|DELETE|INSERT|RENAME)\b/);
+  });
+
+  it('puts no session link on refresh rows (#549)', () => {
+    expect(statements.join('\n')).not.toContain('"refresh_tokens"');
+    expect(getTableConfig(refreshTokens).columns.map((column) => column.name)).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/session_id|sid/)])
+    );
+  });
+
+  it('is what the schema declares', () => {
+    const kind = getTableConfig(sessions).columns.find((column) => column.name === 'kind');
+    expect(kind?.notNull).toBe(true);
+    expect(kind?.default).toBe('browser');
+    const links = getTableConfig(sessionRefreshFamilies);
+    expect(links.name).toBe('session_refresh_families');
+    expect(links.columns.map((column) => [column.name, column.notNull])).toEqual([
+      ['session_id', true],
+      ['family_id', true],
+    ]);
+    expect(links.primaryKeys.map((key) => key.getName())).toEqual(['session_refresh_families_pk']);
+    expect(links.foreignKeys).toHaveLength(1);
   });
 });

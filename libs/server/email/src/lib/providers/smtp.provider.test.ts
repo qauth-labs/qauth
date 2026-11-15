@@ -199,6 +199,35 @@ describe('SmtpEmailProvider', () => {
       });
     });
 
+    it('sends inline images as inline parts named by their content ID', async () => {
+      const provider = new SmtpEmailProvider(config);
+      const content = Buffer.from([137, 80, 78, 71]);
+      mockSendMail.mockResolvedValueOnce({ messageId: 'smtp-msg-124' });
+
+      await provider.sendEmail({
+        to: 'user@example.com',
+        subject: 'Test Subject',
+        html: '<img src="cid:logo@qauth.mail">',
+        inlineImages: [
+          { contentId: 'logo@qauth.mail', filename: 'logo.png', contentType: 'image/png', content },
+        ],
+      });
+
+      expect(mockSendMail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachments: [
+            {
+              filename: 'logo.png',
+              content,
+              contentType: 'image/png',
+              cid: 'logo@qauth.mail',
+              contentDisposition: 'inline',
+            },
+          ],
+        })
+      );
+    });
+
     it('should use from address from options if provided', async () => {
       const provider = new SmtpEmailProvider(config);
       const emailOptions: EmailOptions = {
