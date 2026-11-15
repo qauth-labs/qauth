@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 
-import { and, eq, gt, type InferSelectModel, isNull } from 'drizzle-orm';
+import { and, eq, gt, type InferSelectModel, isNull, lte } from 'drizzle-orm';
 
 import type { DbClient } from '../../types';
 import { uuidv7 } from '../events/uuidv7';
@@ -101,7 +101,9 @@ export interface AdminEnrolmentsRepository {
    * marks it used when it is the realm's, unused and not yet expired at `now`,
    * and returns the account. `undefined` for a token that is malformed,
    * unknown, of another realm, used or expired, alike, so a caller answers
-   * every one of them the same.
+   * every one of them the same. A `now` before the enrolment was made (the
+   * redeeming host's clock behind the enrolling host's) is refused too, and
+   * the trigger refuses a token the database's own clock finds expired.
    */
   redeem(
     realmId: string,
@@ -173,6 +175,7 @@ export function createAdminEnrolmentsRepository(defaultDb: DbClient): AdminEnrol
             eq(adminEnrolments.tokenHash, tokenHash),
             eq(adminEnrolments.realmId, realmId),
             isNull(adminEnrolments.usedAt),
+            lte(adminEnrolments.createdAt, now),
             gt(adminEnrolments.expiresAt, now)
           )
         )

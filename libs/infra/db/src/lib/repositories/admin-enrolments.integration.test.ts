@@ -11,7 +11,7 @@
  * Requires Docker; self-skips without it and fails on CI
  * (`requireDockerOrSkip`).
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import { eq, sql } from 'drizzle-orm';
@@ -21,11 +21,16 @@ import { adminEnrolments, realms, userCredentials, users } from '../schema';
 import {
   ADMIN_ENROLMENT_DEFAULT_TTL_MS,
   type AdminEnrolmentsRepository,
+  adminEnrolmentTokenHash,
   createAdminEnrolmentsRepository,
 } from './admin-enrolments.repository';
 import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
 
-const T0 = 1_800_000_000_000;
+/**
+ * Each test's moment of enrolment: the clock when it starts, as the trigger
+ * reads the database's own clock to refuse an expired token.
+ */
+let T0 = 0;
 
 describe('admin enrolments (real Postgres, #602)', () => {
   let ctx: IntegrationDb | undefined;
@@ -49,6 +54,7 @@ describe('admin enrolments (real Postgres, #602)', () => {
       return;
     }
     await ctx.reset();
+    T0 = Date.now();
   });
 
   function db() {
@@ -144,6 +150,30 @@ describe('admin enrolments (real Postgres, #602)', () => {
     expect(await repository.redeem('not-a-uuid', token, T0 + 1)).toBeUndefined();
     // Still unused for its own realm.
     expect(await repository.redeem(acme, token, T0 + 1)).toBeDefined();
+  });
+
+  it('refuses a redemption timed before the enrolment was made, without an error', async () => {
+    const realmId = await realm('acme');
+    const { token } = await issued(realmId);
+    expect(await repository.redeem(realmId, token, T0 - 1)).toBeUndefined();
+    expect(await repository.redeem(realmId, token, T0)).toBeDefined();
+  });
+
+  it('refuses a token the database’s clock finds expired, whatever time the writer gives', async () => {
+    const realmId = await realm('acme');
+    const userId = await account(realmId);
+    const token = randomBytes(32).toString('base64url');
+    const tokenHash = adminEnrolmentTokenHash(token);
+    if (tokenHash === undefined) throw new Error('not a token');
+    await db()
+      .insert(adminEnrolments)
+      .values({ realmId, userId, tokenHash, createdAt: T0 - 7_200_000, expiresAt: T0 - 3_600_000 });
+
+    // The writer's clock says the token is still valid: the trigger refuses.
+    await expect(repository.redeem(realmId, token, T0 - 5_400_000)).rejects.toMatchObject({
+      cause: expect.objectContaining({ constraint: 'admin_enrolments_use_once' }),
+    });
+    expect((await repository.findByUser(realmId, userId))?.usedAt).toBeNull();
   });
 
   it('lets two redemptions at once use the token once', async () => {

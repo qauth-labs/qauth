@@ -20,7 +20,8 @@ import { bytea } from './sql-helpers';
  * - A token works once: `used_at` is set when it is redeemed, and the trigger
  *   `admin_enrolments_use_once` refuses every other change, so no writer can
  *   make a used token usable again, move its expiry, or move it to another
- *   account.
+ *   account. It also refuses a redemption once the database's own clock has
+ *   passed `expires_at`, whatever `used_at` the writer hands it.
  * - It expires at `expires_at` (by default an hour after it was made). An
  *   expired token is refused like a used one; the row stays, as the record
  *   of the enrolment.

@@ -12,7 +12,9 @@
 -- The trigger `admin_enrolments_use_once` lets a row change in one way only,
 -- whoever writes it: an unused, unexpired token is marked used. Everything
 -- else, a used token made usable again, an expiry moved, a token moved to
--- another account, is refused.
+-- another account, is refused. "Unexpired" is read from the database's own
+-- clock too, so a writer that hands an earlier `used_at` cannot redeem an
+-- expired token.
 --
 -- A new, empty table and a trigger on it: nothing is rewritten, and a
 -- release before this one never names it, so it is safe during a rolling
@@ -46,6 +48,7 @@ BEGIN
   IF OLD."used_at" IS NOT NULL
      OR NEW."used_at" IS NULL
      OR NEW."used_at" >= OLD."expires_at"
+     OR (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint >= OLD."expires_at"
      OR NEW."id" IS DISTINCT FROM OLD."id"
      OR NEW."realm_id" IS DISTINCT FROM OLD."realm_id"
      OR NEW."user_id" IS DISTINCT FROM OLD."user_id"

@@ -111,6 +111,7 @@ describe('migration 0079 (admin enrolments)', () => {
       'IF OLD."used_at" IS NOT NULL',
       'OR NEW."used_at" IS NULL',
       'OR NEW."used_at" >= OLD."expires_at"',
+      'OR (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint >= OLD."expires_at"',
       'OR NEW."user_id" IS DISTINCT FROM OLD."user_id"',
       'OR NEW."token_hash" IS DISTINCT FROM OLD."token_hash"',
       'OR NEW."expires_at" IS DISTINCT FROM OLD."expires_at"',
