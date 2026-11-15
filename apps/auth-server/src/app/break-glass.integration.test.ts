@@ -39,7 +39,13 @@ import {
  * (`requireDockerOrSkip`).
  */
 
-const OPERATOR = Object.freeze({ name: 'break-glass-operator', uid: 4242, host: 'db-host-1' });
+const OPERATOR = Object.freeze({
+  name: 'break-glass-operator',
+  uid: 4242,
+  loginUid: 1000,
+  sudoUser: 'alice',
+  host: 'db-host-1',
+});
 const USED = 'urn:qauth:event:admin.break_glass_used:v1-rc.0';
 const DAY = 24 * 60 * 60 * 1000;
 const WINDOW = 7 * DAY;
@@ -238,8 +244,12 @@ describe('the break-glass CLI (#602)', () => {
     expect(stored[0]?.row).not.toContain(token);
     expect(stored[0]?.row).not.toContain(Buffer.from(token, 'base64url').toString('hex'));
     // Nor in the record of the run.
+    // The admin audit log outlives every test (no role may empty it): read
+    // this test's realm, which each test seeds anew.
     const { rows: recorded } = await app.dbPool.query<{ row: string }>(
-      `SELECT row_to_json(a)::text AS row FROM admin_audit_log a WHERE operation_id = 'breakGlass.enrolAdmin'`
+      `SELECT row_to_json(a)::text AS row FROM admin_audit_log a
+        WHERE realm_id = $1 AND operation_id = 'breakGlass.enrolAdmin'`,
+      [realm.id]
     );
     expect(recorded).toHaveLength(1);
     expect(recorded[0]?.row).not.toContain(token);
@@ -294,8 +304,11 @@ describe('the break-glass CLI (#602)', () => {
       app,
       `CREATE FUNCTION break_glass_test_recorded_first() RETURNS trigger LANGUAGE plpgsql AS $$
        BEGIN
-         IF NOT EXISTS (SELECT 1 FROM admin_audit_log WHERE operation_id = TG_ARGV[0])
-            OR NOT EXISTS (SELECT 1 FROM events WHERE type = '${USED}' AND data->>'command' = TG_ARGV[1]) THEN
+         IF NOT EXISTS (SELECT 1 FROM admin_audit_log
+                         WHERE realm_id = '${realm.id}' AND operation_id = TG_ARGV[0])
+            OR NOT EXISTS (SELECT 1 FROM events
+                         WHERE realm_id = '${realm.id}' AND type = '${USED}'
+                           AND data->>'command' = TG_ARGV[1]) THEN
            RAISE EXCEPTION 'changed before the break-glass record';
          END IF;
          RETURN NEW;
@@ -346,7 +359,12 @@ describe('the break-glass CLI (#602)', () => {
         run: {
           command: 'enrol-admin',
           arguments: { realm: E2E_REALM_NAME, role: 'editor' },
-          operatingSystemUser: { name: OPERATOR.name, uid: OPERATOR.uid },
+          operatingSystemUser: {
+            name: OPERATOR.name,
+            uid: OPERATOR.uid,
+            loginUid: OPERATOR.loginUid,
+            sudoUser: OPERATOR.sudoUser,
+          },
           host: OPERATOR.host,
         },
         grant: { role: 'editor', targetRealmId: realm.id },
@@ -357,7 +375,12 @@ describe('the break-glass CLI (#602)', () => {
         run: {
           command: 'retire-key',
           arguments: { realm: E2E_REALM_NAME, kid, confirm: true },
-          operatingSystemUser: { name: OPERATOR.name, uid: OPERATOR.uid },
+          operatingSystemUser: {
+            name: OPERATOR.name,
+            uid: OPERATOR.uid,
+            loginUid: OPERATOR.loginUid,
+            sudoUser: OPERATOR.sudoUser,
+          },
           host: OPERATOR.host,
         },
         retirement: { kid },
@@ -423,10 +446,11 @@ describe('the break-glass CLI (#602)', () => {
     }, 180_000);
   }
 
-  it('runs as its own process without opening a listening socket or making an HTTP call', async () => {
+  it('runs each command as the CLI process does without opening a listening socket or making an HTTP call', async () => {
     const app = await boot();
     const realm = await realmOf(app);
-    // Only the database and the KEK the boot left: the server itself goes.
+    const kid = await activeKid(app);
+    // Only the database, Redis and the KEK the boot left: the server itself goes.
     await Promise.all(booted.splice(0).map(async (server) => server.close()));
 
     const servers = () =>
@@ -439,59 +463,97 @@ describe('the break-glass CLI (#602)', () => {
     const httpsRequest = vi.spyOn(https, 'request');
     const fetch = vi.spyOn(globalThis, 'fetch');
     const baseline = servers();
-    const during: number[] = [];
 
-    const { runBreakGlassProcess } = await import('./helpers/break-glass-host');
-    const out: string[] = [];
-    const err: string[] = [];
-    const code = await runBreakGlassProcess(
-      ['enrol-admin', '--realm', E2E_REALM_NAME, '--role', 'security-admin'],
-      process.env,
-      {
-        // Read while the process's plugins are open, after the change.
+    const { hostOperator, runBreakGlassProcess } = await import('./helpers/break-glass-host');
+    // The process's environment, without the variables of the Nx task the
+    // suite itself may run as, under which enrol-admin refuses to run.
+    const environ = Object.fromEntries(
+      Object.entries(process.env).filter(([name]) => !name.startsWith('NX_TASK_'))
+    );
+    const runProcess = async (argv: string[]) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const during: number[] = [];
+      const code = await runBreakGlassProcess(argv, environ, {
+        // Read while the process's plugins are open.
         out: (line) => {
           during.push(servers());
           out.push(line);
         },
         err: (line) => err.push(line),
-      }
-    );
+      });
+      return { code, out, err, during };
+    };
 
-    expect(err).toEqual([]);
-    expect(code).toBe(0);
-    expect(printedUrl(out).url.startsWith(`${realm.issuer}/ui/admin-enrolment#token=`)).toBe(true);
-    expect(during.length).toBeGreaterThan(0);
-    expect(new Set(during)).toEqual(new Set([baseline]));
+    const enrol = await runProcess([
+      'enrol-admin',
+      '--realm',
+      E2E_REALM_NAME,
+      '--role',
+      'security-admin',
+    ]);
+    expect(enrol.err).toEqual([]);
+    expect(enrol.code).toBe(0);
+    expect(printedUrl(enrol.out).url.startsWith(`${realm.issuer}/ui/admin-enrolment#token=`)).toBe(
+      true
+    );
+    const retire = await runProcess([
+      'retire-key',
+      '--realm',
+      E2E_REALM_NAME,
+      '--kid',
+      kid,
+      '--confirm',
+    ]);
+    expect(retire.err).toEqual([]);
+    expect(retire.code).toBe(0);
+    expect(retire.out).toContain(`Retired ${kid} (EdDSA, was active): compromised.`);
+
+    for (const run of [enrol, retire]) {
+      expect(run.during.length).toBeGreaterThan(0);
+      expect(new Set(run.during)).toEqual(new Set([baseline]));
+    }
     expect(listen).not.toHaveBeenCalled();
     expect(httpRequest).not.toHaveBeenCalled();
     expect(httpsRequest).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+
     // Recorded with the operating system's user, not a given one.
     const { rows } = await infraQuery(
-      `SELECT actor_id, masked_diff FROM admin_audit_log WHERE operation_id = 'breakGlass.enrolAdmin'`
+      `SELECT operation_id, actor_id, masked_diff FROM admin_audit_log
+        WHERE realm_id = $1 AND operation_id LIKE 'breakGlass.%' ORDER BY seq`,
+      [realm.id]
     );
-    const { hostOperator } = await import('./helpers/break-glass-host');
-    const operator = hostOperator();
-    expect(rows).toEqual([
-      expect.objectContaining({
-        actor_id: operator.name,
-        masked_diff: expect.objectContaining({
-          after: expect.objectContaining({
-            run: expect.objectContaining({
-              operatingSystemUser: { name: operator.name, uid: operator.uid },
-              host: operator.host,
-            }),
-          }),
-        }),
-      }),
+    const operator = hostOperator(environ);
+    expect(rows.map((row) => row.operation_id)).toEqual([
+      'breakGlass.enrolAdmin',
+      'breakGlass.retireKey',
     ]);
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        actor_id: operator.name,
+        masked_diff: {
+          after: {
+            run: {
+              operatingSystemUser: {
+                name: operator.name,
+                uid: operator.uid,
+                loginUid: operator.loginUid,
+                sudoUser: operator.sudoUser,
+              },
+              host: operator.host,
+            },
+          },
+        },
+      });
+    }
   }, 180_000);
 
   /** A query through a server booted for it alone. */
-  async function infraQuery(sql: string) {
+  async function infraQuery(sql: string, params: unknown[] = []) {
     const server = await bootAuthServer(variables());
     try {
-      return await server.app.dbPool.query(sql);
+      return await server.app.dbPool.query(sql, params);
     } finally {
       await server.close();
     }
