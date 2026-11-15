@@ -194,6 +194,34 @@ describe('signAccessToken', () => {
     expect(Object.hasOwn(decodeJwt(token), 'sid')).toBe(false);
     expect(Object.hasOwn(await verifyAccessToken(token, publicKey), 'sid')).toBe(false);
   });
+
+  it('carries the client’s declared name as client_name beside client_id, and round-trips it (#1148)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const token = await signAccessToken(
+      { sub: 'user-1', clientId: 'b1f3…-uuid', clientName: 'Notes Agent' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    expect(decodeJwt(token)).toMatchObject({ client_id: 'b1f3…-uuid', client_name: 'Notes Agent' });
+    expect((await verifyAccessToken(token, publicKey)).clientName).toBe('Notes Agent');
+  });
+
+  it.each([
+    ['no name', {}],
+    ['an empty name', { clientName: '' }],
+  ])('omits client_name for %s (#1148)', async (_case, extra) => {
+    const { privateKey } = await generateEdDSAKeyPair();
+    const token = await signAccessToken(
+      { sub: 'user-1', clientId: 'app-client', ...extra },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    expect(Object.hasOwn(decodeJwt(token), 'client_name')).toBe(false);
+  });
 });
 
 describe('signIdToken', () => {

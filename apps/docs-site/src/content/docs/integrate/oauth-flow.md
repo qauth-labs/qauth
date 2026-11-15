@@ -434,6 +434,16 @@ issued, so a resource server can require a recent sign-in or a given method.
 Discovery lists both in `claims_supported`. The tokens of the other grants
 carry neither.
 
+Every access token also carries the client's `client_name` beside its
+`client_id`, so a resource server can name the app or agent to the person:
+in a list of connected apps, or in a security mail. It is the name the
+client **declared** when it registered (RFC 7591 §2), which QAuth did not
+verify. Show it as declared, as QAuth's consent page does ("calls itself
+Notes Agent"), and never as a verified identity: anyone can register a
+client under any name. It is cleaned and cut to 64 characters as the
+consent page shows it, and is absent for a client with no name left after
+that.
+
 ### 4. Call a protected resource
 
 ```bash
