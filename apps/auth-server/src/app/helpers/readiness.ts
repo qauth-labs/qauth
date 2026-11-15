@@ -5,16 +5,18 @@
  * each role registers the checks of what it depends on, and the route runs
  * them all. `GET /health` is liveness and runs none.
  *
- * - Every process: `database`, Postgres reachable.
+ * - Every process: `database`, Postgres reachable, and `config_digest`, the
+ *   process is in the node list, so its configuration digest is compared
+ *   with every node that boots (#499). A process that boots without the
+ *   database steps has no node list, and no `config_digest`.
  * - `web`, `api` and `admin`: `redis`, which still holds the rate limits and
  *   the single-use stores.
  * - `signer`: `kek`, the KEK unwraps a stored key.
  * - `delivery`: `outbox`, the event outbox is readable.
- * - A later issue registers the configuration digest (#499). The signer
- *   service is not a check of a process with a remote signer (#497): such a
- *   process stays ready while the signer is down, so its JWKS, token
- *   verification, userinfo and introspection keep serving, and what signs
- *   answers 503.
+ * - The signer service is not a check of a process with a remote signer
+ *   (#497): such a process stays ready while the signer is down, so its
+ *   JWKS, token verification, userinfo and introspection keep serving, and
+ *   what signs answers 503.
  *
  * A check is a promise that resolves when the dependency answers and rejects
  * when it does not. Its result is `ok`, or `fail` with a reason from a closed

@@ -136,6 +136,8 @@ describe('what each role loads (the boot-time list)', () => {
       'events',
       'realmPublicKeys',
       'realmSecrets',
+      // The node list every process registers in (#499).
+      'deploymentNodes',
     ]);
     expect([...pluginsFor(['signer'])]).toEqual([]);
   });
@@ -159,6 +161,7 @@ describe('what each role loads (the boot-time list)', () => {
       'realmSecrets',
       // The plugin operations (#600).
       'realmAuthMethodPlugins',
+      'deploymentNodes',
     ]);
     // The token guard verifies with the JWT plugin, which reads `fastify.dpop`;
     // a client the admin API registers gets its secret hashed (#632).
@@ -174,6 +177,7 @@ describe('what each role loads (the boot-time list)', () => {
       'ssfStreams',
       'backchannelLogoutClients',
       'realmPublicKeys',
+      'deploymentNodes',
     ]);
     // The egress client, with the deployment's allowlist, for the logout
     // tokens' POSTs (#624).

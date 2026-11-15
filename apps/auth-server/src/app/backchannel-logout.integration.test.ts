@@ -97,6 +97,18 @@ const USERS: Readonly<Record<ServiceRole, string>> = {
 const FRONT_USER = 'qauth_bclogout_front';
 const DELIVERY_USER = 'qauth_bclogout_delivery_signer';
 
+/**
+ * The deployment's own settings, on every process the suite boots: the
+ * owner's signer fixture runs beside the tested processes, and a node whose
+ * deployment-wide settings differ from a running node's refuses to boot (the
+ * configuration digest, #499).
+ */
+const DEPLOYMENT_SETTINGS: Readonly<Record<string, string>> = Object.freeze({
+  REGISTRATION_RATE_LIMIT: '100',
+  EVENT_DELIVERY_RETRY_INITIAL_DELAY: '1',
+  EVENT_DELIVERY_RETRY_MAX_DELAY: '2',
+});
+
 describe.each<Deployment>(['one process', 'split roles'])(
   'back-channel logout (%s, real containers)',
   (deployment) => {
@@ -138,6 +150,7 @@ describe.each<Deployment>(['one process', 'split roles'])(
         // nothing.
         fixture = await bootAuthServer({
           ...baseEnvironment(infra, jwt),
+          ...DEPLOYMENT_SETTINGS,
           ...SIGNER_LISTENER,
           SERVICE_ROLES: 'signer',
         });
@@ -205,9 +218,7 @@ describe.each<Deployment>(['one process', 'split roles'])(
       if (!infra || !jwt) throw new Error('infrastructure not started');
       const environment: Record<string, string> = {
         ...baseEnvironment(infra, jwt),
-        REGISTRATION_RATE_LIMIT: '100',
-        EVENT_DELIVERY_RETRY_INITIAL_DELAY: '1',
-        EVENT_DELIVERY_RETRY_MAX_DELAY: '2',
+        ...DEPLOYMENT_SETTINGS,
       };
       let app: FastifyInstance;
       if (deployment === 'one process') {

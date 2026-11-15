@@ -140,6 +140,7 @@ describe('health and readiness (#500)', () => {
       status: 'ok',
       checks: {
         database: { status: 'ok' },
+        config_digest: { status: 'ok' },
         redis: { status: 'ok' },
         kek: { status: 'ok' },
         outbox: { status: 'ok' },
@@ -171,7 +172,11 @@ describe('health and readiness (#500)', () => {
     expect(before.body).toEqual({
       status: 'ok',
       roles: ['api'],
-      checks: { database: { status: 'ok' }, redis: { status: 'ok' } },
+      checks: {
+        database: { status: 'ok' },
+        config_digest: { status: 'ok' },
+        redis: { status: 'ok' },
+      },
     });
 
     await relay.stop();
@@ -311,6 +316,7 @@ describe('health and readiness (#500)', () => {
     expect(passing.statusCode).toBe(200);
     expect(passing.body.checks).toEqual({
       database: { status: 'ok' },
+      config_digest: { status: 'ok' },
       redis: { status: 'ok' },
       extra_dependency: { status: 'ok' },
     });
@@ -320,6 +326,7 @@ describe('health and readiness (#500)', () => {
     expect(failing.statusCode).toBe(503);
     expect(failing.body.checks).toEqual({
       database: { status: 'ok' },
+      config_digest: { status: 'ok' },
       redis: { status: 'ok' },
       extra_dependency: { status: 'fail', reason: 'error' },
     });

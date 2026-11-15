@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A configuration digest check at boot** ([#499], ADR-019 Decision 8).
+  Every node takes a SHA-256 digest of its deployment-wide settings, per key
+  and over all of them, and compares it with every node seen in the last two
+  minutes in the new node list, the `deployment_nodes` table (migration
+  0077). A node of the same release whose digest differs refuses to boot,
+  and the error names the keys that differ and the running nodes, never a
+  value. A node of another release, as during a rolling upgrade, is only
+  warned of, and `CONFIG_DIGEST_ROLLOUT=true` turns the refusal into a
+  warning for the window of a planned change. Each key of the configuration
+  key registry now has a digest class (`shared`, `node`, `secret` or
+  `realm-seed`), and a unit test fails when one has none: only `shared` keys
+  are compared, never a secret, and a key only some roles read only between
+  nodes holding one of them (`KEK_PROVIDER` and the key rotation windows on
+  `signer`, the event delivery retries on `delivery`, the admin listener's
+  switch and URL on `admin`, the plugin keys on `web` and `admin`, a route's
+  own rate limits on `web`, `api` and `admin`). A key that seeds a realm is
+  not compared, unless the server still reads it at run time:
+  `EMAIL_VERIFICATION_TOKEN_EXPIRY`,
+  `EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND` and
+  `REDIRECT_URI_CUSTOM_SCHEMES` are. The configuration page lists the shared
+  keys. The node
+  compares read-only before any other boot step writes, and again when it
+  joins the list once its boot succeeded, under a lock so that two nodes
+  booting at once compare with each other. It marks itself seen every 30
+  seconds and leaves the list when it shuts down cleanly or a listener fails
+  to bind after it joined; a row not seen for
+  two minutes stops counting and is removed at the next boot. Every role
+  gains the readiness check `config_digest`, which fails while the node is
+  not in the list, or when a row it wrote back after it was removed meets a
+  node of its release whose settings differ. No role's database user reads
+  or writes the table: every role calls four `SECURITY DEFINER` functions,
+  whose times come from the database's clock, and only the database user
+  that registered a row marks it seen or removes it. A deployment that
+  applies the database grants by hand grants `EXECUTE` on them first
+  ([Upgrades](https://docs.qauth.dev/operate/upgrades/#every-node-registers-in-the-node-list)).
 - **Emergency key retirement, with a `kid` denylist** ([#551], ADR-019
   Decisions 7 and 9). The operator command `auth-server:keys:retire
   --kid=<kid> --yes` retires a token-signing key that may be compromised at
@@ -4598,6 +4633,7 @@ It adds migrations 0068 and 0069.
 [#496]: https://github.com/qauth-labs/qauth/issues/496
 [#497]: https://github.com/qauth-labs/qauth/issues/497
 [#498]: https://github.com/qauth-labs/qauth/issues/498
+[#499]: https://github.com/qauth-labs/qauth/issues/499
 [#500]: https://github.com/qauth-labs/qauth/issues/500
 [#501]: https://github.com/qauth-labs/qauth/issues/501
 [#507]: https://github.com/qauth-labs/qauth/issues/507

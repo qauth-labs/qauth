@@ -304,12 +304,12 @@ describe('service roles (#495)', () => {
       expect(ready.json()).toMatchObject({ status: 'ok', roles });
       expect(ready.statusCode).toBe(200);
       const expected: Record<string, readonly string[]> = {
-        all: ['database', 'redis', 'kek', 'outbox'],
-        web: ['database', 'redis'],
-        api: ['database', 'redis'],
-        admin: ['database', 'redis'],
-        signer: ['database', 'kek'],
-        delivery: ['database', 'outbox'],
+        all: ['database', 'config_digest', 'redis', 'kek', 'outbox'],
+        web: ['database', 'config_digest', 'redis'],
+        api: ['database', 'config_digest', 'redis'],
+        admin: ['database', 'config_digest', 'redis'],
+        signer: ['database', 'config_digest', 'kek'],
+        delivery: ['database', 'config_digest', 'outbox'],
       };
       expect(Object.keys(ready.json<{ checks: object }>().checks)).toEqual(expected[serviceRoles]);
     }

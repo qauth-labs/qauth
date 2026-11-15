@@ -1,3 +1,5 @@
+import type { ServiceRole } from '../schemas/service-roles';
+
 /**
  * The configuration key registry's vocabulary (ADR-018 §5, ADR-019 Decision 10).
  *
@@ -31,6 +33,36 @@ export const KEY_TIERS: readonly KeyTier[] = ['stable', 'advanced', 'experimenta
  *   live on the realm row, the server reads these keys process-wide.
  */
 export type KeyRole = 'deployment' | 'realm-seed';
+
+/**
+ * Whether a key's value takes part in the configuration digest, the
+ * fingerprint of the settings each auth server node compares with the nodes
+ * already running when it boots (ADR-019 Decision 8, issue #499).
+ *
+ * - `shared`: a deployment-wide setting every node of a release holds with
+ *   the same value, such as the issuer, the signing mode or a feature switch.
+ *   A node whose value differs from a running node's refuses to boot.
+ * - `node`: a setting of the node itself, which may differ from node to
+ *   node: where it listens, which roles it runs, the files it reads, its pool
+ *   sizes, timeouts and caches, its logs and its telemetry export. Every key
+ *   of the developer portal is one too: its processes compare no digest.
+ * - `secret`: never part of the digest, neither its value nor a hash of it.
+ *   Every key marked `secret` has this class.
+ * - `realm-seed`: seeds a new realm's policy, which the realm row owns once
+ *   the realm exists (ADR-019 Decision 10), so nodes stay consistent whatever
+ *   their environment holds. Only a `realm-seed` key has this class, and
+ *   every one that is not secret has it, unless the server still reads its
+ *   environment value at run time: such a seed is `shared`.
+ */
+export type KeyDigestClass = 'shared' | 'node' | 'secret' | 'realm-seed';
+
+/** The digest classes, for the classification test. */
+export const KEY_DIGEST_CLASSES: readonly KeyDigestClass[] = [
+  'shared',
+  'node',
+  'secret',
+  'realm-seed',
+];
 
 /**
  * The area that owns a key: the part of QAuth whose pull requests add, tier
@@ -116,6 +148,19 @@ export interface ConfigKey {
    * which the test runner sets.
    */
   readonly developmentOnly: boolean;
+  /**
+   * Whether the value takes part in the configuration digest (#499).
+   * `undefined` is a key nobody classified: the classification test fails on
+   * it, and the digest refuses to be built while one is read.
+   */
+  readonly digest: KeyDigestClass | undefined;
+  /**
+   * For a `shared` key that only nodes of some roles may set, those roles:
+   * two nodes compare it only when each holds one of them. `KEK_PROVIDER`
+   * names `signer`, since a node without the signer may not name a KEK
+   * provider (ADR-019 Decision 9). `undefined`: every node compares it.
+   */
+  readonly digestRoles: readonly ServiceRole[] | undefined;
 }
 
 /**
@@ -124,11 +169,38 @@ export interface ConfigKey {
  */
 export type ConfigKeyInput = Omit<
   ConfigKey,
-  'seeds' | 'secret' | 'aliases' | 'experimentalValues' | 'developmentOnly'
+  | 'seeds'
+  | 'secret'
+  | 'aliases'
+  | 'experimentalValues'
+  | 'developmentOnly'
+  | 'digest'
+  | 'digestRoles'
 > &
   Partial<
-    Pick<ConfigKey, 'seeds' | 'secret' | 'aliases' | 'experimentalValues' | 'developmentOnly'>
+    Pick<
+      ConfigKey,
+      | 'seeds'
+      | 'secret'
+      | 'aliases'
+      | 'experimentalValues'
+      | 'developmentOnly'
+      | 'digest'
+      | 'digestRoles'
+    >
   >;
+
+/**
+ * A key's digest class when its entry names none: `secret` for a secret and
+ * `realm-seed` for a realm policy seed, which no entry has to repeat.
+ * Every other key names its class.
+ */
+function derivedDigestClass(input: ConfigKeyInput): KeyDigestClass | undefined {
+  if (input.digest !== undefined) return input.digest;
+  if (input.secret === true) return 'secret';
+  if (input.role === 'realm-seed') return 'realm-seed';
+  return undefined;
+}
 
 /** Fill in the optional fields of registry entries. */
 export function defineKeys(inputs: readonly ConfigKeyInput[]): readonly ConfigKey[] {
@@ -140,6 +212,9 @@ export function defineKeys(inputs: readonly ConfigKeyInput[]): readonly ConfigKe
       aliases: Object.freeze([...(input.aliases ?? [])]),
       experimentalValues: Object.freeze([...(input.experimentalValues ?? [])]),
       developmentOnly: input.developmentOnly ?? false,
+      digest: derivedDigestClass(input),
+      digestRoles:
+        input.digestRoles === undefined ? undefined : Object.freeze([...input.digestRoles]),
     })
   );
 }

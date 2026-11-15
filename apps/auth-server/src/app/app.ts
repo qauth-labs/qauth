@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import formbody from '@fastify/formbody';
 import { backchannelLogoutPlugin } from '@qauth-labs/fastify-plugin-backchannel-logout';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
@@ -42,10 +44,13 @@ import {
 } from '@qauth-labs/fastify-plugin-signer';
 import { SSF_DELIVERY_KIND, ssfPlugin } from '@qauth-labs/fastify-plugin-ssf';
 import {
+  AUTH_SERVER_KEYS,
+  configurationDigest,
   passkeyPostureWarnings,
   passwordPolicyWarnings,
   resolveStatusListTrustAnchorPems,
   resolveVerifierCertificateChainPems,
+  SERVER_CONFIG_KEYS,
 } from '@qauth-labs/server-config';
 import type { FastifyInstance, RouteOptions } from 'fastify';
 
@@ -63,6 +68,7 @@ import {
 } from './helpers/auth-method-plugins';
 import { createServerBreachedPasswords } from './helpers/breached-passwords';
 import { type DefaultRealmBootSettings, emailBaseUrlWarning } from './helpers/default-realm-boot';
+import { createDeploymentNodeList, type DeploymentNodeList } from './helpers/deployment-nodes';
 import { verifyResourceRequestProof } from './helpers/dpop';
 import { createEngineMailer } from './helpers/engine-mail';
 import type { EventLogQueueLimits } from './helpers/event-log-queue';
@@ -86,6 +92,7 @@ import {
   seedRealmSecrets,
 } from './helpers/realm-secrets';
 import { realmIssuer, tokenRealm } from './helpers/realm-url';
+import { releaseVersion } from './helpers/release-version';
 import { requestRealm } from './helpers/request-realm';
 import { giveSystemClientsTheDeveloperAudience } from './helpers/system-client-boot';
 import { isJtiRevoked } from './helpers/token-revocation';
@@ -341,7 +348,40 @@ declare module 'fastify' {
      * without the default realm's boot step, which reads no database.
      */
     keyDenylist: KidDenylist | null;
+    /**
+     * This node's view of the node list (ADR-019 Decision 8, #499): its id,
+     * the nodes seen in the last two minutes, and whether it is among them,
+     * which the readiness check `config_digest` asks. `null` on a process
+     * that boots without the database steps.
+     */
+    deploymentNodes: DeploymentNodeList | null;
   }
+}
+
+/**
+ * This node's view of the node list (#499): a fresh id, its roles, its
+ * release, and the configuration digest of the auth server's keys from the
+ * parsed environment.
+ */
+function deploymentNodeList(fastify: FastifyInstance): DeploymentNodeList {
+  const roles = env.SERVICE_ROLES;
+  const { digest, keys } = configurationDigest(
+    [...SERVER_CONFIG_KEYS, ...AUTH_SERVER_KEYS],
+    env,
+    roles
+  );
+  return createDeploymentNodeList({
+    repository: fastify.repositories.deploymentNodes,
+    log: fastify.log.child({ component: 'deployment-nodes' }),
+    node: {
+      nodeId: randomUUID(),
+      roles: [...roles],
+      version: releaseVersion(),
+      configDigest: digest,
+      configKeys: keys,
+    },
+    rollout: env.CONFIG_DIGEST_ROLLOUT,
+  });
 }
 
 /**
@@ -816,6 +856,27 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       },
     },
   });
+
+  // The configuration digest check (ADR-019 Decision 8, #499): this node's
+  // fingerprint of the settings every node shares, the configuration key
+  // registry's `shared` keys, compared with every node of the list seen in
+  // the last two minutes. Read-only first, in an `onReady` hook registered
+  // before every other boot step's, so a node of this release whose settings
+  // differ from a running node's refuses before anything writes (a node with
+  // another DEFAULT_REALM_NAME would create a realm); two that boot at once
+  // compare when they register, under the list's lock, once their boot steps
+  // ran. It names the keys, never a value. CONFIG_DIGEST_ROLLOUT makes that a warning; a node of another
+  // release is only warned of. The node registers once every boot step
+  // succeeded (the last `onReady` hook, below the routes), marks itself
+  // seen every 30 seconds and leaves the list when it closes, before the
+  // database does: `main.ts` closes the server after a failed start too. It rides the default realm boot switch, as every database
+  // step at boot does.
+  const deploymentNodes = defaultRealmBoot ? deploymentNodeList(fastify) : null;
+  fastify.decorate('deploymentNodes', deploymentNodes);
+  if (deploymentNodes !== null) {
+    fastify.addHook('onReady', () => deploymentNodes.check());
+    fastify.addHook('onClose', () => deploymentNodes.stop());
+  }
 
   // The realm policy store (#516): `fastify.policyStore`, which the default
   // realm's boot step below fills realms through, and the flows read a
@@ -1419,6 +1480,14 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     .filter((problem) => problem !== undefined);
   if (unplaced.length > 0) {
     throw new Error(unplaced.join('\n'));
+  }
+
+  // The node list (#499): this node registers, comparing its configuration
+  // digest once more under the list's lock, in the last `onReady` hook of
+  // this scope, so a boot that fails in an earlier step leaves no row that
+  // would block the next attempt for two minutes.
+  if (deploymentNodes !== null) {
+    fastify.addHook('onReady', () => deploymentNodes.register());
   }
 
   // The admin API, on its own listener (ADR-019 Decisions 7 and 8, #511),

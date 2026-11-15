@@ -546,7 +546,11 @@ export async function bootAuthServer(
       key.startsWith('INTERNAL_') ||
       // The plugin runtime (#600): a boot that lists no plugin loads none.
       key === 'AUTH_METHOD_PLUGINS' ||
-      key === 'PLUGIN_API_ENABLED'
+      key === 'PLUGIN_API_ENABLED' ||
+      // The node list (#499): a boot that names no release is none, and one
+      // that leaves out the rollout switch has it off.
+      key === 'QAUTH_VERSION' ||
+      key === 'CONFIG_DIGEST_ROLLOUT'
     ) {
       delete process.env[key];
     }

@@ -3,7 +3,7 @@ title: Observability Guide
 description: QAuth's observability surface — structured logging, request-id tracking, auth-event logging, failed-login lockout, health and readiness, Prometheus metrics, events as OpenTelemetry logs, and alerting.
 sidebar:
   order: 3
-lastVerified: '2026-11-02'
+lastVerified: '2026-11-14'
 ---
 
 This guide covers QAuth's observability surface: structured logging, request-id
@@ -347,12 +347,13 @@ rather than in Redis, so the probes answer while Redis does not.
   Point a readiness probe, a load balancer's health check or a Compose
   `healthcheck` at it. The Compose file's `auth-server` service does.
 
-| Check      | Runs on               | Passes when                                                                                                                                                                             |
-| ---------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `database` | every role            | Postgres answers `SELECT 1`.                                                                                                                                                            |
-| `redis`    | `web`, `api`, `admin` | Redis answers `PING`. It still holds the rate limits and the single-use stores those roles use.                                                                                         |
-| `kek`      | `signer`              | The KEK provider reports itself usable and unwraps one stored key for each KEK reference in use. A pass stands for 30 seconds and a failure for 5, as an unwrap may be a call to a KMS. |
-| `outbox`   | `delivery`            | The event delivery queue can be read.                                                                                                                                                   |
+| Check           | Runs on               | Passes when                                                                                                                                                                                         |
+| --------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `database`      | every role            | Postgres answers `SELECT 1`.                                                                                                                                                                        |
+| `config_digest` | every role            | This process is in the node list, so a booting node compares its settings with this one's: its last mark as seen is less than two minutes old, and a row it wrote back matches its release's nodes. |
+| `redis`         | `web`, `api`, `admin` | Redis answers `PING`. It still holds the rate limits and the single-use stores those roles use.                                                                                                     |
+| `kek`           | `signer`              | The KEK provider reports itself usable and unwraps one stored key for each KEK reference in use. A pass stands for 30 seconds and a failure for 5, as an unwrap may be a call to a KMS.             |
+| `outbox`        | `delivery`            | The event delivery queue can be read.                                                                                                                                                               |
 
 A failed check gives a `reason`: `error` when the dependency refused or failed,
 `timeout` when it gave no answer within 2 seconds. The error itself goes to the
@@ -364,10 +365,21 @@ and a request that stops waiting at the timeout leaves the run going: a check
 runs again only once its last run settled, so a stalled dependency holds one
 run of each check, whoever calls `/ready`.
 
-A later release adds the configuration digest on every role. The signer
-service is not a check of the processes that call it: while it is down they
-stay ready, so their JWKS, token verification, `/userinfo` and introspection
-keep serving, and what signs answers `503`
+`config_digest` checks this process's own place in the node list, not whether
+its settings match the other nodes': a node whose settings differ from a
+running node's refuses to boot instead
+([Settings every node shares](/operate/service-roles/#settings-every-node-shares)).
+It fails while the process cannot mark itself seen in the database, and the
+log says so. It also fails when the process's row was removed while it ran,
+it wrote the row back, and a node of its release whose settings differ had
+joined meanwhile: the error log names the keys, and the check passes again
+once the process restarts with the same values. Until the process could
+compare with the running nodes after it wrote its row back, the check fails
+too.
+
+The signer service is not a check of the processes that call it: while it is
+down they stay ready, so their JWKS, token verification, `/userinfo` and
+introspection keep serving, and what signs answers `503`
 ([The signer service](/operate/service-roles/#the-signer-service)). Watch
 `qauth_signer_refusals_total` and the signer client's log lines instead.
 

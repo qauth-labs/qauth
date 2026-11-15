@@ -1,22 +1,54 @@
-import type { ConfigKeyInput } from '../types';
+import type { ServiceRole } from '../../schemas/service-roles';
+import type { ConfigKeyInput, KeyDigestClass } from '../types';
 import { defineKeys } from '../types';
 
 /**
+ * The roles whose processes serve the routes a route's own limit counts:
+ * the public listener's `web` and `api`, and `admin`. A `signer` or
+ * `delivery` process serves none of them, so the configuration digest
+ * (#499) compares those limits only between nodes that hold one of these.
+ */
+const ROUTE_LIMIT_ROLES: readonly ServiceRole[] = ['web', 'api', 'admin'];
+
+/**
+ * The limits every node applies whatever its roles, compared between every
+ * node: the switch, the default limit of a route with none of its own, and
+ * the ceremony app's addresses.
+ */
+const EVERY_NODE_LIMITS: ReadonlySet<string> = new Set([
+  'RATE_LIMIT_ENABLED',
+  'RATE_LIMIT_MAX',
+  'RATE_LIMIT_WINDOW',
+  'CEREMONY_APP_PEERS',
+]);
+
+/** A shared limit of the routes some roles serve, scoped to those roles. */
+function scopedToRouteRoles(key: ConfigKeyInput): ConfigKeyInput {
+  return key.digest === 'shared' && !EVERY_NODE_LIMITS.has(key.name)
+    ? { ...key, digestRoles: ROUTE_LIMIT_ROLES }
+    : key;
+}
+
+/**
  * A rate-limit pair: the most requests per window, and the window in seconds.
- * Every rate-limit key is advanced and seeds nothing.
+ * Every rate-limit key is advanced and seeds nothing. A pair is `shared` in
+ * the configuration digest (#499), since every node counts against the same
+ * Redis counters, unless it counts in the process's own memory.
  */
 function rateLimit(
   limitName: string,
   windowName: string,
   what: string,
   limit: string,
-  window: string
+  window: string,
+  digest: KeyDigestClass = 'shared'
 ): ConfigKeyInput[] {
   return [
     {
       name: limitName,
       tier: 'advanced',
       role: 'deployment',
+      digest,
       owner: 'rate-limits',
       default: limit,
       since: '0.1.0',
@@ -26,6 +58,7 @@ function rateLimit(
       name: windowName,
       tier: 'advanced',
       role: 'deployment',
+      digest,
       owner: 'rate-limits',
       default: window,
       since: '0.1.0',
@@ -35,11 +68,12 @@ function rateLimit(
 }
 
 /** Rate limits: the keys of `rateLimitEnvSchema` and the limits of `authEnvSchema`. */
-export const RATE_LIMIT_KEYS = defineKeys([
+const RATE_LIMIT_ENTRIES: readonly ConfigKeyInput[] = [
   {
     name: 'RATE_LIMIT_ENABLED',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: 'true',
     since: '0.1.0',
@@ -57,7 +91,8 @@ export const RATE_LIMIT_KEYS = defineKeys([
     'HEALTH_RATE_LIMIT_WINDOW',
     "requests per client address to each of `/health` and `/ready`, counted in the process's memory",
     '1000',
-    '60'
+    '60',
+    'node'
   ),
   ...rateLimit(
     'REGISTRATION_RATE_LIMIT',
@@ -91,6 +126,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'RESEND_VERIFICATION_MIN_INTERVAL',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '60',
     since: '0.1.0',
@@ -103,6 +139,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'CEREMONY_APP_PEERS',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '',
     since: '0.2.0',
@@ -112,6 +149,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'CEREMONY_APP_PEER_RATE_LIMIT',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: null,
     since: '0.2.0',
@@ -121,6 +159,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'AUTHORIZE_RATE_LIMIT',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '60',
     since: '0.1.0',
@@ -130,6 +169,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'AUTHORIZE_RATE_LIMIT_LENIENT',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '600',
     since: '0.1.0',
@@ -139,6 +179,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'AUTHORIZE_RATE_WINDOW',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '60',
     since: '0.1.0',
@@ -148,6 +189,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'TOKEN_RATE_LIMIT',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '30',
     since: '0.1.0',
@@ -157,6 +199,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'TOKEN_RATE_LIMIT_LENIENT',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '300',
     since: '0.1.0',
@@ -166,6 +209,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
     name: 'TOKEN_RATE_WINDOW',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
     owner: 'rate-limits',
     default: '60',
     since: '0.1.0',
@@ -200,4 +244,6 @@ export const RATE_LIMIT_KEYS = defineKeys([
     '30',
     '60'
   ),
-]);
+];
+
+export const RATE_LIMIT_KEYS = defineKeys(RATE_LIMIT_ENTRIES.map(scopedToRouteRoles));

@@ -15,6 +15,7 @@ import {
   createAuthorizationCodesRepository,
   createBackchannelLogoutClientsRepository,
   createDatabase,
+  createDeploymentNodesRepository,
   createEmailVerificationTokensRepository,
   createEventDeliveriesRepository,
   createEventRetentionRepository,
@@ -38,6 +39,7 @@ import {
   createUsersRepository,
   type Database,
   type DatabasePool,
+  type DeploymentNodesRepository,
   type EmailVerificationTokensRepository,
   type EventDeliveriesRepository,
   type EventRetentionRepository,
@@ -195,6 +197,13 @@ declare module 'fastify' {
        * config is stored sealed.
        */
       realmUpstreamProviders: RealmUpstreamProvidersRepository;
+      /**
+       * The node list (ADR-019 Decision 8, #499): every node registers in it
+       * once its boot steps succeeded, after comparing its configuration
+       * digest with the nodes already running, marks itself seen every 30
+       * seconds and removes itself when it closes.
+       */
+      deploymentNodes: DeploymentNodesRepository;
     };
   }
 }
@@ -237,6 +246,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   realmSecrets: true,
   realmAuthMethodPlugins: true,
   realmUpstreamProviders: true,
+  deploymentNodes: true,
 };
 
 /** Every repository the plugin can build, in the order of the type above. */
@@ -345,6 +355,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       realmSecrets: () => createRealmSecretsRepository(database.db),
       realmAuthMethodPlugins: () => createRealmAuthMethodPluginsRepository(database.db),
       realmUpstreamProviders: () => createRealmUpstreamProvidersRepository(database.db),
+      deploymentNodes: () => createDeploymentNodesRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};
     for (const name of options.repositories ?? REPOSITORY_NAMES) {

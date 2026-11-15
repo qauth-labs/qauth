@@ -295,7 +295,36 @@ async function start() {
     server.log.info(`Server listening on http://${env.HOST}:${env.PORT}`);
   } catch (error) {
     server.log.error(error, 'Failed to start server');
+    await closeAfterFailedStart();
     process.exit(1);
+  }
+}
+
+/** How long a failed start waits for the server to close before it exits. */
+const FAILED_START_CLOSE_MS = 5_000;
+
+/**
+ * Close what the boot opened before a failed start exits, waiting at most
+ * {@link FAILED_START_CLOSE_MS}. A listener that fails to bind does so after
+ * the boot steps ran, so the node is in the node list by then (#499): closing
+ * removes its row, which would otherwise refuse, for two minutes, a restart
+ * whose deployment-wide settings differ, such as one that turns the admin
+ * listener off after its port was taken.
+ */
+async function closeAfterFailedStart(): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      server.close(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, FAILED_START_CLOSE_MS);
+        timer.unref();
+      }),
+    ]);
+  } catch (error) {
+    server.log.warn(error, 'The server could not close after its failed start');
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -1,6 +1,14 @@
 // Configuration key registry exports (ADR-018 §5)
 export { type AliasedEnv, applyKeyAliases, KeyAliasConflictError, type RawEnv } from './aliases';
 export { type ConfiguredEnv, readConfiguredEnv } from './configured-env';
+export {
+  type ConfigurationDigest,
+  configurationDigest,
+  differingKeys,
+  digestClassificationProblems,
+  digestedKeys,
+  UnclassifiedConfigKeyError,
+} from './digest';
 export { envSchemaShape, findRegistryDrift, type RegistryDrift } from './drift';
 export { experimentalSettingWarnings } from './experimental';
 export {
@@ -22,9 +30,11 @@ export {
   type ConfigWarning,
   defineKeys,
   type EnvDeprecationWarning,
+  KEY_DIGEST_CLASSES,
   KEY_TIERS,
   type KeyAlias,
   type KeyDefault,
+  type KeyDigestClass,
   type KeyOwner,
   type KeyRole,
   type KeyTier,

@@ -1,5 +1,5 @@
 import type { TablePrivilege } from '../role-grants';
-import type { DatabaseRole } from './roles';
+import { DATABASE_ROLES, type DatabaseRole } from './roles';
 
 /**
  * THE GRANTS MAP (ADR-019 Decisions 8 and 9, issue #498): for each table,
@@ -30,7 +30,12 @@ import type { DatabaseRole } from './roles';
  *   the event store, its queue and the columns that say where an event goes
  *   (`eventDeliveryGrantStatements`), and, since the retention job runs on
  *   it, what that job deletes (`eventRetentionGrantStatements`). It runs no
- *   default realm boot step, so it never writes `realms`.
+ *   default realm boot step, so it never writes `realms`. Like every role,
+ *   it registers in the node list (#499), through its functions alone.
+ * - `deployment_nodes`, the node list: no role holds anything on the table.
+ *   Every role executes the four functions of migration 0077, which set the
+ *   times from the database's clock and mark seen or remove only the rows
+ *   the caller's own database user registered.
  * - `admin_grants`, who administers: every role that reads it only reads it.
  *   A change of an account's credentials, identifier or contact address moves
  *   its grants' `last_security_change_at` through the function of migration
@@ -104,6 +109,10 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // Only the purge job, on `api`, deletes the expired rows of the four
   // short-lived token tables (`purge-expired.ts`).
   authorization_codes: { web: SIU, api: SIUD },
+  // The node list (#499): no role holds anything on it. Every node
+  // registers, marks seen, removes and lists itself through the functions of
+  // migration 0077 (FUNCTION_GRANTS below).
+  deployment_nodes: {},
   email_verification_tokens: { web: SIU, api: SIUD },
   // The retention job's anchor of each realm's admin chain (#536).
   event_chain_anchors: { delivery: SIU },
@@ -247,6 +256,17 @@ export const COLUMN_GRANTS: ColumnGrants = Object.freeze({
   ssf_stream_subjects: { delivery: ['stream_id', 'event_subject_type', 'event_subject_id'] },
 });
 
+/**
+ * The node list's functions (migration 0077, #499): list the live nodes,
+ * register a node, mark it seen, and remove it. Every role executes them.
+ */
+export const DEPLOYMENT_NODE_FUNCTIONS = Object.freeze([
+  '"deployment_nodes_live"(bigint)',
+  '"deployment_nodes_register"(uuid, text[], text, text, jsonb, bigint)',
+  '"deployment_nodes_heartbeat"(uuid, text[], text, text, jsonb, bigint)',
+  '"deployment_nodes_remove"(uuid)',
+] as const);
+
 /** The functions a migration took from PUBLIC, and the roles that execute them. */
 export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // An admin event's chain head and the row the writer's own transaction
@@ -271,6 +291,13 @@ export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // Whether an event about a user can still reach an SSF stream (migration
   // 0055): the subject sweep, an `api` job.
   '"ssf_subject_events_pending"(uuid, text)': ['api'],
+  // The node list (migration 0077, #499): every node, whatever its roles,
+  // registers itself at boot, marks itself seen every 30 seconds, removes
+  // itself when it closes and lists the live nodes to compare its
+  // configuration digest. The functions set the times from the database's
+  // clock and change only the caller's own database user's rows; no role
+  // holds anything on the table.
+  ...Object.fromEntries(DEPLOYMENT_NODE_FUNCTIONS.map((signature) => [signature, DATABASE_ROLES])),
   // The admin audit log's prune and the admin chain's trigger function stay
   // with the owner: no role runs them.
 });

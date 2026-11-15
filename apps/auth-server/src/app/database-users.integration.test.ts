@@ -94,6 +94,30 @@ const ACCOUNT = '/account/v1-rc.0';
 /** The admin process's one AuthMethod plugin, for its plugin operations (#600). */
 const PLUGIN_PACKAGE = '@example/qauth-plugin-corp-sso';
 
+/**
+ * The deployment's own settings, on every process: the admin API on (#511)
+ * with one plugin to administer (#600). Every process runs beside the
+ * others, and a node whose deployment-wide settings differ from a running
+ * node's refuses to boot (the configuration digest, #499): DPoP on where the
+ * token endpoint runs, and the plugins wherever they load.
+ */
+const DEPLOYMENT_SETTINGS: Readonly<Record<string, string>> = Object.freeze({
+  ...ADMIN_LISTENER_ENVIRONMENT,
+  AUTH_METHOD_PLUGINS: PLUGIN_PACKAGE,
+  PLUGIN_API_ENABLED: 'true',
+});
+
+/** The plugin package's stand-in, for every process that loads plugins. */
+function authMethodPlugins(): NonNullable<BootAuthServerOptions['authMethodPlugins']> {
+  return {
+    importPackage: fixturePluginImporter({
+      [PLUGIN_PACKAGE]: {
+        authMethod: fixturePluginMethod({ type: 'corp_sso', id: 'corp' }),
+      },
+    }),
+  };
+}
+
 interface RoleProcess {
   readonly server: BootedAuthServer;
   readonly roles: readonly ServiceRole[];
@@ -128,7 +152,10 @@ describe('each service role on a database user of its own (#498)', () => {
 
     // The owner's deployment: it creates the default realm and its keys, and
     // the fixtures below. Its pool connects as the owner of the tables.
-    fixture = await bootAuthServer(baseEnvironment(infra, jwt));
+    fixture = await bootAuthServer(
+      { ...baseEnvironment(infra, jwt), ...DEPLOYMENT_SETTINGS },
+      { authMethodPlugins: authMethodPlugins() }
+    );
     await createDatabaseUsers(fixture.app.dbPool, [
       ...Object.values(USERS),
       WEB_SIGNER,
@@ -146,27 +173,8 @@ describe('each service role on a database user of its own (#498)', () => {
     await boot('signer', ['signer'], USERS.signer);
     await boot('web', ['web'], USERS.web);
     await boot('api', ['api'], USERS.api);
-    // With its admin API on (#511) and one plugin to administer (#600).
-    await boot(
-      'admin',
-      ['admin'],
-      USERS.admin,
-      {
-        ...ADMIN_LISTENER_ENVIRONMENT,
-        AUTH_METHOD_PLUGINS: PLUGIN_PACKAGE,
-        PLUGIN_API_ENABLED: 'true',
-      },
-      {
-        adminListener: async () => ({}),
-        authMethodPlugins: {
-          importPackage: fixturePluginImporter({
-            [PLUGIN_PACKAGE]: {
-              authMethod: fixturePluginMethod({ type: 'corp_sso', id: 'corp' }),
-            },
-          }),
-        },
-      }
-    );
+    // With its admin API's listener (#511).
+    await boot('admin', ['admin'], USERS.admin, {}, { adminListener: async () => ({}) });
     await boot('delivery', ['delivery'], USERS.delivery);
     await boot('web+signer', ['web', 'signer'], WEB_SIGNER);
     await boot('api+signer', ['api', 'signer'], API_SIGNER);
@@ -198,6 +206,7 @@ describe('each service role on a database user of its own (#498)', () => {
     if (!infra || !jwt) throw new Error('infrastructure not started');
     const base: Record<string, string> = {
       ...baseEnvironment(infra, jwt),
+      ...DEPLOYMENT_SETTINGS,
       ...extra,
       DATABASE_URL: databaseUrlAs(infra.postgres.connectionString, user),
       SERVICE_ROLES: roles.join(','),
@@ -210,6 +219,7 @@ describe('each service role on a database user of its own (#498)', () => {
       : { ...withoutKeys, ...SIGNER_SERVICE };
     const log: string[] = [];
     const server = await bootAuthServer(environment, {
+      authMethodPlugins: authMethodPlugins(),
       ...options,
       logStream: { write: (line) => void log.push(line) },
     });

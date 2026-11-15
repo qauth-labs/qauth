@@ -14,6 +14,10 @@ export const PLUGIN_KEYS = defineKeys([
     name: 'AUTH_METHOD_PLUGINS',
     tier: 'advanced',
     role: 'deployment',
+    digest: 'shared',
+    // Loaded only where the sign-in pages mount them or the admin API
+    // configures them.
+    digestRoles: ['web', 'admin'],
     owner: 'plugins',
     default: '',
     since: '0.2.0',
@@ -23,6 +27,8 @@ export const PLUGIN_KEYS = defineKeys([
     name: 'PLUGIN_API_ENABLED',
     tier: 'experimental',
     role: 'deployment',
+    digest: 'shared',
+    digestRoles: ['web', 'admin'],
     owner: 'plugins',
     default: 'false',
     since: '0.2.0',

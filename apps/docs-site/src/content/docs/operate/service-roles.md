@@ -3,7 +3,7 @@ title: Service roles
 description: Run the auth server as one process, or split it into web, api, admin, signer and delivery processes with SERVICE_ROLES, and keep keys on the signer only.
 sidebar:
   order: 12
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-14'
 ---
 
 The auth server is one codebase that starts as one or more **service roles**
@@ -277,6 +277,63 @@ process.
 
 With `ENABLE_SWAGGER` on, only a process holding `api` serves the Swagger UI
 and its spec under `/docs`.
+
+## Settings every node shares
+
+Every node of a deployment must serve the same discovery documents and behave
+the same way, so the deployment-wide settings must be equal on every node: the
+issuer, the default realm, the signing mode, the trust proxy list, the feature
+switches and the other keys the
+[configuration page](/operate/configuration/#settings-every-node-shares)
+lists. At boot, each node takes a digest of those keys (SHA-256, per key and
+over all of them, never the values) and compares it with every node seen in
+the node list during the last two minutes (the `deployment_nodes` table).
+
+- A node of the same release whose digest differs refuses to boot. The error
+  names the keys that differ and the nodes it differs from, never a value:
+  give every node the same value of those keys.
+- A node of another release, as during a rolling upgrade, is only warned of.
+- `CONFIG_DIGEST_ROLLOUT=true` turns the refusal into a warning, for the window
+  of a planned change of one of those keys: set it on the nodes that start
+  with the new value, and remove it once every node runs the new value.
+- A key that only some roles read is compared only between nodes that hold
+  one of them: `KEK_PROVIDER` and the rotation windows
+  (`KEY_ROTATION_PERIOD_DAYS`, `KEY_PREPUBLISH_DAYS`,
+  `KEY_RETIRED_RETENTION_DAYS`) between nodes holding `signer`, the
+  `EVENT_DELIVERY_*` retry keys between nodes holding `delivery`,
+  `ADMIN_API_ENABLED` and `ADMIN_API_BASE_URL` between nodes holding `admin`,
+  `AUTH_METHOD_PLUGINS` and `PLUGIN_API_ENABLED` between nodes holding `web` or
+  `admin`, where plugins load, and a route's own rate limits between nodes
+  holding `web`, `api` or `admin`, which serve the routes.
+- Each node's own settings, such as `SERVICE_ROLES`, `PORT`, its TLS files and
+  its pool sizes, may differ, and so may a secret or a key that seeds a realm,
+  whose row owns its policies. Three seeds the server still reads at run time,
+  beside the realm's policy, are compared:
+  `EMAIL_VERIFICATION_TOKEN_EXPIRY`,
+  `EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND` and
+  `REDIRECT_URI_CUSTOM_SCHEMES`.
+
+The node compares read-only before any other boot step writes to the database,
+and again when it joins the list, once every boot step succeeded, under a lock
+that makes two nodes booting at once compare with each other. It marks itself
+seen every 30 seconds and leaves the list when it shuts down cleanly, or when
+a listener fails to bind after it joined; a node that stops without shutting down stops counting two minutes after it was last
+seen. The readiness check `config_digest` fails while the node is not in the
+list ([Observability](/operate/observability/#health-and-readiness)). When a
+node's row was removed while it ran, as after two minutes without the
+database, its next mark as seen writes the row back and compares once more:
+if a node of its release whose settings differ joined meanwhile, the node
+logs an error naming the keys, and `config_digest` fails until it restarts
+with the same values. It writes the row back under the list's lock, as a
+booting node registers, so whichever of the two comes second compares with
+the other; until its comparison succeeds, `config_digest` fails.
+
+No role's database user reads or writes the `deployment_nodes` table: every
+role calls the four `SECURITY DEFINER` functions of migration 0077, which take
+the times from the database's clock, and a row is marked seen or removed only
+by the database user that registered it. A setting held in a
+file, such as `EGRESS_ALLOWLIST_PATH`, is compared by its path's class, not
+its contents: the path may differ by node, and the file is not read.
 
 ## The admin listener
 

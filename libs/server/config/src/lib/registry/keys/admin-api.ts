@@ -5,11 +5,14 @@ import { defineKeys } from '../types';
  * and #520): the keys of `adminApiEnvSchema`. Deployment wiring, like `HOST`
  * and `PORT`.
  */
-export const ADMIN_API_KEYS = defineKeys([
+export const ADMIN_LISTENER_KEYS = defineKeys([
   {
     name: 'ADMIN_API_BASE_URL',
     tier: 'stable',
     role: 'deployment',
+    digest: 'shared',
+    // Read only where the admin listener runs.
+    digestRoles: ['admin'],
     owner: 'server',
     default: null,
     since: '0.2.0',
@@ -19,6 +22,8 @@ export const ADMIN_API_KEYS = defineKeys([
     name: 'ADMIN_API_ENABLED',
     tier: 'stable',
     role: 'deployment',
+    digest: 'shared',
+    digestRoles: ['admin'],
     owner: 'server',
     default: 'false',
     since: '0.2.0',
@@ -28,6 +33,7 @@ export const ADMIN_API_KEYS = defineKeys([
     name: 'ADMIN_API_HOST',
     tier: 'stable',
     role: 'deployment',
+    digest: 'node',
     owner: 'server',
     default: '127.0.0.1',
     since: '0.2.0',
@@ -37,6 +43,7 @@ export const ADMIN_API_KEYS = defineKeys([
     name: 'ADMIN_API_PORT',
     tier: 'stable',
     role: 'deployment',
+    digest: 'node',
     owner: 'server',
     default: '3002',
     since: '0.2.0',

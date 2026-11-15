@@ -6,6 +6,7 @@ import {
 
 import { OAUTH_ERROR_MEDIA_TYPE, OAUTH_ERROR_SCHEMA_REF } from './api-conventions/oauth-error';
 import { PROBLEM_MEDIA_TYPE, PROBLEM_SCHEMA_REF, statusTitle } from './api-conventions/problem';
+import { releaseVersion, UNRELEASED_VERSION } from './helpers/release-version';
 
 /**
  * Where one HTTP operation stands under the ADR-018 §5 stability contract.
@@ -246,10 +247,7 @@ const transformRoute: SwaggerPlugin.SwaggerTransform = (input) => {
 };
 
 /** `info.version` of every build that is not a release. */
-export const UNRELEASED_VERSION = '0.0.0-dev';
-
-/** A release version as `release-images.yml` reads it from the tag: `X.Y.Z` or `X.Y.Z-rc.N`. */
-const RELEASE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-rc\.(0|[1-9]\d*))?$/;
+export { UNRELEASED_VERSION };
 
 /**
  * The OpenAPI document's `info.version`: the QAuth release the server was
@@ -261,7 +259,7 @@ const RELEASE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-rc\.(0|[1-9]
  * tags (`scripts/stable-surface/lib.mjs`).
  */
 export function openapiVersion(value: string | undefined = process.env['QAUTH_VERSION']): string {
-  return value !== undefined && RELEASE_VERSION.test(value) ? value : UNRELEASED_VERSION;
+  return releaseVersion(value);
 }
 
 /**
