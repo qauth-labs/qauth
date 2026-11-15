@@ -59,7 +59,11 @@ const SERVICE_ACCOUNT_NAME_SQL = '^[a-z][a-z0-9]*(-[a-z0-9]+)*$';
  * too (`service_accounts_user_realm_fk`), so the account and the row can never
  * be of two realms. The client is checked to be of the same realm when the
  * row is written; its id is unique here, so one client is one service
- * account's.
+ * account's, and the client cannot be deleted while the row binds it.
+ *
+ * Being a service account is a lasting fact of the account
+ * (`users.is_service_account`, which never changes): should this row go, the
+ * account is refused everywhere, never taken for a person's.
  */
 export const serviceAccounts = pgTable(
   'service_accounts',
@@ -75,10 +79,15 @@ export const serviceAccounts = pgTable(
     name: varchar('name', { length: SERVICE_ACCOUNT_NAME_MAX_LENGTH }).notNull(),
     /** The account: a user of the realm with no credential. Its admin grants name it. */
     userId: uuid('user_id').notNull(),
-    /** The OAuth client the account signs in with (`oauth_clients.id`). */
+    /**
+     * The OAuth client the account signs in with (`oauth_clients.id`). The
+     * client is not deleted while a service account binds it (`no action`,
+     * checked at the end of the statement, so the realm's own cascade, which
+     * removes both rows, passes).
+     */
     clientId: uuid('client_id')
       .notNull()
-      .references(() => oauthClients.id, { onDelete: 'cascade' }),
+      .references(() => oauthClients.id, { onDelete: 'no action' }),
     /** A disabled service account gets no token and makes no admin call. */
     enabled: boolean('enabled').notNull().default(true),
     /**

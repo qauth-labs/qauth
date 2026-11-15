@@ -12,6 +12,8 @@ import path from 'node:path';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 
+import { FUNCTION_GRANTS } from '../database-users/grants-map';
+import { users } from './core';
 import { SERVICE_ACCOUNT_NAME_PATTERN, serviceAccounts } from './service-accounts';
 
 const DRIZZLE_DIR = path.resolve(__dirname, '..', '..', '..', 'drizzle');
@@ -66,16 +68,56 @@ describe('migration 0078 (service accounts)', () => {
     expect(when(MIGRATION_IDX)).toBeGreaterThan(when(MIGRATION_IDX - 1));
   });
 
-  it('creates one new table with its keys and an index, and touches no other table', () => {
+  it('creates one new table, one users column with a default, and its functions and trigger', () => {
     expect(statements[0]).toMatch(/^CREATE TABLE "service_accounts" \(/);
     expect(statements.filter((statement) => statement.startsWith('CREATE TABLE'))).toHaveLength(1);
     for (const statement of statements.slice(1)) {
       expect(statement).toMatch(
-        /^(ALTER TABLE "service_accounts" ADD CONSTRAINT "service_accounts_[a-z_]+" FOREIGN KEY|CREATE INDEX "idx_service_accounts_)/
+        /^(ALTER TABLE "service_accounts" ADD CONSTRAINT "service_accounts_[a-z_]+" FOREIGN KEY|CREATE INDEX "idx_service_accounts_|ALTER TABLE "users" ADD COLUMN "is_service_account" boolean DEFAULT false NOT NULL;$|CREATE FUNCTION "(users_service_account_permanent|service_accounts_end_tokens)"|CREATE TRIGGER "users_service_account_permanent"|REVOKE ALL ON FUNCTION "service_accounts_end_tokens"\(uuid, uuid\) FROM PUBLIC;$)/
       );
     }
-    expect(statements.join('\n')).not.toMatch(
+    // Nothing runs now that rewrites or removes a row: the one UPDATE is the
+    // body of a function a caller runs later.
+    const runNow = statements.filter((statement) => !statement.startsWith('CREATE FUNCTION'));
+    expect(runNow.join('\n')).not.toMatch(
       /\b(DROP|DELETE FROM|INSERT INTO|RENAME|TRUNCATE)\b|^UPDATE\b/m
+    );
+  });
+
+  it('marks a service account for good, with a constant default no row is rewritten for', () => {
+    expect(
+      getTableConfig(users).columns.find((column) => column.name === 'is_service_account')
+    ).toMatchObject({ notNull: true, default: false });
+    const permanent =
+      statements.find((statement) =>
+        statement.startsWith('CREATE FUNCTION "users_service_account_permanent"')
+      ) ?? '';
+    expect(permanent).toContain(
+      'IF NEW."is_service_account" IS DISTINCT FROM OLD."is_service_account" THEN'
+    );
+    expect(permanent).toContain("CONSTRAINT = 'users_service_account_permanent'");
+    expect(permanent).toContain('SET search_path = pg_catalog, pg_temp');
+    expect(statements).toContain(
+      'CREATE TRIGGER "users_service_account_permanent"\n  BEFORE UPDATE OF "is_service_account" ON "users"\n  FOR EACH ROW\n  EXECUTE FUNCTION "users_service_account_permanent"();'
+    );
+  });
+
+  it("moves a bound account's not_valid_before forward only, as a definer the admin role alone runs", () => {
+    const end =
+      statements.find((statement) =>
+        statement.startsWith('CREATE FUNCTION "service_accounts_end_tokens"')
+      ) ?? '';
+    expect(end).toContain('SECURITY DEFINER');
+    expect(end).toContain('SET search_path = pg_catalog, pg_temp');
+    expect(end).toContain('coalesce(u."not_valid_before", 0)');
+    expect(end).toContain('s."client_id" = p_client_id');
+    expect(end).toContain('u."realm_id" = s."realm_id"');
+    expect(FUNCTION_GRANTS['"service_accounts_end_tokens"(uuid, uuid)']).toEqual(['admin']);
+  });
+
+  it('keeps a bound client from being deleted, and lets the realm cascade pass', () => {
+    expect(statements.join('\n')).toContain(
+      'ADD CONSTRAINT "service_accounts_client_id_oauth_clients_id_fk" FOREIGN KEY ("client_id") REFERENCES "public"."oauth_clients"("id") ON DELETE no action'
     );
   });
 

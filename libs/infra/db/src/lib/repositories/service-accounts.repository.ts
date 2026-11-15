@@ -5,7 +5,7 @@ import {
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
 import { ADMIN_API_AUDIENCE, ADMIN_API_SCOPES } from '@qauth-labs/shared-validation';
-import { and, asc, eq, type InferSelectModel } from 'drizzle-orm';
+import { and, asc, eq, type InferSelectModel, sql } from 'drizzle-orm';
 import { z } from 'zod';
 
 import type { DbClient } from '../../types';
@@ -15,6 +15,7 @@ import {
   SERVICE_ACCOUNT_NAME_PATTERN,
   serviceAccounts,
 } from '../schema/service-accounts';
+import { DEFAULT_SYSTEM_CLIENT_ID } from '../system-client/provision';
 import { publicJwkSchema } from '../system-client/public-jwk';
 import { unusableSecretHash } from '../unusable-secret-hash';
 
@@ -38,6 +39,13 @@ export interface NewServiceAccount {
   readonly jwksUri?: string;
   /** The admin who creates it; `null` for the host's command or QAuth itself. */
   readonly createdBy: string | null;
+  /**
+   * Client ids the deployment keeps for clients of its own, beside the
+   * default system client's (`system`): the `SYSTEM_CLIENT_ID` it runs with.
+   * A service account never takes one, so no provisioner of such a client
+   * ever finds a service account's.
+   */
+  readonly reservedClientIds?: readonly string[];
 }
 
 /** What {@link ServiceAccountsRepository.create} wrote. */
@@ -77,8 +85,14 @@ export interface ServiceAccountsRepository {
    * With `tx`, every row is written in the caller's transaction; without,
    * in a transaction of its own.
    *
-   * @throws BadRequestError when the realm is not the operator realm, or the
-   *   name, the client id, the keys or `createdBy` are malformed
+   * The account is marked a service account's (`users.is_service_account`),
+   * for good: should the row go, the admin API refuses the account rather
+   * than take it for a person's.
+   *
+   * @throws BadRequestError when the realm is not the operator realm; when
+   *   the name, the client id, the keys or `createdBy` are malformed; or when
+   *   the client id is the system client's, one the deployment reserves, or
+   *   one a client of the realm already has
    * @throws UniqueConstraintError when the realm already holds the name, or
    *   a client with the client id
    */
@@ -111,9 +125,12 @@ export interface ServiceAccountsRepository {
   list(realmId: string, tx?: DbClient): Promise<ServiceAccount[]>;
 
   /**
-   * Enable or disable the service account. A disabled one gets no token and
-   * makes no admin call from the next request on, whatever token it holds.
-   * `undefined` when the realm holds no such service account.
+   * Enable or disable the service account, and its account with it, in one
+   * transaction. A disabled one gets no token and makes no admin call from
+   * the next request on, whatever token it holds. Disabling the account moves
+   * its `users.not_valid_before` to the commit (migration 0044), so a token
+   * issued before stays refused once it is enabled again. `undefined` when
+   * the realm holds no such service account.
    */
   setEnabled(
     realmId: string,
@@ -121,6 +138,17 @@ export interface ServiceAccountsRepository {
     enabled: boolean,
     tx?: DbClient
   ): Promise<ServiceAccount | undefined>;
+
+  /**
+   * End every token issued so far to the service account the client
+   * `clientRowId` binds in the realm: its account's `not_valid_before` moves
+   * to the database's clock, through `service_accounts_end_tokens`
+   * (migration 0078), so the admin role needs no UPDATE on `users`. The admin
+   * API calls it when it suspends the client, so nothing issued before comes
+   * back when the suspension lifts. How many accounts it moved: 0 for a
+   * client no service account binds.
+   */
+  endTokensOfClient(realmId: string, clientRowId: string, tx?: DbClient): Promise<number>;
 }
 
 /** A uuid, as Postgres prints and takes it; anything else names no row. */
@@ -218,11 +246,31 @@ export function createServiceAccountsRepository(defaultDb: DbClient): ServiceAcc
         if (realm === undefined || !realm.isOperator) {
           throw new BadRequestError('A service account lives in the operator realm');
         }
+        // Never the system client's id, nor one the deployment keeps, nor a
+        // client's that exists: a service account's client is its own, which
+        // no provisioner of another client rewrites.
+        const reserved = new Set([DEFAULT_SYSTEM_CLIENT_ID, ...(input.reservedClientIds ?? [])]);
+        if (reserved.has(input.clientId)) {
+          throw new BadRequestError(
+            `"${input.clientId}" is a client id the deployment keeps for a client of its own: give the service account another`
+          );
+        }
+        const [taken] = await db
+          .select({ id: oauthClients.id })
+          .from(oauthClients)
+          .where(and(eq(oauthClients.realmId, realm.id), eq(oauthClients.clientId, input.clientId)))
+          .limit(1);
+        if (taken !== undefined) {
+          throw new BadRequestError(
+            `A client of the operator realm already has the client id "${input.clientId}": a service account's client is its own`
+          );
+        }
         try {
-          // The account: no credential, so it signs in nowhere.
+          // The account: no credential, so it signs in nowhere, and marked a
+          // service account's for good.
           const [user] = await db
             .insert(users)
-            .values({ realmId: realm.id })
+            .values({ realmId: realm.id, isServiceAccount: true })
             .returning({ id: users.id });
           const [client] = await db
             .insert(oauthClients)
@@ -301,12 +349,31 @@ export function createServiceAccountsRepository(defaultDb: DbClient): ServiceAcc
 
     async setEnabled(realmId, id, enabled, tx) {
       if (!isId(realmId) || !isId(id)) return undefined;
-      const [row] = await (tx ?? defaultDb)
-        .update(serviceAccounts)
-        .set({ enabled })
-        .where(and(eq(serviceAccounts.realmId, realmId), eq(serviceAccounts.id, id)))
-        .returning();
-      return row;
+      const write = async (db: DbClient): Promise<ServiceAccount | undefined> => {
+        const [row] = await db
+          .update(serviceAccounts)
+          .set({ enabled })
+          .where(and(eq(serviceAccounts.realmId, realmId), eq(serviceAccounts.id, id)))
+          .returning();
+        if (row === undefined) return undefined;
+        // The account goes with it: disabling it ends what it was issued
+        // (`users.not_valid_before`, migration 0044's triggers), and nothing
+        // issued before comes back when it is enabled again.
+        await db
+          .update(users)
+          .set({ enabled })
+          .where(and(eq(users.realmId, realmId), eq(users.id, row.userId)));
+        return row;
+      };
+      return tx === undefined ? defaultDb.transaction(write) : write(tx);
+    },
+
+    async endTokensOfClient(realmId, clientRowId, tx) {
+      if (!isId(realmId) || !isId(clientRowId)) return 0;
+      const { rows } = await (tx ?? defaultDb).execute<{ ended: number | string }>(
+        sql`select "service_accounts_end_tokens"(${realmId}::uuid, ${clientRowId}::uuid) as ended`
+      );
+      return Number(rows[0]?.ended ?? 0);
     },
   };
 }

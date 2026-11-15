@@ -1,5 +1,5 @@
 {
-  "id": "ea2f6a89-7928-4565-b1ef-1e8f40678748",
+  "id": "9f9bce14-6b91-484d-98e6-85bdf73250df",
   "prevId": "ac43663f-b10f-4922-98f7-afa45f27270b",
   "version": "7",
   "dialect": "postgresql",
@@ -2621,6 +2621,13 @@
           "type": "varchar(320)",
           "primaryKey": false,
           "notNull": false
+        },
+        "is_service_account": {
+          "name": "is_service_account",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         }
       },
       "indexes": {
@@ -4824,7 +4831,7 @@
           "tableTo": "oauth_clients",
           "columnsFrom": ["client_id"],
           "columnsTo": ["id"],
-          "onDelete": "cascade",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "service_accounts_created_by_users_id_fk": {

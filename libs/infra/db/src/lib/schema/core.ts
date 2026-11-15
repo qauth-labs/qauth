@@ -462,6 +462,17 @@ export const users = pgTable(
      * `operatorVerifiedBy`/`parseOperatorVerifiedBy` of shared-validation.
      */
     operatorVerifiedBy: varchar('operator_verified_by', { length: 320 }),
+    /**
+     * Whether the account is a service account's (#522): a user with no
+     * credential that automation reaches the admin API as. Set when the
+     * service accounts repository creates the account, and never changed:
+     * the trigger `users_service_account_permanent` (migration 0078) refuses
+     * an update of it, and `UpdateUser` leaves it out. The admin API reads it
+     * as the lasting fact the `service_accounts` row may no longer show: a
+     * marked account whose binding is gone is refused, never taken for a
+     * person's.
+     */
+    isServiceAccount: boolean('is_service_account').notNull().default(false),
   },
   (t) => [
     // An operator's verification records its time and its operator together,

@@ -63,6 +63,11 @@ export interface TargetAdminGrant extends LiveAdminGrant {
     readonly notValidBefore: number | null;
     /** When the account was created, in epoch ms: the two-admin rule reads it (#521). */
     readonly createdAt: number;
+    /**
+     * Whether the account is a service account's (#522): one never approves,
+     * so the two-admin rule never counts it.
+     */
+    readonly isServiceAccount: boolean;
   };
 }
 
@@ -356,6 +361,7 @@ export function createAdminGrantsRepository(
             enabled: users.enabled,
             notValidBefore: users.notValidBefore,
             createdAt: users.createdAt,
+            isServiceAccount: users.isServiceAccount,
           },
         })
         .from(adminGrants)

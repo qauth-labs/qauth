@@ -15,12 +15,17 @@ import { resolveFirstPartyProfile } from '@qauth-labs/shared-validation';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { createOAuthClientsRepository, createRealmsRepository } from '../repositories';
+import {
+  createOAuthClientsRepository,
+  createRealmsRepository,
+  createServiceAccountsRepository,
+} from '../repositories';
 import { type IntegrationDb, setupIntegrationDb } from '../repositories/integration-setup';
 import { oauthClients } from '../schema/core';
 import { events } from '../schema/events';
 import {
   DEFAULT_SYSTEM_CLIENT_REASON,
+  describeSystemClientResult,
   provisionSystemClient,
   systemClientSpecSchema,
 } from './provision';
@@ -283,6 +288,41 @@ describe('provisionSystemClient (real Postgres)', () => {
       expect(result, reason).toEqual({ status: 'refused', realm: 'master', clientId, reason });
       expect(await systemRow(realmId, clientId), reason).toEqual(before);
     }
+    expect(await recorded(realmId)).toEqual([]);
+  });
+  // #522: a service account's client is the service-accounts command's; the
+  // provisioner never rewrites it as the system client.
+  it("refuses a service account's client by name, and leaves it", async () => {
+    const realms = createRealmsRepository(db());
+    const realmId = await realm('master');
+    await realms.setOperator(realmId, true);
+    await createServiceAccountsRepository(db()).create({
+      realmId,
+      name: 'portal-robot',
+      clientId: 'portal-robot',
+      jwks: JWKS,
+      createdBy: null,
+    });
+    const before = await systemRow(realmId, 'portal-robot');
+
+    const result = await provisionSystemClient(
+      db(),
+      'master',
+      systemClientSpecSchema.parse({
+        client_id: 'portal-robot',
+        redirect_uris: [CALLBACK],
+        jwks: JWKS,
+      })
+    );
+
+    expect(result).toEqual({
+      status: 'refused',
+      realm: 'master',
+      clientId: 'portal-robot',
+      reason: 'service_account',
+    });
+    expect(describeSystemClientResult(result)).toContain("a service account's client");
+    expect(await systemRow(realmId, 'portal-robot')).toEqual(before);
     expect(await recorded(realmId)).toEqual([]);
   });
 });

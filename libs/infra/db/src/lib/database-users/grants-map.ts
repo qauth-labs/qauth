@@ -305,6 +305,10 @@ export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // clock and change only the caller's own database user's rows; no role
   // holds anything on the table.
   ...Object.fromEntries(DEPLOYMENT_NODE_FUNCTIONS.map((signature) => [signature, DATABASE_ROLES])),
+  // A service account's client suspended through the admin API ends what its
+  // account was issued (migration 0078, #522): `admin` holds no UPDATE on
+  // `users`, and the function moves only that account's not_valid_before.
+  '"service_accounts_end_tokens"(uuid, uuid)': ['admin'],
   // The admin audit log's prune and the admin chain's trigger function stay
   // with the owner: no role runs them.
 });

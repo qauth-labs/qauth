@@ -13,12 +13,19 @@ export type NewUser = InferInsertModel<typeof users>;
  * What an update may change. Not `notValidBefore`: the triggers of migration
  * 0044 set it when the account is disabled (#748), and no caller writes it.
  * Nor an operator's verification (#1052): only
- * {@link UsersRepository.recordOperatorVerification} records it.
+ * {@link UsersRepository.recordOperatorVerification} records it. Nor whether
+ * the account is a service account's (#522), which never changes.
  */
 export type UpdateUser = Partial<
   Omit<
     NewUser,
-    'id' | 'createdAt' | 'realmId' | 'notValidBefore' | 'operatorVerifiedAt' | 'operatorVerifiedBy'
+    | 'id'
+    | 'createdAt'
+    | 'realmId'
+    | 'notValidBefore'
+    | 'operatorVerifiedAt'
+    | 'operatorVerifiedBy'
+    | 'isServiceAccount'
   >
 > & {
   updatedAt?: number;

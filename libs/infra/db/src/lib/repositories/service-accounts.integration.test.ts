@@ -84,7 +84,7 @@ describe('service accounts (real Postgres, #522)', () => {
       createdBy: null,
     });
     const [user] = await db().select().from(users).where(eq(users.id, created.userId));
-    expect(user).toMatchObject({ realmId: operator, enabled: true });
+    expect(user).toMatchObject({ realmId: operator, enabled: true, isServiceAccount: true });
     expect(
       await db().select().from(userCredentials).where(eq(userCredentials.userId, created.userId))
     ).toEqual([]);
@@ -146,16 +146,42 @@ describe('service accounts (real Postgres, #522)', () => {
       jwks: KEYS,
       createdBy: null,
     });
-    for (const clash of [
-      { name: 'ci', clientId: 'other-client' },
-      { name: 'other', clientId: 'ci' },
-    ]) {
-      await expect(
-        repository.create({ realmId: operator, ...clash, jwks: KEYS, createdBy: null })
-      ).rejects.toThrow(UniqueConstraintError);
-    }
+    await expect(
+      repository.create({
+        realmId: operator,
+        name: 'ci',
+        clientId: 'other-client',
+        jwks: KEYS,
+        createdBy: null,
+      })
+    ).rejects.toThrow(UniqueConstraintError);
+    // A client id any client of the realm has is refused before anything is
+    // written: a service account's client is its own.
+    await expect(
+      repository.create({
+        realmId: operator,
+        name: 'other',
+        clientId: 'ci',
+        jwks: KEYS,
+        createdBy: null,
+      })
+    ).rejects.toThrow(BadRequestError);
     expect(await db().select().from(users)).toHaveLength(1);
     expect(await db().select().from(oauthClients)).toHaveLength(1);
+  });
+
+  it("never takes the system client's id, or one the deployment reserves", async () => {
+    const operator = await realm('operator', true);
+    for (const input of [
+      { clientId: 'system' },
+      { clientId: 'portal', reservedClientIds: ['portal'] },
+    ]) {
+      await expect(
+        repository.create({ realmId: operator, name: 'ci', jwks: KEYS, createdBy: null, ...input }),
+        JSON.stringify(input)
+      ).rejects.toThrow(BadRequestError);
+    }
+    expect(await db().select().from(users)).toEqual([]);
   });
 
   it('refuses malformed input before anything is read', async () => {
@@ -249,7 +275,93 @@ describe('service accounts (real Postgres, #522)', () => {
     await expect(repository.list(other)).resolves.toEqual([]);
   });
 
-  it('goes with its account and with its client', async () => {
+  // #522: disabling a service account disables its account, which ends what
+  // it was issued (migration 0044), and enabling it again brings none back.
+  it('switches its account with it, and disabling it ends what the account was issued', async () => {
+    const operator = await realm('operator', true);
+    const { serviceAccount, userId } = await repository.create({
+      realmId: operator,
+      name: 'ci',
+      clientId: 'ci',
+      jwks: KEYS,
+      createdBy: null,
+    });
+    const account = async () => (await db().select().from(users).where(eq(users.id, userId)))[0];
+    expect(await account()).toMatchObject({ enabled: true, notValidBefore: null });
+
+    const before = Date.now();
+    await repository.setEnabled(operator, serviceAccount.id, false);
+    const disabled = await account();
+    expect(disabled.enabled).toBe(false);
+    expect(disabled.notValidBefore).toBeGreaterThanOrEqual(before - 1000);
+
+    await repository.setEnabled(operator, serviceAccount.id, true);
+    expect(await account()).toMatchObject({
+      enabled: true,
+      notValidBefore: disabled.notValidBefore,
+    });
+  });
+
+  it("ends the tokens of the account a client binds, and of no other account's", async () => {
+    const operator = await realm('operator', true);
+    const { client, userId } = await repository.create({
+      realmId: operator,
+      name: 'ci',
+      clientId: 'ci',
+      jwks: KEYS,
+      createdBy: null,
+    });
+    const [person] = await db()
+      .insert(users)
+      .values({ realmId: operator })
+      .returning({ id: users.id });
+    const before = Date.now();
+    await expect(repository.endTokensOfClient(operator, client.id)).resolves.toBe(1);
+    const [ended] = await db().select().from(users).where(eq(users.id, userId));
+    expect(ended.enabled).toBe(true);
+    expect(ended.notValidBefore).toBeGreaterThanOrEqual(before - 1000);
+    const [untouched] = await db().select().from(users).where(eq(users.id, person.id));
+    expect(untouched.notValidBefore).toBeNull();
+    // A client no service account binds, or another realm's: nothing moves.
+    const [spare] = await db()
+      .insert(oauthClients)
+      .values({
+        realmId: operator,
+        clientId: 'spare',
+        clientSecretHash: 'unused',
+        name: 'Spare',
+        redirectUris: [],
+      })
+      .returning({ id: oauthClients.id });
+    await expect(repository.endTokensOfClient(operator, spare.id)).resolves.toBe(0);
+    const other = await realm('other', false);
+    await expect(repository.endTokensOfClient(other, client.id)).resolves.toBe(0);
+  });
+
+  it('keeps the mark of a service account for good', async () => {
+    const operator = await realm('operator', true);
+    const { userId } = await repository.create({
+      realmId: operator,
+      name: 'ci',
+      clientId: 'ci',
+      jwks: KEYS,
+      createdBy: null,
+    });
+    const pool = ctx?.database.pool;
+    if (!pool) throw new Error('integration db not initialised');
+    await expect(
+      pool.query('UPDATE users SET is_service_account = false WHERE id = $1', [userId])
+    ).rejects.toMatchObject({ constraint: 'users_service_account_permanent' });
+    const [person] = await db()
+      .insert(users)
+      .values({ realmId: operator })
+      .returning({ id: users.id });
+    await expect(
+      pool.query('UPDATE users SET is_service_account = true WHERE id = $1', [person.id])
+    ).rejects.toMatchObject({ constraint: 'users_service_account_permanent' });
+  });
+
+  it('goes with its account and its realm, and keeps its client from being deleted', async () => {
     const operator = await realm('operator', true);
     const first = await repository.create({
       realmId: operator,
@@ -265,8 +377,20 @@ describe('service accounts (real Postgres, #522)', () => {
       jwks: KEYS,
       createdBy: null,
     });
+    const pool = ctx?.database.pool;
+    if (!pool) throw new Error('integration db not initialised');
+    // The client a service account binds is not deleted, whoever tries.
+    await expect(
+      pool.query('DELETE FROM oauth_clients WHERE id = $1', [second.client.id])
+    ).rejects.toMatchObject({
+      code: '23503',
+      constraint: 'service_accounts_client_id_oauth_clients_id_fk',
+    });
     await db().delete(users).where(eq(users.id, first.userId));
-    await db().delete(oauthClients).where(eq(oauthClients.id, second.client.id));
+    expect((await db().select().from(serviceAccounts)).map((row) => row.name)).toEqual(['second']);
+    // The realm's own cascade removes the row and its client together.
+    await db().delete(realms).where(eq(realms.id, operator));
     expect(await db().select().from(serviceAccounts)).toEqual([]);
+    expect(await db().select().from(oauthClients)).toEqual([]);
   });
 });
