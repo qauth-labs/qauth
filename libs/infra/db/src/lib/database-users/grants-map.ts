@@ -89,13 +89,19 @@ const I: readonly TablePrivilege[] = Object.freeze(['INSERT']);
 
 /** Every table of the schema, in name order, with the roles that hold anything on it. */
 export const TABLE_GRANTS: TableGrants = Object.freeze({
+  // Act-chain tokens issued to admins (#523): written in the transaction of
+  // the admin operation that mints one, read by the account API (`api`) on
+  // every call made with one. Written once: no role updates or deletes it.
+  admin_act_sessions: { api: S, admin: SI },
   // Approval requests for security operations (#512): filed, approved,
   // consumed and expired on the admin listener.
   admin_approvals: { admin: SIU },
   // The admin audit log (#448): appended in the admin pipeline's
-  // transaction; its trigger reads the chain head and the checkpoints.
-  admin_audit_log: { admin: SI },
-  admin_audit_log_checkpoints: { admin: S },
+  // transaction; its trigger reads the chain head and the checkpoints. The
+  // account API (`api`) appends the row of each call an admin makes with an
+  // act-chain token (#523).
+  admin_audit_log: { api: SI, admin: SI },
+  admin_audit_log_checkpoints: { api: S, admin: S },
   // One-time admin enrolments (#602): written by the host's break-glass
   // command as the owner. `web`, which serves the enrolment step of the
   // Interaction API (#621), reads whether a token may still be redeemed and
@@ -232,6 +238,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
 });
 
 /**
+ * The columns `api` reads of an approval: whether the approval an admin's
+ * act-chain token ran on is still `consumed` (#523).
+ *
  * The columns `delivery` reads of tables it may not read whole: whether a
  * stream may receive events and where its subjects point, and a client's
  * back-channel logout metadata (`EVENT_DELIVERY_COLUMNS`), and each realm's
@@ -245,6 +254,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
  * its config, whose client id and authentication method name it.
  */
 export const COLUMN_GRANTS: ColumnGrants = Object.freeze({
+  // Whether the approval an act-chain token ran on is still consumed (#523):
+  // the account API reads its status, never its request, display or digest.
+  admin_approvals: { api: ['id', 'realm_id', 'status'] },
   oauth_clients: {
     delivery: [
       'id',

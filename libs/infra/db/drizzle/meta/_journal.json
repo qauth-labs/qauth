@@ -575,6 +575,13 @@
       "when": 1794792279256,
       "tag": "0081_protected_resources",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1794812259011,
+      "tag": "0082_admin_act_sessions",
+      "breakpoints": true
     }
   ]
 }
