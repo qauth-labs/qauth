@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-11-16
+
+A patch release with no breaking change of the stable surface. **A client
+that gets admin tokens with a client secret, or as a public client, stops
+getting them:** the admin API's audience and the admin scopes now go only to
+a client that authenticates with `private_key_jwt`, so switch such a client
+before you upgrade. It has four non-destructive migrations: 0078
+(`service_accounts` and `users.is_service_account`), 0079
+(`admin_enrolments`), 0080 (the two functions an admin's account deletion
+runs) and 0081 (`protected_resources`). A deployment that applies its
+database grants by hand grants them before it starts the new version
+([upgrade guide](https://docs.qauth.dev/operate/upgrades/)). There are no new
+settings. Automation reaches the admin API as a service account, a break-glass
+CLI enrols the first admin and retires a key when no admin can act, and an
+admin can delete an account, which ends every session with its back-channel
+logouts. A realm can register a protected resource's scopes, open to any
+client the user brings, and `@qauth-labs/resource-guard` advertises the scopes
+of every operation. A realm's mail on Resend is tried again when Resend is
+busy.
+
 ### Added
 
 - **Service accounts for the admin API** ([#522], ADR-019 Decision 7).
@@ -5861,7 +5881,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/qauth-labs/qauth/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/qauth-labs/qauth/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/qauth-labs/qauth/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/qauth-labs/qauth/compare/v0.2.4...v0.2.5
