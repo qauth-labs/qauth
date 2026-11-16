@@ -3714,6 +3714,147 @@
         }
       }
     },
+    "/auth/admin-enrolment": {
+      "post": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Start the one-time enrolment of an admin account the break-glass CLI created (ADR-019 Decision 7): the ceremony app’s enrolment page posts the token of the enrolment URL’s fragment as a form, from the realm origin. A token that may still be redeemed starts an interaction at the admin_enrolment step in this browser and redirects (303) to its ceremony page; starting does not spend it. A malformed, unknown, used or expired token gets one HTML page (400), and no interaction, as does every start while passkey sign-in is off (WEBAUTHN_ENABLED); a realm that names its ceremony app’s error page (its ceremonyApp.errorPage policy) gets 303 to that page instead, with code=admin_enrolment_refused. A request from another origin is refused with 403.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "token": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/admin-enrolment/status": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "The page an admin enrolment ends on when the realm names no ceremony error page: result=enrolled (the account’s first passkey was stored), cancelled (nothing was stored; the enrolment URL works until it expires) or refused (the enrolment URL enrolled nothing). Any other value reads as refused. A realm that names its ceremony app’s error page (its ceremonyApp.errorPage policy) gets 303 to that page instead, with code=admin_enrolment_finished and enrolled, or code=admin_enrolment_refused.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "result",
+            "required": false,
+            "description": "How the enrolment ended: enrolled, cancelled, refused."
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/link/wallet": {
       "post": {
         "tags": [

@@ -150,6 +150,9 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   'GET /oauth/end-session/status',
   // The landing of a mailed pass link (#637).
   'GET /auth/pass',
+  // The one-time admin enrolment (#621): its start and the page it ends on.
+  'POST /auth/admin-enrolment',
+  'GET /auth/admin-enrolment/status',
   // The upstream sign-in flow (#639): a provider button of the sign-in page,
   // the start of a routed provider, and the callbacks of the realm's OpenID
   // Connect providers.

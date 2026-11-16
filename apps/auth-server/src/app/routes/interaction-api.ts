@@ -23,6 +23,12 @@ import {
   finishAccountInteraction,
 } from '../helpers/account-interaction';
 import { accountPoliciesOf } from '../helpers/account-policies';
+import {
+  ADMIN_ENROLMENT_STEP,
+  adminEnrolmentEndUrl,
+  type AdminEnrolmentResult,
+  decideAdminEnrolment,
+} from '../helpers/admin-enrolment';
 import { UnsupportedMediaTypeError } from '../helpers/api-request-errors';
 import {
   cancelAuthorization,
@@ -60,9 +66,10 @@ import type { InteractionStep } from '../helpers/interaction-record';
 import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
 import { ladderEndUserIp } from '../helpers/password-attempts';
 import { createPeerAddressList, type PeerAddressList } from '../helpers/peer-address-list';
+import { comesFromRealmOrigin, type OriginRule } from '../helpers/realm-origin';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-rate-limit';
-import { buildRealmUrl, realmIssuer } from '../helpers/realm-url';
-import { type RealmRow, requestRealm } from '../helpers/request-realm';
+import { buildRealmUrl } from '../helpers/realm-url';
+import { requestRealm } from '../helpers/request-realm';
 import { roundEnvironment } from '../helpers/round-limits';
 import { finishHeldUpstreamLink } from '../helpers/upstream-links';
 import {
@@ -92,7 +99,8 @@ import { emitUserEvent } from '../helpers/user-events';
  * An answer is checked in this order, and nothing of the sign-in engine runs
  * before all of it passes: the body's media type, its 64 KiB cap and its form
  * (no repeated field), the same origin (`Sec-Fetch-Site`, else `Origin`), the
- * body's bound for the step it names (16 KiB, 64 KiB for `webauthn_create`),
+ * body's bound for the step it names (16 KiB, 64 KiB for `webauthn_create` and
+ * `admin_enrolment`),
  * the flow cookie, the step's CSRF value (`helpers/interaction.ts`), then the
  * answer against the step grammar. A request from another origin and a wrong CSRF value get one
  * generic `403`, audited as `request.csrf_rejected`. Then the engine runs one
@@ -176,10 +184,14 @@ export function parseAnswerForm(text: string): Record<string, string> {
   return fields;
 }
 
+/** The answers that carry a passkey's attestation: 64 KiB bodies (ADR-017 Decision 7). */
+const ATTESTATION_STEP_URNS: readonly unknown[] = [WEBAUTHN_CREATE_STEP_URN, ADMIN_ENROLMENT_STEP];
+
 /**
- * The bound of a body: 64 KiB for an answer to `webauthn_create`, 16 KiB for
- * anything else (ADR-017 Decision 7). The parser already refused anything
- * over 64 KiB.
+ * The bound of a body: 64 KiB for an answer to `webauthn_create` or to
+ * `admin_enrolment` (#621), whose passkey registration carries the same
+ * attestation, 16 KiB for anything else (ADR-017 Decision 7). The parser
+ * already refused anything over 64 KiB.
  *
  * @throws ContentTooLargeError over the bound
  */
@@ -188,55 +200,13 @@ export function checkAnswerBodySize(body: unknown, bytes: number): void {
     typeof body === 'object' && body !== null
       ? (body as Record<string, unknown>)['type']
       : undefined;
-  const limit = type === WEBAUTHN_CREATE_STEP_URN ? WEBAUTHN_CREATE_BODY_LIMIT : ANSWER_BODY_LIMIT;
+  const limit = ATTESTATION_STEP_URNS.includes(type)
+    ? WEBAUTHN_CREATE_BODY_LIMIT
+    : ANSWER_BODY_LIMIT;
   if (bytes > limit) throw new ContentTooLargeError();
 }
 
-/** How strictly a request must show that it comes from the realm origin. */
-type OriginRule =
-  /**
-   * An answer or a cancel: `Sec-Fetch-Site: same-origin`; from a browser that
-   * sends no `Sec-Fetch-Site`, an `Origin` of the realm. Neither: refused.
-   */
-  | 'required'
-  /**
-   * The personal-data read: refused when a header names another origin. A
-   * request with neither header passes (the contract's rule for the read).
-   */
-  | 'unless_absent';
-
-/**
- * Whether the request comes from the realm origin (ADR-019 Decision 6), by
- * the headers a browser sets and a page cannot.
- *
- * An answer or a cancel (`required`) follows the contract's rule: when the
- * browser sent `Sec-Fetch-Site`, it decides, and must be `same-origin`; only
- * when it did not, `Origin` must be the realm origin (`null` and any other
- * origin refused), and a request with neither is refused. `Sec-Fetch-Site`
- * decides alone because a form post from a page whose referrer policy is
- * `no-referrer`, as the ceremony pages' is, sends `Origin: null` (Fetch,
- * "append a request Origin header") with `Sec-Fetch-Site: same-origin`; and
- * an opaque-origin document, such as a sandboxed frame, sends
- * `Sec-Fetch-Site: cross-site`.
- *
- * The personal-data read (`unless_absent`) refuses a request either header
- * names another origin by, and lets one with neither through.
- */
-export function comesFromRealmOrigin(
-  headers: FastifyRequest['headers'],
-  realm: Pick<RealmRow, 'issuer'>,
-  rule: OriginRule
-): boolean {
-  const site = headers['sec-fetch-site'];
-  const origin = headers.origin;
-  const realmOrigin = new URL(realmIssuer(realm)).origin;
-  if (rule === 'required') {
-    if (site !== undefined) return site === 'same-origin';
-    return origin === realmOrigin;
-  }
-  if (site !== undefined && site !== 'same-origin') return false;
-  return origin === undefined || origin === realmOrigin;
-}
+export { comesFromRealmOrigin } from '../helpers/realm-origin';
 
 /** Refuse the request with the generic `403` unless it comes from the realm origin. */
 async function requireRealmOrigin(request: FastifyRequest, rule: OriginRule): Promise<void> {
@@ -538,9 +508,18 @@ async function decideAnswer(
      * post's next state keeps it for the next step read instead.
      */
     readonly restarted: (notice: RestartNotice) => void;
+    /** How an admin enrolment's answer ended it (#621), for the page it ends on. */
+    readonly adminEnrolment: (result: Exclude<AdminEnrolmentResult, 'cancelled'>) => void;
   },
   catalog: UpstreamProviderCatalog
 ): Promise<InteractionDecision> {
+  if (state.purpose === 'admin_enrolment') {
+    // The enrolment of an admin account (#621) runs no engine round: its one
+    // step registers the account's first passkey, and nobody signs in.
+    const read = readAnswer(state.step, answer);
+    const { webauthn_response: response } = read.answer as { webauthn_response: string };
+    return decideAdminEnrolment(request.server, request, state, response, answered.adminEnrolment);
+  }
   if (state.purpose === 'logout') return decideLogout(state, answer, answered.logout);
   if (state.step.name === CONSENT_STEP) return decideConsent(state, answer, answered.consent);
   const read = readAnswer(state.step, answer);
@@ -791,6 +770,7 @@ export default async function (fastify: FastifyInstance) {
       let logout: LogoutDecision | undefined;
       let upstream: UpstreamStarted | undefined;
       let restarted: RestartNotice | undefined;
+      let adminEnrolment: Exclude<AdminEnrolmentResult, 'cancelled'> | undefined;
       let signedInMethod: SignedInMethod = 'password';
       const result = await answerInteraction(
         request,
@@ -821,6 +801,9 @@ export default async function (fastify: FastifyInstance) {
                 restarted: (notice) => {
                   restarted = notice;
                 },
+                adminEnrolment: (ended) => {
+                  adminEnrolment = ended;
+                },
               },
               catalog
             )
@@ -841,6 +824,17 @@ export default async function (fastify: FastifyInstance) {
             view: restarted === undefined ? result.view : { ...result.view, notice: restarted },
           });
         case 'finished': {
+          if (result.purpose === 'admin_enrolment') {
+            // The enrolment ended (#621): its passkey stored, or the
+            // enrolment spent or expired meanwhile. The browser goes to the
+            // page that says which.
+            if (adminEnrolment === undefined) {
+              throw new Error('an admin enrolment finished without a result');
+            }
+            return respond(request, reply, parsed.encoding, {
+              location: adminEnrolmentEndUrl(fastify, request, adminEnrolment),
+            });
+          }
           if (result.purpose === 'logout') {
             // The confirm step finished the interaction (#675): the session
             // ends now, or stays, as the person decided.
@@ -954,7 +948,10 @@ export default async function (fastify: FastifyInstance) {
             ? await cancelLogout(fastify, request, result)
             : result.purpose === 'account'
               ? cancelAccountInteraction(request, result)
-              : await cancelAuthorization(fastify, request, result.request),
+              : result.purpose === 'admin_enrolment'
+                ? // Nothing was stored, and the enrolment URL works until it expires (#621).
+                  adminEnrolmentEndUrl(fastify, request, 'cancelled')
+                : await cancelAuthorization(fastify, request, result.request),
       });
     }
   );

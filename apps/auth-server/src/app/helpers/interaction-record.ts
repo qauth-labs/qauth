@@ -479,11 +479,45 @@ const accountRecordSchema = z.strictObject({
   upstreamLink: upstreamLinkSchema.optional(),
 });
 
+/**
+ * What an `admin_enrolment` interaction holds (#621; ADR-019 Decision 7): the
+ * one-time enrolment the browser's token named and the account it enrols,
+ * as the start read them. Never the token, nor its hash: the transaction
+ * that stores the passkey redeems the enrolment by its id, once.
+ *
+ * - `ceremony`: 32 random bytes, base64url, that key the WebAuthn
+ *   registration's state in Redis. Made at the start, never sent.
+ * - `userHandle`: the account's WebAuthn user handle, made at the start, so
+ *   a new ceremony after a refused answer names the same one.
+ */
+export const adminEnrolmentRequestSchema = z.strictObject({
+  enrolmentId: z.uuid(),
+  userId: z.uuid(),
+  ceremony: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  userHandle: z.string().regex(/^[A-Za-z0-9_-]{1,86}$/),
+});
+
+export type AdminEnrolmentRequest = z.infer<typeof adminEnrolmentRequestSchema>;
+
+/**
+ * An interaction the token of an admin enrolment URL started (#621): the
+ * `admin_enrolment` step alone, for no client, whose answer stores the
+ * account's first passkey. Its transaction stays empty: nobody signs in. The
+ * record format is the same version: a server from before it reads an
+ * `admin_enrolment` record as absent, as any record it cannot parse.
+ */
+const adminEnrolmentRecordSchema = z.strictObject({
+  ...recordFields,
+  purpose: z.literal('admin_enrolment'),
+  request: adminEnrolmentRequestSchema,
+});
+
 export const interactionRecordSchema = z.discriminatedUnion('purpose', [
   authorizationRecordSchema,
   logoutRecordSchema,
   mailedPassRecordSchema,
   accountRecordSchema,
+  adminEnrolmentRecordSchema,
 ]);
 
 export type InteractionRecord = z.infer<typeof interactionRecordSchema>;
@@ -503,15 +537,28 @@ export type MailedPassInteractionRecord = Extract<InteractionRecord, { purpose: 
 /** A record of an interaction the hosted account page started (#844). */
 export type AccountInteractionRecord = Extract<InteractionRecord, { purpose: 'account' }>;
 
+/** A record of an admin enrolment's interaction (#621). */
+export type AdminEnrolmentInteractionRecord = Extract<
+  InteractionRecord,
+  { purpose: 'admin_enrolment' }
+>;
+
 /** A record an answer, a cancel or a user switch may act on: not a mailed pass's (#637). */
 export type AnswerableInteractionRecord = Exclude<InteractionRecord, MailedPassInteractionRecord>;
 
 /** What {@link requestClientIdOf} reads: a record's request, or one shaped like it. */
 type RequestHolder = {
-  readonly request: { readonly client_id?: string } | MailedPassRequest | AccountRequest;
+  readonly request:
+    | { readonly client_id?: string }
+    | MailedPassRequest
+    | AccountRequest
+    | AdminEnrolmentRequest;
 };
 
-/** The client the record's request names, if any: a mailed pass's and an account page's name none. */
+/**
+ * The client the record's request names, if any: a mailed pass's, an account
+ * page's and an admin enrolment's name none.
+ */
 export function requestClientIdOf(record: RequestHolder): string | undefined {
   return 'client_id' in record.request ? record.request.client_id : undefined;
 }
@@ -556,13 +603,14 @@ export function eventClientIdOf(record: RequestHolder): string | null {
 
 /**
  * The user an interaction's events name: the one its transaction proved or is
- * for, or, for a logout, the account of the session it ends (#675), and for
- * an account page's interaction, the account of the session it started for
- * (#844).
+ * for, or, for a logout, the account of the session it ends (#675), for an
+ * account page's interaction, the account of the session it started for
+ * (#844), and for an admin enrolment, the account it enrols (#621).
  */
 export function eventUserIdOf(record: InteractionRecord): string | null {
   const proved = record.transaction.userId;
   if (proved !== undefined) return proved;
+  if (record.purpose === 'admin_enrolment') return record.request.userId;
   return record.purpose === 'logout' || record.purpose === 'account'
     ? (record.carriedSession?.userId ?? null)
     : null;

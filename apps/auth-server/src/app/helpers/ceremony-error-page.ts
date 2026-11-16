@@ -28,18 +28,23 @@ export function ceremonyErrorPageOf(
   return fastify.policyStore.ofRealm(realm).policies.ceremonyApp.errorPage;
 }
 
-/** What a logout's ending adds to the query (#1106): the facts its own page showed. */
+/**
+ * What an ending adds to the query: a logout's, the facts its own page
+ * showed (#1106); an admin enrolment's, whether it stored the passkey (#621).
+ */
 export interface ErrorPageFacts {
   /** Whether this browser holds no session of the realm now. */
   readonly signedOut?: boolean;
   /** The host of the app the person would go back to, as text. */
   readonly host?: string;
+  /** Whether the admin enrolment stored the account's first passkey. */
+  readonly enrolled?: boolean;
 }
 
 /**
  * The URL of the error page `path` for an ending with `code`, on the
  * request's realm: `code`, the request's id as `trace_id` when it is one a
- * `trace_id` can carry, and the logout's facts. Exported for its unit test.
+ * `trace_id` can carry, and the ending's facts. Exported for its unit test.
  */
 export function ceremonyErrorPageUrl(
   request: FastifyRequest,
@@ -51,6 +56,7 @@ export function ceremonyErrorPageUrl(
   if (isTraceId(request.id)) query.set('trace_id', request.id);
   if (facts.signedOut !== undefined) query.set('signed_out', String(facts.signedOut));
   if (facts.host !== undefined) query.set('host', facts.host);
+  if (facts.enrolled !== undefined) query.set('enrolled', String(facts.enrolled));
   return buildRealmUrl(requestRealm(request), `${path}?${query.toString()}`);
 }
 

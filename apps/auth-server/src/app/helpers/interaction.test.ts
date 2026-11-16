@@ -313,7 +313,13 @@ async function buildHarness(): Promise<Harness> {
       { id: (request.params as { id: string }).id, revision: 0 },
       decideBy({ kind: 'finished' })
     );
-    if (result.kind !== 'finished' || result.purpose === 'logout') return result;
+    if (
+      result.kind !== 'finished' ||
+      result.purpose === 'logout' ||
+      result.purpose === 'admin_enrolment'
+    ) {
+      return result;
+    }
     return { location: await continueAtStep(request, reply, result, step) };
   });
   app.post(`${INTERACTION_API_PREFIX}/:id/fail`, async () => {

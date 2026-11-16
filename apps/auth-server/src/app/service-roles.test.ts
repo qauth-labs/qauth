@@ -117,10 +117,9 @@ describe('what each role loads (the boot-time list)', () => {
   /**
    * The repositories no process builds: nothing reads them. Custom admin
    * roles are read only through the grants until the admin API's role routes
-   * ship (#679). Admin enrolments are read only by the break-glass CLI,
-   * which is no service role, until the enrolment step serves them (#621).
+   * ship (#679).
    */
-  const UNUSED: readonly RepositoryName[] = ['auditLogs', 'adminRoles', 'adminEnrolments'];
+  const UNUSED: readonly RepositoryName[] = ['auditLogs', 'adminRoles'];
 
   it('builds every repository but the unused ones in a single process', () => {
     expect(repositoriesFor(SERVICE_ROLE_NAMES)).toEqual(

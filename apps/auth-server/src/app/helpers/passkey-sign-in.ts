@@ -153,6 +153,21 @@ function displayName(value: string, fallback: string): string {
 }
 
 /**
+ * The relying party's name a passkey ceremony of the realm shows: the
+ * realm's mail sender name, else its own name, as display text, else
+ * `QAuth`.
+ */
+export function relyingPartyNameOf(
+  fastify: Pick<FastifyInstance, 'policyStore'>,
+  realm: NonNullable<Awaited<ReturnType<FastifyInstance['repositories']['realms']['findById']>>>
+): string {
+  return displayName(
+    fastify.policyStore.ofRealm(realm).policies.mail.fromName,
+    displayName(realm.name, 'QAuth')
+  );
+}
+
+/**
  * The name of an account with no address in its passkey (#655): `account-`
  * and the first 8 characters of its user handle (base64url, random), which
  * names nobody and tells two such accounts on one authenticator apart.
@@ -335,13 +350,7 @@ export function createServerPasskeys(
       const started = await provider.startRegistration({
         transactionId: transactionOf(realmId, key),
         purpose: 'sign-in',
-        rp: {
-          id: rpId,
-          name: displayName(
-            fastify.policyStore.ofRealm(realm).policies.mail.fromName,
-            displayName(realm.name, 'QAuth')
-          ),
-        },
+        rp: { id: rpId, name: relyingPartyNameOf(fastify, realm) },
         origins,
         user: { handle, name, displayName: name },
         excludeCredentials: existing.slice(0, MAX_EXCLUDED_CREDENTIALS).map(({ row, data }) => ({
