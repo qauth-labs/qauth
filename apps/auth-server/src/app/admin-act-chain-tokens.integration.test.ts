@@ -510,8 +510,13 @@ describe('act-chain tokens for admins acting for a user (#523, real containers)'
     const refused = await accountCall('GET', CONSENTS, accessToken);
     expect(refused.statusCode, refused.body).toBe(401);
     expect(refused.headers['www-authenticate']).toContain('invalid_token');
-    // The refused call was not admitted, so it has no audit row of its own.
-    expect(await accountCallRowsOf(requester.userId)).toHaveLength(1);
+    // The refused call is audited too, as denied, with the same act chain.
+    const rows = await accountCallRowsOf(requester.userId);
+    expect(rows.map((row) => [row.operation_id, row.outcome])).toEqual([
+      ['account.consents.list', 'succeeded'],
+      ['account.consents.list', 'denied'],
+    ]);
+    expect(rows[1].act_chain).toEqual(rows[0].act_chain);
   });
 
   // Acceptance criterion: each call writes an audit row with the full act

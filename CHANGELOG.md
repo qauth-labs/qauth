@@ -46,14 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   admin's token to its record on every call, so revoking the admin's grant
   or disabling the admin stops it on its next use (401 `invalid_token`).
   Every call made with one appends an admin audit row with the full act
-  chain, and a successful call whose row cannot be written answers 503.
+  chain, refused calls included once the token's record is found, and a
+  successful call whose row cannot be written answers 503. A verified access
+  token now keeps an actor's `iss` and `client_id` in `act`.
   `requireFreshAuthentication(request)` refuses an act-chain token. The
   signer lets the `admin` role sign `at+jwt` tokens of this profile and no
   other. The `api` role's database user gets `SELECT` on
-  `admin_act_sessions`, `SELECT` and `INSERT` on `admin_audit_log`, `SELECT`
-  on `admin_audit_log_checkpoints` and on the `id`, `realm_id` and `status`
-  of `admin_approvals`; the `admin` role's gets `SELECT` and `INSERT` on
-  `admin_act_sessions`. The migration runner applies them.
+  `admin_act_sessions` and on the `id`, `realm_id` and `status` of
+  `admin_approvals`, and `EXECUTE` on the two functions of migration 0082
+  that append a call's audit row, whose actor and act chain they take from
+  the token's record; it holds nothing on `admin_audit_log`. The `admin`
+  role's gets `SELECT` and `INSERT` on `admin_act_sessions`. The migration
+  runner applies them.
 - **The declarative realm file has a fixed format,
   `urn:qauth:realm-file:v1-rc.0`** ([#515], ADR-018 §5). One JSON document
   describes a realm's configuration with no secret value: `format`

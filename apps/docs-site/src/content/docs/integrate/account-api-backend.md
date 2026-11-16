@@ -202,8 +202,9 @@ see.
   `delegated_token_refused`, and so does an operation that asks for a fresh sign-in.
 - Each call is held to the token's record: once the admin's grant is revoked, or the admin's account
   or realm is disabled, the next call answers 401 `invalid_token`.
-- Each call writes a row of the admin audit log with the whole act chain and the call's outcome. A
-  call whose row cannot be written answers 503 with `Retry-After` instead of its answer.
+- Each call writes a row of the admin audit log with the whole act chain and the call's outcome, a
+  refused one too. A call whose row cannot be written answers 503 with `Retry-After` instead of
+  its answer.
 
 A BFF never holds such a token: it holds the person's own.
 

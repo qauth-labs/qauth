@@ -15,9 +15,12 @@
  *   stops the token on its next use, with 401 `invalid_token`.
  * - **Audits every call made with it** ({@link registerAdminActChainAudit}):
  *   one row of the admin audit log, with the full act chain, the operation and
- *   its outcome. A call whose row cannot be written gets 503 for an answer
- *   that would have succeeded, never the answer unaudited. A route whose scope
- *   has no audit hook takes no such token.
+ *   its outcome, refused calls included once the token's row is found. The
+ *   row goes in through the functions of migration 0082, which take its actor
+ *   and act chain from the token's row: the account API's database user holds
+ *   nothing on the log. A call whose row cannot be written gets 503 for an
+ *   answer that would have succeeded. A route whose scope has no audit hook
+ *   takes no such token.
  * - **Lists them for the user** ({@link listAdminAccess}): who acted for them,
  *   when, and on which approval.
  *
@@ -65,6 +68,18 @@ interface AdminActChainCall {
 /** The calls in flight made with an admin's act-chain token, by request. */
 const calls = new WeakMap<FastifyRequest, AdminActChainCall>();
 
+/** A request id the audit row can hold: printable ASCII, at most 128 characters. */
+const STORABLE_TRACE_ID = /^[\x21-\x7e]{1,128}$/;
+
+/**
+ * The trace id of the call's audit row: the request's id, which on the public
+ * listener is the caller's `X-Request-Id` when it sends one, or `null` when
+ * the column could not hold it. Never a reason for the row to fail.
+ */
+function traceIdOf(request: FastifyRequest): string | null {
+  return STORABLE_TRACE_ID.test(request.id) ? request.id : null;
+}
+
 /** The one answer to an act-chain token that is no longer live, whatever the reason. */
 function noLongerValid(): JWTInvalidError {
   return new JWTInvalidError('The act-chain token is no longer valid');
@@ -89,6 +104,10 @@ function adminActorOf(
  * module), and mark the call for its audit row. A token with no `act`, or an
  * agent's, passes untouched: the operation's own rule decides on it.
  *
+ * Once the token's row is found, the call is marked whatever comes next, so a
+ * call refused because the token expired, its approval or the admin's grant
+ * was revoked, or the admin was disabled is audited too, as `denied`.
+ *
  * Runs after the family guard verified the token and resolved its subject in
  * the request's realm, and before the operation's rules.
  *
@@ -110,11 +129,9 @@ export async function checkAdminActChain(
     throw noLongerValid();
   }
   const realm = requestRealm(request);
-  const session = await request.server.repositories.adminActSessions.findLive(
-    realm.id,
-    claims.jti,
-    Date.now()
-  );
+  const records = request.server.repositories.adminActSessions;
+  const live = await records.findLive(realm.id, claims.jti, Date.now());
+  const session = live ?? (await records.findByJti(realm.id, claims.jti));
   if (
     session === undefined ||
     session.userId !== claims.sub ||
@@ -124,6 +141,9 @@ export async function checkAdminActChain(
   ) {
     throw noLongerValid();
   }
+  // From here the call is this token's: audited, whether it is admitted or not.
+  calls.set(request, { session, user: claims.sub, act, operation, audited: false });
+  if (live === undefined) throw noLongerValid();
 
   // The admin, as the admin API's authority stage reads one (#510): an
   // enabled account of an enabled realm whose issuer the actor names.
@@ -140,9 +160,9 @@ export async function checkAdminActChain(
   }
   // Every permission the minting operation needed, still held through a live
   // grant on this realm: a revoked grant stops the token here.
-  const live = await request.server.repositories.adminGrants.listLive(adminRealm.id, admin.id);
+  const grants = await request.server.repositories.adminGrants.listLive(adminRealm.id, admin.id);
   const held = effectivePermissions(
-    live
+    grants
       .filter((grant) => grantCoversRealm(grant, adminRealm, realm.id))
       .flatMap((grant) => grantedPermissionIds(grant)),
     ADMIN_SCOPE_LIST
@@ -150,7 +170,6 @@ export async function checkAdminActChain(
   if (session.permissionIds.length === 0 || !session.permissionIds.every((id) => held.has(id))) {
     throw noLongerValid();
   }
-  calls.set(request, { session, user: claims.sub, act, operation, audited: false });
 }
 
 /** The outcome of a call, from its status: as the admin pipeline records one. */
@@ -174,20 +193,16 @@ async function auditAdminActChainCall(request: FastifyRequest, reply: FastifyRep
   const { session, act, operation } = call;
   try {
     await request.server.db.transaction((tx) =>
-      request.server.repositories.adminAuditLog.appendAdminAudit(tx, {
+      request.server.repositories.adminAuditLog.appendActChainCall(tx, {
         realmId: session.realmId,
-        actorKind: 'human_admin',
+        tokenJti: session.tokenJti,
         actorId: session.adminUserId,
         actorRealmId: session.adminRealmId,
         actChain: { sub: call.user, act: { sub: act.sub, iss: act.iss, client_id: act.client_id } },
         operationId: operation.operationId,
         operationClass: operation.operationClass,
-        effects: [],
         outcome,
-        diff: null,
-        approvals: [],
-        requestDigest: null,
-        traceId: request.id,
+        traceId: traceIdOf(request),
       })
     );
   } catch (error) {
