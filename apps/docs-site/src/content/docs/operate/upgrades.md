@@ -1663,6 +1663,21 @@ A realm can now register a protected resource's scopes
 - **Register a resource only once every node runs this release.** A node of
   the previous release grants a scope by the client's own list alone.
 
+### The `account-closer` role
+
+A relying party's service account can now delete the accounts it closed with
+no approval, through the new built-in admin role `account-closer`
+([#1090](https://github.com/qauth-labs/qauth/issues/1090),
+[Account closing at a relying party](/operate/account-closing/)). There is no
+migration and no grant to apply: the role lives in the code, and the grant is
+an `admin_grants` row like any other.
+
+- **Grant the role only once every `admin` node runs this release.** A node
+  of the previous release reads `account-closer` as a role with no
+  permission, so it refuses the service account's `users.delete` with `403`,
+  and it knows no deletion without an approval. The refusal changes nothing,
+  and a retry on a node of this release deletes the account.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

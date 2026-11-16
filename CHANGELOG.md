@@ -9,23 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **A relying party's service account deletes the accounts it closed, with
-  no approval** ([#1090], ADR-019 Decision 7, amended 2026-11-16). The new
-  built-in admin role `account-closer` holds `users.delete` alone. Granted to
-  a service account on one realm, by the host's `service-accounts create
-  --grant account-closer@<realm name>` (which refuses it on every realm), it
-  lets that service account run `users.delete` there with no approval, so a
-  relying party that closes an account on its side deletes it on the realm
-  the moment the person confirms: every session ends, each client with a
-  back-channel logout URI is sent a logout token per session, and a retry
-  for a `sub` already deleted answers `204` as the first call did. Every
-  other security operation still needs its approval, and so does the
-  deletion for a person who holds the role, for a grant on every realm, for
-  a service account whose client registered itself, and on a realm whose
-  `admin.twoAdminMandatoryOperations` lists `users.delete`, which one admin
-  can always add. The audit row names the service account and lists no
-  approval; the events name its client as the actor
-  ([Account closing at a relying party](https://docs.qauth.dev/operate/account-closing/)).
 - **An admin the break-glass CLI enrolled registers its first passkey with
   the URL it was given** ([#621], ADR-019 Decision 7). The ceremony app's
   page `/ui/admin-enrolment` posts the URL's token to the new
@@ -44,6 +27,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `admin_enrolment_refused`. The `web` role's database user gets `SELECT`
   and `UPDATE` on `admin_enrolments`, which the migration runner applies
   ([Break-glass access](https://docs.qauth.dev/operate/break-glass/)).
+
+## [0.2.9] - 2026-11-16
+
+A patch release with no breaking change of the stable surface, no migration
+and no new setting. A relying party that closes an account on its side can
+now delete it on the realm with no approval: the new built-in admin role
+`account-closer`, granted to its service account on one realm, runs
+`users.delete` there unattended, and every other security operation still
+needs its approval. Grant the role only once every `admin` node runs this
+release ([upgrade guide](https://docs.qauth.dev/operate/upgrades/)).
+
+### Added
+
+- **A relying party's service account deletes the accounts it closed, with
+  no approval** ([#1090], ADR-019 Decision 7, amended 2026-11-16). The new
+  built-in admin role `account-closer` holds `users.delete` alone. Granted to
+  a service account on one realm, by the host's `service-accounts create
+  --grant account-closer@<realm name>` (which refuses it on every realm), it
+  lets that service account run `users.delete` there with no approval, so a
+  relying party that closes an account on its side deletes it on the realm
+  the moment the person confirms: every session ends, each client with a
+  back-channel logout URI is sent a logout token per session, and a retry
+  for a `sub` already deleted answers `204` as the first call did. Every
+  other security operation still needs its approval, and so does the
+  deletion for a person who holds the role, for a grant on every realm, for
+  a service account whose client registered itself, and on a realm whose
+  `admin.twoAdminMandatoryOperations` lists `users.delete`, which one admin
+  can always add. The audit row names the service account and lists no
+  approval; the events name its client as the actor
+  ([Account closing at a relying party](https://docs.qauth.dev/operate/account-closing/)).
 
 ## [0.2.8] - 2026-11-16
 
@@ -5920,7 +5933,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.8...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.9...HEAD
+[0.2.9]: https://github.com/qauth-labs/qauth/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/qauth-labs/qauth/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/qauth-labs/qauth/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/qauth-labs/qauth/compare/v0.2.5...v0.2.6
