@@ -207,76 +207,77 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 
 ## Event types
 
-| Type                                                                                                    | Category | Severity | Since  |
-| ------------------------------------------------------------------------------------------------------- | -------- | -------- | ------ |
-| [`urn:qauth:event:user.signed_in:v1-rc.0`](#usersigned_in-v1-rc0)                                       | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.sign_in_failed:v1-rc.0`](#usersign_in_failed-v1-rc0)                             | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.sign_in_step_passed:v1-rc.0`](#usersign_in_step_passed-v1-rc0)                   | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.password_breach_check_failed:v1-rc.0`](#userpassword_breach_check_failed-v1-rc0) | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.signed_out:v1-rc.0`](#usersigned_out-v1-rc0)                                     | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.client_session_ended:v1-rc.0`](#userclient_session_ended-v1-rc0)                 | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                           | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                     | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.registration_failed:v1-rc.0`](#userregistration_failed-v1-rc0)                   | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.password_reset:v1-rc.0`](#userpassword_reset-v1-rc0)                             | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.recovery_code_used:v1-rc.0`](#userrecovery_code_used-v1-rc0)                     | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.recovery_codes_failed:v1-rc.0`](#userrecovery_codes_failed-v1-rc0)               | user     | critical | v0.2.0 |
-| [`urn:qauth:event:user.disabled:v1-rc.0`](#userdisabled-v1-rc0)                                         | admin    | warning  | v0.2.0 |
-| [`urn:qauth:event:user.enabled:v1-rc.0`](#userenabled-v1-rc0)                                           | admin    | info     | v0.2.0 |
-| [`urn:qauth:event:user.session_revoked:v1-rc.0`](#usersession_revoked-v1-rc0)                           | admin    | info     | v0.2.4 |
-| [`urn:qauth:event:user.upstream_linked:v1-rc.0`](#userupstream_linked-v1-rc0)                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.upstream_unlinked:v1-rc.0`](#userupstream_unlinked-v1-rc0)                       | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.upstream_link_failed:v1-rc.0`](#userupstream_link_failed-v1-rc0)                 | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.password_changed:v1-rc.0`](#userpassword_changed-v1-rc0)                         | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.credential_added:v1-rc.0`](#usercredential_added-v1-rc0)                         | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.credential_removed:v1-rc.0`](#usercredential_removed-v1-rc0)                     | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.passkey_renamed:v1-rc.0`](#userpasskey_renamed-v1-rc0)                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0`](#userrecovery_codes_regenerated-v1-rc0)     | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.agent_ownership_refused:v1-rc.0`](#useragent_ownership_refused-v1-rc0)           | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.verified:v1-rc.0`](#userverified-v1-rc0)                                         | admin    | warning  | v0.2.3 |
-| [`urn:qauth:event:user.deleted:v1-rc.0`](#userdeleted-v1-rc0)                                           | admin    | warning  | v0.2.8 |
-| [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0 |
-| [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                           | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                   | user     | info     | v0.2.0 |
-| [`urn:qauth:event:step_up.elevated:v1-rc.0`](#step_upelevated-v1-rc0)                                   | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.granted:v1-rc.0`](#consentgranted-v1-rc0)                                     | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.administrative:v1-rc.0`](#consentadministrative-v1-rc0)                       | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.denied:v1-rc.0`](#consentdenied-v1-rc0)                                       | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.revoked:v1-rc.0`](#consentrevoked-v1-rc0)                                     | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.issued:v1-rc.0`](#tokenissued-v1-rc0)                                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.request_failed:v1-rc.0`](#tokenrequest_failed-v1-rc0)                           | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:token.family_revoked:v1-rc.0`](#tokenfamily_revoked-v1-rc0)                           | user     | critical | v0.2.0 |
-| [`urn:qauth:event:token.revoked:v1-rc.0`](#tokenrevoked-v1-rc0)                                         | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.revocation_failed:v1-rc.0`](#tokenrevocation_failed-v1-rc0)                     | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:token.introspected:v1-rc.0`](#tokenintrospected-v1-rc0)                               | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.introspection_failed:v1-rc.0`](#tokenintrospection_failed-v1-rc0)               | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:userinfo.served:v1-rc.0`](#userinfoserved-v1-rc0)                                     | user     | info     | v0.2.0 |
-| [`urn:qauth:event:userinfo.request_failed:v1-rc.0`](#userinforequest_failed-v1-rc0)                     | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:client.created:v1-rc.0`](#clientcreated-v1-rc0)                                       | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.updated:v1-rc.0`](#clientupdated-v1-rc0)                                       | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.deleted:v1-rc.0`](#clientdeleted-v1-rc0)                                       | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.secret_rotated:v1-rc.0`](#clientsecret_rotated-v1-rc0)                         | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.suspended:v1-rc.0`](#clientsuspended-v1-rc0)                                   | admin    | warning  | v0.2.0 |
-| [`urn:qauth:event:client.suspension_lifted:v1-rc.0`](#clientsuspension_lifted-v1-rc0)                   | admin    | info     | v0.2.0 |
-| [`urn:qauth:event:client.first_party_changed:v1-rc.0`](#clientfirst_party_changed-v1-rc0)               | admin    | warning  | v0.2.0 |
-| [`urn:qauth:event:client.verified_domain_changed:v1-rc.0`](#clientverified_domain_changed-v1-rc0)       | admin    | warning  | v0.2.0 |
-| [`urn:qauth:event:api_key.created:v1-rc.0`](#api_keycreated-v1-rc0)                                     | user     | info     | v0.2.0 |
-| [`urn:qauth:event:api_key.revoked:v1-rc.0`](#api_keyrevoked-v1-rc0)                                     | user     | info     | v0.2.0 |
-| [`urn:qauth:event:wallet.linked:v1-rc.0`](#walletlinked-v1-rc0)                                         | user     | info     | v0.2.0 |
-| [`urn:qauth:event:wallet.link_failed:v1-rc.0`](#walletlink_failed-v1-rc0)                               | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:wallet.presentation_received:v1-rc.0`](#walletpresentation_received-v1-rc0)           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:interaction.created:v1-rc.0`](#interactioncreated-v1-rc0)                             | user     | info     | v0.2.0 |
-| [`urn:qauth:event:interaction.answered:v1-rc.0`](#interactionanswered-v1-rc0)                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:interaction.cancelled:v1-rc.0`](#interactioncancelled-v1-rc0)                         | user     | info     | v0.2.0 |
-| [`urn:qauth:event:interaction.expired:v1-rc.0`](#interactionexpired-v1-rc0)                             | user     | info     | v0.2.0 |
-| [`urn:qauth:event:request.csrf_rejected:v1-rc.0`](#requestcsrf_rejected-v1-rc0)                         | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:request.account_operation_refused:v1-rc.0`](#requestaccount_operation_refused-v1-rc0) | user     | info     | v0.2.0 |
-| [`urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`](#ssfstreamverification_requested-v1-rc0)  | user     | info     | v0.2.0 |
-| [`urn:qauth:event:key.emergency_retired:v1-rc.0`](#keyemergency_retired-v1-rc0)                         | admin    | critical | v0.2.0 |
-| [`urn:qauth:event:key.next_created:v1-rc.0`](#keynext_created-v1-rc0)                                   | admin    | info     | v0.2.5 |
-| [`urn:qauth:event:key.rotated:v1-rc.0`](#keyrotated-v1-rc0)                                             | admin    | info     | v0.2.5 |
-| [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                           | admin    | info     | v0.2.0 |
-| [`urn:qauth:event:admin.break_glass_used:v1-rc.0`](#adminbreak_glass_used-v1-rc0)                       | admin    | critical | v0.2.8 |
+| Type                                                                                                    | Category | Severity | Since   |
+| ------------------------------------------------------------------------------------------------------- | -------- | -------- | ------- |
+| [`urn:qauth:event:user.signed_in:v1-rc.0`](#usersigned_in-v1-rc0)                                       | user     | info     | v0.2.0  |
+| [`urn:qauth:event:user.sign_in_failed:v1-rc.0`](#usersign_in_failed-v1-rc0)                             | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:user.sign_in_step_passed:v1-rc.0`](#usersign_in_step_passed-v1-rc0)                   | user     | info     | v0.2.0  |
+| [`urn:qauth:event:user.password_breach_check_failed:v1-rc.0`](#userpassword_breach_check_failed-v1-rc0) | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:user.signed_out:v1-rc.0`](#usersigned_out-v1-rc0)                                     | user     | info     | v0.2.0  |
+| [`urn:qauth:event:user.client_session_ended:v1-rc.0`](#userclient_session_ended-v1-rc0)                 | user     | info     | v0.2.0  |
+| [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                           | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                     | user     | info     | v0.2.0  |
+| [`urn:qauth:event:user.registration_failed:v1-rc.0`](#userregistration_failed-v1-rc0)                   | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:user.password_reset:v1-rc.0`](#userpassword_reset-v1-rc0)                             | user     | info     | v0.2.0  |
+| [`urn:qauth:event:user.recovery_code_used:v1-rc.0`](#userrecovery_code_used-v1-rc0)                     | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:user.recovery_codes_failed:v1-rc.0`](#userrecovery_codes_failed-v1-rc0)               | user     | critical | v0.2.0  |
+| [`urn:qauth:event:user.disabled:v1-rc.0`](#userdisabled-v1-rc0)                                         | admin    | warning  | v0.2.0  |
+| [`urn:qauth:event:user.enabled:v1-rc.0`](#userenabled-v1-rc0)                                           | admin    | info     | v0.2.0  |
+| [`urn:qauth:event:user.session_revoked:v1-rc.0`](#usersession_revoked-v1-rc0)                           | admin    | info     | v0.2.4  |
+| [`urn:qauth:event:user.upstream_linked:v1-rc.0`](#userupstream_linked-v1-rc0)                           | user     | info     | v0.2.0  |
+| [`urn:qauth:event:user.upstream_unlinked:v1-rc.0`](#userupstream_unlinked-v1-rc0)                       | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:user.upstream_link_failed:v1-rc.0`](#userupstream_link_failed-v1-rc0)                 | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:user.password_changed:v1-rc.0`](#userpassword_changed-v1-rc0)                         | user     | info     | v0.2.0  |
+| [`urn:qauth:event:user.credential_added:v1-rc.0`](#usercredential_added-v1-rc0)                         | user     | info     | v0.2.0  |
+| [`urn:qauth:event:user.credential_removed:v1-rc.0`](#usercredential_removed-v1-rc0)                     | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:user.passkey_renamed:v1-rc.0`](#userpasskey_renamed-v1-rc0)                           | user     | info     | v0.2.0  |
+| [`urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0`](#userrecovery_codes_regenerated-v1-rc0)     | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:user.agent_ownership_refused:v1-rc.0`](#useragent_ownership_refused-v1-rc0)           | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:user.verified:v1-rc.0`](#userverified-v1-rc0)                                         | admin    | warning  | v0.2.3  |
+| [`urn:qauth:event:user.deleted:v1-rc.0`](#userdeleted-v1-rc0)                                           | admin    | warning  | v0.2.8  |
+| [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0  |
+| [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                           | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                   | user     | info     | v0.2.0  |
+| [`urn:qauth:event:step_up.elevated:v1-rc.0`](#step_upelevated-v1-rc0)                                   | user     | info     | v0.2.0  |
+| [`urn:qauth:event:consent.granted:v1-rc.0`](#consentgranted-v1-rc0)                                     | user     | info     | v0.2.0  |
+| [`urn:qauth:event:consent.administrative:v1-rc.0`](#consentadministrative-v1-rc0)                       | user     | info     | v0.2.0  |
+| [`urn:qauth:event:consent.denied:v1-rc.0`](#consentdenied-v1-rc0)                                       | user     | info     | v0.2.0  |
+| [`urn:qauth:event:consent.revoked:v1-rc.0`](#consentrevoked-v1-rc0)                                     | user     | info     | v0.2.0  |
+| [`urn:qauth:event:token.issued:v1-rc.0`](#tokenissued-v1-rc0)                                           | user     | info     | v0.2.0  |
+| [`urn:qauth:event:token.request_failed:v1-rc.0`](#tokenrequest_failed-v1-rc0)                           | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:token.family_revoked:v1-rc.0`](#tokenfamily_revoked-v1-rc0)                           | user     | critical | v0.2.0  |
+| [`urn:qauth:event:token.revoked:v1-rc.0`](#tokenrevoked-v1-rc0)                                         | user     | info     | v0.2.0  |
+| [`urn:qauth:event:token.revocation_failed:v1-rc.0`](#tokenrevocation_failed-v1-rc0)                     | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:token.introspected:v1-rc.0`](#tokenintrospected-v1-rc0)                               | user     | info     | v0.2.0  |
+| [`urn:qauth:event:token.introspection_failed:v1-rc.0`](#tokenintrospection_failed-v1-rc0)               | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:userinfo.served:v1-rc.0`](#userinfoserved-v1-rc0)                                     | user     | info     | v0.2.0  |
+| [`urn:qauth:event:userinfo.request_failed:v1-rc.0`](#userinforequest_failed-v1-rc0)                     | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:client.created:v1-rc.0`](#clientcreated-v1-rc0)                                       | user     | info     | v0.2.0  |
+| [`urn:qauth:event:client.updated:v1-rc.0`](#clientupdated-v1-rc0)                                       | user     | info     | v0.2.0  |
+| [`urn:qauth:event:client.deleted:v1-rc.0`](#clientdeleted-v1-rc0)                                       | user     | info     | v0.2.0  |
+| [`urn:qauth:event:client.secret_rotated:v1-rc.0`](#clientsecret_rotated-v1-rc0)                         | user     | info     | v0.2.0  |
+| [`urn:qauth:event:client.suspended:v1-rc.0`](#clientsuspended-v1-rc0)                                   | admin    | warning  | v0.2.0  |
+| [`urn:qauth:event:client.suspension_lifted:v1-rc.0`](#clientsuspension_lifted-v1-rc0)                   | admin    | info     | v0.2.0  |
+| [`urn:qauth:event:client.first_party_changed:v1-rc.0`](#clientfirst_party_changed-v1-rc0)               | admin    | warning  | v0.2.0  |
+| [`urn:qauth:event:client.verified_domain_changed:v1-rc.0`](#clientverified_domain_changed-v1-rc0)       | admin    | warning  | v0.2.0  |
+| [`urn:qauth:event:api_key.created:v1-rc.0`](#api_keycreated-v1-rc0)                                     | user     | info     | v0.2.0  |
+| [`urn:qauth:event:api_key.revoked:v1-rc.0`](#api_keyrevoked-v1-rc0)                                     | user     | info     | v0.2.0  |
+| [`urn:qauth:event:wallet.linked:v1-rc.0`](#walletlinked-v1-rc0)                                         | user     | info     | v0.2.0  |
+| [`urn:qauth:event:wallet.link_failed:v1-rc.0`](#walletlink_failed-v1-rc0)                               | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:wallet.presentation_received:v1-rc.0`](#walletpresentation_received-v1-rc0)           | user     | info     | v0.2.0  |
+| [`urn:qauth:event:interaction.created:v1-rc.0`](#interactioncreated-v1-rc0)                             | user     | info     | v0.2.0  |
+| [`urn:qauth:event:interaction.answered:v1-rc.0`](#interactionanswered-v1-rc0)                           | user     | info     | v0.2.0  |
+| [`urn:qauth:event:interaction.cancelled:v1-rc.0`](#interactioncancelled-v1-rc0)                         | user     | info     | v0.2.0  |
+| [`urn:qauth:event:interaction.expired:v1-rc.0`](#interactionexpired-v1-rc0)                             | user     | info     | v0.2.0  |
+| [`urn:qauth:event:request.csrf_rejected:v1-rc.0`](#requestcsrf_rejected-v1-rc0)                         | user     | warning  | v0.2.0  |
+| [`urn:qauth:event:request.account_operation_refused:v1-rc.0`](#requestaccount_operation_refused-v1-rc0) | user     | info     | v0.2.0  |
+| [`urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`](#ssfstreamverification_requested-v1-rc0)  | user     | info     | v0.2.0  |
+| [`urn:qauth:event:key.emergency_retired:v1-rc.0`](#keyemergency_retired-v1-rc0)                         | admin    | critical | v0.2.0  |
+| [`urn:qauth:event:key.next_created:v1-rc.0`](#keynext_created-v1-rc0)                                   | admin    | info     | v0.2.5  |
+| [`urn:qauth:event:key.rotated:v1-rc.0`](#keyrotated-v1-rc0)                                             | admin    | info     | v0.2.5  |
+| [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                           | admin    | info     | v0.2.0  |
+| [`urn:qauth:event:admin.break_glass_used:v1-rc.0`](#adminbreak_glass_used-v1-rc0)                       | admin    | critical | v0.2.8  |
+| [`urn:qauth:event:admin.enrolment_completed:v1-rc.0`](#adminenrolment_completed-v1-rc0)                 | admin    | info     | v0.2.10 |
 
 ### user.signed_in v1-rc.0
 
@@ -541,7 +542,7 @@ A person changed their account's password with the current one, after a fresh si
 
 ### user.credential_added v1-rc.0
 
-A passkey or an authenticator app (TOTP) was bound to a person’s account, in a step of the hosted pages the person answered: after a sign-in that offered or asked for it, in a recovery that replaced a lost passkey, or from the hosted account page after a fresh sign-in. A passkey an account was registered with is recorded by the registration (`user.registered`). One bound after a sign-in that proved only the password is new for the realm’s `accounts.newFactorWindowDays` (#1064).
+A passkey or an authenticator app (TOTP) was bound to a person’s account, in a step of the hosted pages the person answered: after a sign-in that offered or asked for it, in a recovery that replaced a lost passkey, from the hosted account page after a fresh sign-in, or, for an admin account the break-glass CLI created, at its one-time enrolment (#621), recorded with `admin.enrolment_completed`. A passkey an account was registered with is recorded by the registration (`user.registered`). One bound after a sign-in that proved only the password is new for the realm’s `accounts.newFactorWindowDays` (#1064).
 
 - Identifier: `urn:qauth:event:user.credential_added:v1-rc.0`
 - Category: `user` · Severity: `info` · Since: v0.2.0
@@ -1085,12 +1086,12 @@ A browser ceremony began: the server created an interaction and bound it to the 
 - Subject: `user`, when known
 - Schema: [interaction.created.v1-rc.0.json](/schemas/events/interaction.created.v1-rc.0.json)
 
-| Member        | Type                                                                         | Required | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------- | ---------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `interaction` | UUID                                                                         | yes      | The interaction: a random reference the server gave it, which links the events of one interaction. Never the interaction id the browser holds.                                                                                                                                                                                                                                                                                                   |
-| `purpose`     | one of `authorization`, `logout`, `mailed_pass`, `account`, or a later value | yes      | `authorization`: an authorization request at the authorization endpoint. `logout`: an RP-initiated logout at the end-session endpoint, which asks the person to confirm (#675). `mailed_pass`: the reset or registration start a mailed pass link carries (#637). `account`: a sign-in, a fresh sign-in before a change, an enrolment or an upstream link on the hosted account page (#844), for no client. The set may grow in a minor release. |
-| `step`        | string                                                                       | yes      | The first step the ceremony asks for.                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `replaces`    | UUID                                                                         | no       | For an interaction that a user switch started: the interaction it replaces, which ended with it. Nothing proved in that one carries over.                                                                                                                                                                                                                                                                                                        |
+| Member        | Type                                                                                            | Required | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interaction` | UUID                                                                                            | yes      | The interaction: a random reference the server gave it, which links the events of one interaction. Never the interaction id the browser holds.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `purpose`     | one of `authorization`, `logout`, `mailed_pass`, `account`, `admin_enrolment`, or a later value | yes      | `authorization`: an authorization request at the authorization endpoint. `logout`: an RP-initiated logout at the end-session endpoint, which asks the person to confirm (#675). `mailed_pass`: the reset or registration start a mailed pass link carries (#637). `account`: a sign-in, a fresh sign-in before a change, an enrolment or an upstream link on the hosted account page (#844), for no client. `admin_enrolment`: the one-time enrolment of an admin account the break-glass CLI created, started with the token of its enrolment URL (#621), for no client. The set may grow in a minor release. |
+| `step`        | string                                                                                          | yes      | The first step the ceremony asks for.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `replaces`    | UUID                                                                                            | no       | For an interaction that a user switch started: the interaction it replaces, which ended with it. Nothing proved in that one carries over.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ### interaction.answered v1-rc.0
 
@@ -1258,6 +1259,19 @@ An operator ran a break-glass command on a host that holds the database credenti
 | Member    | Type                                                 | Required | Meaning                                                                                   |
 | --------- | ---------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------- |
 | `command` | one of `enrol-admin`, `retire-key`, or a later value | yes      | The command that ran: `enrol-admin` or `retire-key`. The set may grow in a minor release. |
+
+### admin.enrolment_completed v1-rc.0
+
+An admin account that the break-glass CLI's `enrol-admin` created registered its first passkey with the one-time enrolment URL (ADR-019 Decision 7, #621), in the browser that opened it. The URL's token is spent in the same transaction, so each enrolment completes once; the account has no password and signs in with the passkey from now on. It cannot approve another admin's request for 7 days. Emitted with the account's `user.credential_added`, in the transaction that stores the passkey.
+
+- Identifier: `urn:qauth:event:admin.enrolment_completed:v1-rc.0`
+- Category: `admin` · Severity: `info` · Since: v0.2.10
+- Subject: `user`, when known
+- Schema: [admin.enrolment_completed.v1-rc.0.json](/schemas/events/admin.enrolment_completed.v1-rc.0.json)
+
+| Member         | Type | Required | Meaning                                                  |
+| -------------- | ---- | -------- | -------------------------------------------------------- |
+| `credentialId` | UUID | yes      | The id of the passkey credential the account registered. |
 
 ## Earlier event names
 

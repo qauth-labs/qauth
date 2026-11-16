@@ -4,7 +4,7 @@ import { adminDiffSchema } from '../admin-diff';
 import { defineEventType } from '../definition';
 import { ACTOR_TYPES, extensibleEnum } from '../envelope';
 import { QAUTH_BREAK_GLASS_USED } from '../ssf-mapping';
-import { FIRST_RELEASE } from './fields';
+import { FIRST_RELEASE, recordId } from './fields';
 
 /**
  * Admin events (ADR-020 §3, ADR-019 Decision 7, issue #459): what an
@@ -140,7 +140,26 @@ export const adminBreakGlassUsed = defineEventType({
     'Recorded once per run of a break-glass command (#602), whatever it changes: an emergency retirement also sends `key-emergency-retired` for each key it retires. Every stream of the realm that requested the event receives it.',
 });
 
-export const ADMIN_EVENT_TYPES = [adminChangeApplied, adminBreakGlassUsed] as const;
+export const adminEnrolmentCompleted = defineEventType({
+  name: 'admin.enrolment_completed',
+  version: 1,
+  rc: 0,
+  description:
+    "An admin account that the break-glass CLI's `enrol-admin` created registered its first passkey with the one-time enrolment URL (ADR-019 Decision 7, #621), in the browser that opened it. The URL's token is spent in the same transaction, so each enrolment completes once; the account has no password and signs in with the passkey from now on. It cannot approve another admin's request for 7 days. Emitted with the account's `user.credential_added`, in the transaction that stores the passkey.",
+  category: 'admin',
+  severity: 'info',
+  since: 'v0.2.10',
+  subject: 'user',
+  data: z.strictObject({
+    credentialId: recordId('The id of the passkey credential the account registered.'),
+  }),
+});
+
+export const ADMIN_EVENT_TYPES = [
+  adminChangeApplied,
+  adminBreakGlassUsed,
+  adminEnrolmentCompleted,
+] as const;
 
 /** One approval, as an admin event records it. */
 export type AdminApproval = z.infer<typeof adminApprovalSchema>;
