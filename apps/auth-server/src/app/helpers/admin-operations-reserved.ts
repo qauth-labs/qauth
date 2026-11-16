@@ -356,6 +356,12 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     "Verify an account as the operator: it counts as verified for sign-in and for owning an agent, and an unclaimed account is claimed, so another person's mailbox proof no longer ends it."
   ),
   reserve(
+    'users.delete',
+    ['credential-path'],
+    `${ADR_019}, ${ADR_020}, #681`,
+    "Delete an account at once, with every credential, link and address that authenticates or recovers it; each of its sessions ends with its back-channel logouts. It refuses a service account's account, and an account that holds an admin grant: an admin is removed through the admin operations, under the two-admin rule (#521)."
+  ),
+  reserve(
     'upstreamProviders.create',
     ['credential-path'],
     `${ADR_019}, #714`,

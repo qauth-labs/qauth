@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/user.session_revoked.v1-rc.0.json",
   "title": "urn:qauth:event:user.session_revoked:v1-rc.0",
-  "description": "The user.session_revoked event, v1-rc.0. An operator's or an admin's action on an account ended one of its browser sessions, not the person's own sign-out: the operator tool disabled the account, and ended each session it held. One event per session ended, in the transaction that ended it.",
+  "description": "The user.session_revoked event, v1-rc.0. An operator's or an admin's action on an account ended one of its sessions, not the person's own sign-out: the operator tool disabled the account, or an admin deleted it, and ended each session it held, a sign-up's or a reset's logout-only session included. One event per session ended, in the transaction that ended it.",
   "type": "object",
   "properties": {
     "id": {
@@ -153,9 +153,10 @@
         },
         "reason": {
           "type": "string",
-          "description": "`account_disabled`: the account was disabled. The set may grow in a minor release.",
+          "description": "`account_disabled`: the account was disabled. `account_deleted`: an admin deleted the account. The set may grow in a minor release.",
           "x-extensible-enum": [
-            "account_disabled"
+            "account_disabled",
+            "account_deleted"
           ]
         }
       },

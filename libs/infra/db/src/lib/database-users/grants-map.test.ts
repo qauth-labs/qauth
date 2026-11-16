@@ -220,6 +220,26 @@ describe('the grants map (#498)', () => {
     ).toEqual(['admin']);
   });
 
+  it("gives admin users.delete's two functions and the session ending it reuses, never a table delete of an account (#681)", () => {
+    expect(FUNCTION_GRANTS['"users_lock_for_deletion"(uuid, uuid)']).toEqual(['admin']);
+    expect(FUNCTION_GRANTS['"users_delete_account"(uuid, uuid)']).toEqual(['admin']);
+    // What the sessions repository's `revokeForUser` runs: lock and revoke
+    // the sessions, delete and return their registry rows, spend their codes.
+    expect(privilegesOf('admin', 'sessions')).toEqual(['SELECT', 'UPDATE']);
+    expect(privilegesOf('admin', 'session_clients')).toEqual(['SELECT', 'DELETE']);
+    expect(privilegesOf('admin', 'authorization_codes')).toEqual(['SELECT', 'UPDATE']);
+    // Nothing else of the account: the cascade removes the rest as the owner.
+    for (const table of [
+      'user_credentials',
+      'user_recovery_codes',
+      'oauth_consents',
+      'user_attributes',
+      'session_refresh_families',
+    ]) {
+      expect(privilegesOf('admin', table), table).toEqual([]);
+    }
+  });
+
   it("lets admin manage any client of a realm and revoke a client's tokens, never issue one (#632)", () => {
     expect(privilegesOf('admin', 'oauth_clients')).toEqual([
       'SELECT',

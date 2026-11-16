@@ -212,8 +212,9 @@ deletes it once the relation has ended and every event about the user has reache
 the SET that tells of the end still arrives. A disabled user is related to no receiver, so after
 \`account-disabled\` reaches a stream the sweep deletes the user's subject there, and
 \`account-enabled\` reaches only a stream the sweep has not cleared yet: once the user is enabled,
-the receiver adds them again. The [SSF transmitter](/operate/ssf-transmitter/) guide gives the
-whole rule.`,
+the receiver adds them again. A deleted user's consents and refresh tokens go with the account, so
+after \`account-purged\` reaches a stream the sweep deletes the user's subject there too. The
+[SSF transmitter](/operate/ssf-transmitter/) guide gives the whole rule.`,
     `## Mapping`,
     mappingTable(definitions),
     notesList(definitions),

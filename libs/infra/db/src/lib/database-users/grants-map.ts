@@ -111,8 +111,10 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // Read-only since #458 and read by nothing at run time.
   audit_logs: {},
   // Only the purge job, on `api`, deletes the expired rows of the four
-  // short-lived token tables (`purge-expired.ts`).
-  authorization_codes: { web: SIU, api: SIUD },
+  // short-lived token tables (`purge-expired.ts`). `admin` spends the
+  // unredeemed codes of the sessions an account's deletion ends (#681), as
+  // every session revocation does.
+  authorization_codes: { web: SIU, api: SIUD, admin: SU },
   // The node list (#499): no role holds anything on it. Every node
   // registers, marks seen, removes and lists itself through the functions of
   // migration 0077 (FUNCTION_GRANTS below).
@@ -167,14 +169,19 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // resolves its approver as the admin API resolves a caller. Written by no
   // role: the host's `service-accounts` command writes it as the owner.
   service_accounts: { web: S, api: S, admin: S },
-  session_clients: { web: SID, api: SID },
+  // An account's deletion through the admin API (#681) ends its sessions as
+  // every revocation does: it deletes and returns their registry rows.
+  session_clients: { web: SID, api: SID, admin: SD },
   // The refresh families a logout-only session's codes started (#1144): the
   // code exchange, on `api`, links a family's first token; ending one session
   // reads the links, on `web` (the hosted account page) and on `api` (the
   // account API). Purging a session deletes its rows through the cascade.
   session_refresh_families: { web: S, api: SI },
   // Only the session purge, on `web`, deletes a session (`session-purge.ts`).
-  sessions: { web: SIUD, api: SIU },
+  // `admin` ends every session of an account it deletes (#681), locking and
+  // revoking them as the session repository's `revokeForUser` does, before the
+  // deletion's cascade removes the rows.
+  sessions: { web: SIUD, api: SIU, admin: SU },
   // The SSF streams (#410): managed on `api`, read by the delivery route.
   ssf_stream_subjects: { api: SID },
   ssf_streams: { api: SIUD, delivery: S },
@@ -212,7 +219,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // `api` creates accounts; `web` and `api` record sign-ins; `admin` finds
   // the account behind an admin token, and records an operator's
   // verification of one only through `users_record_operator_verification`
-  // (`users.verify`, #1052). No role deletes one.
+  // (`users.verify`, #1052). No role deletes one through a table grant:
+  // `admin` locks and deletes an account only through the functions of
+  // migration 0080 (`users.delete`, #681).
   users: { web: SIU, api: SIU, admin: S },
 });
 
@@ -313,6 +322,13 @@ export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // account was issued (migration 0078, #522): `admin` holds no UPDATE on
   // `users`, and the function moves only that account's not_valid_before.
   '"service_accounts_end_tokens"(uuid, uuid)': ['admin'],
+  // An admin's deletion of an account (`users.delete`, migration 0080, #681):
+  // the lock that keeps anything from being added to the account until the
+  // deletion commits, and the deletion, which refuses a service account's
+  // account and one that holds an admin grant. `admin` holds no UPDATE and no
+  // DELETE on `users`.
+  '"users_lock_for_deletion"(uuid, uuid)': ['admin'],
+  '"users_delete_account"(uuid, uuid)': ['admin'],
   // The admin audit log's prune and the admin chain's trigger function stay
   // with the owner: no role runs them.
 });

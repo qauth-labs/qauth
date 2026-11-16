@@ -302,7 +302,8 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
         summary: 'File an approval for one request of a security operation',
         // 409: the state an operation's request reads refuses it before
         // anything is filed (users.verify: a disabled account, or one an
-        // operator already verified, #1052).
+        // operator already verified, #1052; users.delete: a service
+        // account's account, or one that holds an admin grant, #681).
         // 409 too: the realm requires a second admin and no other admin can
         // give the approval (`approval_unavailable`, #521).
         'x-qauth-errors': [400, 401, 403, 404, 409, 422],

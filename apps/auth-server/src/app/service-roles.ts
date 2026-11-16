@@ -144,6 +144,8 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     // client's first-party profile revokes its `refreshTokens`. The
     // authority stage reads whether the caller is a service account
     // (`serviceAccounts`, #522), and so does the count of who may approve.
+    // An admin's deletion of an account (#681) ends its `sessions`, each
+    // with its back-channel logout notices, before it deletes the account.
     repositories: [
       'users',
       'oauthClients',
@@ -156,6 +158,7 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
       'realmSecrets',
       'realmAuthMethodPlugins',
       'serviceAccounts',
+      'sessions',
     ],
   },
   signer: {

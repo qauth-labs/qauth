@@ -1,9 +1,9 @@
 ---
 title: Accounts
-description: How to disable a user account and enable it again, what disabling ends at once and for good, what suspending a client or disabling a realm ends, and how an operator verifies an account that cannot confirm its address.
+description: How to disable a user account and enable it again, what disabling ends at once and for good, what suspending a client or disabling a realm ends, how an operator verifies an account that cannot confirm its address, and how an admin deletes an account.
 sidebar:
   order: 13
-lastVerified: '2026-11-12'
+lastVerified: '2026-11-15'
 ---
 
 An operator disables an account to stop whoever holds it, for example after
@@ -11,7 +11,8 @@ the account was taken over. The admin API has no operation for that yet, so
 this page uses the operator tool, which talks to the database directly. An
 operator also verifies an account that cannot confirm its address
 ([Verify an account](#verify-an-account)): through the admin API, or on the
-server host where no admin API is set up.
+server host where no admin API is set up. An admin deletes an account through
+the admin API ([Delete an account](#delete-an-account)).
 
 ## What disabling does
 
@@ -361,3 +362,98 @@ command, with the operating-system user as its actor.
 During a rolling upgrade from 0.2, a node of 0.2 does not read the
 verification: it still asks the account for its mailbox code. Verify accounts
 once every node runs this release.
+
+## Delete an account
+
+An admin deletes an account through the admin API's `users.delete`
+([ADR-020](/reference/records/adr/020-ui-surfaces-and-acceptance-criteria/) §3).
+The deletion is immediate and cannot be undone. In one transaction, it:
+
+- ends every session the account holds: each browser session, and each
+  logout-only session a sign-up or a password reset left. Every client a
+  session signed in to that has a back-channel logout URI is queued one logout
+  token per session, in that same transaction, so no session survives the
+  deletion and no notice is lost. The delivery role sends the tokens after the
+  commit, as for any other session that ends;
+- deletes the account, and with it everything that hangs off it: its
+  credentials (password, passkeys, authenticator app, upstream and wallet
+  identities), recovery codes, consents, attributes, refresh tokens,
+  unredeemed codes and required actions. Its access tokens stop working
+  wherever QAuth checks them: introspection answers `active: false` and
+  `/oauth/userinfo` refuses them. A resource server that verifies access
+  tokens itself accepts one until it expires;
+- records the admin events: a `user.session_revoked` for each session it
+  ended, then `user.deleted`, the admin as their actor, and the call's audit
+  row, which keeps the account's id, its creation time and the id and type of
+  each credential, never an address.
+
+The browser that held the account's session signs in again at the next
+authorization request: no app is signed in to without a prompt.
+
+### Deleting through the admin API
+
+`users.delete` is a security operation: it needs the permission
+`users.delete`, so a token with `qauth:admin:security`, and an approval
+([security operations](/reference/security-operations/)). A role can grant
+`users.delete` alone. A service account may file the approval; a person
+approves it. File it with the account in `params` and no body. The approver
+sees the account's id, when it was created, whether it is enabled, what the
+deletion ends and each credential with the proof it holds. A credential's
+identifier is shown masked, only its first and last character
+(`identifier d***m, proved`), and the approval keeps only that: it outlives
+the account. An account with no identifier, such as one that signs in with a
+passkey alone, is told by its id, its creation time and its credentials:
+
+```http
+POST /admin/v1-rc.0/realms/<realm id>/approvals
+Content-Type: application/json
+
+{ "operation": "users.delete", "params": { "userId": "<user id>" },
+  "reason": "The person closed the account at the relying party." }
+```
+
+Once it is approved, send the deletion with the approval:
+
+```http
+DELETE /admin/v1-rc.0/realms/<realm id>/users/<user id>
+If-Match: *
+QAuth-Approval: <approval id>
+```
+
+It answers `204` with no body. The approval holds only for the account as it
+stood when it was filed: when a credential is added, removed or proved in
+between, it no longer matches, and you file a new one.
+
+**It is idempotent by id.** An id the realm does not hold answers `204` too,
+whether the account is unknown, was deleted already, or belongs to another
+realm: the call changes nothing and records no event, and its approver is
+shown that nothing is deleted. A caller that keeps an account in a retry table
+until QAuth confirms the deletion can send the same call again with
+`If-Match: *` and gets the same answer. An approval is used once, so a retry
+needs an approval of its own, as the first call did. A call that names the account's
+`ETag` in `If-Match` instead answers `412` once the account is gone, as any
+conditional request on a changed resource does.
+
+Two accounts are refused with `409`, before anything is filed:
+
+- a service account's account: disable the service account with
+  `pnpm nx run auth-server:service-accounts -- disable`
+  ([Service accounts](/operate/service-accounts/)), and remove it through its
+  own path;
+- an account that holds an admin grant that is not revoked: removing an admin
+  goes through the admin operations, under the two-admin rule, which deleting
+  the account would bypass. The caller's own account is one.
+
+| Event                                                                             | When                                             |
+| --------------------------------------------------------------------------------- | ------------------------------------------------ |
+| [`user.session_revoked`](/reference/events/#usersession_revoked-v1-rc0) (`info`)  | Each session the deletion ended                  |
+| [`user.deleted`](/reference/events/#userdeleted-v1-rc0) (`warning`)               | The account was deleted                          |
+| [`user.client_session_ended`](/reference/events/#userclient_session_ended-v1-rc0) | Each client a session signed in to, with its URI |
+
+`user.session_revoked` and `user.deleted` are admin events, in the realm's
+hash chain, and reach Shared Signals receivers as CAEP `session-revoked` and
+RISC `account-purged`
+([SSF transmitter](/operate/ssf-transmitter/)).
+
+During a rolling upgrade, a node of the previous release has no
+`users.delete`: replace the `admin` nodes before you delete accounts.

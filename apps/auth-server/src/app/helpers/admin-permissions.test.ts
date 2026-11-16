@@ -32,6 +32,7 @@ describe('the admin permission catalog (#507)', () => {
       ['plugins.security', 'security'],
       ['secrets.seal', 'write'],
       ['users.security', 'security'],
+      ['users.delete', 'security'],
       ['clients.read', 'read'],
       ['clients.write', 'write'],
       ['clients.security', 'security'],
@@ -47,6 +48,7 @@ describe('the admin permission catalog (#507)', () => {
       'realms.policies.security',
       'plugins.security',
       'users.security',
+      'users.delete',
       'clients.security',
       'approvals.approve',
     ]);

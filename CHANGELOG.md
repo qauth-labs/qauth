@@ -86,6 +86,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   option defaults to `requiredScopes` and must hold every entry of it
   (`ResourceGuardConfigError` otherwise), so a guard without it serves the
   same document and challenges as before.
+- **An admin deletes an account through the admin API** ([#681], ADR-020
+  §3). `DELETE /admin/v1-rc.0/realms/{realmId}/users/{userId}`
+  (`users.delete`, experimental) is a security operation with the effect
+  `credential-path`: it needs the new permission `users.delete`, which a
+  role can grant alone, and an approval, which a service account may file
+  and a person gives; its id is reserved. The deletion is immediate and
+  runs in one transaction: it locks the account, so nothing is added to it
+  until it commits, then ends every session the account holds, browser and
+  logout-only alike, through the same path as every session revocation
+  ([#624], [#893], [#1144]), each queuing one back-channel logout token per
+  client with a logout URI, then deletes the account with its credentials,
+  recovery codes, consents, attributes, upstream identities, refresh tokens
+  and codes (migration 0080 adds the two functions the admin role locks and
+  deletes through; no role deletes an account through a table grant). Its
+  access tokens no longer introspect, and the browser that held its session
+  signs in again at the next authorization request. It is idempotent by id:
+  an id the realm does not hold, whether unknown, deleted already or another
+  realm's, answers `204` as a deletion does, changes nothing and records no
+  event. A service account's account, and an account that holds an admin
+  grant, the caller's own included, are refused with `409`. It records a
+  `user.session_revoked` per session it ended, with the new reason
+  `account_deleted`, and the new admin event `user.deleted`, sent to Shared
+  Signals receivers as RISC `account-purged`; its audit row keeps the
+  account's id, creation time and credential types, never an identifier,
+  and its approver is shown, and its approval keeps, each credential's
+  identifier masked to its first and last character
+  ([Accounts](https://docs.qauth.dev/operate/accounts/#delete-an-account)).
+  A deployment that applies its database grants by hand grants the admin
+  role the new functions and its session grants first
+  ([Upgrades](https://docs.qauth.dev/operate/upgrades/#an-admin-deletes-accounts-through-migration-0080s-functions)).
 
 ### Changed
 
@@ -4870,6 +4900,7 @@ It adds migrations 0068 and 0069.
 [#682]: https://github.com/qauth-labs/qauth/issues/682
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
+[#681]: https://github.com/qauth-labs/qauth/issues/681
 [#689]: https://github.com/qauth-labs/qauth/issues/689
 [#695]: https://github.com/qauth-labs/qauth/issues/695
 [#700]: https://github.com/qauth-labs/qauth/issues/700
