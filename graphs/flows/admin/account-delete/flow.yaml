@@ -81,11 +81,12 @@ context:
       recommended: "the realm's admin.twoAdminMandatoryOperations does not list users.delete: one approval is needed"
       mandatory: 'it lists users.delete: a second admin is mandatory, and the deletion needs two approvals from anyone'
   approval:
-    values: [approved, missing]
+    values: [approved, missing, unusable]
     initial: any
     say:
       approved: 'QAuth-Approval names an approval filed for exactly this request by this caller, approved and unexpired'
-      missing: 'it names none, or one for another request, or one not approved, expired or used'
+      missing: 'the request sends no QAuth-Approval'
+      unusable: 'it names one for another request, or one not approved, expired or used, or none that exists'
   underLock:
     values: [same, gone, grantedAdmin, moved]
     initial: any
@@ -105,6 +106,7 @@ guards:
   administratorsAccount: "account == 'administrator'"
   staleIfMatch: "ifMatch == 'stale'"
   noApproval: "approval == 'missing'"
+  unusableApproval: "approval == 'unusable'"
   closerCaller: "caller == 'accountCloser'"
   secondAdminMandatory: "twoAdmin == 'mandatory'"
   runsUnattended: "caller == 'accountCloser' and twoAdmin == 'recommended' and approval == 'missing'"
@@ -219,6 +221,12 @@ states:
         target: approval_required.no_approval
         say: 'no approval for exactly this request: the operation never runs'
         source: apps/auth-server/src/app/admin/pipeline.ts:815
+      - guard: unusableApproval
+        target: approval_required.no_approval
+        say: >-
+          the approval it names does not approve exactly this request: it is refused, whoever calls, the grant
+          included
+        source: apps/auth-server/src/app/admin/pipeline.ts:843
       - target: lockingAccount
         say: 'the approval holds, and the handler transaction consumes it'
 
@@ -400,6 +408,10 @@ assertions:
     never: 'deleted and noApproval and secondAdminMandatory'
     say: 'Where the realm makes a second admin mandatory for users.delete, no deletion runs without its approvals'
     source: apps/auth-server/src/app/admin/approvals/unattended.ts:41
+  - id: no-deletion-under-an-unusable-approval
+    never: 'deleted and unusableApproval'
+    say: 'A request that names an approval is judged by it: one that does not approve it deletes nothing'
+    source: apps/auth-server/src/app/admin/pipeline.ts:843
   - id: write-scope-never-deletes
     never: 'deleted and scopeLacksSecurity'
     say: 'A token that carries qauth:admin:write but not qauth:admin:security never deletes an account'
