@@ -305,6 +305,14 @@ describe('act-chain tokens issued to admins (real Postgres, #523)', () => {
       });
       expect(second.seq).toBe(2);
       expect(second.prevHash.equals(first.rowHash)).toBe(true);
+      // A call admitted just before its token ended may finish after it.
+      const ended = await db().transaction((tx) =>
+        sessions.create(tx, issuedNow(at, Date.now() - TEN_MINUTES - 5 * 60_000))
+      );
+      const late = await db().transaction((tx) =>
+        audit.appendActChainCall(tx, call(at, ended.tokenJti))
+      );
+      expect(late.seq).toBe(3);
       expect(await audit.verifyAdminAuditChain(at.realmId)).toMatchObject({ ok: true });
     });
 
@@ -342,8 +350,8 @@ describe('act-chain tokens issued to admins (real Postgres, #523)', () => {
       // The other realm's token is not this realm's.
       const other = await fixture();
       await expect(refused(call(other, written.tokenJti))).rejects.toThrow(/wrote no row/);
-      // No call lands outside the token's life: one that ended an hour ago,
-      // or one the clock has not reached.
+      // No row lands for a token that ended an hour ago, or one the clock
+      // has not reached.
       for (const startedAt of [Date.now() - 70 * 60_000, NOW]) {
         const outside = await db().transaction((tx) =>
           sessions.create(tx, issuedNow(at, startedAt))

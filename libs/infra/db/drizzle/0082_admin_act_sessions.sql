@@ -92,10 +92,12 @@ REVOKE ALL ON FUNCTION "admin_audit_act_chain_head"(uuid) FROM PUBLIC;--> statem
 -- the token's admin_act_sessions row names, its act chain must be that row's
 -- user and admin with the admin's realm issuer and client, and its operation
 -- an account API operation, with no effect, diff, approval or request digest.
--- Its time is the database's clock of the last minute, within a minute of the
--- token's life, so no row lands outside a call the token could have made. Any
--- other row is not inserted, and the caller gets no row back. The caller
--- hashes the row; the chain triggers of 0026 check its place.
+-- Its time is the database's clock of the last minute, from a minute before
+-- the token was issued to ten minutes after it ended: a call admitted while
+-- the token lived has that long to finish and keep its row, and no row lands
+-- for a token long gone. Any other row is not inserted, and the caller gets no
+-- row back. The caller hashes the row; the chain triggers of 0026 check its
+-- place.
 --
 -- SECURITY DEFINER: it writes the log as its owner. Its search_path is pinned,
 -- every table and type is named with its schema, and EXECUTE is revoked from
@@ -136,7 +138,7 @@ AS $$
      AND starts_with(p_operation_id, 'account.')
      AND p_created_at BETWEEN (extract(epoch FROM clock_timestamp()) * 1000)::bigint - 60000
                           AND (extract(epoch FROM clock_timestamp()) * 1000)::bigint
-     AND p_created_at BETWEEN s."created_at" - 60000 AND s."expires_at" + 60000
+     AND p_created_at BETWEEN s."created_at" - 60000 AND s."expires_at" + 600000
      AND p_act_chain = jsonb_build_object(
            'sub', s."user_id"::text,
            'act', jsonb_build_object(

@@ -55,8 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `admin_act_sessions` and on the `id`, `realm_id` and `status` of
   `admin_approvals`, and `EXECUTE` on the two functions of migration 0082
   that append a call's audit row, whose actor and act chain they take from
-  the token's record and whose time is the database's, within the token's
-  life; it holds nothing on `admin_audit_log`. The `admin`
+  the token's record and whose time is the database's, no later than ten
+  minutes after the token ends; it holds nothing on `admin_audit_log`. The `admin`
   role's gets `SELECT` and `INSERT` on `admin_act_sessions`. The migration
   runner applies them.
 - **The declarative realm file has a fixed format,

@@ -2173,13 +2173,15 @@ export interface AdminAuditLogRepository {
    * {@link appendAdminAudit} does, and inserts the row only when its actor
    * and act chain are those of the token's `admin_act_sessions` row in the
    * realm, its operation is an account API operation, and its time, the
-   * database's clock, falls within a minute of the token's life. The stored
-   * row is hashed and checked as {@link appendAdminAudit} checks it.
+   * database's clock, falls between a minute before the token was issued and
+   * ten minutes after it ended, so a call admitted while the token lived keeps
+   * its row. The stored row is hashed and checked as {@link appendAdminAudit}
+   * checks it.
    *
    * @throws TypeError on an entry {@link appendAdminAudit} would refuse, and
    *   on an operation that is not the account API's
    * @throws Error when the database inserted no row: no such token in the
-   *   realm, an act chain that is not its row's, or a call outside its life
+   *   realm, an act chain that is not its row's, or a token long gone
    */
   appendActChainCall(tx: DbTransaction, entry: AdminActChainCallEntry): Promise<AdminAuditRecord>;
 
