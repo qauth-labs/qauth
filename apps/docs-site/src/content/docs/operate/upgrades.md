@@ -1635,6 +1635,34 @@ with `permission denied` and deletes nothing; no other call needs them. During
 a rolling upgrade, an `admin` node of the previous release has no
 `users.delete`.
 
+### Protected resources and migration 0081
+
+A realm can now register a protected resource's scopes
+([#1087](https://github.com/qauth-labs/qauth/issues/1087),
+[Docker](/operate/docker/#registering-a-protected-resources-scopes)).
+
+- **Migration 0081 adds the empty `protected_resources` table.** Its foreign
+  key briefly locks `realms` against writes, so a request that writes a realm
+  waits for the runner's commit.
+- **`web` and `api` read the table, and `admin` writes it.** Every
+  authorization request, consent step, code exchange and refresh reads the
+  realm's registered resources, even when the realm has none. A deployment
+  whose migration runner grants the roles' database users
+  ([above](#each-role-can-connect-as-a-database-user-of-its-own)), or whose
+  roles connect as the one user that owns the tables, needs nothing. One that
+  applies the grants by hand applies, before the new version starts:
+
+  ```sql
+  GRANT SELECT ON TABLE "protected_resources" TO <web_role>, <api_role>;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "protected_resources" TO <admin_role>;
+  ```
+
+  Without them every authorization request, code exchange and refresh fails
+  with `permission denied`, so no user signs in to an app.
+
+- **Register a resource only once every node runs this release.** A node of
+  the previous release grants a scope by the client's own list alone.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]
