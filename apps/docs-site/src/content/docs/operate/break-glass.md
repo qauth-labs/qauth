@@ -119,12 +119,39 @@ The enrolment and the grant go with the account. This deletion is not a
 break-glass run and writes no audit row: note it with the incident. Then
 enrol again.
 
-:::caution[The enrolment page ships separately]
-The page that turns the URL into the account's first passkey is the
-Interaction API's enrolment step
-([#621](https://github.com/qauth-labs/qauth/issues/621)). Until it ships, the
-URL opens no page: the command creates the account, the grant and the token,
-and the account cannot sign in.
+### What the new admin does with the URL
+
+The URL opens the ceremony app's enrolment page. When the new admin presses
+its button, the page posts the token to the auth server
+(`POST /auth/admin-enrolment`), which starts the Interaction API's
+`admin_enrolment` step
+([#621](https://github.com/qauth-labs/qauth/issues/621)): the browser creates
+a passkey for the realm, and it must verify the user, with a PIN or a
+biometric. Starting reads the token and spends nothing, so a link scanner
+that opens the URL, or a ceremony the admin abandons or cancels, leaves it
+usable until it expires. The token is spent in the transaction that stores
+the passkey, and only then.
+
+- **No password, ever.** The step has no alternative, and the account holds
+  the passkey alone. It signs in with it like any account.
+- **No approvals for 7 days.** Storing the passkey is a security change of
+  the account (`user.credential_added`), so it cannot approve another admin's
+  request until 7 days have passed. The enrolment also writes
+  `admin.enrolment_completed` to the realm's admin events.
+- **One answer for every bad URL.** A token that is unknown, used, expired or
+  damaged gets the same page, "This enrolment link is no longer valid", and
+  starts nothing. So does every URL while passkey sign-in is off
+  (`WEBAUTHN_ENABLED`): the account could not sign in with its passkey. The
+  server's log says why at `warn`, and the URL works once passkeys are on.
+- **The enrolment signs nobody in.** It ends on the auth server's page
+  `/auth/admin-enrolment/status`, or on the realm's ceremony app error page
+  when the realm names one (`ceremonyApp.errorPage`), with the code
+  `admin_enrolment_finished` or `admin_enrolment_refused`.
+
+:::caution[The enrolment page is the ceremony app's]
+The auth server does not serve `/ui/admin-enrolment`, which reads the token
+from the URL's fragment. A deployment whose ceremony app does not serve that
+page yet opens no page from the URL, and its account cannot sign in.
 :::
 
 ## A realm with no second admin
@@ -171,7 +198,9 @@ which was granted a role, in the 7 days before the request it would approve
 (ADR-019 Decision 7). The account and its grant are created at the run, so
 the account approves only a request made 7 days or more after it. The
 command prints that moment. An admin that changes its own credentials,
-identifier or contact address waits 7 days from the change too.
+identifier or contact address waits 7 days from the change too, and
+registering the first passkey is such a change: the wait runs from the
+enrolment, which comes later than the run.
 
 ## What is recorded
 
