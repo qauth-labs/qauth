@@ -69,7 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `user.session_revoked` per session it ended, with the new reason
   `account_deleted`, and the new admin event `user.deleted`, sent to Shared
   Signals receivers as RISC `account-purged`; its audit row keeps the
-  account's id, creation time and credential types, never an address
+  account's id, creation time and credential types, never an identifier,
+  and its approver is shown, and its approval keeps, each credential's
+  identifier masked to its first and last character
   ([Accounts](https://docs.qauth.dev/operate/accounts/#delete-an-account)).
   A deployment that applies its database grants by hand grants the admin
   role the new functions and its session grants first

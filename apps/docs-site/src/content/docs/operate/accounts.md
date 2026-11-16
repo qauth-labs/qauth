@@ -397,8 +397,12 @@ authorization request: no app is signed in to without a prompt.
 ([security operations](/reference/security-operations/)). A role can grant
 `users.delete` alone. A service account may file the approval; a person
 approves it. File it with the account in `params` and no body. The approver
-sees the account, whether it is enabled, what the deletion ends and each
-credential with the proof it holds:
+sees the account's id, when it was created, whether it is enabled, what the
+deletion ends and each credential with the proof it holds. A credential's
+identifier is shown masked, only its first and last character
+(`identifier d***m, proved`), and the approval keeps only that: it outlives
+the account. An account with no identifier, such as one that signs in with a
+passkey alone, is told by its id, its creation time and its credentials:
 
 ```http
 POST /admin/v1-rc.0/realms/<realm id>/approvals

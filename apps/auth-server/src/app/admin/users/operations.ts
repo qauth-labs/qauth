@@ -64,6 +64,13 @@ import type {
  * which the call deletes nothing for and answers as a deletion
  * (`./deletion.ts`). A service account's account and an account that holds an
  * admin grant are refused (409) before anything is filed.
+ *
+ * A deletion's state, and so what its approver is shown and what the approval
+ * keeps, names each credential's identifier masked (`maskIdentifier`), never
+ * whole: the approval row outlives the account, and an identifier is the
+ * person's, whatever kind it is. The approver tells the account by its id,
+ * its creation time and its credentials, which holds for an account with no
+ * identifier at all, such as one that signs in with a passkey alone.
  */
 
 /** The ids of the account operations. */
@@ -295,13 +302,46 @@ function renderVerification(input: RenderInput): RenderedOperation {
   return { title: 'Verify an account as the operator', fields };
 }
 
+/**
+ * One credential of an account `users.delete` deletes, as its approver is
+ * shown it: its identifier masked.
+ */
+export interface DeletableCredentialState extends Omit<AccountCredentialState, 'identifier'> {
+  /**
+   * The identifier the credential answers to, masked (`maskIdentifier`);
+   * `null` for a credential whose identifier the admin role does not read.
+   */
+  readonly maskedIdentifier: string | null;
+}
+
 /** The account `users.delete` deletes, as its `loadState` reads it. */
 export interface DeletableAccount {
   /** When the account was created, in milliseconds. */
   readonly createdAt: number;
   readonly enabled: boolean;
   /** Its credentials in the realm, by id, each with the proof it holds. */
-  readonly credentials: readonly AccountCredentialState[];
+  readonly credentials: readonly DeletableCredentialState[];
+}
+
+/** What a masked identifier shows in place of what it hides, whatever its length. */
+const MASK = '***';
+
+/**
+ * An identifier, masked for an approval that outlives the account (#681):
+ * its first code point, the mask and, for an identifier of five code points
+ * or more, its last one. The same for every kind of identifier, an address,
+ * a username or a number alike, and its length is not told.
+ */
+export function maskIdentifier(identifier: string): string {
+  const points = Array.from(identifier);
+  if (points.length === 0) return MASK;
+  const first = points[0];
+  return points.length < 5 ? `${first}${MASK}` : `${first}${MASK}${points[points.length - 1]}`;
+}
+
+function deletableCredentialOf(credential: AccountCredentialState): DeletableCredentialState {
+  const { identifier, ...rest } = credential;
+  return { ...rest, maskedIdentifier: identifier === null ? null : maskIdentifier(identifier) };
 }
 
 /**
@@ -358,8 +398,10 @@ export async function readAccountDeletionState(
   if (user === undefined) return { userId: userId.toLowerCase(), account: null };
   await refuseUndeletableAccount(server, realmId, user, tx);
   const rows = await server.repositories.userCredentials.findProofsByUserId(realmId, user.id, tx);
+  // Masked before the state is versioned: the approval binds, and keeps the
+  // digest of, what its approver is shown, never a whole identifier.
   const credentials = rows
-    .map(credentialStateOf)
+    .map((row) => deletableCredentialOf(credentialStateOf(row)))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return {
     userId: user.id,
@@ -399,11 +441,20 @@ async function loadAccountDeletionState(
 const DELETION_EFFECT =
   'The account is deleted at once, with its credentials, recovery codes, consents, attributes, upstream identities and refresh tokens: nothing can authenticate or recover it again. Every session it holds ends first, a sign-up or reset session included, and each app a session signed in to that has a back-channel logout URI is sent a logout token. Its access tokens no longer introspect. It cannot be undone.';
 
+/** What the approver reads of one credential of an account to delete: its masked identifier, if any, and its proof. */
+function deletableCredentialText(credential: DeletableCredentialState): string {
+  const proof = PROOF_TEXT[credential.proof];
+  return credential.maskedIdentifier === null
+    ? proof
+    : `identifier ${credential.maskedIdentifier}, ${proof}`;
+}
+
 /**
  * What an approver is shown of a deletion (#681): the account, whether it is
  * enabled, what the deletion does and each credential with the proof it
- * holds, as they stood when the approval was filed; or, for an id the realm
- * does not hold, that nothing is deleted, without saying why.
+ * holds and its identifier masked, as they stood when the approval was filed;
+ * or, for an id the realm does not hold, that nothing is deleted, without
+ * saying why.
  */
 function renderDeletion(input: RenderInput): RenderedOperation {
   const state = input.state as AccountDeletionState | undefined;
@@ -438,7 +489,7 @@ function renderDeletion(input: RenderInput): RenderedOperation {
     { label: 'effect', value: DELETION_EFFECT },
     ...shown.map((credential): RenderedField => ({
       label: `credential ${credential.type}${credential.primary ? ' (primary)' : ''}${credential.disabled ? ' (disabled)' : ''}`,
-      value: proofText(credential),
+      value: deletableCredentialText(credential),
     })),
   ];
   if (account.credentials.length === 0) {

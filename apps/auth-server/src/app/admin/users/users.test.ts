@@ -18,6 +18,7 @@ import {
   accountDeletionStateVersion,
   type AccountVerificationState,
   accountVerificationStateVersion,
+  maskIdentifier,
   USER_OPERATION_IDS,
 } from './operations';
 import { accountVerificationOf, accountVerificationSchema, deletedAccountAudit } from './routes';
@@ -451,7 +452,7 @@ describe('the account users.delete meets (#681)', () => {
             primary: false,
             disabled: false,
             proof: 'none',
-            identifier: null,
+            maskedIdentifier: null,
           },
           {
             id: 'c2',
@@ -459,11 +460,22 @@ describe('the account users.delete meets (#681)', () => {
             primary: true,
             disabled: false,
             proof: 'not_proved',
-            identifier: 'ada@example.com',
+            maskedIdentifier: 'a***m',
           },
         ],
       },
     });
+  });
+
+  it('holds no whole identifier, so neither the approval nor its digest keeps one', async () => {
+    const state = await loadDeletion(deletionRequestFor(userRow(), [PASSWORD, TOTP]));
+    expect(JSON.stringify(state)).not.toContain('ada@example.com');
+    // Another identifier under the same mask is the same state: the approver
+    // was shown the mask, and the approval binds what was shown.
+    const renamed = await loadDeletion(
+      deletionRequestFor(userRow(), [{ ...PASSWORD, identifier: 'alice@example.com' }, TOTP])
+    );
+    expect(accountDeletionStateVersion(renamed)).toBe(accountDeletionStateVersion(state));
   });
 
   it('reads an id the realm does not hold as one absent state, whatever the case of the id', async () => {
@@ -541,8 +553,22 @@ describe('what an approver is shown of a deletion (#681)', () => {
     expect(fields['now']).toBe('enabled');
     expect(fields['effect']).toContain('back-channel logout URI is sent a logout token');
     expect(fields['effect']).toContain('cannot be undone');
-    expect(fields['credential password (primary)']).toBe('address ada@example.com not confirmed');
+    expect(fields['credential password (primary)']).toBe('identifier a***m, not proved');
     expect(fields['credential totp']).toBe('proves no identity');
+    expect(JSON.stringify(rendered)).not.toContain('ada@example.com');
+  });
+
+  it('shows an account with no identifier by its id, its creation time and its credentials', async () => {
+    const passkey = credential({
+      id: 'c3',
+      providerType: 'webauthn',
+      isPrimary: true,
+      proofData: { user_verified: true },
+    });
+    const fields = fieldsOf(render(await loadDeletion(deletionRequestFor(userRow(), [passkey]))));
+    expect(fields['account']).toBe(USER);
+    expect(fields['created']).toBe('2026-11-01T00:00:00.000Z');
+    expect(fields['credential webauthn (primary)']).toBe('proved');
   });
 
   it('shows an absent account as nothing to delete, without saying why it is absent', () => {
@@ -569,6 +595,25 @@ describe('what an approver is shown of a deletion (#681)', () => {
 
   it('refuses to render without the account the approval was filed against', () => {
     expect(() => render(undefined)).toThrow(/filed against/);
+  });
+});
+
+describe('an identifier, masked for a deletion (#681)', () => {
+  it('keeps the first and last code point of every kind of identifier, and hides its length', () => {
+    expect(maskIdentifier('ada@example.com')).toBe('a***m');
+    expect(maskIdentifier('ada.lovelace')).toBe('a***e');
+    expect(maskIdentifier('+905551234567')).toBe('+***7');
+    expect(maskIdentifier('ada@example.com')).toBe(maskIdentifier('alice@example.com'));
+  });
+
+  it('keeps only the first code point of a short identifier, and nothing of an empty one', () => {
+    expect(maskIdentifier('abcd')).toBe('a***');
+    expect(maskIdentifier('a')).toBe('a***');
+    expect(maskIdentifier('')).toBe('***');
+  });
+
+  it('cuts by code point, never inside a surrogate pair', () => {
+    expect(maskIdentifier('😀bcd😀')).toBe('😀***😀');
   });
 });
 

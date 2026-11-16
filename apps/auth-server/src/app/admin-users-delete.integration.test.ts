@@ -383,8 +383,8 @@ describe('users.delete (#681, real containers)', () => {
     expect(await app().repositories.users.findById(realm.id, userId)).toBeDefined();
 
     const approvalId = await fileAndApprove(realm.id, userId, requester);
-    // The approver was shown the account, its password credential and what
-    // the deletion ends.
+    // The approver was shown the account, its password credential with its
+    // identifier masked, and what the deletion ends.
     const shown = await send(
       'GET',
       `/admin/v1-rc.0/realms/${realm.id}/approvals/${approvalId}`,
@@ -399,11 +399,12 @@ describe('users.delete (#681, real containers)', () => {
           { label: 'now', value: 'enabled' },
           {
             label: 'credential password (primary)',
-            value: `address ${email} confirmed by its mailbox code`,
+            value: 'identifier d***m, proved',
           },
         ]),
       },
     });
+    expect(shown.body).not.toContain(email);
 
     const done = await remove(realm.id, userId, requester, { 'qauth-approval': approvalId });
     expect(done.statusCode, done.body).toBe(204);
