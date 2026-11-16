@@ -63,7 +63,7 @@ context:
     values: [redeemable, absent, damaged, unknown, used, expired]
     initial: any
     say:
-      redeemable: "an enrolment of this realm that is not used and has not expired"
+      redeemable: 'an enrolment of this realm that is not used and has not expired'
       absent: 'the form has no token, or a body that is not a form of text members'
       damaged: 'a token that is not 32 bytes in base64url: no row is read'
       unknown: 'a token of the right shape whose hash no enrolment of this realm holds'
@@ -237,7 +237,7 @@ states:
       is not read, and stays usable once passkeys are on; the log says why at warn.
     source: apps/auth-server/src/app/helpers/admin-enrolment.ts:226
     always:
-      - guard: "passkeysOff and errorPageNamed"
+      - guard: 'passkeysOff and errorPageNamed'
         target: admin_enrolment_refused.at_start
         say: "passkeys are off, and the realm names its ceremony app's error page"
       - guard: passkeysOff
@@ -520,7 +520,7 @@ states:
     invoke: { external: interactionStore }
     on:
       DONE:
-        - guard: "passkeyStored and errorPageNamed"
+        - guard: 'passkeyStored and errorPageNamed'
           target: admin_enrolment_finished.enrolled
           effect: [closeInteraction]
           say: "the passkey is stored, and the realm names its ceremony app's error page"
