@@ -3,7 +3,7 @@ title: API conventions
 description: The rules every route of the admin, account and developer APIs follows — paths, names, errors, paging, concurrency, OpenAPI extensions and versioning.
 sidebar:
   order: 3
-lastVerified: '2026-11-08'
+lastVerified: '2026-11-16'
 ---
 
 QAuth has three API families: admin, account and developer
@@ -179,7 +179,10 @@ Every admin route runs behind the same stages, in this order
    missing.
 7. The approval gate. A request classified `security` runs only with the approval its
    `QAuth-Approval` header names, filed for exactly this request ([Approvals](#approvals)). Every
-   other one answers 403 `approval_required` and never runs.
+   other one answers 403 `approval_required` and never runs. One exception: `users.delete` by a
+   service account that holds `account-closer` on the realm runs with no approval, where the realm
+   needs one for it
+   ([Unattended account deletion](/reference/security-operations/#unattended-account-deletion)).
 8. The handler, inside one database transaction. The transaction first consumes the approval
    stage 7 checked; a call that finds it used meanwhile answers 403 `approval_required`. The
    handler answers by returning its body: a handler
@@ -253,7 +256,9 @@ with the caller instead, so a stranger cannot add rows to another realm's chain.
 ### Approvals
 
 A security operation runs only with a fresh approval bound to that exact request (ADR-019
-Decision 7). The approval engine lives in `apps/auth-server/src/app/admin/approvals/`.
+Decision 7), but for one unattended deletion
+([Unattended account deletion](/reference/security-operations/#unattended-account-deletion)). The
+approval engine lives in `apps/auth-server/src/app/admin/approvals/`.
 
 1. The client calls the operation and gets 403 `approval_required`, or 409 `approval_unavailable`
    where the realm requires a second admin and none is eligible (below).

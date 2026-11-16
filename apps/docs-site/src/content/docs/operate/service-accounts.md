@@ -1,9 +1,9 @@
 ---
 title: Service accounts
-description: Create a service account for the admin API, sign it in with client_credentials, private_key_jwt and a DPoP proof, have a human approve its security operations, and disable it.
+description: Create a service account for the admin API, sign it in with client_credentials, private_key_jwt and a DPoP proof, have a human approve its security operations, let it delete one realm's accounts unattended, and disable it.
 sidebar:
   order: 16
-lastVerified: '2026-11-15'
+lastVerified: '2026-11-16'
 ---
 
 A **service account** is automation that calls the admin API as itself: a
@@ -44,13 +44,13 @@ tsx src/service-accounts.ts create --name ci-realm-import --client-id ci-realm-i
   --jwks /etc/qauth/ci-realm-import.jwks.json --grant viewer@master
 ```
 
-| Flag          | What it sets                                                                                                  |
-| ------------- | ------------------------------------------------------------------------------------------------------------- |
-| `--name`      | Lower-case words joined by hyphens, unique in the operator realm.                                             |
-| `--client-id` | The `client_id` the client's assertions name: no client's in the operator realm, and not the system client's. |
-| `--jwks`      | A file holding the client's public JWK Set, `{"keys": [...]}`. A key with a private member is refused.        |
-| `--jwks-uri`  | An https URL that serves the client's public JWK Set. Give this or `--jwks`, not both.                        |
-| `--grant`     | `viewer`, `editor` or `security-admin`, on the realm named after `@`, or on every realm with `@*`. Repeat it. |
+| Flag          | What it sets                                                                                                                                                                                                                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--name`      | Lower-case words joined by hyphens, unique in the operator realm.                                                                                                                                                                                                                 |
+| `--client-id` | The `client_id` the client's assertions name: no client's in the operator realm, and not the system client's.                                                                                                                                                                     |
+| `--jwks`      | A file holding the client's public JWK Set, `{"keys": [...]}`. A key with a private member is refused.                                                                                                                                                                            |
+| `--jwks-uri`  | An https URL that serves the client's public JWK Set. Give this or `--jwks`, not both.                                                                                                                                                                                            |
+| `--grant`     | `viewer`, `editor` or `security-admin`, on the realm named after `@`, or on every realm with `@*`. Repeat it. `account-closer`, on one named realm only, lets it delete that realm's accounts with no approval ([Account closing at a relying party](/operate/account-closing/)). |
 
 The command writes everything in one transaction: the account, its client,
 the service account, its grants, and one row of the operator realm's admin
@@ -130,6 +130,16 @@ and a human admin approves it:
 Where no human admin could approve, the filing fails closed with `409`
 `approval_unavailable`, whatever grants the service account holds.
 
+One security operation runs with no approval: `users.delete`, by a service
+account that holds the built-in role `account-closer` on the realm it acts
+on, so that a relying party that closes an account on its side deletes it at
+once ([Account closing at a relying party](/operate/account-closing/)). The
+operator grants it with `--grant account-closer@<realm name>`, on one realm,
+never `@*`. Where the realm makes a second admin mandatory for
+`users.delete`, the deletion needs its approvals as above. Every other
+security operation still needs a human, whatever roles the service account
+holds beside it.
+
 ## Disable a service account
 
 ```console
@@ -200,3 +210,5 @@ No path stores or takes an admin credential that outlives a few minutes:
   — migration 0078, its grants, and the `private_key_jwt` rule.
 - [Security operations](/reference/security-operations/) — which admin
   operations need an approval.
+- [Account closing at a relying party](/operate/account-closing/) — the
+  unattended deletion of a relying party's accounts.
