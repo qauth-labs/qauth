@@ -3,9 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "devDependencies": {
+    "@qauth-labs/infra-db": "workspace:*",
+    "@qauth-labs/realm-file": "workspace:*",
     "@qauth-labs/server-config": "workspace:*",
     "@qauth-labs/server-realm-policy": "workspace:*",
     "@qauth-labs/shared-stability": "workspace:*",
+    "ajv": "catalog:",
+    "ajv-formats": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
