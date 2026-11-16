@@ -1678,6 +1678,29 @@ an `admin_grants` row like any other.
   and it knows no deletion without an approval. The refusal changes nothing,
   and a retry on a node of this release deletes the account.
 
+### The admin enrolment step and the `web` grant on `admin_enrolments`
+
+An admin that `enrol-admin` created now registers its first passkey with the
+URL it printed, through the Interaction API's `admin_enrolment` step
+([#621](https://github.com/qauth-labs/qauth/issues/621),
+[Break-glass](/operate/break-glass/)). There is no migration.
+
+- **The `web` role's database user gets `SELECT` and `UPDATE` on
+  `admin_enrolments`**, where 0.2.8 gave no role anything on it. The
+  migration runner applies the grant after its migrations. A deployment that
+  applies the grants by hand applies it too
+  (`GRANT SELECT, UPDATE ON TABLE "admin_enrolments" TO <web user>;`): without
+  it, every `POST /auth/admin-enrolment` fails with `500`. The trigger of
+  migration 0079 still lets an update do nothing but redeem an unused,
+  unexpired token, once.
+- **Hand out enrolment URLs once every `web` node runs this release.** A
+  node of the previous release answers `POST /auth/admin-enrolment` with
+  `404`, and knows neither the `admin_enrolment` step nor the new
+  `admin.enrolment_completed` event, so an enrolment it receives the answer
+  of fails and stores nothing. The URL stays usable until it expires.
+- **Passkey sign-in must be on** (`WEBAUTHN_ENABLED=true`). While it is off,
+  every enrolment URL is refused, and stays usable until it expires.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]
