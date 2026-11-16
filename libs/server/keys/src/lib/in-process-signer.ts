@@ -20,6 +20,7 @@ import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 import { type JWTPayload, SignJWT } from 'jose';
 
 import type { KeyIdentity } from './aad';
+import { actChainTokenClaimsProblem } from './act-chain-token-claims';
 import { BoundedCache } from './bounded-cache';
 import {
   COOKIE_KID_PATTERN,
@@ -40,7 +41,6 @@ import {
 } from './data-at-rest';
 import { openKeyMaterial } from './envelope';
 import { KeyDecryptionError } from './errors';
-import { actChainTokenClaimsProblem } from './act-chain-token-claims';
 import { eventTokenClaimsProblem, isEventTokenTyp } from './event-token-claims';
 import type { KekProvider } from './kek-provider';
 import { isScopeId, MAX_SCOPE_ID_LENGTH } from './key-factory';
