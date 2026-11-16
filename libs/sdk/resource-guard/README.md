@@ -15,7 +15,9 @@ Drop it into an MCP server and you get spec-correct OAuth in minutes:
   2026-07-28)
 - **Scope guidance on the first 401**: the scopes the operation needs are
   advertised on the credential-absent `401` as well as the `403`, so a client
-  authorizes in one round instead of fetching PRM and guessing. `offline_access`
+  authorizes in one round instead of fetching PRM and guessing. A resource with
+  one scope per operation advertises all of them (see
+  [One scope per operation](#one-scope-per-operation)). `offline_access`
   is filtered out of both advertisement surfaces — it concerns refresh-token
   issuance at the AS, not access to this resource
 - Bearer-token validation in two modes — local **JWT** verification against the
@@ -104,6 +106,68 @@ await app.register(async (admin) => {
 });
 ```
 
+### One scope per operation
+
+An MCP server often gives each tool its own scope and requires none of every
+request. List every scope in `scopesSupported` and leave `requiredScopes` empty:
+any valid, audience-bound token passes `requireBearer`, and each tool call checks
+its own scope once the request body names the tool.
+
+```ts
+import { ResourceGuardError } from '@qauth-labs/resource-guard';
+import { resourceGuardPlugin, sendBearerChallenge } from '@qauth-labs/resource-guard/fastify';
+
+const TOOL_SCOPES = new Map([
+  ['notes.search', 'notes:read'],
+  ['notes.create', 'notes:write'],
+  ['notes.delete', 'notes:delete'],
+]);
+
+await app.register(resourceGuardPlugin, {
+  resource: 'https://notes.mcp.example.com',
+  authorizationServer: 'https://auth.example.com',
+  // Advertised, never required of every request.
+  scopesSupported: [...TOOL_SCOPES.values()],
+});
+
+app.post('/mcp', { preHandler: app.requireBearer }, async (request, reply) => {
+  const { method, params } = request.body as { method: string; params?: { name?: string } };
+  if (method === 'tools/call') {
+    // A tool the map does not name is refused, never run unchecked.
+    const scope = TOOL_SCOPES.get(params?.name ?? '');
+    if (scope === undefined) {
+      return reply.code(400).send({ error: 'unknown tool' });
+    }
+    try {
+      // A token without the tool's scope gets a 403 naming that scope only.
+      app.resourceGuard.assertScopes(request.tokenClaims!, [scope]);
+    } catch (error) {
+      if (error instanceof ResourceGuardError) {
+        return sendBearerChallenge(app.resourceGuard, reply, error);
+      }
+      throw error;
+    }
+  }
+  // …dispatch the request. Other methods (`initialize`, `tools/list`, …) need
+  // only the valid token checked above; give one that needs a scope its own check.
+});
+```
+
+The metadata document lists every tool's scope as `scopes_supported`. A request
+without a token gets a `401` that names them all, because the guard answers it
+before the body says which tool is called:
+
+```
+WWW-Authenticate: Bearer scope="notes:read notes:write notes:delete",
+                  resource_metadata="https://notes.mcp.example.com/.well-known/oauth-protected-resource"
+```
+
+A route behind `requireScopes(...)` still names only its own scopes and
+`requiredScopes` on its `401` and `403`. `scopesSupported` defaults to
+`requiredScopes` and must hold every entry of it, or the guard throws
+`ResourceGuardConfigError`. The core works the same way without Fastify:
+`guard.authenticate(header)`, then `guard.assertScopes(claims, [scope])`.
+
 ## The handshake (what an MCP client sees)
 
 ```
@@ -167,6 +231,7 @@ so the no-passthrough guarantee never depends solely on AS-side configuration.
 | `resource`                | `string` (required)          | —                                              | Resource identifier; `aud` tokens must carry (RFC 8707)             |
 | `authorizationServer`     | `string` (required)          | —                                              | QAuth issuer identifier                                             |
 | `requiredScopes`          | `string[]`                   | `[]`                                           | Default scopes for any protected route                              |
+| `scopesSupported`         | `string[]`                   | `requiredScopes`                               | Every scope the resource understands; advertised, never required    |
 | `validationMode`          | `'jwt' \| 'introspection'`   | `'jwt'`                                        | Token-validation strategy                                           |
 | `jwksUri`                 | `string`                     | `${authorizationServer}/.well-known/jwks.json` | Both modes: introspection verifies locally first                    |
 | `jwksCacheTtlMs`          | `number`                     | `300000`                                       | JWKS cache/cooldown                                                 |

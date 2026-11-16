@@ -180,7 +180,7 @@ rule fails closed. The ways out:
 3. Whoever holds the host, the database credentials and the KEK enrols a new admin with the
    break-glass CLI, which records the operating-system user and sends a critical security event.
    The new admin approves 7 days after its enrolment; until then the operation still fails
-   closed. The CLI is not in this release
+   closed. See [Break-glass](/operate/break-glass/)
    ([#602](https://github.com/qauth-labs/qauth/issues/602)).
 
 The list itself cannot be shortened by one admin, so a realm that made an operation mandatory and

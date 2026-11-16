@@ -96,6 +96,10 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // transaction; its trigger reads the chain head and the checkpoints.
   admin_audit_log: { admin: SI },
   admin_audit_log_checkpoints: { admin: S },
+  // One-time admin enrolments (#602): written by the host's break-glass
+  // command as the owner. No role holds anything on it until the enrolment
+  // step of the Interaction API (#621) redeems a token.
+  admin_enrolments: {},
   // Who administers (#510): read on every admin request and at sign-in and
   // token issuance, written by no role yet. A security change of an account
   // moves its grants' last_security_change_at through migration 0074's
@@ -217,7 +221,7 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // verification of one only through `users_record_operator_verification`
   // (`users.verify`, #1052). No role deletes one through a table grant:
   // `admin` locks and deletes an account only through the functions of
-  // migration 0079 (`users.delete`, #681).
+  // migration 0080 (`users.delete`, #681).
   users: { web: SIU, api: SIU, admin: S },
 });
 
@@ -318,7 +322,7 @@ export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // account was issued (migration 0078, #522): `admin` holds no UPDATE on
   // `users`, and the function moves only that account's not_valid_before.
   '"service_accounts_end_tokens"(uuid, uuid)': ['admin'],
-  // An admin's deletion of an account (`users.delete`, migration 0079, #681):
+  // An admin's deletion of an account (`users.delete`, migration 0080, #681):
   // the lock that keeps anything from being added to the account until the
   // deletion commits, and the deletion, which refuses a service account's
   // account and one that holds an admin grant. `admin` holds no UPDATE and no

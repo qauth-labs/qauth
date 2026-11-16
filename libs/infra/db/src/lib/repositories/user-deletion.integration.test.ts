@@ -1,6 +1,6 @@
 /**
  * The two functions an admin's deletion of an account runs through as the
- * admin role (migration 0079, `users.delete`, #681), against real Postgres:
+ * admin role (migration 0080, `users.delete`, #681), against real Postgres:
  * the lock that holds the account until the deletion commits, and the
  * deletion, whose cascade removes what hangs off the account and whose guard
  * refuses a service account's account and one that holds an admin grant.

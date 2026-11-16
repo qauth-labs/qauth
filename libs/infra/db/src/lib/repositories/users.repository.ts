@@ -123,7 +123,7 @@ export interface UsersRepository extends Omit<
   /**
    * Lock the account `id` of the realm `FOR UPDATE` in `tx`, for its deletion
    * (`users.delete`, #681), through `users_lock_for_deletion` (migration
-   * 0079): the admin role that deletes holds no `UPDATE` on `users`, which a
+   * 0080): the admin role that deletes holds no `UPDATE` on `users`, which a
    * locking clause needs. Until `tx` ends nothing adds a row that refers to
    * the account (a session, a token, a credential, an admin grant), since
    * their foreign keys wait for the lock, so what the deletion's cascade
@@ -136,7 +136,7 @@ export interface UsersRepository extends Omit<
   /**
    * Delete the account `id` of the realm and, through the schema's cascades,
    * everything that hangs off it, through `users_delete_account` (migration
-   * 0079), so that no role deletes an account through a table grant. The
+   * 0080), so that no role deletes an account through a table grant. The
    * function deletes nothing for a service account's account or one that
    * holds an admin grant not revoked, whoever calls it. Call it after
    * {@link lockForDeletion} in the same transaction, once the account's

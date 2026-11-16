@@ -6,6 +6,7 @@ import {
   CAEP_TOKEN_CLAIMS_CHANGE,
   EVENT_TYPES,
   type EventEnvelope,
+  QAUTH_BREAK_GLASS_USED,
   QAUTH_KEY_EMERGENCY_RETIRED,
   QAUTH_TOKEN_REVOKED,
   RISC_ACCOUNT_DISABLED,
@@ -283,6 +284,7 @@ describe('the SETs of mapped event types (#540)', () => {
   const apiKeyRevoked = typeOf('api_key.revoked');
   const walletLinked = typeOf('wallet.linked');
   const keyEmergencyRetired = typeOf('key.emergency_retired');
+  const adminBreakGlassUsed = typeOf('admin.break_glass_used');
   const ISSUER = 'https://auth.example.com';
   const USER = '0192a000-0000-7000-8000-0000000000b1';
   const TIME = '2026-10-30T09:30:00.900Z';
@@ -395,6 +397,12 @@ describe('the SETs of mapped event types (#540)', () => {
       actor: { type: 'operator_cli', id: 'root' },
       subject: undefined,
       data: { keyId: 'kid-7', purpose: 'token_signing' },
+    }),
+    [adminBreakGlassUsed.type]: event(adminBreakGlassUsed.type, {
+      category: 'admin',
+      actor: { type: 'operator_cli', id: 'root' },
+      subject: undefined,
+      data: { command: 'enrol-admin' },
     }),
   };
 
@@ -704,6 +712,19 @@ describe('the SETs of mapped event types (#540)', () => {
     });
   });
 
+  it('sends a break-glass use about the realm, named by its issuer, and nothing for a realm with none', async () => {
+    const { claims } = await signed(SAMPLES[adminBreakGlassUsed.type]);
+    expect(claims).toMatchObject({
+      sub_id: { format: 'uri', uri: ISSUER },
+      events: {
+        [QAUTH_BREAK_GLASS_USED]: { command: 'enrol-admin', initiating_entity: 'admin' },
+      },
+    });
+    const noIssuer = await signed(SAMPLES[adminBreakGlassUsed.type], { issuer: null });
+    expect(noIssuer.outcome).toEqual({ ok: false, errorClass: 'event_not_offered', retry: false });
+    expect(noIssuer.requests).toHaveLength(0);
+  });
+
   // A delivery waits in the queue: held while its stream is paused, retried
   // for hours. It is sent as the stream is at the attempt, not as it was at
   // the fan-out.
@@ -741,14 +762,12 @@ describe('the SETs of mapped event types (#540)', () => {
     }
   });
 
-  it('sends a key event whatever subjects the stream has', async () => {
-    const { outcome, hasSubject } = await signed(
-      SAMPLES[keyEmergencyRetired.type],
-      {},
-      { hasSubject: false }
-    );
-    expect(outcome).toEqual({ ok: true, statusCode: 202 });
-    expect(hasSubject).not.toHaveBeenCalled();
+  it('sends a key or realm event whatever subjects the stream has', async () => {
+    for (const type of [keyEmergencyRetired.type, adminBreakGlassUsed.type]) {
+      const { outcome, hasSubject } = await signed(SAMPLES[type], {}, { hasSubject: false });
+      expect(outcome, type).toEqual({ ok: true, statusCode: 202 });
+      expect(hasSubject, type).not.toHaveBeenCalled();
+    }
   });
 
   it('sends nothing for an event without the subject its mapping names', async () => {
@@ -772,6 +791,7 @@ describe('the SETs of mapped event types (#540)', () => {
             CAEP_SESSION_REVOKED,
             CAEP_CREDENTIAL_CHANGE,
             QAUTH_KEY_EMERGENCY_RETIRED,
+            QAUTH_BREAK_GLASS_USED,
           ],
           subjects: [{ type: 'user', id: USER }],
         },
@@ -787,6 +807,7 @@ describe('the SETs of mapped event types (#540)', () => {
         tokenFamilyRevoked.type,
         apiKeyRevoked.type,
         keyEmergencyRetired.type,
+        adminBreakGlassUsed.type,
       ])
     );
     expect(listed.typeRules).toEqual({
@@ -795,6 +816,7 @@ describe('the SETs of mapped event types (#540)', () => {
       [apiKeyCreated.type]: { subjectFrom: 'client', clientId: 'receiver' },
       [apiKeyRevoked.type]: { subjectFrom: 'client', clientId: 'receiver' },
       [keyEmergencyRetired.type]: { subjectFrom: 'none' },
+      [adminBreakGlassUsed.type]: { subjectFrom: 'none' },
     });
   });
 

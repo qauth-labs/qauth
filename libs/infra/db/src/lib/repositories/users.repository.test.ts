@@ -94,7 +94,7 @@ describe('createUsersRepository — malformed ids', () => {
     }
   );
 
-  it('locks and deletes through the definer functions of migration 0079, by the realm (#681)', async () => {
+  it('locks and deletes through the definer functions of migration 0080, by the realm (#681)', async () => {
     const { db, queries } = createRecordingDb();
     const users = createUsersRepository(db);
     const id = '019a0b9e-4c2f-7d31-9f6e-2b8c4d5e6f70';

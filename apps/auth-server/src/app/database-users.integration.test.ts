@@ -693,7 +693,7 @@ describe('each service role on a database user of its own (#498)', () => {
     expect(recorded.rows[0]?.count).toBe(1);
 
     // users.delete (#681), approved and run as the admin user: it locks and
-    // deletes the account through the functions of migration 0079 (it holds
+    // deletes the account through the functions of migration 0080 (it holds
     // no UPDATE and no DELETE on users), and ends its session as the sessions
     // repository's revokeForUser does: the session locked and revoked, its
     // unredeemed code spent, its registry row deleted and a back-channel

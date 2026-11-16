@@ -109,9 +109,24 @@ export interface ResourceGuardConfig {
   /**
    * Scopes a caller must hold to access the resource by default. An empty
    * array means "any valid, audience-bound token is accepted". Per-operation
-   * step-up requirements are expressed at the call site (see `requireScopes`).
+   * step-up requirements are expressed at the call site (see `requireScopes`);
+   * list them in {@link scopesSupported} to advertise them.
    */
   requiredScopes?: string[];
+
+  /**
+   * Every scope the resource understands, for a resource whose operations
+   * each need their own scope (an MCP server with one scope per tool).
+   * Defaults to `requiredScopes`, and must hold every entry of it, or the
+   * guard throws `ResourceGuardConfigError`.
+   *
+   * Advertised, never required: the RFC 9728 document lists these scopes as
+   * `scopes_supported`, and the credential-absent `401` of a call that passes
+   * no per-operation scopes names them in `scope` (MCP 2026-07-28, "Scope
+   * Selection Strategy"). A token is checked against `requiredScopes` and the
+   * per-call scopes only.
+   */
+  scopesSupported?: string[];
 
   /** Token-validation strategy. Defaults to `'jwt'`. */
   validationMode?: ValidationMode;

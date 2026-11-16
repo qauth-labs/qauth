@@ -1,23 +1,23 @@
 /**
- * Migration 0079 adds the two functions an admin's deletion of an account
- * runs through (`users.delete`, #681) as the admin role, which holds no
- * `UPDATE` and no `DELETE` on `users`: the lock that holds the account until
- * the deletion commits, and the deletion, which refuses a service account's
- * account and one that holds an admin grant. It only creates them: nothing
- * runs now, nothing is rewritten, and a release before this one never names
- * them. Their behaviour against a real Postgres is held by
- * `repositories/user-deletion.integration.test.ts` and the auth server's
- * `admin-users-delete.integration.test.ts`.
+ * Migration 0079 adds `admin_enrolments` (#602): the one-time admin
+ * enrolments the break-glass command `enrol-admin` issues, each holding the
+ * SHA-256 of a token and nothing that recovers it. A new, empty table that a
+ * release before this one never names, so nothing is rewritten and a rolling
+ * upgrade is safe. Its behaviour against a real Postgres is held by
+ * `repositories/admin-enrolments.integration.test.ts` and the auth server's
+ * `break-glass.integration.test.ts`.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 
-import { FUNCTION_GRANTS } from '../database-users/grants-map';
+import { TABLE_GRANTS } from '../database-users/grants-map';
+import { adminEnrolments } from './admin-enrolments';
 
 const DRIZZLE_DIR = path.resolve(__dirname, '..', '..', '..', 'drizzle');
-const MIGRATION_TAG = '0079_users_delete_account';
+const MIGRATION_TAG = '0079_admin_enrolments';
 const MIGRATION_IDX = 79;
 
 interface JournalEntry {
@@ -44,10 +44,9 @@ function statementsOf(tag: string): string[] {
     .filter((statement) => statement !== '');
 }
 
-describe('migration 0079 (an admin deletes an account)', () => {
+describe('migration 0079 (admin enrolments)', () => {
   const statements = statementsOf(MIGRATION_TAG);
-  const functionNamed = (name: string) =>
-    statements.find((statement) => statement.startsWith(`CREATE FUNCTION "${name}"`)) ?? '';
+  const table = statements.find((statement) => statement.startsWith('CREATE TABLE')) ?? '';
 
   it('is in the journal, after 0078', () => {
     const entry = journal.entries.find((candidate) => candidate.tag === MIGRATION_TAG);
@@ -64,56 +63,68 @@ describe('migration 0079 (an admin deletes an account)', () => {
         )
       );
     expect(snapshotOf(MIGRATION_IDX).prevId).toBe(snapshotOf(MIGRATION_IDX - 1).id);
-    // The migrator runs a migration only when it is newer than the last one applied.
     const when = (idx: number) => journal.entries[idx]?.when ?? 0;
     expect(when(MIGRATION_IDX)).toBeGreaterThan(when(MIGRATION_IDX - 1));
   });
 
-  it('only creates two functions and takes EXECUTE on them from PUBLIC', () => {
-    expect(statements).toHaveLength(4);
-    for (const statement of statements) {
+  it('creates one new table, its foreign keys and its trigger, and rewrites nothing', () => {
+    expect(statements[0]).toMatch(/^CREATE TABLE "admin_enrolments" \(/);
+    expect(statements.filter((statement) => statement.startsWith('CREATE TABLE'))).toHaveLength(1);
+    for (const statement of statements.slice(1)) {
       expect(statement).toMatch(
-        /^(CREATE FUNCTION "(users_lock_for_deletion|users_delete_account)"\(p_realm_id uuid, p_user_id uuid\)|REVOKE ALL ON FUNCTION "(users_lock_for_deletion|users_delete_account)"\(uuid, uuid\) FROM PUBLIC;$)/
+        /^(ALTER TABLE "admin_enrolments" ADD CONSTRAINT "admin_enrolments_[a-z_]+" FOREIGN KEY|CREATE FUNCTION "admin_enrolments_use_once"|CREATE TRIGGER "admin_enrolments_use_once")/
       );
     }
-    // Nothing runs now that rewrites or removes a row: the one DELETE is the
-    // body of a function a caller runs later.
-    const runNow = statements.filter((statement) => !statement.startsWith('CREATE FUNCTION'));
-    expect(runNow.join('\n')).not.toMatch(
-      /\b(DROP|DELETE FROM|INSERT INTO|RENAME|TRUNCATE|ALTER)\b|^UPDATE\b/m
+    expect(statements.join('\n')).not.toMatch(
+      /\b(DROP|DELETE FROM|INSERT INTO|RENAME|TRUNCATE)\b|^UPDATE\b/m
     );
   });
 
-  it('runs both as definers with a pinned search path, the admin role alone executing them', () => {
-    for (const name of ['users_lock_for_deletion', 'users_delete_account']) {
-      const body = functionNamed(name);
-      expect(body, name).toContain('SECURITY DEFINER');
-      expect(body, name).toContain('VOLATILE');
-      expect(body, name).toContain('SET search_path = pg_catalog, pg_temp');
-      // Every statement names its schema: the search path holds none of ours.
-      expect(body, name).toContain('public."users" u');
-      expect(FUNCTION_GRANTS[`"${name}"(uuid, uuid)`], name).toEqual(['admin']);
+  it('holds a 32-byte hash and no token, one enrolment per account, the account in the row’s realm', () => {
+    expect(table).toContain('"token_hash" "bytea" NOT NULL');
+    expect(table).not.toMatch(/"token"/);
+    for (const constraint of [
+      'CONSTRAINT "admin_enrolments_token_hash_unique" UNIQUE("token_hash")',
+      'CONSTRAINT "admin_enrolments_user_id_unique" UNIQUE("user_id")',
+      'CONSTRAINT "admin_enrolments_token_hash_sha256" CHECK (octet_length("admin_enrolments"."token_hash") = 32)',
+      'CONSTRAINT "admin_enrolments_expires_after_created" CHECK ("admin_enrolments"."expires_at" > "admin_enrolments"."created_at")',
+    ]) {
+      expect(table).toContain(constraint);
     }
-  });
-
-  it('locks the realm’s account FOR UPDATE, the lock a foreign key’s key-share waits for', () => {
-    const lock = functionNamed('users_lock_for_deletion');
-    expect(lock).toContain('u."realm_id" = p_realm_id');
-    expect(lock).toContain('u."id" = p_user_id');
-    expect(lock).toMatch(/FOR UPDATE\s*\$\$;$/);
-    expect(lock).not.toMatch(/FOR (NO KEY UPDATE|SHARE|KEY SHARE)/);
-  });
-
-  it("deletes only the realm's account that is no service account's and holds no admin grant", () => {
-    const remove = functionNamed('users_delete_account');
-    expect(remove).toContain('DELETE FROM public."users" u');
-    expect(remove).toContain('u."realm_id" = p_realm_id');
-    expect(remove).toContain('u."id" = p_user_id');
-    expect(remove).toContain('NOT u."is_service_account"');
-    expect(remove).toContain(
-      'SELECT 1 FROM public."service_accounts" s WHERE s."user_id" = u."id"'
+    expect(statements.join('\n')).toContain(
+      'ADD CONSTRAINT "admin_enrolments_user_realm_fk" FOREIGN KEY ("user_id","realm_id") REFERENCES "public"."users"("id","realm_id") ON DELETE cascade'
     );
-    expect(remove).toContain('g."user_id" = u."id" AND g."revoked_at" IS NULL');
-    expect(remove).toContain('RETURNING u."id"');
+    expect(
+      getTableConfig(adminEnrolments)
+        .foreignKeys.map((fk) => getTableConfig(fk.reference().foreignTable).name)
+        .sort()
+    ).toEqual(['realms', 'users']);
+  });
+
+  it('lets a row change only by one redemption before its expiry, whoever writes it', () => {
+    const useOnce =
+      statements.find((statement) =>
+        statement.startsWith('CREATE FUNCTION "admin_enrolments_use_once"')
+      ) ?? '';
+    expect(useOnce).toContain('SET search_path = pg_catalog, pg_temp');
+    for (const guard of [
+      'IF OLD."used_at" IS NOT NULL',
+      'OR NEW."used_at" IS NULL',
+      'OR NEW."used_at" >= OLD."expires_at"',
+      'OR (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint >= OLD."expires_at"',
+      'OR NEW."user_id" IS DISTINCT FROM OLD."user_id"',
+      'OR NEW."token_hash" IS DISTINCT FROM OLD."token_hash"',
+      'OR NEW."expires_at" IS DISTINCT FROM OLD."expires_at"',
+    ]) {
+      expect(useOnce).toContain(guard);
+    }
+    expect(useOnce).toContain("CONSTRAINT = 'admin_enrolments_use_once'");
+    expect(statements).toContain(
+      'CREATE TRIGGER "admin_enrolments_use_once"\n  BEFORE UPDATE ON "admin_enrolments"\n  FOR EACH ROW\n  EXECUTE FUNCTION "admin_enrolments_use_once"();'
+    );
+  });
+
+  it('grants no service role anything on it', () => {
+    expect(TABLE_GRANTS['admin_enrolments']).toEqual({});
   });
 });

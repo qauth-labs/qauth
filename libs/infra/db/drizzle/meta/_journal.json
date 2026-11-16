@@ -558,8 +558,15 @@
     {
       "idx": 79,
       "version": "7",
-      "when": 1794776517989,
-      "tag": "0079_users_delete_account",
+      "when": 1794758672945,
+      "tag": "0079_admin_enrolments",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1794791292907,
+      "tag": "0080_users_delete_account",
       "breakpoints": true
     }
   ]
