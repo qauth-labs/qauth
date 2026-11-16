@@ -3,7 +3,7 @@ title: Accounts
 description: How to disable a user account and enable it again, what disabling ends at once and for good, what suspending a client or disabling a realm ends, how an operator verifies an account that cannot confirm its address, and how an admin deletes an account.
 sidebar:
   order: 13
-lastVerified: '2026-11-15'
+lastVerified: '2026-11-16'
 ---
 
 An operator disables an account to stop whoever holds it, for example after
@@ -396,7 +396,9 @@ authorization request: no app is signed in to without a prompt.
 `users.delete`, so a token with `qauth:admin:security`, and an approval
 ([security operations](/reference/security-operations/)). A role can grant
 `users.delete` alone. A service account may file the approval; a person
-approves it. File it with the account in `params` and no body. The approver
+approves it. A service account that holds the built-in role `account-closer`
+on the realm deletes with no approval, as a relying party that owns account
+closing needs ([Account closing at a relying party](/operate/account-closing/)). File it with the account in `params` and no body. The approver
 sees the account's id, when it was created, whether it is enabled, what the
 deletion ends and each credential with the proof it holds. A credential's
 identifier is shown masked, only its first and last character

@@ -75,8 +75,9 @@ function roleTable(roles: Readonly<Record<BuiltInRoleName, BuiltInRole>>): strin
   for (const role of Object.values(roles)) {
     const permissions =
       role.permissionIds.length === 0 ? 'none' : role.permissionIds.map(code).join(', ');
+    const classes = role.classes.length === 0 ? 'none' : role.classes.join(', ');
     lines.push(
-      `| ${code(role.name)} | ${role.classes.join(', ')} | ${permissions} | ${tableCell(role.description)} |`
+      `| ${code(role.name)} | ${classes} | ${permissions} | ${tableCell(role.description)} |`
     );
   }
   return lines.join('\n');
@@ -172,8 +173,17 @@ role reaches a security operation through \`${ADMIN_SCOPES.write}\`.
 
 ${roleTable(roles)}
 
-- Built-in roles are defined in code, by class, and cannot be edited. A permission added to the
-  catalog joins every built-in role of its class.
+- Built-in roles are defined in code and cannot be edited. \`viewer\`, \`editor\` and
+  \`security-admin\` are defined by class: a permission added to the catalog joins every one of
+  its class. \`account-closer\` lists its one permission, \`users.delete\`, and holds no other.
+- \`account-closer\` is the one role that lets an operation run with no approval. A service account
+  that holds it on one realm runs \`users.delete\` there unattended, so that a relying party that
+  closes an account on its side deletes it at once
+  ([Account closing at a relying party](/operate/account-closing/)). It needs a grant on exactly
+  that realm: a grant on every realm, a person and a service account whose client registered
+  itself run every deletion with its approval. Where the realm makes a second admin mandatory for
+  \`users.delete\`, the deletion needs its approvals from anyone. The host's \`service-accounts\`
+  command grants it, on one named realm only.
 - A custom role lists permission ids from the table above. An unknown id is refused, and so is a
   retired one. Its name is lower-case ASCII words joined by single hyphens, such as
   \`realm-auditor\`, and never reads as a built-in role's name.

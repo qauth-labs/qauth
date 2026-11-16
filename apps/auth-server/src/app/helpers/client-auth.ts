@@ -8,13 +8,13 @@ import { ADMIN_API_AUDIENCE, isReservedAudience } from '@qauth-labs/shared-valid
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
-import { mayHoldAdminAudience } from './admin-audience';
+import { isSelfRegisteredClient, mayHoldAdminAudience } from './admin-audience';
 import {
   authenticateClientAssertion,
   type ClientAssertionCredentials,
   type ClientAssertionRealm,
 } from './client-assertion';
-import { isAgentClient, isCimdClient, resolveClient } from './client-resolution';
+import { isAgentClient, resolveClient } from './client-resolution';
 import { isClientUsable } from './client-status';
 import { systemClientId } from './oauth-client';
 import { type AgentMode, findExceedingAgentScopes, parseAgentMode } from './scope-modes';
@@ -680,21 +680,6 @@ export function userGrantDefaultAudience(
   // portal's token from it without a `resource`.
   if (client.clientId === systemClientId()) return parsed.data;
   return parsed.data.filter((value) => !isReservedAudience(value));
-}
-
-/**
- * Whether the client registered itself: resolved from a Client ID Metadata
- * Document, or registered at `/oauth/register`. Read from both marks the
- * registration writes, so either one is enough.
- */
-function isSelfRegisteredClient(
-  client: Pick<OAuthClientLike, 'metadata' | 'dynamicRegisteredAt'>
-): boolean {
-  return (
-    isCimdClient({ metadata: client.metadata ?? null }) ||
-    client.metadata?.['registrationType'] === 'dynamic' ||
-    (client.dynamicRegisteredAt !== undefined && client.dynamicRegisteredAt !== null)
-  );
 }
 
 /**

@@ -58,6 +58,7 @@ import {
 import { isApprovalEngineOperation } from './approvals/operations';
 import { callerAccount } from './approvals/standing';
 import { approvalsFromOthers, operationApprovalRequirement } from './approvals/two-admin';
+import { runsUnattended } from './approvals/unattended';
 import { runInAdminHandler } from './handler-scope';
 import { adminRealmRouteProblem } from './route-placement';
 import { secretMemberSchemaProblem } from './secrets/secret-members';
@@ -96,7 +97,10 @@ import { secretMemberSchemaProblem } from './secrets/secret-members';
  *    approval its `QAuth-Approval` header names, filed for exactly this
  *    request by this caller, approved and unexpired (#512, `./approvals`);
  *    every other one answers `approval_required` and never runs. Filing and
- *    withdrawing an approval, the engine's own security operations, pass.
+ *    withdrawing an approval, the engine's own security operations, pass, and
+ *    so does `users.delete` by a service account that holds `account-closer`
+ *    on the realm, where the realm needs one approval for it
+ *    (`./approvals/unattended.ts`, #1090).
  * 8. Handler, inside one database transaction (`adminTransaction`), its
  *    answer serialized before the commit. The transaction first consumes the
  *    approval stage 7 checked, with one conditional update: a call that
@@ -759,6 +763,9 @@ function refusedApproval(
  *
  * `approvals.create` and `approvals.cancel` are classified `security` by the
  * operation they name, and pass: an approval is not needed to ask for one.
+ * A call that names no approval passes too where {@link runsUnattended}
+ * says it runs unattended: `users.delete` by a service account the operator
+ * gave `account-closer` on the realm (#1090).
  */
 function approvalGate(registry: OperationRegistry) {
   return async function adminApprovalGate(request: FastifyRequest): Promise<void> {
@@ -778,6 +785,16 @@ function approvalGate(registry: OperationRegistry) {
     });
     const header = request.headers[APPROVAL_HEADER];
     if (header === undefined) {
+      // A service account the operator gave `account-closer` on this realm
+      // deletes its accounts with no approval, while the realm needs one for
+      // the request: the two-admin rule still binds it (#1090).
+      if (runsUnattended(caller, operationId, approvalsRequired)) {
+        request.log.info(
+          { operation: operationId, serviceAccount: caller.serviceAccount?.name },
+          'A service account runs a security operation with no approval, under its grant on the realm'
+        );
+        return;
+      }
       // Where the request needs another admin's approval and none could
       // give it, the call fails closed with what it is waiting for: the
       // same check as the filing's.

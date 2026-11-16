@@ -28,7 +28,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 
-import { mayHoldAdminAudience } from './admin-audience';
+import { isSelfRegisteredClient, mayHoldAdminAudience } from './admin-audience';
 import type { OAuthClientLike } from './client-auth';
 import { isClientUsable } from './client-status';
 import type { RealmRow } from './request-realm';
@@ -90,7 +90,18 @@ export function serviceAccountRefusal(
 /** Who an admin call comes from, by the account its token names. */
 export type AdminCallerAccount =
   | { readonly kind: 'human'; readonly serviceAccount: null }
-  | { readonly kind: 'service_account'; readonly serviceAccount: ServiceAccountCaller }
+  | {
+      readonly kind: 'service_account';
+      readonly serviceAccount: ServiceAccountCaller;
+      /**
+       * Whether its client registered itself, at `/oauth/register` or from a
+       * Client ID Metadata Document (`isSelfRegisteredClient`). The host's
+       * command makes a service account's client itself, so this holds only
+       * for a row written some other way; such a service account runs
+       * nothing unattended (#1090).
+       */
+      readonly clientSelfRegistered: boolean;
+    }
   | {
       readonly kind: 'refused';
       readonly reason:
@@ -151,6 +162,7 @@ export async function adminCallerAccount(
   return {
     kind: 'service_account',
     serviceAccount: { id: serviceAccount.id, name: serviceAccount.name, clientId: client.clientId },
+    clientSelfRegistered: isSelfRegisteredClient(client),
   };
 }
 

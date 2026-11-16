@@ -201,7 +201,9 @@ operation of the OpenAPI document as \`x-qauth-effects\`
   the body. The admin listener refuses to boot such a route without
   one. Filing an approval (\`approvals.create\`) and withdrawing one (\`approvals.cancel\`) need
   what the operation it is for needs, so they declare every effect and permission and decide per
-  request; they are the only security operations that run without an approval.
+  request; they, and \`users.delete\` by a service account the operator gave \`account-closer\` on
+  the realm ([below](#unattended-account-deletion)), are the only security operations that run
+  without an approval.
 - The approval binds the request as its route parses it, so the route of a security operation
   parses all of it, and the admin listener refuses to boot one that does not: it has one method, a
   Zod object schema for its path parameters that names every parameter of its URL, a Zod body
@@ -298,6 +300,31 @@ rule fails closed. The ways out:
 
 The list itself cannot be shortened by one admin, so a realm that made an operation mandatory and
 has one admin left keeps the rule until a second is eligible.
+
+### Unattended account deletion
+
+A relying party that closes a person's account on its own side deletes the account on its realm the
+moment the person confirms, as a service account. Had a human to approve each deletion, the account
+would stay alive and signed in until one did. So one security operation can run with no approval
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/), Decision 7,
+amended 2026-11-16): \`users.delete\`, called by a service account that holds the built-in role
+\`account-closer\` on the realm it acts on
+([Account closing at a relying party](/operate/account-closing/)).
+
+- The operator grants it on the host, with the \`service-accounts\` command, on one named realm.
+  The command refuses it on every realm, and a grant on every realm written another way lets
+  nothing run unattended.
+- Only a service account runs unattended, and only one whose client the operator made: a person
+  who holds the role, and a service account whose client registered itself, need an approval for
+  every deletion.
+- The two-admin rule still binds it. Where the realm lists \`users.delete\` in
+  \`admin.twoAdminMandatoryOperations\`, the grant stands in for nothing, and the deletion needs
+  every approval the rule asks. One admin can always add it to the list, so a realm's admins can
+  switch the unattended deletion off; removing it again takes two.
+- Everything else of the call holds: the permission check, \`If-Match\`, the refusal of a service
+  account's account and an admin's, the audit row, which names the service account and records no
+  approval, and the admin events, whose actor is the service account's client.
+- Every other security operation runs only with its approval, whoever holds the role.
 
 ## Operations
 

@@ -112,6 +112,8 @@ interface ServiceAccountFixture {
     readonly enabled: boolean;
     readonly suspended: boolean;
     readonly tokenEndpointAuthMethod: string;
+    readonly dynamicRegisteredAt?: number | null;
+    readonly metadata?: Record<string, unknown> | null;
   };
 }
 
@@ -719,6 +721,68 @@ describe('resolveAdminAuthority', () => {
       await expect(asRobot(unmarked)).resolves.toEqual({
         allowed: false,
         refusal: 'account_inactive',
+      });
+    });
+
+    // #1090: account-closer lets a service account delete one realm's
+    // accounts with no approval.
+    describe('unattended operations', () => {
+      function closerServer(grants: LiveAdminGrant[], account: ServiceAccountFixture = robot()) {
+        return server(grants, { serviceAccounts: [account] });
+      }
+
+      it('names users.delete for a service account that holds account-closer on exactly this realm', async () => {
+        const fastify = closerServer([grant(ROBOT, REALM_A, 'account-closer')]);
+        await expect(asRobot(fastify)).resolves.toMatchObject({
+          allowed: true,
+          kind: 'service_account',
+          permissions: new Set(['users.delete']),
+          unattendedOperations: new Set(['users.delete']),
+        });
+      });
+
+      it('names none on another realm, nor for an account-closer grant on every realm', async () => {
+        const elsewhere = closerServer([
+          grant(ROBOT, REALM_B, 'account-closer'),
+          grant(ROBOT, REALM_A, 'security-admin'),
+        ]);
+        await expect(asRobot(elsewhere)).resolves.toMatchObject({
+          allowed: true,
+          unattendedOperations: new Set(),
+        });
+        const everywhere = closerServer([grant(ROBOT, null, 'account-closer')]);
+        await expect(asRobot(everywhere)).resolves.toMatchObject({
+          allowed: true,
+          permissions: new Set(['users.delete']),
+          unattendedOperations: new Set(),
+        });
+      });
+
+      it('names none for a service account whose client registered itself', async () => {
+        for (const client of [
+          { dynamicRegisteredAt: 1_800_000_000_000 },
+          { metadata: { registrationType: 'dynamic' } },
+          { metadata: { registrationType: 'cimd' } },
+        ]) {
+          const fastify = closerServer(
+            [grant(ROBOT, REALM_A, 'account-closer')],
+            robot({ client })
+          );
+          await expect(asRobot(fastify), JSON.stringify(client)).resolves.toMatchObject({
+            allowed: true,
+            unattendedOperations: new Set(),
+          });
+        }
+      });
+
+      it('names none for a person who holds account-closer', async () => {
+        const fastify = server([grant(OPERATOR_ADMIN, REALM_A, 'account-closer')]);
+        await expect(ask(fastify, { targetRealmId: REALM_A })).resolves.toMatchObject({
+          allowed: true,
+          kind: 'human',
+          permissions: new Set(['users.delete']),
+          unattendedOperations: new Set(),
+        });
       });
     });
 

@@ -11,11 +11,15 @@
  * when its class's scope is in the token, so a token with only `qauth:admin:write`
  * never uses a security permission, whatever role the caller holds.
  *
- * BUILT-IN ROLES are defined here, in code, by class: `viewer` holds every
- * read permission, `editor` every read and write permission, and
- * `security-admin` every permission. They follow the catalog, so a permission
- * added to it joins them, and they cannot be edited: the objects are frozen,
- * and no table holds them. CUSTOM ROLES are stored per realm by the admin
+ * BUILT-IN ROLES are defined here, in code. Three are defined by class:
+ * `viewer` holds every read permission, `editor` every read and write
+ * permission, and `security-admin` every permission. They follow the catalog,
+ * so a permission added to it joins them. The fourth, `account-closer`, lists
+ * its one permission, `users.delete`, and is the one role that lets a service
+ * account run an operation with no approval: `users.delete`, on the one realm
+ * its grant names (ADR-019 Decision 7, amended 2026-11-16; issue #1090; see
+ * {@link UNATTENDED_OPERATION_IDS}). None can be edited: the objects are
+ * frozen, and no table holds them. CUSTOM ROLES are stored per realm by the admin
  * grants work (#510) and checked with {@link validateCustomRole}: the admin
  * role and grant repositories call it through {@link ADMIN_ROLE_CATALOG}, which
  * the app hands the database plugin. A custom role name follows the grammar
@@ -31,25 +35,57 @@ import type { AdminRoleCatalog } from '@qauth-labs/fastify-plugin-db';
 import { PERMISSION_REGISTRY, type PermissionRegistry } from './admin-permissions';
 import { allowedPermissionClasses, type PermissionClass } from './admin-scopes';
 
-/** The names of the built-in roles, from the least to the most privileged. */
-export const BUILT_IN_ROLE_NAMES = Object.freeze(['viewer', 'editor', 'security-admin'] as const);
+/**
+ * The names of the built-in roles: the three defined by class, from the least
+ * to the most privileged, then `account-closer`.
+ */
+export const BUILT_IN_ROLE_NAMES = Object.freeze([
+  'viewer',
+  'editor',
+  'security-admin',
+  'account-closer',
+] as const);
 
 export type BuiltInRoleName = (typeof BUILT_IN_ROLE_NAMES)[number];
 
-/** A built-in role: every grantable permission of its classes. */
+/**
+ * The operations a built-in role may let a service account run with no
+ * approval (ADR-019 Decision 7, amended 2026-11-16; issue #1090). Closed:
+ * `users.delete` alone, so that a relying party that closes an account on its
+ * side deletes it on its realm at once. Every other security operation runs
+ * only with an approval, whoever calls it.
+ */
+export const UNATTENDED_OPERATION_IDS = Object.freeze(['users.delete'] as const);
+
+/** A built-in role: the grantable permissions of its classes, or the ones it lists. */
 export interface BuiltInRole {
   readonly name: BuiltInRoleName;
   /** One sentence for the docs page and the admin console. */
   readonly description: string;
-  /** The permission classes whose every permission the role holds. */
+  /** The permission classes whose every permission the role holds; none for a role that lists its permissions. */
   readonly classes: readonly PermissionClass[];
   /** The ids of those permissions, in catalog order. */
   readonly permissionIds: readonly string[];
+  /**
+   * The operations a service account that holds the role on one realm runs
+   * there with no approval (`admin/approvals/unattended.ts`): `users.delete`
+   * for `account-closer`, none for any other role. A person who holds the
+   * role runs every operation with its approval, and so does a service
+   * account whose grant names every realm.
+   */
+  readonly unattendedOperations: readonly string[];
 }
 
-const BUILT_IN_ROLE_CLASSES: Readonly<
-  Record<BuiltInRoleName, { classes: readonly PermissionClass[]; description: string }>
-> = {
+/** How a built-in role is defined: by its classes, or by the permissions it lists. */
+type BuiltInRoleDefinition = {
+  readonly description: string;
+  readonly unattendedOperations?: readonly (typeof UNATTENDED_OPERATION_IDS)[number][];
+} & (
+  | { readonly classes: readonly PermissionClass[] }
+  | { readonly permissions: readonly string[] }
+);
+
+const BUILT_IN_ROLE_DEFINITIONS: Readonly<Record<BuiltInRoleName, BuiltInRoleDefinition>> = {
   viewer: { classes: ['read'], description: 'Reads everything an admin can read.' },
   editor: {
     classes: ['read', 'write'],
@@ -59,6 +95,12 @@ const BUILT_IN_ROLE_CLASSES: Readonly<
     classes: ['read', 'write', 'security'],
     description: 'Reads, makes every change, and performs security operations.',
   },
+  'account-closer': {
+    permissions: ['users.delete'],
+    unattendedOperations: ['users.delete'],
+    description:
+      "Deletes the realm's accounts, and nothing else. A service account that holds it on one realm deletes there with no approval, unless the realm makes a second admin mandatory for users.delete; for anyone else every deletion needs its approval (#1090).",
+  },
 };
 
 /** The built-in roles over `registry`, frozen. */
@@ -67,16 +109,20 @@ export function builtInRolesOf(
 ): Readonly<Record<BuiltInRoleName, BuiltInRole>> {
   const roles = {} as Record<BuiltInRoleName, BuiltInRole>;
   for (const name of BUILT_IN_ROLE_NAMES) {
-    const { classes, description } = BUILT_IN_ROLE_CLASSES[name];
+    const definition = BUILT_IN_ROLE_DEFINITIONS[name];
+    const classes = 'classes' in definition ? definition.classes : [];
+    const holds = (permission: { readonly id: string; readonly class: PermissionClass }) =>
+      'classes' in definition
+        ? definition.classes.includes(permission.class)
+        : definition.permissions.includes(permission.id);
     roles[name] = Object.freeze({
       name,
-      description,
+      description: definition.description,
       classes: Object.freeze([...classes]),
       permissionIds: Object.freeze(
-        registry.active
-          .filter((permission) => classes.includes(permission.class))
-          .map((permission) => permission.id)
+        registry.active.filter((permission) => holds(permission)).map((permission) => permission.id)
       ),
+      unattendedOperations: Object.freeze([...(definition.unattendedOperations ?? [])]),
     });
   }
   return Object.freeze(roles);

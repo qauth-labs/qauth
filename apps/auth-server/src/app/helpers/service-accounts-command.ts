@@ -14,7 +14,9 @@
  * `create` writes, in one transaction, the account (a user with no
  * credential, in the operator realm), its OAuth client (`private_key_jwt`
  * with the given public keys, `client_credentials`, DPoP-bound, the admin
- * API's audience), the service account, its admin grants, and one row of the
+ * API's audience), the service account, its admin grants (`account-closer`,
+ * which lets it delete a realm's accounts with no approval, only on one
+ * named realm, #1090), and one row of the
  * operator realm's admin audit log: `serviceAccounts.create`, actor kind
  * `host_operator`, with the operating-system user. No secret is made or
  * printed: the private key stays with the automation, and only its public
@@ -53,6 +55,12 @@ export const SERVICE_ACCOUNT_CREATE_OPERATION = SERVICE_ACCOUNT_OPERATIONS.creat
 /** The effects of every operation the command records (ADR-019 Decision 7). */
 const SERVICE_ACCOUNT_EFFECTS = Object.freeze(['administration'] as const);
 
+/**
+ * The built-in role that lets a service account delete a realm's accounts
+ * with no approval (#1090): granted on one realm, never on every realm.
+ */
+const UNATTENDED_ROLE = 'account-closer';
+
 export const SERVICE_ACCOUNTS_USAGE = `Usage: service-accounts create --name <name> --client-id <client_id>
                          (--jwks <file> | --jwks-uri <https URL>)
                          [--grant <role>@<realm name> | --grant <role>@*]...
@@ -70,11 +78,14 @@ owner's, not one service role's in a split deployment.
   --jwks       a file holding the client's public JWK Set, {"keys": [...]}
   --jwks-uri   an https URL that serves the client's public JWK Set
   --grant      a built-in admin role (${BUILT_IN_ROLE_NAMES.join(', ')}) on the realm named,
-               or on every realm with *; repeat for more than one
+               or on every realm with *; repeat for more than one.
+               ${UNATTENDED_ROLE}@<realm name> lets it delete that realm's accounts
+               with no approval, and takes one realm, never *
 
 A service account signs in with client_credentials, private_key_jwt and a
 DPoP proof, for the admin API's audience. Its token names its account, and
-its security operations run only after a human admin approves them.
+its security operations run only after a human admin approves them, but for
+the deletions an ${UNATTENDED_ROLE} grant lets it run unattended.
 
 Exits 0 on success, 1 when the change was refused, 2 on a usage error.`;
 
@@ -150,6 +161,12 @@ function grantOf(value: string): GrantArgument {
   if (!(BUILT_IN_ROLE_NAMES as readonly string[]).includes(role)) {
     throw new ServiceAccountsUsageError(
       `--grant ${value}: "${role}" is not a built-in admin role (${BUILT_IN_ROLE_NAMES.join(', ')})`
+    );
+  }
+  // The unattended deletion is one service account's, on one realm (#1090).
+  if (role === UNATTENDED_ROLE && realm === '*') {
+    throw new ServiceAccountsUsageError(
+      `--grant ${value}: ${UNATTENDED_ROLE} deletes accounts with no approval, so it is granted on one realm: name it`
     );
   }
   return { role, realm: realm === '*' ? null : realm };
@@ -323,6 +340,11 @@ async function create(
   );
   for (const grant of grants) {
     deps.out(`  grant ${grant.role} on ${grant.targetRealmId ?? 'every realm'}`);
+    if (grant.role === UNATTENDED_ROLE) {
+      deps.out(
+        "    it deletes that realm's accounts with no approval, unless the realm makes a second admin mandatory for users.delete."
+      );
+    }
   }
   if (grants.length === 0) {
     deps.out('  no admin grant: it gets no admin token until one is granted to its user id.');

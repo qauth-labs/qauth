@@ -1,8 +1,9 @@
 /**
  * Which clients may hold the admin API's audience (ADR-019 Decision 7, issue
- * #522). Apart from `client-auth.ts` so the admin API's authority stage
- * (`admin-authority.ts`, `service-accounts.ts`) reads the rule without
- * loading the client authentication module and the environment it reads.
+ * #522), and which registered themselves. Apart from `client-auth.ts` so the
+ * admin API's authority stage (`admin-authority.ts`, `service-accounts.ts`)
+ * reads the rules without loading the client authentication module and the
+ * environment it reads.
  */
 
 /**
@@ -23,4 +24,25 @@ export function mayHoldAdminAudience(client: {
   readonly tokenEndpointAuthMethod?: string;
 }): boolean {
   return client.tokenEndpointAuthMethod === 'private_key_jwt';
+}
+
+/**
+ * Whether the client registered itself: resolved from a Client ID Metadata
+ * Document (`registrationType` `cimd`, as `isCimdClient` reads it), or
+ * registered at `/oauth/register` (`registrationType` `dynamic`, or a
+ * `dynamic_registered_at`). Read from both marks the registration writes, so
+ * either one is enough. `client-auth.ts` keeps such a client off the admin
+ * audience's error path, and a service account whose client is one runs
+ * nothing unattended (#1090).
+ */
+export function isSelfRegisteredClient(client: {
+  readonly metadata?: Record<string, unknown> | null;
+  readonly dynamicRegisteredAt?: number | null;
+}): boolean {
+  const registrationType = client.metadata?.['registrationType'];
+  return (
+    registrationType === 'cimd' ||
+    registrationType === 'dynamic' ||
+    (client.dynamicRegisteredAt !== undefined && client.dynamicRegisteredAt !== null)
+  );
 }
