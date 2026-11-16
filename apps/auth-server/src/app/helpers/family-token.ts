@@ -10,6 +10,7 @@ import {
   type FamilyOperationClass,
   type ScopedApiFamily,
 } from '../api-conventions/families';
+import { DelegatedTokenRefusedError } from './account-operation-errors';
 import { accessTokenIssuedAt, accountCredentialRefusal } from './account-validity';
 import { isClientUsable } from './client-status';
 import { realmIssuer } from './realm-url';
@@ -82,6 +83,22 @@ export interface FamilyTokenOptions {
     token: string,
     claims: JWTPayload
   ) => Promise<void>;
+  /**
+   * Whether the route takes a token that carries an RFC 8693 `act` claim: an
+   * agent's delegation token, or an admin's act-chain token (#523). The
+   * default is no: such a token gets 403 `DelegatedTokenRefusedError`. Only
+   * the account family admits one at all; the developer and admin families
+   * refuse it whatever this says ({@link assertFamilyClaims}). A route that
+   * takes one passes {@link checkActChain} too.
+   */
+  readonly allowActChain?: boolean;
+  /**
+   * The check every token with an `act` claim goes through on the route,
+   * before {@link allowActChain} decides: the account API holds an admin's
+   * act-chain token to its record and marks the call for its audit row
+   * (`admin-access.ts`). Required with `allowActChain`.
+   */
+  readonly checkActChain?: (request: FastifyRequest, claims: JWTPayload) => Promise<void>;
 }
 
 /**
@@ -118,12 +135,13 @@ function audiencesOf(claims: JWTPayload): string[] {
  *     and a token an agent obtained by exchange is neither. Automation
  *     reaches the admin API as a service account, with a token of its own.
  *
- *   The account family accepts one: ADR-019 Decision 7 has the account API
- *   refuse an act-chain token per operation, on the routes that change a
- *   credential, an identifier, the contact address or a linked account, and
- *   on account deletion. Either way the agent's own client must list the
- *   family's audience to be issued it (`assertReservedAudiencesListed` in the
- *   token route).
+ *   The account family admits one only on a route that declares it takes
+ *   one (`allowActChain`, #523), and refuses it everywhere else with 403:
+ *   ADR-019 Decision 7 has the account API refuse an act-chain token per
+ *   operation, on the routes that change a credential, an identifier, the
+ *   contact address or a linked account, and on account deletion. An agent's
+ *   own client must list the family's audience to be issued one
+ *   (`assertReservedAudiencesListed` in the token route).
  */
 function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
   // A structural check of the claims, not the refusal of a subject that names
@@ -240,7 +258,11 @@ export function requireFamilyToken(
     throw new Error('requireFamilyToken: a family route admits at least one kind of subject');
   }
   const requiredScopes = [...(options.requiredScopes ?? [])];
-  const { requireDpop } = options;
+  const { requireDpop, checkActChain } = options;
+  const allowActChain = options.allowActChain === true;
+  if (allowActChain && checkActChain === undefined) {
+    throw new Error('requireFamilyToken: a route that takes act-chain tokens checks them');
+  }
 
   return async function requireFamilyTokenHandler(request) {
     const claims = await request.server.verifyRequestAccessToken(request, {
@@ -250,6 +272,12 @@ export function requireFamilyToken(
     });
     assertFamilyClaims(family, claims);
     await assertSubjectOfRealm(request, claims as JWTPayload & { sub: string }, subjects);
+    // Default deny (#523): a token with an act chain reaches only a route
+    // that declares it takes one, after the route's own check.
+    if (claims.act !== undefined && claims.act !== null) {
+      if (checkActChain !== undefined) await checkActChain(request, claims);
+      if (!allowActChain) throw new DelegatedTokenRefusedError();
+    }
 
     // The developer portal's token of the release before #933 carries no
     // scope; it keeps working for this release. REMOVE IN THE NEXT RELEASE.

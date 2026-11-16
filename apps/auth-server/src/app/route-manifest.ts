@@ -233,6 +233,10 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'sessions',
     ],
     repositories: [
+      // An admin's act-chain token (#523) is held to its row on every call,
+      // with the admin's live grants, and each call is audited.
+      'adminActSessions',
+      'adminAuditLog',
       // A passkey removal (#1108) reads whether the account holds an admin
       // grant, where the realm's MFA policy requires a second factor of admins.
       'adminGrants',

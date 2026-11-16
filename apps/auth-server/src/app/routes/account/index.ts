@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { MERGE_PATCH_MEDIA_TYPE } from '../../api-conventions/conditional-requests';
 import { createAccountFactors } from '../../helpers/account-factors';
+import { registerAdminActChainAudit } from '../../helpers/admin-access';
 import { createEngineMailer } from '../../helpers/engine-mail';
 import { registerAccountConsentRoutes } from './consents';
 import { registerAccountLinkedAccountRoutes } from './linked-accounts';
@@ -48,6 +49,10 @@ export default async function (fastify: FastifyInstance) {
     reply.header('Cache-Control', 'no-store');
     return payload;
   });
+  // Every call an admin makes with an act-chain token lands in the admin
+  // audit log, with its act chain (#523); a route outside this scope takes
+  // no such token.
+  registerAdminActChainAudit(fastify);
   // A PATCH body here is a JSON Merge Patch (RFC 7396), parsed as JSON is.
   // Registered in this module only, so no route outside the families starts
   // taking the media type.
