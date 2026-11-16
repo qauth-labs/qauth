@@ -276,6 +276,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:key.next_created:v1-rc.0`](#keynext_created-v1-rc0)                                   | admin    | info     | v0.2.5 |
 | [`urn:qauth:event:key.rotated:v1-rc.0`](#keyrotated-v1-rc0)                                             | admin    | info     | v0.2.5 |
 | [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                           | admin    | info     | v0.2.0 |
+| [`urn:qauth:event:admin.break_glass_used:v1-rc.0`](#adminbreak_glass_used-v1-rc0)                       | admin    | critical | v0.2.8 |
 
 ### user.signed_in v1-rc.0
 
@@ -1243,6 +1244,20 @@ An administrator, a service account or an operator changed something in the real
 | `target.id`   | string          | yes      | The changed thing's identifier, such as a realm id or a `client_id`. It stays valid after the thing is deleted.                                                                                                        |
 | `diff`        | array of object | yes      | What the operation changed in the target, field by field. Only changed fields are listed. A nested object is diffed member by member; any other value, an array included, is shown whole. Every secret value is `***`. |
 | `approvals`   | array of object | yes      | The approvals the operation ran on, both of a two-admin operation. Empty when it needed none.                                                                                                                          |
+
+### admin.break_glass_used v1-rc.0
+
+An operator ran a break-glass command on a host that holds the database credentials and the KEK (ADR-019 Decision 7): `enrol-admin` created an admin account with a one-time enrolment, or `retire-key` retired a key of the realm in an emergency. Whoever holds the host and the KEK stands outside the two-admin rule, so every use is announced. Emitted in the transaction of the command's change, before the change: a command whose event cannot be written changes nothing. The realm's admin audit log records the operating-system user, the host and the command's arguments.
+
+- Identifier: `urn:qauth:event:admin.break_glass_used:v1-rc.0`
+- Category: `admin` · Severity: `critical` · Since: v0.2.8
+- Subject: none: the event never carries one
+- Schema: [admin.break_glass_used.v1-rc.0.json](/schemas/events/admin.break_glass_used.v1-rc.0.json)
+- Security type · SSF: `urn:qauth:secevent:break-glass-used:v1-rc.0` ([SSF events](/reference/ssf-events/))
+
+| Member    | Type                                                 | Required | Meaning                                                                                   |
+| --------- | ---------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `command` | one of `enrol-admin`, `retire-key`, or a later value | yes      | The command that ran: `enrol-admin` or `retire-key`. The set may grow in a minor release. |
 
 ## Earlier event names
 

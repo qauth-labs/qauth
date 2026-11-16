@@ -1,5 +1,5 @@
 {
-  "id": "7bc6ec2e-d5ed-47d3-adcd-27f1d0444c6d",
+  "id": "7d6bef36-11fd-4f15-9b85-a4ac235133a5",
   "prevId": "9f9bce14-6b91-484d-98e6-85bdf73250df",
   "version": "7",
   "dialect": "postgresql",
@@ -510,6 +510,105 @@
         "admin_audit_log_checkpoints_row_hash_sha256": {
           "name": "admin_audit_log_checkpoints_row_hash_sha256",
           "value": "octet_length(\"admin_audit_log_checkpoints\".\"row_hash\") = 32"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.admin_enrolments": {
+      "name": "admin_enrolments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "uuidv7()"
+        },
+        "realm_id": {
+          "name": "realm_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "token_hash": {
+          "name": "token_hash",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "used_at": {
+          "name": "used_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "admin_enrolments_realm_id_realms_id_fk": {
+          "name": "admin_enrolments_realm_id_realms_id_fk",
+          "tableFrom": "admin_enrolments",
+          "tableTo": "realms",
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "admin_enrolments_user_realm_fk": {
+          "name": "admin_enrolments_user_realm_fk",
+          "tableFrom": "admin_enrolments",
+          "tableTo": "users",
+          "columnsFrom": ["user_id", "realm_id"],
+          "columnsTo": ["id", "realm_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "admin_enrolments_token_hash_unique": {
+          "name": "admin_enrolments_token_hash_unique",
+          "nullsNotDistinct": false,
+          "columns": ["token_hash"]
+        },
+        "admin_enrolments_user_id_unique": {
+          "name": "admin_enrolments_user_id_unique",
+          "nullsNotDistinct": false,
+          "columns": ["user_id"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "admin_enrolments_token_hash_sha256": {
+          "name": "admin_enrolments_token_hash_sha256",
+          "value": "octet_length(\"admin_enrolments\".\"token_hash\") = 32"
+        },
+        "admin_enrolments_expires_after_created": {
+          "name": "admin_enrolments_expires_after_created",
+          "value": "\"admin_enrolments\".\"expires_at\" > \"admin_enrolments\".\"created_at\""
+        },
+        "admin_enrolments_used_after_created": {
+          "name": "admin_enrolments_used_after_created",
+          "value": "\"admin_enrolments\".\"used_at\" IS NULL OR \"admin_enrolments\".\"used_at\" >= \"admin_enrolments\".\"created_at\""
         }
       },
       "isRLSEnabled": false

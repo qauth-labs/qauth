@@ -43,6 +43,20 @@ export async function checkKeyCustody(
   kekProvider: KekProvider,
   store: KekCanaryStore
 ): Promise<void> {
+  await openKekCanaries(kekProvider, store);
+}
+
+/**
+ * {@link checkKeyCustody}, and how many canaries it opened: `0` when no key is
+ * stored, so the provider's report decided alone.
+ *
+ * @throws as {@link checkKeyCustody} does
+ */
+export async function openKekCanaries(
+  kekProvider: KekProvider,
+  store: KekCanaryStore
+): Promise<number> {
+  let opened = 0;
   const health = await kekProvider.health();
   if (!health.ok) {
     throw new KekUnavailableError({
@@ -61,5 +75,7 @@ export async function checkKeyCustody(
       algorithm: sealed.algorithm,
     });
     material.fill(0);
+    opened += 1;
   }
+  return opened;
 }

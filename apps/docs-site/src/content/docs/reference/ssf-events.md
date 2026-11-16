@@ -90,6 +90,7 @@ after `account-purged` reaches a stream the sweep deletes the user's subject the
 | [`api_key.revoked`](/reference/events/#api_keyrevoked-v1-rc0)                 | `credential-change` (CAEP 1.0 §3.3)                       | the event’s client, `uri` or `opaque` | the stream of the event’s client, when it added the subject | `credential_type`: `"api-key"`; `change_type`: `"revoke"`; `initiating_entity`: `"admin"`                                                                                                                                        |
 | [`wallet.linked`](/reference/events/#walletlinked-v1-rc0)                     | `credential-change` (CAEP 1.0 §3.3)                       | the user, `iss_sub`                   | every stream that added the subject                         | `credential_type`: `"verifiable-credential"`; `change_type`: by `data.rebound` (`true` → `"update"`, `false` → `"create"`); `initiating_entity` from the actor                                                                   |
 | [`key.emergency_retired`](/reference/events/#keyemergency_retired-v1-rc0)     | [`key-emergency-retired`](#key-emergency-retired) (QAuth) | the key, `opaque` with its `kid`      | every stream of the realm that requested it                 | `kid`: `data.keyId`; `purpose`: `data.purpose`; `initiating_entity` from the actor                                                                                                                                               |
+| [`admin.break_glass_used`](/reference/events/#adminbreak_glass_used-v1-rc0)   | [`break-glass-used`](#break-glass-used) (QAuth)           | the realm, `uri` with its issuer      | every stream of the realm that requested it                 | `command`: `data.command`; `initiating_entity` from the actor                                                                                                                                                                    |
 
 Notes on the mapping:
 
@@ -103,6 +104,7 @@ Notes on the mapping:
 - [`api_key.created`](/reference/events/#api_keycreated-v1-rc0): Sent only to the stream of the client whose credential changed, never to another receiver that added that client: a receiver learns of its own credentials only. A developer managing a client acts as its administrator, so `initiating_entity` is `admin`.
 - [`api_key.revoked`](/reference/events/#api_keyrevoked-v1-rc0): Sent only to the stream of the client whose credential changed, never to another receiver that added that client: a receiver learns of its own credentials only. A developer managing a client acts as its administrator, so `initiating_entity` is `admin`.
 - [`key.emergency_retired`](/reference/events/#keyemergency_retired-v1-rc0): Recorded once per retired `kid` by the emergency retirement (`auth-server:keys:retire`, #551): retiring one key of a hybrid pair retires both, and sends two events. A receiver that caches the realm's JWKS drops the key on it, without waiting for its cache to expire.
+- [`admin.break_glass_used`](/reference/events/#adminbreak_glass_used-v1-rc0): Recorded once per run of a break-glass command (#602), whatever it changes: an emergency retirement also sends `key-emergency-retired` for each key it retires. Every stream of the realm that requested the event receives it.
 
 ## Security events with no SSF event
 
@@ -158,3 +160,16 @@ An operator retired a key of the realm that may be compromised (ADR-019 Decision
 | `initiating_entity` | no       | Who invoked it, as CAEP 1.0 §2 names it; see [Common members](#common-members). |
 | `kid`               | yes      | The `kid` of the retired key.                                                   |
 | `purpose`           | no       | What the key was for, such as `token_signing`.                                  |
+
+### break-glass-used
+
+- Identifier: `urn:qauth:secevent:break-glass-used:v1-rc.0`
+- Sent for: [`admin.break_glass_used`](/reference/events/#adminbreak_glass_used-v1-rc0)
+
+An operator ran a break-glass command on a host that holds the realm's database credentials and its key-encryption key (ADR-019 Decision 7): it acts outside the realm's two-admin rule, so every use is announced. The subject is the realm, as a `uri` identifier holding its issuer, and every stream of the realm that requested the event receives it.
+
+| Member              | Required | Meaning                                                                         |
+| ------------------- | -------- | ------------------------------------------------------------------------------- |
+| `event_timestamp`   | yes      | When the event happened, in seconds since the epoch (CAEP 1.0 §2).              |
+| `initiating_entity` | no       | Who invoked it, as CAEP 1.0 §2 names it; see [Common members](#common-members). |
+| `command`           | yes      | The command that ran, such as `enrol-admin` or `retire-key`.                    |

@@ -46,6 +46,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserved security operations of the admin API, beside
   `serviceAccounts.create`); no secret is made or printed
   ([Service accounts](https://docs.qauth.dev/operate/service-accounts/)).
+- **The break-glass CLI** ([#602], ADR-019 Decisions 7 and 9). `tsx
+  src/break-glass.ts` of the auth server is the way in when no admin can
+  act, run on a host that holds the database credentials and the KEK, and
+  has exactly two commands: `enrol-admin --realm <name> --role <role>` creates an admin
+  account with no password and no credential, its built-in role grant on
+  the realm and a one-time enrolment URL on the realm's issuer, printed once;
+  `retire-key --realm <name> --kid <kid> --confirm` runs the emergency key
+  retirement of `keys:retire`. No command sets a password or imports a key.
+  It starts only when `DATABASE_URL` is set and the KEK opens a stored key
+  (exit code 4 otherwise), registers no route and never listens, and has no
+  Nx target: Nx keeps a task's output on disk, so `enrol-admin` refuses to
+  run under Nx. The
+  enrolment token is 32 random bytes, stored only as its SHA-256 hash in the
+  new `admin_enrolments` table (migration 0079), single use, valid an hour
+  by default (`--expires-in`, up to a day), and carried in the URL's
+  fragment. The enrolled admin cannot approve another admin's request for 7
+  days, by the two-admin rule. Before a run changes anything, and in its
+  transaction, it writes an admin audit row of the realm
+  (`breakGlass.enrolAdmin` or `breakGlass.retireKey`, actor kind
+  `break_glass_operator`, with the operating-system user and uid, the audit
+  login uid, the reported sudo user, the host name, the command and its
+  arguments) and the new critical `admin.break_glass_used` event, which
+  every route that reads the event store sends (the event API, webhooks,
+  and SSF streams as `urn:qauth:secevent:break-glass-used:v1-rc.0`; the
+  CLI exports nothing to OpenTelemetry); if either fails, nothing changes. The page that turns the URL into a first passkey is
+  [#621]
+  ([Break-glass](https://docs.qauth.dev/operate/break-glass/)).
+- **`@qauth-labs/resource-guard` advertises the scopes of every operation**
+  ([#1088], ADR-007). The new `scopesSupported` option, of the core and of
+  the Fastify plugin, lists every scope a resource understands, for a resource
+  whose operations each need their own scope, such as an MCP server with one
+  scope per tool. The guard's RFC 9728 document, which the plugin's metadata
+  route serves, lists them as `scopes_supported`, and the credential-absent
+  `401` of a call that passes no per-operation scopes names them in `scope`
+  (MCP 2026-07-28, "Scope Selection Strategy"); a call that passes some still
+  names those and `requiredScopes`. They are advertised, never required: a
+  token is checked against `requiredScopes` and the per-call scopes only. The
+  option defaults to `requiredScopes` and must hold every entry of it
+  (`ResourceGuardConfigError` otherwise), so a guard without it serves the
+  same document and challenges as before.
 - **An admin deletes an account through the admin API** ([#681], ADR-020
   §3). `DELETE /admin/v1-rc.0/realms/{realmId}/users/{userId}`
   (`users.delete`, experimental) is a security operation with the effect
@@ -58,7 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#624], [#893], [#1144]), each queuing one back-channel logout token per
   client with a logout URI, then deletes the account with its credentials,
   recovery codes, consents, attributes, upstream identities, refresh tokens
-  and codes (migration 0079 adds the two functions the admin role locks and
+  and codes (migration 0080 adds the two functions the admin role locks and
   deletes through; no role deletes an account through a table grant). Its
   access tokens no longer introspect, and the browser that held its session
   signs in again at the next authorization request. It is idempotent by id:
@@ -75,7 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([Accounts](https://docs.qauth.dev/operate/accounts/#delete-an-account)).
   A deployment that applies its database grants by hand grants the admin
   role the new functions and its session grants first
-  ([Upgrades](https://docs.qauth.dev/operate/upgrades/#an-admin-deletes-accounts-through-migration-0079s-functions)).
+  ([Upgrades](https://docs.qauth.dev/operate/upgrades/#an-admin-deletes-accounts-through-migration-0080s-functions)).
 
 ### Changed
 
@@ -4812,6 +4852,7 @@ It adds migrations 0068 and 0069.
 [#615]: https://github.com/qauth-labs/qauth/issues/615
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#618]: https://github.com/qauth-labs/qauth/issues/618
+[#621]: https://github.com/qauth-labs/qauth/issues/621
 [#624]: https://github.com/qauth-labs/qauth/issues/624
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
@@ -4888,6 +4929,7 @@ It adds migrations 0068 and 0069.
 [#1081]: https://github.com/qauth-labs/qauth/issues/1081
 [#1082]: https://github.com/qauth-labs/qauth/issues/1082
 [#1083]: https://github.com/qauth-labs/qauth/issues/1083
+[#1088]: https://github.com/qauth-labs/qauth/issues/1088
 [#1106]: https://github.com/qauth-labs/qauth/issues/1106
 [#1107]: https://github.com/qauth-labs/qauth/issues/1107
 [#1108]: https://github.com/qauth-labs/qauth/issues/1108

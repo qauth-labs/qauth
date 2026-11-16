@@ -17,7 +17,7 @@ import {
  * its approval's consumption commit in too. In this order:
  *
  * 1. **The lock.** The account row is locked `FOR UPDATE`
- *    (`users_lock_for_deletion`, migration 0079). It is the one lock a
+ *    (`users_lock_for_deletion`, migration 0080). It is the one lock a
  *    foreign key's key-share check waits for, so from here to the commit
  *    nothing adds a session, a code, a token, a credential or an admin grant
  *    of the account: a sign-in that completes meanwhile waits, and fails once
@@ -39,7 +39,7 @@ import {
  *    role sends each client its logout token from them, signed for the
  *    session's `sub` and `sid` as they were, so it needs no row of the
  *    account.
- * 4. **The account is deleted** (`users_delete_account`, migration 0079), and
+ * 4. **The account is deleted** (`users_delete_account`, migration 0080), and
  *    with it, through the schema's cascades, its credentials, recovery codes,
  *    consents, attributes, upstream identities, refresh tokens, codes,
  *    sessions with their registry and family links, required actions and

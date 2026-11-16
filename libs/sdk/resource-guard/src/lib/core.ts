@@ -99,6 +99,14 @@ export class ResourceGuard {
   readonly requiredScopes: string[];
   readonly validationMode: ValidationMode;
 
+  /**
+   * Every scope the resource understands: advertised in its metadata and on
+   * the credential-absent 401 of a call with no per-operation scopes, never
+   * required of a token. `requiredScopes` unless the config lists them.
+   * Private, so no caller can reach `requiredScopes` through it: trimming
+   * what is advertised must never change what is enforced.
+   */
+  private readonly scopesSupported: readonly string[];
   private readonly validator: TokenValidator;
   private readonly metadata: ProtectedResourceMetadata;
 
@@ -113,6 +121,7 @@ export class ResourceGuard {
     this.resource = stripTrailingSlash(config.resource);
     this.authorizationServer = stripTrailingSlash(config.authorizationServer);
     this.requiredScopes = config.requiredScopes ?? [];
+    this.scopesSupported = resolveScopesSupported(config.scopesSupported, this.requiredScopes);
     this.validationMode = config.validationMode ?? 'jwt';
 
     this.validator = this.buildValidator(config);
@@ -120,7 +129,7 @@ export class ResourceGuard {
     this.metadata = buildProtectedResourceMetadata({
       resource: this.resource,
       authorizationServer: this.authorizationServer,
-      scopesSupported: this.requiredScopes.length > 0 ? this.requiredScopes : undefined,
+      scopesSupported: this.scopesSupported.length > 0 ? [...this.scopesSupported] : undefined,
     });
   }
 
@@ -228,9 +237,10 @@ export class ResourceGuard {
    * @param scopes additional per-operation scopes to require on top of the
    *   guard's default `requiredScopes` (the step-up surface).
    * @returns the validated, audience-bound token claims.
-   * @throws {MissingTokenError} when no bearer is present (→ 401, bare
-   *   challenge), the `DPoP` scheme included: this version accepts `Bearer`
-   *   only, and the error's message says so.
+   * @throws {MissingTokenError} when no bearer is present (→ 401, no `error`
+   *   code), the `DPoP` scheme included: this version accepts `Bearer` only,
+   *   and the error's message says so. The challenge names `requiredScopes`
+   *   and `scopes`, or `scopesSupported` when `scopes` is empty.
    * @throws {InvalidTokenError} when validation fails (→ 401 `invalid_token`),
    *   a sender-constrained (`cnf`-carrying) token included.
    * @throws {InsufficientScopeError} when scopes are insufficient
@@ -242,11 +252,20 @@ export class ResourceGuard {
   ): Promise<ValidatedToken> {
     const token = extractBearerToken(authorization);
     if (!token) {
-      // Advertise the FULL requirement for THIS route (guard defaults plus the
-      // per-call step-up scopes) on the 401 challenge — #284. Same set the 403
-      // step-up would advertise, so an unauthenticated client and a
-      // under-scoped one are told the same thing.
-      const required = dedupe([...this.requiredScopes, ...scopes]);
+      // A call that names its operation's scopes gets the FULL requirement
+      // for THIS route (guard defaults plus the per-call step-up scopes) on
+      // the 401 challenge — #284. Same set the 403 step-up would advertise,
+      // so an unauthenticated client and an under-scoped one are told the
+      // same thing.
+      //
+      // A call that names none, as a host does before the request body says
+      // which operation it is, gets every scope the resource supports —
+      // #1088. MCP clients fall back to `scopes_supported` when the 401 names
+      // no scope, so this tells them in one round what the metadata would.
+      // Without `scopesSupported` that is `requiredScopes`, as before.
+      const required = dedupe(
+        scopes.length > 0 ? [...this.requiredScopes, ...scopes] : this.scopesSupported
+      );
       // A `DPoP` credential gets the same bare `Bearer` challenge as no
       // credential at all: RFC 6750 §3.1 gives no error code to a request
       // that "attempted using an unsupported authentication method", and a
@@ -281,6 +300,33 @@ export class ResourceGuard {
   }
 }
 
-function dedupe(values: string[]): string[] {
+function dedupe(values: readonly string[]): string[] {
   return [...new Set(values)];
+}
+
+/**
+ * The guard's `scopesSupported`: the configured list, de-duplicated, or
+ * `requiredScopes` itself when none is configured, so a guard without the
+ * option advertises exactly what it did before it existed (#1088).
+ *
+ * @throws {ResourceGuardConfigError} when the configured list leaves out a
+ *   `requiredScopes` entry: every token must carry that scope, so a document
+ *   that does not list it would tell a client to request too little.
+ */
+function resolveScopesSupported(
+  configured: readonly string[] | undefined,
+  required: string[]
+): readonly string[] {
+  if (configured === undefined) {
+    return required;
+  }
+  const supported = dedupe(configured);
+  const listed = new Set(supported);
+  const unlisted = dedupe(required.filter((scope) => !listed.has(scope)));
+  if (unlisted.length > 0) {
+    throw new ResourceGuardConfigError(
+      `\`scopesSupported\` must hold every \`requiredScopes\` entry; missing: ${unlisted.join(' ')}`
+    );
+  }
+  return supported;
 }
