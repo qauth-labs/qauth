@@ -550,6 +550,42 @@ describe('signJws', () => {
       });
     });
 
+    it('lets the admin role sign an act-chain token and no other access token (#523)', async () => {
+      const { signer } = await setup();
+      const iat = Math.floor(NOW / 1000);
+      const actChain = {
+        sub: 'user-1',
+        aud: 'urn:qauth:aud:account:v1-rc.0',
+        act: { sub: 'admin-1', iss: ISSUER_A, client_id: 'console' },
+        cnf: { jkt: 'thumbprint' },
+        jti: 'token-1',
+        client_id: 'console',
+        scope: 'qauth:account:read',
+        token_use: 'access',
+        iat,
+        exp: iat + 600,
+      };
+
+      const token = await signer.signJws('admin', accessToken(REALM_A, { claims: actChain }));
+      const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+      expect(payload).toEqual({ iss: ISSUER_A, ...actChain });
+
+      // An ordinary access token, or an act-chain token that counts as a sign-in.
+      for (const claims of [CLAIMS, { ...actChain, auth_time: iat }, { ...actChain, aud: 'rs' }]) {
+        expect(await refusal(signer.signJws('admin', accessToken(REALM_A, { claims })))).toBe(
+          'INVALID_CLAIMS'
+        );
+      }
+      // Neither an ID token nor an assertion grant.
+      for (const typ of ['JWT', 'oauth-id-jag+jwt'] as const) {
+        await expect(
+          signer.signJws('admin', accessToken(REALM_A, { typ, claims: actChain }))
+        ).rejects.toMatchObject({ code: 'SIGNER_ACCESS_DENIED', caller: 'admin' });
+      }
+      // The other roles' access tokens are not held to the profile.
+      await expect(signer.signJws('api', accessToken())).resolves.toEqual(expect.any(String));
+    });
+
     it('signs no logout token as a hybrid carrier', async () => {
       const { signer } = await setup({ hybrid: true });
 
@@ -1081,6 +1117,35 @@ describe('signHybrid', () => {
         })
       )
     ).toBe('RESERVED_CLAIM');
+  });
+});
+
+describe('signHybrid for the admin role (#523)', () => {
+  it('signs an act-chain token as a hybrid carrier, and refuses any other access token', async () => {
+    const { signer } = await setup({ hybrid: true });
+    const iat = Math.floor(NOW / 1000);
+    const actChain = {
+      sub: 'user-1',
+      aud: 'urn:qauth:aud:account:v1-rc.0',
+      act: { sub: 'admin-1', iss: ISSUER_A, client_id: 'console' },
+      cnf: { jkt: 'thumbprint' },
+      jti: 'token-1',
+      client_id: 'console',
+      scope: 'qauth:account:read',
+      token_use: 'access',
+      iat,
+      exp: iat + 300,
+    };
+
+    const hybrid = await signer.signHybrid('admin', {
+      realmId: REALM_A,
+      typ: 'at+jwt',
+      claims: actChain,
+    });
+    expect(hybrid.pqcAlg).toBe('ML-DSA-65');
+    expect(
+      await refusal(signer.signHybrid('admin', { realmId: REALM_A, typ: 'at+jwt', claims: CLAIMS }))
+    ).toBe('INVALID_CLAIMS');
   });
 });
 
@@ -2335,7 +2400,11 @@ describe('caller policy', () => {
 
     const result = CALLS[operation](signer, caller);
 
-    if (allowed) {
+    if (allowed && caller === 'admin' && (operation === 'signJws' || operation === 'signHybrid')) {
+      // Granted, and held to the act-chain profile (#523): the table's
+      // ordinary access token is refused for its claims, not for the grant.
+      expect(await refusal(result)).toBe('INVALID_CLAIMS');
+    } else if (allowed) {
       await expect(result).resolves.toBeDefined();
     } else {
       await expect(result).rejects.toBeInstanceOf(SignerAccessDeniedError);

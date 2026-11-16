@@ -5,6 +5,13 @@
 // signer are in `@qauth-labs/server-keys/custody`, which only the signer's
 // wiring may import (.oxlintrc.json, issue #464).
 export {
+  ACT_CHAIN_TOKEN_AUDIENCE,
+  ACT_CHAIN_TOKEN_CLAIMS,
+  ACT_CHAIN_TOKEN_MAX_LIFETIME_SECONDS,
+  ACT_CHAIN_TOKEN_SCOPES,
+  actChainTokenClaimsProblem,
+} from './lib/act-chain-token-claims';
+export {
   type ApprovedOperation,
   canonicalOperationBytes,
   isKekRef,
