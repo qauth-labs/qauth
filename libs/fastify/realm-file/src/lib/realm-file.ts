@@ -181,14 +181,16 @@ function withSystemClientId(raw: unknown, options: ParseRealmFileOptions): unkno
  *
  * A string that is a URL with a user name or password is refused wherever it
  * is (`./credentials`), with an issue of its own that never quotes it. Any
- * other issue at the same string is left out, since a schema's message may
- * quote the value it refuses.
+ * other issue at that string, or at a member that holds it, is left out,
+ * since a schema's message may quote the value it refuses, the string within
+ * it included; an unknown member's issue stays, as it names only the member.
  */
 export function safeParseRealmFile(
   raw: unknown,
   options: ParseRealmFileOptions = {}
 ): RealmFileParseResult {
-  const credentials: RealmFileIssue[] = urlCredentialPaths(raw).map((path) => ({
+  const credentialPaths = urlCredentialPaths(raw);
+  const credentials: RealmFileIssue[] = credentialPaths.map((path) => ({
     path,
     pointer: jsonPointer(path),
     message: URL_CREDENTIALS_MESSAGE,
@@ -197,10 +199,7 @@ export function safeParseRealmFile(
   if (result.success && credentials.length === 0) {
     return { success: true, file: result.data as RealmFile };
   }
-  const quoting = new Set(credentials.map(({ pointer }) => pointer));
-  const issues = result.success
-    ? []
-    : realmFileIssues(result.error).filter(({ pointer }) => !quoting.has(pointer));
+  const issues = result.success ? [] : realmFileIssues(result.error, credentialPaths);
   return { success: false, issues: [...issues, ...credentials] };
 }
 

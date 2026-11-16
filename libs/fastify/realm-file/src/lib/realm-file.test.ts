@@ -376,6 +376,23 @@ describe('a URL with a user name or password', () => {
     ).not.toThrow();
   });
 
+  // A message at a member that holds the URL may quote the member whole, as
+  // the format's does.
+  it('is never quoted by an issue at a member that holds it', () => {
+    const raw = { realm: 'master', format: { nested: credentialed } };
+    const issues = issuesOf(raw);
+    expect(issues).toEqual([
+      { path: ['format', 'nested'], pointer: '/format/nested', message: URL_CREDENTIALS_MESSAGE },
+    ]);
+    expect(() => parseRealmFile(raw)).not.toThrow(PASSWORD);
+  });
+
+  it('leaves the issue of an unknown member that holds it, which names only the member', () => {
+    const issues = issuesOf({ realm: 'master', extras: { url: credentialed } });
+    expect(issues.map(({ pointer }) => pointer)).toEqual(['/extras', '/extras/url']);
+    expect(JSON.stringify(issues)).not.toContain(PASSWORD);
+  });
+
   it('is found at any depth without a recursion, in document order', () => {
     let deep: unknown = credentialed;
     for (let level = 0; level < 100_000; level++) deep = [deep];

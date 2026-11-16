@@ -102,8 +102,27 @@ function unknownMember(parent: readonly (string | number)[], key: string): strin
 const pathOf = (path: readonly PropertyKey[]): (string | number)[] =>
   path.map((token) => (typeof token === 'number' ? token : String(token)));
 
-/** The issues of a realm file that `error` refused, in the order Zod found them. */
-export function realmFileIssues(error: z.ZodError): RealmFileIssue[] {
+/** Whether `path` is `below` or one of the members it is in, token by token. */
+const isAtOrAbove = (
+  path: readonly (string | number)[],
+  below: readonly (string | number)[]
+): boolean =>
+  path.length <= below.length &&
+  path.every((token, index) => String(token) === String(below[index]));
+
+/**
+ * The issues of a realm file that `error` refused, in the order Zod found them.
+ *
+ * `withheld` holds the paths of values no message may quote, such as a URL
+ * with a password. An issue at one of them, or at a member that holds one, is
+ * left out: a schema's message may quote the value it refuses, the value
+ * within it included. An unknown member's issue stays, since it names the
+ * member and never its value.
+ */
+export function realmFileIssues(
+  error: z.ZodError,
+  withheld: readonly (readonly (string | number)[])[] = []
+): RealmFileIssue[] {
   const issues: RealmFileIssue[] = [];
   for (const issue of error.issues) {
     const path = pathOf(issue.path);
@@ -118,6 +137,7 @@ export function realmFileIssues(error: z.ZodError): RealmFileIssue[] {
       }
       continue;
     }
+    if (withheld.some((value) => isAtOrAbove(path, value))) continue;
     issues.push({ path, pointer: jsonPointer(path), message: issue.message });
   }
   return issues;
