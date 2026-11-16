@@ -1,0 +1,108 @@
+{
+  "format": "urn:qauth:realm-file:v1-rc.0",
+  "realm": "master",
+  "policies": {
+    "tokens": {
+      "accessTokenLifespanSeconds": 600
+    },
+    "accounts": {
+      "requireVerifiedAccount": true,
+      "allowSignUp": true
+    },
+    "password": {
+      "minLength": 15,
+      "minScore": 3
+    },
+    "bruteForce": {
+      "maxAttempts": 5,
+      "lockoutSeconds": 1800
+    },
+    "mail": {
+      "provider": "smtp",
+      "fromAddress": "no-reply@example.com",
+      "fromName": "Example",
+      "smtp": {
+        "host": "smtp.example.com",
+        "port": 587,
+        "secure": true,
+        "user": "mailer"
+      }
+    },
+    "posture": {
+      "maxEnvironmentLaxity": "production"
+    },
+    "admin": {
+      "twoAdminMandatoryOperations": ["realms.policies.update"]
+    }
+  },
+  "clients": [
+    {
+      "client_id": "notes-api",
+      "name": "Notes API",
+      "description": "The notes service: it calls the events API as itself.",
+      "grant_types": ["client_credentials"],
+      "scopes": ["notes:sync", "ssf:stream"],
+      "client_credentials_scopes": ["ssf:stream"],
+      "audience": ["https://notes.example.com/api"],
+      "token_endpoint_auth_method": "private_key_jwt",
+      "jwks": {
+        "keys": [
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "kid": "backend-2026-11"
+          }
+        ]
+      },
+      "environment": "production"
+    },
+    {
+      "client_id": "notes-web",
+      "name": "Notes",
+      "grant_types": ["authorization_code", "refresh_token"],
+      "response_types": ["code"],
+      "scopes": ["openid", "profile", "email", "offline_access", "notes:read"],
+      "redirect_uris": ["https://notes.example.com/callback"],
+      "post_logout_redirect_uris": ["https://notes.example.com/signed-out"],
+      "require_pkce": true,
+      "token_endpoint_auth_method": "none",
+      "hosted_flows": ["register"]
+    },
+    {
+      "client_id": "research-agent",
+      "name": "Research agent",
+      "grant_types": ["urn:ietf:params:oauth:grant-type:token-exchange"],
+      "scopes": ["agent:readonly", "notes:read"],
+      "token_endpoint_auth_method": "private_key_jwt",
+      "jwks_uri": "https://agents.example.com/.well-known/jwks.json",
+      "is_agent": true,
+      "max_agent_mode": "readonly"
+    }
+  ],
+  "cimd_clients": [
+    {
+      "client_id": "https://client.example.com/oauth/metadata.json",
+      "scopes": ["notes:read", "offline_access"],
+      "audience": ["https://notes.example.com/api"]
+    }
+  ],
+  "resources": [
+    {
+      "resource": "https://mcp.example.com/mcp",
+      "scopes": [
+        {
+          "scope": "files:read",
+          "text": {
+            "en": "Read your files"
+          }
+        }
+      ],
+      "clients": "any_client"
+    }
+  ],
+  "system_client": {
+    "redirect_uris": ["https://portal.example.com/auth/callback"],
+    "jwks_uri": "https://portal.example.com/.well-known/jwks.json"
+  }
+}

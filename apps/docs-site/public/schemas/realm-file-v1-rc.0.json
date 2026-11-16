@@ -1,0 +1,1331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/schemas/realm-file-v1-rc.0.json",
+  "title": "urn:qauth:realm-file:v1-rc.0",
+  "description": "The declarative realm file, format urn:qauth:realm-file:v1-rc.0: a realm's configuration, without any secret value (ADR-018 §5). Generated from libs/fastify/realm-file; the docs page reference/realm-file describes every section, its natural key and the rules of growth. A member this schema does not name is refused, a section of a later release included.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "default": "urn:qauth:realm-file:v1-rc.0",
+      "description": "The file's format. Optional: a file without it is read as urn:qauth:realm-file:v1-rc.0. A breaking change raises its release-candidate number before QAuth 1.0.0, and its major version after.",
+      "type": "string",
+      "const": "urn:qauth:realm-file:v1-rc.0"
+    },
+    "realm": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The name of the realm the file describes. It only advises: the caller of an import chooses the target realm, and a different name is a warning, so a sandbox realm's file can go to its live realm."
+    },
+    "policies": {
+      "title": "QAuth realm policies",
+      "description": "The realm's policies, in the shape of the policies of the admin API's realm representation, without the <name>Set flag of a secret field: groups of camelCase fields, each matched by its path. A field left out takes its default.",
+      "x-qauth-schema-version": "1-rc.2",
+      "type": "object",
+      "properties": {
+        "tokens": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "accessTokenLifespanSeconds": {
+              "default": 900,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 86400,
+              "description": "How long an access token for a staging or production client is valid, in seconds, at most 86400 (a day).",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#tokens",
+                "seedEnv": "ACCESS_TOKEN_LIFESPAN",
+                "direction": "lower-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "posture-loosening"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "developmentAccessTokenLifespanSeconds": {
+              "default": 28800,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 86400,
+              "description": "How long an access token for a development client is valid, in seconds, at most 86400 (a day); no staging or production client receives it.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#tokens",
+                "seedEnv": "DEV_ACCESS_TOKEN_LIFESPAN",
+                "direction": "lower-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "posture-loosening"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "refreshTokenLifespanSeconds": {
+              "default": 604800,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 7776000,
+              "description": "How long a refresh token is valid, in seconds, at most 7776000 (90 days), from its issue; a browser-based client's rotated token (a public client with an `https` redirect URI) never outlives the one it replaces, so its family ends with its first (RFC 10017).",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#tokens",
+                "seedEnv": "REFRESH_TOKEN_LIFESPAN",
+                "direction": "lower-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "posture-loosening"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "adminAccessTokenLifespanSeconds": {
+              "default": 600,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 900,
+              "description": "How long an access token for the admin API is valid, in seconds, at most 900, so a token whose audience is the admin API never lives longer, whatever the other lifetimes say (ADR-019 Decision 7: admin tokens are short-lived).",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#tokens",
+                "seedEnv": null,
+                "direction": "lower-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "posture-loosening"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "accounts": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "requireVerifiedAccount": {
+              "default": true,
+              "type": "boolean",
+              "description": "Whether the legacy login routes (`POST /auth/login`, `POST /ui/login`) refuse an unverified account's right password with the answer a wrong password gets; the Interaction API verifies such an account inline with an emailed code, whatever this says.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#accounts",
+                "seedEnv": "REQUIRE_VERIFIED_ACCOUNT",
+                "direction": "true-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "allowSignUp": {
+              "default": false,
+              "type": "boolean",
+              "description": "Whether a person may create a new account through the hosted sign-in, from an unknown upstream identity (#639) or with `prompt=create` (#640, for a client whose `hosted_flows` name `register`), or through the legacy `POST /auth/register` (since 0.2.1; it answers 403 while this is off).",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#accounts",
+                "seedEnv": "ALLOW_SIGN_UP",
+                "direction": "false-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "newFactorWindowDays": {
+              "default": 7,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 30,
+              "description": "How many days, 0 to 30, a passkey or authenticator app bound after a sign-in that proved only the password stays new: the password alone may remove it, and it does not count as the account's strongest factor for a reset or a change; 0 means no window.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#accounts",
+                "seedEnv": "NEW_FACTOR_WINDOW_DAYS",
+                "direction": "opaque",
+                "securityWhen": "any-change",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "password": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "minLength": {
+              "default": 15,
+              "type": "integer",
+              "minimum": 8,
+              "maximum": 64,
+              "description": "The fewest characters (Unicode code points, after NFC normalisation) a new password may have, from 8 to 64; below 15 is a recorded deviation from NIST SP 800-63B-4 while a password can be the only factor.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#password",
+                "seedEnv": "PASSWORD_MIN_LENGTH",
+                "direction": "higher-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "minScore": {
+              "default": 2,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4,
+              "description": "The lowest zxcvbn strength score, from 0 to 4, a new password may have.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#password",
+                "seedEnv": "PASSWORD_MIN_SCORE",
+                "direction": "higher-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "breachListSource": {
+              "default": "off",
+              "type": "string",
+              "enum": [
+                "off",
+                "local",
+                "k_anonymity"
+              ],
+              "description": "Which breach list new and presented passwords are checked against: off (the default), a list the operator supplies, or a k-anonymity range lookup through the egress client that sends only the first five hex characters of the password's SHA-1; a failed check never blocks a sign-in.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#password",
+                "seedEnv": "PASSWORD_BREACH_LIST_SOURCE",
+                "direction": "ordered",
+                "order": [
+                  "off",
+                  "local",
+                  "k_anonymity"
+                ],
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "bruteForce": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "type": "boolean",
+              "description": "Whether repeated failed sign-ins for one identifier lock it out for a while; when off, failures are only logged.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#bruteforce",
+                "seedEnv": "FAILED_LOGIN_TRACKING_ENABLED",
+                "direction": "true-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "maxAttempts": {
+              "default": 5,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "How many failed sign-ins within the window lock an identifier out.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#bruteforce",
+                "seedEnv": "FAILED_LOGIN_MAX_ATTEMPTS",
+                "direction": "lower-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "windowSeconds": {
+              "default": 900,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400,
+              "description": "The window, in seconds, over which failed sign-ins are counted, at most 86400 (a day).",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#bruteforce",
+                "seedEnv": "FAILED_LOGIN_WINDOW",
+                "direction": "higher-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "lockoutSeconds": {
+              "default": 900,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400,
+              "description": "How long, in seconds, a locked-out identifier is refused before any password check, at most 86400 (a day).",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#bruteforce",
+                "seedEnv": "FAILED_LOGIN_LOCKOUT_DURATION",
+                "direction": "higher-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "botChallenge": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "requiredAtSignUp": {
+              "default": false,
+              "type": "boolean",
+              "description": "Whether every `prompt=create` registration passes the bot challenge before its address is asked for, whatever the client; it then needs JavaScript, a client that cannot serve the challenge cannot register, and the legacy `POST /auth/register` ignores it.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#botchallenge",
+                "seedEnv": "BOT_CHALLENGE_REQUIRED_AT_SIGN_UP",
+                "direction": "true-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "difficulty": {
+              "default": 18,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32,
+              "description": "How many leading zero bits the built-in proof of work asks for; each one doubles the work of the page that solves it, and 18 takes a browser a second or two.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#botchallenge",
+                "seedEnv": "BOT_CHALLENGE_DIFFICULTY",
+                "direction": "higher-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "passkeys": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "offerAfterSignIn": {
+              "default": true,
+              "type": "boolean",
+              "description": "Whether the hosted sign-in offers to add a passkey after a password sign-in, to a verified account whose only factor is that password, while passkeys are on (`WEBAUTHN_ENABLED`); a passkey added from the account page is not affected.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#passkeys",
+                "seedEnv": "PASSKEY_OFFER_AFTER_SIGN_IN",
+                "direction": "true-is-stricter",
+                "securityWhen": "never",
+                "effects": [],
+                "secret": false,
+                "environmentBound": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "ceremonyApp": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "errorPage": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 256,
+                  "pattern": "^\\/ui(?:\\/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){1,8}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The path on the realm origin, under `/ui/`, of the ceremony app’s page for the endings that leave no interaction to show (a provider callback whose sign-in has ended, the logout’s own pages), or null to keep the auth server’s own pages.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#ceremonyapp",
+                "seedEnv": "CEREMONY_APP_ERROR_PAGE",
+                "direction": "opaque",
+                "securityWhen": "never",
+                "effects": [],
+                "secret": false,
+                "environmentBound": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "registration": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "dynamicRegistrationAllowedScopes": {
+              "default": [
+                "openid",
+                "profile",
+                "email",
+                "offline_access"
+              ],
+              "maxItems": 100,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 255,
+                "pattern": "^(?![qQ][aA][uU][tT][hH]:)[\\x21\\x23-\\x5B\\x5D-\\x7E]+$"
+              },
+              "description": "The scopes a dynamically registered client may hold; a scope outside the list is dropped from the registration, and no scope of the reserved qauth: namespace can be listed.",
+              "uniqueItems": true,
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#registration",
+                "seedEnv": "DEFAULT_DYNAMIC_REGISTRATION_SCOPES",
+                "direction": "subset-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "token-content"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "cimd": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "default": true,
+                  "type": "boolean",
+                  "description": "Whether an HTTPS URL is accepted as a client_id, its metadata fetched from that URL (Client ID Metadata Documents).",
+                  "x-qauth-policy": {
+                    "docs": "https://docs.qauth.dev/reference/realm-policies/#registration",
+                    "seedEnv": "CIMD_ENABLED",
+                    "direction": "false-is-stricter",
+                    "securityWhen": "loosening",
+                    "effects": [
+                      "token-content"
+                    ],
+                    "secret": false,
+                    "environmentBound": false
+                  }
+                },
+                "trustPolicy": {
+                  "default": "accept-any-https",
+                  "type": "string",
+                  "enum": [
+                    "accept-any-https",
+                    "allowlist"
+                  ],
+                  "description": "Which hosts a metadata-document client_id may have: any HTTPS host, or only the trusted domains.",
+                  "x-qauth-policy": {
+                    "docs": "https://docs.qauth.dev/reference/realm-policies/#registration",
+                    "seedEnv": "CIMD_TRUST_POLICY",
+                    "direction": "ordered",
+                    "order": [
+                      "accept-any-https",
+                      "allowlist"
+                    ],
+                    "securityWhen": "loosening",
+                    "effects": [
+                      "token-content"
+                    ],
+                    "secret": false,
+                    "environmentBound": false
+                  }
+                },
+                "trustedDomains": {
+                  "default": [],
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 253,
+                    "pattern": "^(?:\\*\\.)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+(?![0-9]+$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"
+                  },
+                  "description": "The hosts the allowlist policy accepts, stored in lower case; an entry `*.example.com` accepts every subdomain of `example.com` but not `example.com` itself.",
+                  "uniqueItems": true,
+                  "x-qauth-policy": {
+                    "docs": "https://docs.qauth.dev/reference/realm-policies/#registration",
+                    "seedEnv": "CIMD_TRUSTED_DOMAINS",
+                    "direction": "subset-is-stricter",
+                    "securityWhen": "loosening",
+                    "effects": [
+                      "token-content"
+                    ],
+                    "secret": false,
+                    "environmentBound": true
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "mail": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "provider": {
+              "default": "mock",
+              "type": "string",
+              "enum": [
+                "mock",
+                "resend",
+                "smtp"
+              ],
+              "description": "Which transport sends the realm mail: mock (logs only), resend or smtp.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+                "seedEnv": "EMAIL_PROVIDER",
+                "direction": "opaque",
+                "securityWhen": "any-change",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": true
+              }
+            },
+            "fromAddress": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 254,
+                  "format": "email",
+                  "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The address the realm mail is sent from.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+                "seedEnv": "EMAIL_FROM_ADDRESS",
+                "direction": "opaque",
+                "securityWhen": "any-change",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": true
+              }
+            },
+            "fromName": {
+              "default": "QAuth",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "pattern": "^[^\\r\\n]*$",
+              "description": "The sender name the realm mail shows.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+                "seedEnv": "EMAIL_FROM_NAME",
+                "direction": "opaque",
+                "securityWhen": "any-change",
+                "effects": [
+                  "credential-path"
+                ],
+                "secret": false,
+                "environmentBound": true
+              }
+            },
+            "smtp": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "host": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 253,
+                      "pattern": "^[^\\s/@]+$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The SMTP server the smtp transport connects to.",
+                  "x-qauth-policy": {
+                    "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+                    "seedEnv": "SMTP_HOST",
+                    "direction": "opaque",
+                    "securityWhen": "any-change",
+                    "effects": [
+                      "credential-path"
+                    ],
+                    "secret": false,
+                    "environmentBound": true
+                  }
+                },
+                "port": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65535
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The port of the SMTP server.",
+                  "x-qauth-policy": {
+                    "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+                    "seedEnv": "SMTP_PORT",
+                    "direction": "opaque",
+                    "securityWhen": "any-change",
+                    "effects": [
+                      "credential-path"
+                    ],
+                    "secret": false,
+                    "environmentBound": true
+                  }
+                },
+                "secure": {
+                  "default": true,
+                  "type": "boolean",
+                  "description": "Whether the SMTP connection uses TLS from its start.",
+                  "x-qauth-policy": {
+                    "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+                    "seedEnv": "SMTP_SECURE",
+                    "direction": "opaque",
+                    "securityWhen": "any-change",
+                    "effects": [
+                      "credential-path"
+                    ],
+                    "secret": false,
+                    "environmentBound": true
+                  }
+                },
+                "user": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255,
+                      "pattern": "^[^\\r\\n]*$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The user name the smtp transport signs in with.",
+                  "x-qauth-policy": {
+                    "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+                    "seedEnv": "SMTP_USER",
+                    "direction": "opaque",
+                    "securityWhen": "any-change",
+                    "effects": [
+                      "credential-path"
+                    ],
+                    "secret": false,
+                    "environmentBound": true
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "resend": {
+              "default": {},
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            },
+            "verificationTokenExpirySeconds": {
+              "default": 86400,
+              "type": "integer",
+              "minimum": 3600,
+              "maximum": 9007199254740991,
+              "description": "How long a verification link is valid, in seconds, at least one hour.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+                "seedEnv": "EMAIL_VERIFICATION_TOKEN_EXPIRY",
+                "direction": "lower-is-stricter",
+                "securityWhen": "loosening",
+                "effects": [
+                  "posture-loosening"
+                ],
+                "secret": false,
+                "environmentBound": true
+              }
+            },
+            "invalidateExistingTokensOnResend": {
+              "default": true,
+              "type": "boolean",
+              "description": "Whether sending a new verification link makes the earlier ones invalid, so only the latest works.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#mail",
+                "seedEnv": "EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND",
+                "direction": "true-is-stricter",
+                "securityWhen": "never",
+                "effects": [],
+                "secret": false,
+                "environmentBound": true
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "posture": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "maxEnvironmentLaxity": {
+              "default": "production",
+              "type": "string",
+              "enum": [
+                "development",
+                "staging",
+                "production"
+              ],
+              "description": "The laxest environment profile a client of the realm may get; a client set to a laxer one gets this one.",
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/operate/environment-authorization/",
+                "seedEnv": null,
+                "direction": "ordered",
+                "order": [
+                  "development",
+                  "staging",
+                  "production"
+                ],
+                "securityWhen": "loosening",
+                "effects": [
+                  "posture-loosening"
+                ],
+                "secret": false,
+                "environmentBound": true
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "admin": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "twoAdminMandatoryOperations": {
+              "default": [],
+              "maxItems": 200,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 128,
+                "pattern": "^[a-z][a-zA-Z0-9]*(?:\\.[a-z][a-zA-Z0-9]*)+$"
+              },
+              "description": "The admin operations that need a second admin approval in this realm, by operation id.",
+              "uniqueItems": true,
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#admin",
+                "seedEnv": null,
+                "direction": "superset-is-stricter",
+                "securityWhen": "any-change",
+                "effects": [
+                  "administration"
+                ],
+                "secret": false,
+                "environmentBound": false
+              }
+            },
+            "workloadIssuers": {
+              "default": [],
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 2048,
+                "format": "uri",
+                "pattern": "^https://[^\\s?#@]+$"
+              },
+              "description": "The HTTPS issuers whose workload tokens a CI service account may exchange for admin API tokens.",
+              "uniqueItems": true,
+              "x-qauth-policy": {
+                "docs": "https://docs.qauth.dev/reference/realm-policies/#admin",
+                "seedEnv": null,
+                "direction": "subset-is-stricter",
+                "securityWhen": "any-change",
+                "effects": [
+                  "administration"
+                ],
+                "secret": false,
+                "environmentBound": true
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "clients": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "grant_types": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "authorization_code",
+                "refresh_token",
+                "client_credentials",
+                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "urn:ietf:params:oauth:grant-type:token-exchange"
+              ]
+            }
+          },
+          "response_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "code"
+              ]
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "client_credentials_scopes": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "redirect_uris": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "post_logout_redirect_uris": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "backchannel_logout_uri": {
+            "type": "string"
+          },
+          "backchannel_logout_session_required": {
+            "type": "boolean"
+          },
+          "require_pkce": {
+            "type": "boolean"
+          },
+          "token_endpoint_auth_method": {
+            "type": "string",
+            "enum": [
+              "client_secret_post",
+              "client_secret_basic",
+              "private_key_jwt",
+              "none"
+            ]
+          },
+          "is_agent": {
+            "type": "boolean"
+          },
+          "max_agent_mode": {
+            "type": "string",
+            "enum": [
+              "readonly",
+              "admin",
+              "exec"
+            ]
+          },
+          "id_jag_targets": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "jwks": {
+            "type": "object",
+            "properties": {
+              "keys": {
+                "minItems": 1,
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kty": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kty"
+                  ],
+                  "additionalProperties": {},
+                  "description": "A public JWK. A member of private key material (d, p, q, dp, dq, qi, oth, k, priv) is refused: a realm file holds no secret value.",
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "d"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "p"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "q"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "dp"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "dq"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "qi"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "oth"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "k"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "priv"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "keys"
+            ]
+          },
+          "jwks_uri": {
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "webauthn_allowed_origins": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dpop_bound_access_tokens": {
+            "type": "boolean"
+          },
+          "verified_domain": {
+            "type": "string"
+          },
+          "first_party_profile": {
+            "type": "string",
+            "enum": [
+              "web_redirect",
+              "native_backend"
+            ]
+          },
+          "first_party_policy": {
+            "type": "object",
+            "properties": {
+              "flows": {
+                "default": [
+                  "login"
+                ],
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "login",
+                    "register",
+                    "reset"
+                  ]
+                }
+              },
+              "email_code_after_password": {
+                "default": false,
+                "type": "boolean"
+              },
+              "pkce_required": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "first_party_reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "hosted_flows": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "register"
+              ]
+            }
+          },
+          "registration_challenge": {
+            "type": "boolean"
+          },
+          "environment": {
+            "description": "The client's environment profile (ADR-008): development, staging or production. Left out, the client is production, the fail-safe default; the realm's posture.maxEnvironmentLaxity caps it. A sandbox realm's client says staging here.",
+            "type": "string",
+            "enum": [
+              "development",
+              "staging",
+              "production"
+            ]
+          }
+        },
+        "required": [
+          "client_id",
+          "name",
+          "grant_types"
+        ],
+        "additionalProperties": false
+      },
+      "description": "The operator-managed OAuth clients, each a seed-manifest client with its OAuth metadata names (RFC 7591) and an optional environment, matched by client_id."
+    },
+    "cimd_clients": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "client_credentials_scopes": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "client_id",
+          "scopes"
+        ],
+        "additionalProperties": false
+      },
+      "description": "The operator's grants to Client ID Metadata Document clients: the scopes each may receive, those the client_credentials grant may issue it and its audience, matched by client_id. Its document owns every other field."
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string"
+          },
+          "scopes": {
+            "minItems": 1,
+            "maxItems": 64,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "scope": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[!#$%&'()*+,\\-./0-9:;=?@A-Z[\\]^_`a-z{|}~]+$"
+                },
+                "text": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "maxLength": 35,
+                    "pattern": "^[a-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$"
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 280,
+                    "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$"
+                  }
+                },
+                "sensitive": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "scope",
+                "text"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "clients": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "any_client"
+              },
+              {
+                "minItems": 1,
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "resource",
+          "scopes",
+          "clients"
+        ],
+        "additionalProperties": false
+      },
+      "description": "The realm's protected resources: each one's resource indicator (RFC 8707), the scopes it defines with their consent texts, and who may ask for them, matched by resource."
+    },
+    "system_client": {
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "default": "system",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "redirect_uris": {
+          "minItems": 1,
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "jwks": {
+          "type": "object",
+          "properties": {
+            "keys": {
+              "minItems": 1,
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kty": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kty"
+                ],
+                "additionalProperties": {},
+                "description": "A public JWK. A member of private key material (d, p, q, dp, dq, qi, oth, k, priv) is refused: a realm file holds no secret value.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "d"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "p"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "q"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "dp"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "dq"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "qi"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "oth"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "k"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "priv"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "required": [
+            "keys"
+          ]
+        },
+        "jwks_uri": {
+          "type": "string",
+          "maxLength": 2048,
+          "format": "uri"
+        },
+        "first_party_reason": {
+          "default": "QAuth's developer portal: the web front-end this deployment runs for its own developers.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "redirect_uris"
+      ],
+      "additionalProperties": false,
+      "description": "The developer portal's system client, as the migration runner provisions it: its redirect URIs, its public keys and its first-party reason, matched by client_id."
+    }
+  },
+  "required": [
+    "realm"
+  ],
+  "additionalProperties": false
+}

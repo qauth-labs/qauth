@@ -1,0 +1,11 @@
+{
+  "realm": "master",
+  "cimd_clients": [
+    {
+      "client_id": "https://client.example.com/oauth/metadata.json",
+      "scopes": ["notes:read", "ssf:stream"],
+      "client_credentials_scopes": ["ssf:stream"],
+      "audience": ["https://auth.example.com"]
+    }
+  ]
+}

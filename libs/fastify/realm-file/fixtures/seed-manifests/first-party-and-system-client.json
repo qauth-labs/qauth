@@ -1,0 +1,22 @@
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "notes-backend",
+      "name": "Notes",
+      "grant_types": ["authorization_code", "refresh_token"],
+      "redirect_uris": ["com.example.notes:/callback"],
+      "token_endpoint_auth_method": "private_key_jwt",
+      "jwks_uri": "https://notes.example.com/.well-known/jwks.json",
+      "first_party_profile": "native_backend",
+      "first_party_policy": {
+        "flows": ["login", "register", "reset"]
+      },
+      "first_party_reason": "Notes is our own app, published under our brand."
+    }
+  ],
+  "system_client": {
+    "redirect_uris": ["https://portal.example.com/auth/callback"],
+    "jwks_uri": "https://portal.example.com/.well-known/jwks.json"
+  }
+}

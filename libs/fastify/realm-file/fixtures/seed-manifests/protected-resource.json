@@ -1,0 +1,25 @@
+{
+  "realm": "master",
+  "resources": [
+    {
+      "resource": "https://mcp.example.com/mcp",
+      "scopes": [
+        {
+          "scope": "files:read",
+          "text": {
+            "en": "Read your files",
+            "tr": "Dosyalarınızı okusun"
+          }
+        },
+        {
+          "scope": "files:write",
+          "text": {
+            "en": "Change your files"
+          },
+          "sensitive": true
+        }
+      ],
+      "clients": "any_client"
+    }
+  ]
+}

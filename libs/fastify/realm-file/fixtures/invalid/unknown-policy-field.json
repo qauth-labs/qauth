@@ -1,0 +1,8 @@
+{
+  "realm": "master",
+  "policies": {
+    "tokens": {
+      "accessTokenLifetime": 600
+    }
+  }
+}
