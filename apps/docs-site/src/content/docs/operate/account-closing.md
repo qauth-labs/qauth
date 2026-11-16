@@ -149,10 +149,16 @@ the first call did.
 | `429`, `5xx`, a network error      | The call may not have run.                                                                                       | Yes, with `If-Match: *`   |
 | `403` `approval_required`          | The service account holds no `account-closer` on this realm, or the realm makes a second admin mandatory for it. | Not until that changes    |
 | `403` `forbidden`                  | The token lacks `qauth:admin:security`, or the service account's role lacks `users.delete`.                      | Not until that changes    |
-| `404` `not_found`                  | The realm is outside the service account's grants.                                                               | No                        |
+| `404` `not_found`                  | The realm is outside the service account's grants: the grant names another realm, or the call another realm id.  | Not until that changes    |
 | `409` `conflict`                   | The account is a service account's, or holds an admin grant: those are removed through their own paths.          | No                        |
 | `409` `approval_unavailable`       | The realm makes a second admin mandatory for it, and has too few admins who could approve.                       | Not until that changes    |
 | `412` `precondition_failed`, `428` | `If-Match` named another version, or none.                                                                       | With `If-Match: *`        |
+
+An answer marked "Not until that changes" is a setup to correct, not a
+deletion to give up: the account is still alive and signed in. Keep the
+`sub` in the retry table, alert the operator, and retry once the grant, the
+realm id or the realm's policy is corrected. Drop a `sub` only on `204`, or
+on `409` `conflict` after an operator has looked at that account.
 
 ## Take the grant away
 
