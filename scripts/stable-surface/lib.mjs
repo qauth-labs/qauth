@@ -501,16 +501,25 @@ function requirementKey(requirement) {
 
 /**
  * Whether `after` keeps every requirement of `before`, which names at least
- * one: OpenAPI security requirements are alternatives, so a request that met
- * one of `before` still meets one of `after`, whatever `after` adds.
+ * one, and adds only requirements that name a scheme: OpenAPI security
+ * requirements are alternatives, so a request that met one of `before` still
+ * meets one of `after`. An added empty requirement (`{}`) makes the operation
+ * anonymous, so it is never taken for a compatible alternative: that change
+ * stays a break, which an approval a reviewer sees must cover.
  */
 function keepsEveryAlternative(before, after) {
   if (!Array.isArray(before) || before.length === 0 || !Array.isArray(after)) return false;
-  const kept = new Set(after.map(requirementKey));
-  return before.every((requirement) => {
-    const key = requirementKey(requirement);
-    return key !== null && kept.has(key);
-  });
+  const beforeKeys = before.map(requirementKey);
+  if (beforeKeys.some((key) => key === null)) return false;
+  const afterKeys = after.map(requirementKey);
+  const kept = new Set(afterKeys);
+  if (!beforeKeys.every((key) => kept.has(key))) return false;
+  const known = new Set(beforeKeys);
+  return after.every(
+    (requirement, index) =>
+      known.has(afterKeys[index]) ||
+      (afterKeys[index] !== null && Object.keys(requirement).length > 0)
+  );
 }
 
 /** The security an operation of `doc` is under: its own, else the document's. */
@@ -530,7 +539,8 @@ function effectiveSecurity(doc, path, method) {
  * operation still does, so that finding is info, not a break. Any other case
  * stays a break: an operation that had no requirement, or an empty list; a
  * requirement that lost a scheme or changed its scopes, since it is no longer
- * kept; a finding whose operation the documents do not hold.
+ * kept; an added empty requirement, which lets a request in with no
+ * credential; a finding whose operation the documents do not hold.
  */
 export function rateFindings(findings, base, revision) {
   return findings.map((finding) => {

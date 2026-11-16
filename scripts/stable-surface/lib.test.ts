@@ -616,6 +616,18 @@ describe('an added security alternative (#525)', () => {
     expect(rate(operationWith([]), operationWith([{ bearerAuth: [] }])).level).toBe(LEVEL.ERR);
   });
 
+  it('stays a break when the added alternative is the empty requirement, which lets anyone in', () => {
+    expect(
+      rate(operationWith([{ bearerAuth: [] }]), operationWith([{ bearerAuth: [] }, {}])).level
+    ).toBe(LEVEL.ERR);
+    expect(
+      rate(
+        operationWith([{ bearerAuth: [] }]),
+        operationWith([{ bearerAuth: [] }, { dpopAuth: [] }, {}])
+      ).level
+    ).toBe(LEVEL.ERR);
+  });
+
   it('stays a break when a kept requirement gained a scheme or a scope', () => {
     expect(
       rate(operationWith([{ bearerAuth: [] }]), operationWith([{ bearerAuth: [], dpopAuth: [] }]))
