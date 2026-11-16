@@ -191,7 +191,9 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   'POST /ui/account/linked-accounts/link',
   'POST /ui/account/linked-accounts/:linkedAccountId/unlink',
   // The server-rendered pages' stylesheet and fonts (#472).
-  'GET /assets/ui/:file',
+  'GET /assets/ui/:file', // The account and developer APIs' own OpenAPI documents (#525).
+  'GET /account/v1-rc.0/openapi.json',
+  'GET /developer/v1-rc.0/openapi.json',
 ];
 
 /**

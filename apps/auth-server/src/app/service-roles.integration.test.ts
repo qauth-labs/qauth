@@ -156,7 +156,9 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   // The account API's sessions and sign-out everywhere (#1110).
   'GET /account/v1-rc.0/sessions',
   'DELETE /account/v1-rc.0/sessions/:sessionId',
-  'POST /account/v1-rc.0/sessions/end-all',
+  'POST /account/v1-rc.0/sessions/end-all', // The account and developer APIs' own OpenAPI documents (#525).
+  'GET /account/v1-rc.0/openapi.json',
+  'GET /developer/v1-rc.0/openapi.json',
 ];
 
 /** The routes removed since: the metrics moved to the internal listener (#500). */
