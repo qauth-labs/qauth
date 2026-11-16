@@ -15,3 +15,5 @@ export type {
   NewAdminApproval,
 } from '@qauth-labs/infra-db';
 export { canonicalizeJson } from '@qauth-labs/infra-db';
+/** An act-chain token's row (#523), as the account API reads it. */
+export type { AdminActSession, NewAdminActSession } from '@qauth-labs/infra-db';
