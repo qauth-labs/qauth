@@ -190,9 +190,13 @@ await provider.sendEmail({
 
 **Features**:
 
-- Automatic retry on transient failures
-- Idempotency key support to prevent duplicate sends
-- TypeScript-first SDK
+- Automatic retry on transient failures: no answer, any 5xx, 429 `rate_limit_exceeded` and 409
+  `concurrent_idempotent_requests` are tried again up to three times, after 2 s, 4 s and 8 s or the
+  longer wait a `Retry-After` asks for (up to 10 s; a longer one ends the send). Every other answer,
+  the daily and monthly quotas included, is final. Each attempt is aborted after 10 s.
+- A content-based idempotency key, the same on every attempt, so a retry never sends the mail twice
+- A failure's `error` names Resend's status and error name, never its message, which can quote an
+  address
 
 #### SMTP Provider
 

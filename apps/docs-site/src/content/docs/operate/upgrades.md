@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — the upgrade from 0.1 to 0.2 with its hosts, keys, sessions and roles, and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-11-14'
+lastVerified: '2026-11-15'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -1532,6 +1532,108 @@ GRANT EXECUTE ON FUNCTION "deployment_nodes_live"(bigint), "deployment_nodes_reg
 
 Without them a node of the new release does not start: its boot fails with
 `permission denied` for the function.
+
+### Service accounts, and the admin audience needs `private_key_jwt`
+
+This release adds service accounts for the admin API
+([#522](https://github.com/qauth-labs/qauth/issues/522),
+[Service accounts](/operate/service-accounts/)) and, with them, one rule for
+every client: **the admin API's audience, and an admin scope, are issued only
+to a client that authenticates with `private_key_jwt`**, on every grant.
+
+- **A client that gets admin tokens with a secret or as a public client stops
+  getting them.** Its token request for the admin audience answers
+  `invalid_target`, with the event reason
+  `admin_audience_requires_private_key_jwt`; its admin scopes are withheld;
+  the authorization endpoint refuses the admin audience as a `resource`.
+  Before you upgrade, give such a client `token_endpoint_auth_method:
+  private_key_jwt` and its public keys (`jwks` or `jwks_uri`) in the seed
+  manifest, and switch the application to sign client assertions. The seed
+  manifest now refuses a `clients` entry that lists the admin audience with
+  another method, and a `--rotate` entry for a service account's client.
+- **A static developer API key of a client that lists the admin audience
+  stops authenticating.** None is minted for such a client any more.
+- **Migration 0078 adds the empty `service_accounts` table and the column
+  `users.is_service_account`.** The column's constant default rewrites no
+  row, but adding it takes a brief exclusive lock on `users`, and the new
+  foreign keys briefly lock `realms`, `users` and `oauth_clients` against
+  writes, so a sign-in, a sign-up or a client registration waits for the
+  runner's commit. A trigger keeps the column as it was written, and
+  `service_accounts_end_tokens(uuid, uuid)` ends a service account's tokens
+  when the admin API suspends its client. A client a service account binds can
+  no longer be deleted.
+- **`web`, `api` and `admin` read the table.** The token endpoint reads it for
+  every `client_credentials` request, the admin API for every call. A
+  deployment whose migration runner grants the roles' database users
+  ([above](#each-role-can-connect-as-a-database-user-of-its-own)), or whose
+  roles connect as the one user that owns the tables, needs nothing. One that
+  applies the grants by hand applies, before the new version starts:
+
+  ```sql
+  GRANT SELECT ON TABLE "service_accounts" TO <web_role>, <api_role>, <admin_role>;
+  GRANT EXECUTE ON FUNCTION "service_accounts_end_tokens"(uuid, uuid) TO <admin_role>;
+  ```
+
+  Without them every `client_credentials` request and every admin call fails
+  with `permission denied`, and so does every suspension of a client through
+  the admin API's `clients.disable`.
+
+- **During a rolling upgrade**, a node of the previous release still issues
+  the admin audience to a client with a secret, and knows no service account:
+  it issues a service account's client no admin token, and an admin node of
+  that release would take a service account's token as a person's. Replace
+  the `admin` nodes before you create the first service account.
+
+### The break-glass CLI and migration 0079
+
+This release adds the break-glass CLI
+([#602](https://github.com/qauth-labs/qauth/issues/602),
+[Break-glass](/operate/break-glass/)), which enrols an admin and retires a
+key in an emergency from the host that holds the database credentials and
+the KEK.
+
+- **Migration 0079 adds the empty `admin_enrolments` table**, which holds the
+  hash of each enrolment token. Its foreign keys briefly lock `realms` and
+  `users` against writes, so a sign-up waits for the runner's commit. No
+  service role holds a grant on it: only the CLI writes it, as the table
+  owner. A deployment that applies the grants by hand applies nothing for it.
+- **Run the CLI once every node runs this release.** A node of the previous
+  release does not know the new `admin.break_glass_used` event, which every
+  run writes.
+- **SSF receivers see a new event type.** The transmitter's configuration
+  lists `urn:qauth:secevent:break-glass-used:v1-rc.0` in `events_supported`,
+  before `key-emergency-retired`.
+
+### An admin deletes accounts through migration 0080's functions
+
+The admin API's `users.delete`
+([#681](https://github.com/qauth-labs/qauth/issues/681),
+[Accounts](/operate/accounts/#delete-an-account)) deletes an account at once
+and ends its sessions first. Migration 0080 only creates two functions,
+`users_lock_for_deletion` and `users_delete_account`: it rewrites no row and
+takes no lock a request waits for. No role deletes an account through a table
+grant; `admin` locks and deletes one through these functions alone, and ends
+its sessions as every session revocation does, so it now reads and revokes
+`sessions`, deletes `session_clients` and spends `authorization_codes`.
+
+`EXECUTE` on the functions is revoked from `PUBLIC`. A deployment whose
+migration runner grants the roles' database users
+([above](#each-role-can-connect-as-a-database-user-of-its-own)), or whose
+roles connect as the one user that owns the tables, needs nothing. One that
+applies the grants by hand applies, before the new version starts:
+
+```sql
+GRANT SELECT, UPDATE ON TABLE "sessions" TO <admin_role>;
+GRANT SELECT, DELETE ON TABLE "session_clients" TO <admin_role>;
+GRANT SELECT, UPDATE ON TABLE "authorization_codes" TO <admin_role>;
+GRANT EXECUTE ON FUNCTION "users_lock_for_deletion"(uuid, uuid) TO <admin_role>;
+GRANT EXECUTE ON FUNCTION "users_delete_account"(uuid, uuid) TO <admin_role>;
+```
+
+Nothing checks the grants at boot. Without them every `users.delete` fails
+with `permission denied` and deletes nothing; no other call needs them. During
+a rolling upgrade, an `admin` node of the previous release has no
+`users.delete`.
 
 ## Upgrading within 1.x
 

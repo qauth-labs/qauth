@@ -4,6 +4,7 @@ export * from './base.repository';
 // Export all repositories
 export * from './admin-approvals.repository';
 export * from './admin-audit-log.repository';
+export * from './admin-enrolments.repository';
 export * from './admin-grants.repository';
 export * from './admin-roles.repository';
 export * from './api-keys.repository';
@@ -27,6 +28,7 @@ export * from './realm-secrets.repository';
 export * from './realm-upstream-providers.repository';
 export * from './realms.repository';
 export * from './refresh-tokens.repository';
+export * from './service-accounts.repository';
 export * from './sessions.repository';
 export * from './ssf-streams.repository';
 export * from './user-attributes.repository';

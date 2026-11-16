@@ -117,9 +117,10 @@ describe('what each role loads (the boot-time list)', () => {
   /**
    * The repositories no process builds: nothing reads them. Custom admin
    * roles are read only through the grants until the admin API's role routes
-   * ship (#679).
+   * ship (#679). Admin enrolments are read only by the break-glass CLI,
+   * which is no service role, until the enrolment step serves them (#621).
    */
-  const UNUSED: readonly RepositoryName[] = ['auditLogs', 'adminRoles'];
+  const UNUSED: readonly RepositoryName[] = ['auditLogs', 'adminRoles', 'adminEnrolments'];
 
   it('builds every repository but the unused ones in a single process', () => {
     expect(repositoriesFor(SERVICE_ROLE_NAMES)).toEqual(
@@ -154,6 +155,8 @@ describe('what each role loads (the boot-time list)', () => {
       // credentials and records `user.verified`.
       'userCredentials',
       'events',
+      // An admin's deletion of an account ends its sessions first (#681).
+      'sessions',
       'adminGrants',
       'adminAuditLog',
       'adminApprovals',
@@ -164,6 +167,8 @@ describe('what each role loads (the boot-time list)', () => {
       'deploymentNodes',
       // The resource server operations (#1087).
       'protectedResources',
+      // Whether a caller, or a would-be approver, is a service account (#522).
+      'serviceAccounts',
     ]);
     // The token guard verifies with the JWT plugin, which reads `fastify.dpop`;
     // a client the admin API registers gets its secret hashed (#632).

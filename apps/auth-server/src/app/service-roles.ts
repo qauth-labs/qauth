@@ -141,8 +141,13 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     // An operator's verification of an account (#1052) reads its
     // credentials and records `user.verified` in `events`. The client
     // operations (#632) read and write `oauthClients`, and removing a
-    // client's first-party profile revokes its `refreshTokens`. The resource
-    // server operations (#1087) read and write `protectedResources`.
+    // client's first-party profile revokes its `refreshTokens`. The
+    // authority stage reads whether the caller is a service account
+    // (`serviceAccounts`, #522), and so does the count of who may approve.
+    // An admin's deletion of an account (#681) ends its `sessions`, each
+    // with its back-channel logout notices, before it deletes the account.
+    // The resource server operations (#1087) read and write
+    // `protectedResources`.
     repositories: [
       'users',
       'oauthClients',
@@ -155,6 +160,8 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
       'realmSecrets',
       'realmAuthMethodPlugins',
       'protectedResources',
+      'serviceAccounts',
+      'sessions',
     ],
   },
   signer: {

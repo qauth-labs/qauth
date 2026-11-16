@@ -850,7 +850,7 @@ client on `/oauth/authorize`. Set the profile on the client's entry in the
   CIMD document can never set one.
 - A first-party client authenticates with `private_key_jwt`, so the seed
   issues and prints no secret for it, on creation or on `--rotate`: the row
-  holds a hash no secret matches. QAuth 0.2.5 and earlier printed a secret
+  holds a hash no secret matches. QAuth 0.2.6 and earlier printed a secret
   for every `clients` entry, a `private_key_jwt` or `none` one too; running
   that entry once more with `--rotate` replaces its hash, and the printed
   secret then verifies nowhere, whatever the client's method becomes later.

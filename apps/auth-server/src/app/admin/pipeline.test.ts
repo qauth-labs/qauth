@@ -907,6 +907,8 @@ describe('a call the pipeline admits', () => {
             rows.push({ outcome: entry.outcome, transaction });
           },
         },
+        // A person's admin account: no service account (#522).
+        serviceAccounts: { findByUser: async () => undefined },
       } as never);
       app.decorate('db', {
         transaction: async (work: (transaction: unknown) => Promise<unknown>) => work(TX),
@@ -1182,6 +1184,7 @@ describe('the DPoP check (#520)', () => {
             ],
           },
           adminAuditLog: { appendAdminAudit: async () => undefined },
+          serviceAccounts: { findByUser: async () => undefined },
         } as never);
         app.decorate('db', {
           transaction: async (work: (transaction: unknown) => Promise<unknown>) => work({}),

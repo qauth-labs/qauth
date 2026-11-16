@@ -5,6 +5,7 @@
  * it, like `client-suspension.ts`.
  */
 import {
+  ADMIN_API_AUDIENCE,
   backchannelLogoutUriProblem,
   FIRST_PARTY_PROFILES,
   FIRST_PARTY_REASON_MAX_LENGTH,
@@ -235,6 +236,18 @@ export const clientSpecSchema = z
     message: 'jwks and jwks_uri are mutually exclusive (RFC 7591 §2) — set at most one',
     path: ['jwks'],
   })
+  // #522: no client that authenticates with a secret, or as a public client,
+  // holds the admin API's audience: the token endpoint would refuse it on
+  // every grant, so the seed says so first.
+  .refine(
+    (spec) =>
+      !(spec.audience ?? []).includes(ADMIN_API_AUDIENCE) ||
+      spec.token_endpoint_auth_method === 'private_key_jwt',
+    {
+      message: `audience lists the admin API's audience (${ADMIN_API_AUDIENCE}), which only a client with token_endpoint_auth_method=private_key_jwt may hold: no client_secret_* or public client gets an admin token`,
+      path: ['audience'],
+    }
+  )
   // Fail closed on a half-provisioned private_key_jwt client: without a key
   // set there is nothing to verify an assertion against, so the client could
   // never authenticate. Surfacing that at seed time beats a runtime

@@ -9,11 +9,13 @@ import {
   CAEP_SESSION_REVOKED,
   CAEP_TOKEN_CLAIMS_CHANGE,
   initiatingEntityOf,
+  QAUTH_BREAK_GLASS_USED,
   QAUTH_SECEVENT_PATTERN,
   QAUTH_SSF_EVENTS,
   QAUTH_TOKEN_REVOKED,
   RISC_ACCOUNT_DISABLED,
   RISC_ACCOUNT_ENABLED,
+  RISC_ACCOUNT_PURGED,
   ssfEventMembers,
   ssfMappingOf,
   STANDARD_SSF_EVENTS,
@@ -211,7 +213,7 @@ describe('the SSF rule of the registry (#540)', () => {
     [
       'an unknown subject source',
       { event: CAEP_SESSION_REVOKED, subject: 'actor' as never },
-      'ssf.subject must be subject, client or key',
+      'ssf.subject must be subject, client, key or realm',
     ],
     [
       'a clientOnly that is not true',
@@ -443,8 +445,66 @@ describe('the mapping table of #540', () => {
     expect(eventOf('urn:qauth:event:user.enabled:v1-rc.0')).toBe(RISC_ACCOUNT_ENABLED);
   });
 
+  it("maps an admin's deletion of an account to RISC account-purged, and each session it ended to CAEP session-revoked (#681)", () => {
+    expect(eventOf('urn:qauth:event:user.deleted:v1-rc.0')).toBe(RISC_ACCOUNT_PURGED);
+    expect(STANDARD_SSF_EVENTS.find((event) => event.uri === RISC_ACCOUNT_PURGED)).toMatchObject({
+      name: 'account-purged',
+      definedIn: 'RISC 1.0 §2.2',
+      members: {},
+    });
+    const revoked = getEventType('urn:qauth:event:user.session_revoked:v1-rc.0');
+    const mapping = revoked === undefined ? undefined : ssfMappingOf(revoked);
+    if (mapping === undefined) throw new Error('user.session_revoked has no SSF mapping');
+    const members = ssfEventMembers(mapping, {
+      time: '2026-11-15T09:30:00.000Z',
+      category: 'admin',
+      actor: { type: 'user', id: '0192a000-0000-7000-8000-0000000000e3' },
+      data: { sid: '0192a000-0000-7000-8000-0000000000e5', reason: 'account_deleted' },
+    });
+    expect(members).toMatchObject({
+      reason_admin: { en: 'The account was deleted; every session it held was revoked.' },
+      initiating_entity: 'admin',
+    });
+  });
+
   it('maps a replay that revokes a refresh family to CAEP session-revoked', () => {
     expect(eventOf('urn:qauth:event:token.family_revoked:v1-rc.0')).toBe(CAEP_SESSION_REVOKED);
+  });
+
+  it('keeps a realm subject to a type with no subject, and never to one client', () => {
+    const realmType = (ssf: SsfEventMapping) =>
+      securityType({
+        subject: undefined,
+        data: z.strictObject({ command: z.string().describe('A command.') }),
+        ssf,
+      });
+    expect(validate([realmType({ event: CAEP_SESSION_REVOKED, subject: 'realm' })])).toEqual([]);
+    expect(
+      validate([
+        realmType({ event: CAEP_SESSION_REVOKED, subject: 'realm', clientOnly: true }),
+      ]).join('\n')
+    ).toContain('an event about the realm goes to every stream of the realm');
+    // A user's type cannot reach the whole realm by calling itself a realm event.
+    expect(
+      validate([
+        securityType({
+          data: z.strictObject({ command: z.string().describe('A command.') }),
+          ssf: { event: CAEP_SESSION_REVOKED, subject: 'realm' },
+        }),
+      ]).join('\n')
+    ).toContain('ssf.subject "realm" is for a type with no subject');
+  });
+
+  it('announces a break-glass use to every stream of the realm, naming the command', () => {
+    const definition = getEventType(
+      'urn:qauth:event:admin.break_glass_used:v1-rc.0'
+    ) as EventTypeDefinition;
+    expect(definition).toMatchObject({ category: 'admin', severity: 'critical', security: true });
+    expect(ssfMappingOf(definition)).toMatchObject({
+      event: QAUTH_BREAK_GLASS_USED,
+      subject: 'realm',
+      members: { command: { data: 'command' } },
+    });
   });
 
   it('maps RFC 7009 revocation to a QAuth-defined, versioned event', () => {

@@ -8,24 +8,30 @@ import { OPERATOR_VERIFICATION_METHODS } from '@qauth-labs/shared-validation';
 import type { FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
+import { AccountDeletionConflictError } from '../../helpers/account-deletion-errors';
 import { AccountVerificationConflictError } from '../../helpers/account-verification-errors';
 import { OPERATION_REGISTRY } from '../../helpers/admin-operations';
 import { RESERVED_OPERATIONS } from '../../helpers/admin-operations-reserved';
 import type { AdminRateLimitCheck } from '../pipeline';
 import {
+  type AccountDeletionState,
+  accountDeletionStateVersion,
   type AccountVerificationState,
   accountVerificationStateVersion,
+  maskIdentifier,
   USER_OPERATION_IDS,
 } from './operations';
-import { accountVerificationOf, accountVerificationSchema } from './routes';
+import { accountVerificationOf, accountVerificationSchema, deletedAccountAudit } from './routes';
 
 /**
- * The account operations of the admin API (#1052), without a listener: the
- * entry of `users.verify` in the registry, the account its `loadState` reads
- * and the version the approval binds, what an approver is shown, and the
- * route in the admin document. The route behind the pipeline, its approval
- * and its write are exercised against real containers in
- * `admin-users-verify.integration.test.ts`.
+ * The account operations of the admin API (#1052, #681), without a listener:
+ * the entries of `users.verify` and `users.delete` in the registry, the
+ * account each `loadState` reads and the version the approval binds, what an
+ * approver is shown, and the routes in the admin document. The routes behind
+ * the pipeline, their approvals and their writes are exercised against real
+ * containers in `admin-users-verify.integration.test.ts` and
+ * `admin-users-delete.integration.test.ts`; the order of a deletion's steps
+ * in `deletion.test.ts`.
  */
 
 const REALM = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f';
@@ -334,6 +340,302 @@ describe('what an approver is shown of a verification (#1052)', () => {
   });
 });
 
+const deletion = () => {
+  const found = OPERATION_REGISTRY.get(USER_OPERATION_IDS.delete);
+  if (found === undefined) throw new Error('users.delete is not registered');
+  return found;
+};
+
+/** A request behind the pipeline, for `users.delete`'s `loadState`. */
+function deletionRequestFor(
+  user: (UserRow & { isServiceAccount?: boolean }) | undefined,
+  rows: unknown[],
+  options: { serviceAccount?: unknown; grants?: unknown[]; transaction?: unknown } = {}
+) {
+  return {
+    adminPipeline: {
+      authority: { targetRealm: { id: REALM } },
+      transaction: options.transaction,
+    },
+    server: {
+      repositories: {
+        users: { findById: vi.fn(async () => user) },
+        userCredentials: { findProofsByUserId: vi.fn(async () => rows) },
+        serviceAccounts: { findByUser: vi.fn(async () => options.serviceAccount) },
+        adminGrants: { listByUser: vi.fn(async () => options.grants ?? []) },
+      },
+    },
+  } as unknown as FastifyRequest & {
+    server: {
+      repositories: {
+        users: { findById: ReturnType<typeof vi.fn> };
+        serviceAccounts: { findByUser: ReturnType<typeof vi.fn> };
+        adminGrants: { listByUser: ReturnType<typeof vi.fn> };
+      };
+    };
+  };
+}
+
+const deleteRequest = { method: 'DELETE', params: { realmId: REALM, userId: USER }, query: {} };
+
+async function loadDeletion(
+  request: FastifyRequest,
+  userId: string = USER
+): Promise<AccountDeletionState> {
+  const loadState = deletion().loadState;
+  if (loadState === undefined) throw new Error('users.delete reads no state');
+  return (await loadState(request, {
+    ...deleteRequest,
+    params: { realmId: REALM, userId },
+    body: undefined,
+  })) as AccountDeletionState;
+}
+
+describe('users.delete in the registry (#681)', () => {
+  it('is a security operation with the effect credential-path, needing users.delete alone', () => {
+    const remove = deletion();
+    expect([remove.id, remove.class, remove.effects, remove.permissions]).toEqual([
+      'users.delete',
+      'security',
+      ['credential-path'],
+      ['users.delete'],
+    ]);
+    expect(OPERATION_REGISTRY.permissions.get('users.delete')?.class).toBe('security');
+    // Every request needs the declaration: an absent account as well, so its
+    // answer and its approval read as a deletion's.
+    expect(remove.classify).toBeUndefined();
+    expect(remove.secretMembers).toBeUndefined();
+    expect(remove.selfProtecting).toBeUndefined();
+    expect(remove.description).toContain('Idempotent by id');
+  });
+
+  it('takes the reserved entry, which no later change may file under qauth:admin:write', () => {
+    const reserved = RESERVED_OPERATIONS.find((entry) => entry.id === 'users.delete');
+    expect(reserved).toMatchObject({ effects: ['credential-path'] });
+    expect(reserved?.requestDependent).toBeUndefined();
+  });
+
+  it('records user.deleted as an admin security event sent as RISC account-purged, and each ended session as user.session_revoked', () => {
+    const deleted = getEventType('urn:qauth:event:user.deleted:v1-rc.0');
+    expect(deleted).toMatchObject({
+      category: 'admin',
+      security: true,
+      subject: 'user',
+      ssf: { event: 'https://schemas.openid.net/secevent/risc/event-type/account-purged' },
+    });
+    expect(deleted?.data.safeParse({}).success).toBe(true);
+    expect(deleted?.data.safeParse({ email: 'ada@example.com' }).success).toBe(false);
+    const revoked = getEventType('urn:qauth:event:user.session_revoked:v1-rc.0');
+    expect(
+      revoked?.data.safeParse({
+        sid: '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e80',
+        reason: 'account_deleted',
+      }).success
+    ).toBe(true);
+  });
+});
+
+describe('the account users.delete meets (#681)', () => {
+  it('reads the account, whether it is enabled and its credentials with their proofs, in the realm', async () => {
+    const request = deletionRequestFor(userRow({ enabled: false }), [PASSWORD, TOTP]);
+    const state = await loadDeletion(request);
+    expect(request.server.repositories.users.findById).toHaveBeenCalledWith(REALM, USER, undefined);
+    expect(state).toEqual({
+      userId: USER,
+      account: {
+        createdAt: Date.UTC(2026, 10, 1),
+        enabled: false,
+        credentials: [
+          {
+            id: 'c1',
+            type: 'totp',
+            primary: false,
+            disabled: false,
+            proof: 'none',
+            maskedIdentifier: null,
+          },
+          {
+            id: 'c2',
+            type: 'password',
+            primary: true,
+            disabled: false,
+            proof: 'not_proved',
+            maskedIdentifier: 'a***m',
+          },
+        ],
+      },
+    });
+  });
+
+  it('holds no whole identifier, so neither the approval nor its digest keeps one', async () => {
+    const state = await loadDeletion(deletionRequestFor(userRow(), [PASSWORD, TOTP]));
+    expect(JSON.stringify(state)).not.toContain('ada@example.com');
+    // Another identifier under the same mask is the same state: the approver
+    // was shown the mask, and the approval binds what was shown.
+    const renamed = await loadDeletion(
+      deletionRequestFor(userRow(), [{ ...PASSWORD, identifier: 'alice@example.com' }, TOTP])
+    );
+    expect(accountDeletionStateVersion(renamed)).toBe(accountDeletionStateVersion(state));
+  });
+
+  it('reads an id the realm does not hold as one absent state, whatever the case of the id', async () => {
+    const unknown = await loadDeletion(deletionRequestFor(undefined, []));
+    expect(unknown).toEqual({ userId: USER, account: null });
+    const upper = await loadDeletion(deletionRequestFor(undefined, []), USER.toUpperCase());
+    expect(accountDeletionStateVersion(upper)).toBe(accountDeletionStateVersion(unknown));
+    // An absent account is no present one's version.
+    const present = await loadDeletion(deletionRequestFor(userRow(), []));
+    expect(accountDeletionStateVersion(present)).not.toBe(accountDeletionStateVersion(unknown));
+  });
+
+  it("refuses a service account's account, marked or bound, with 409", async () => {
+    const marked = await loadDeletion(
+      deletionRequestFor({ ...userRow(), isServiceAccount: true }, [])
+    ).catch((error: unknown) => error);
+    expect(marked).toBeInstanceOf(AccountDeletionConflictError);
+    expect(marked).toMatchObject({ statusCode: 409, refusal: 'service_account' });
+    const bound = await loadDeletion(
+      deletionRequestFor(userRow(), [], { serviceAccount: { id: 'sa-1' } })
+    ).catch((error: unknown) => error);
+    expect(bound).toMatchObject({ statusCode: 409, refusal: 'service_account' });
+  });
+
+  it('refuses an account that holds an admin grant not revoked, and deletes one whose grants are revoked', async () => {
+    const admin = await loadDeletion(
+      deletionRequestFor(userRow(), [], { grants: [{ id: 'g1', revokedAt: null }] })
+    ).catch((error: unknown) => error);
+    expect(admin).toMatchObject({ statusCode: 409, refusal: 'administrator' });
+    const former = await loadDeletion(
+      deletionRequestFor(userRow(), [], { grants: [{ id: 'g1', revokedAt: 1 }] })
+    );
+    expect(former.account).not.toBeNull();
+  });
+
+  it("reads in the handler's transaction when it runs inside one", async () => {
+    const tx = { id: 'handler-tx' };
+    const request = deletionRequestFor(userRow(), [], { transaction: tx });
+    await loadDeletion(request);
+    expect(request.server.repositories.users.findById).toHaveBeenCalledWith(REALM, USER, tx);
+    expect(request.server.repositories.serviceAccounts.findByUser).toHaveBeenCalledWith(
+      REALM,
+      USER,
+      tx
+    );
+    expect(request.server.repositories.adminGrants.listByUser).toHaveBeenCalledWith(
+      REALM,
+      USER,
+      tx
+    );
+  });
+});
+
+describe('what an approver is shown of a deletion (#681)', () => {
+  const render = (state?: AccountDeletionState) => {
+    const { render: renderer } = deletion();
+    if (renderer === undefined) throw new Error('users.delete has no renderer');
+    return renderer({
+      operationId: USER_OPERATION_IDS.delete,
+      ...deleteRequest,
+      body: null,
+      state,
+    });
+  };
+  const fieldsOf = (rendered: ReturnType<typeof render>) =>
+    Object.fromEntries((rendered.fields ?? []).map((field) => [field.label, field.value]));
+
+  it('shows the account, whether it is enabled, what the deletion ends, and each credential', async () => {
+    const state = await loadDeletion(deletionRequestFor(userRow(), [PASSWORD, TOTP]));
+    const rendered = render(state);
+    expect(rendered.title).toBe('Delete an account');
+    const fields = fieldsOf(rendered);
+    expect(fields['account']).toBe(USER);
+    expect(fields['created']).toBe('2026-11-01T00:00:00.000Z');
+    expect(fields['now']).toBe('enabled');
+    expect(fields['effect']).toContain('back-channel logout URI is sent a logout token');
+    expect(fields['effect']).toContain('cannot be undone');
+    expect(fields['credential password (primary)']).toBe('identifier a***m, not proved');
+    expect(fields['credential totp']).toBe('proves no identity');
+    expect(JSON.stringify(rendered)).not.toContain('ada@example.com');
+  });
+
+  it('shows an account with no identifier by its id, its creation time and its credentials', async () => {
+    const passkey = credential({
+      id: 'c3',
+      providerType: 'webauthn',
+      isPrimary: true,
+      proofData: { user_verified: true },
+    });
+    const fields = fieldsOf(render(await loadDeletion(deletionRequestFor(userRow(), [passkey]))));
+    expect(fields['account']).toBe(USER);
+    expect(fields['created']).toBe('2026-11-01T00:00:00.000Z');
+    expect(fields['credential webauthn (primary)']).toBe('proved');
+  });
+
+  it('shows an absent account as nothing to delete, without saying why it is absent', () => {
+    const rendered = render({ userId: USER, account: null });
+    const fields = fieldsOf(rendered);
+    expect(fields['account']).toBe(USER);
+    expect(fields['now']).toBe(
+      'The realm holds no account with this id: it is unknown, deleted already, or of another realm.'
+    );
+    expect(fields['effect']).toContain('Nothing is deleted');
+  });
+
+  it('caps a long list of credentials under the display limit', async () => {
+    const many = Array.from({ length: 45 }, (_, index) =>
+      credential({ id: `k${String(index).padStart(2, '0')}`, providerType: 'webauthn' })
+    );
+    const capped = render(await loadDeletion(deletionRequestFor(userRow(), many)));
+    expect(capped.fields?.length).toBeLessThanOrEqual(50);
+    expect(capped.fields?.at(-1)).toEqual({
+      label: 'and more',
+      value: '5 more credentials, not shown',
+    });
+  });
+
+  it('refuses to render without the account the approval was filed against', () => {
+    expect(() => render(undefined)).toThrow(/filed against/);
+  });
+});
+
+describe('an identifier, masked for a deletion (#681)', () => {
+  it('keeps the first and last code point of every kind of identifier, and hides its length', () => {
+    expect(maskIdentifier('ada@example.com')).toBe('a***m');
+    expect(maskIdentifier('ada.lovelace')).toBe('a***e');
+    expect(maskIdentifier('+905551234567')).toBe('+***7');
+    expect(maskIdentifier('ada@example.com')).toBe(maskIdentifier('alice@example.com'));
+  });
+
+  it('keeps only the first code point of a short identifier, and nothing of an empty one', () => {
+    expect(maskIdentifier('abcd')).toBe('a***');
+    expect(maskIdentifier('a')).toBe('a***');
+    expect(maskIdentifier('')).toBe('***');
+  });
+
+  it('cuts by code point, never inside a surrogate pair', () => {
+    expect(maskIdentifier('😀bcd😀')).toBe('😀***😀');
+  });
+});
+
+describe('what the audit row keeps of a deleted account (#681)', () => {
+  it('keeps ids, types, the creation time and the sessions ended, never an address', async () => {
+    const state = await loadDeletion(deletionRequestFor(userRow(), [PASSWORD, TOTP]));
+    if (state.account === null) throw new Error('no account');
+    const audited = deletedAccountAudit(state.userId, state.account, 3);
+    expect(audited).toEqual({
+      userId: USER,
+      createdAt: '2026-11-01T00:00:00.000Z',
+      enabled: true,
+      credentials: [
+        { id: 'c1', type: 'totp', primary: false },
+        { id: 'c2', type: 'password', primary: true },
+      ],
+      endedSessions: 3,
+    });
+    expect(JSON.stringify(audited)).not.toContain('ada@example.com');
+  });
+});
+
 describe('the verification the route answers (#1052)', () => {
   it("names the admin for users.verify and the host's user for the command", () => {
     const at = Date.UTC(2026, 10, 8, 12);
@@ -402,6 +704,7 @@ describe('the account routes in the admin OpenAPI document (#1052)', () => {
       };
       expect(Object.keys(document.paths)).toEqual([
         '/admin/v1-rc.0/realms/{realmId}/users/{userId}/verification',
+        '/admin/v1-rc.0/realms/{realmId}/users/{userId}',
       ]);
       const verify =
         document.paths['/admin/v1-rc.0/realms/{realmId}/users/{userId}/verification']['post'];
@@ -413,9 +716,19 @@ describe('the account routes in the admin OpenAPI document (#1052)', () => {
       });
       expect(JSON.stringify(verify['requestBody'])).toContain('AdminAccountVerificationRequest');
       expect(JSON.stringify(verify['responses'])).toContain('AdminAccountVerification');
+      const remove = document.paths['/admin/v1-rc.0/realms/{realmId}/users/{userId}']['delete'];
+      expect(remove).toMatchObject({
+        operationId: 'users.delete',
+        'x-qauth-class': 'security',
+        'x-qauth-permission': 'users.delete',
+        'x-qauth-effects': ['credential-path'],
+        'x-qauth-stability': 'experimental',
+      });
+      expect(Object.keys(remove['responses'] as Record<string, unknown>)).toContain('204');
+      expect(String(remove['description'])).toContain('Idempotent by id');
       const report = checkApiConventions(document, { operations: OPERATION_REGISTRY });
       expect(report.violations).toEqual([]);
-      expect(report.checkedOperations).toBe(1);
+      expect(report.checkedOperations).toBe(2);
     } finally {
       await app.close();
     }

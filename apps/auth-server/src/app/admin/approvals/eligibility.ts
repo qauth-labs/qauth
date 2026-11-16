@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { accountCredentialRefusal } from '../../helpers/account-validity';
 import type { RealmRow } from '../../helpers/request-realm';
+import { isServiceAccountUser } from '../../helpers/service-accounts';
 import type { ApprovalAccount } from './standing';
 import { approverRecord, approverRefusal, grantGivesApprove } from './two-admin';
 
@@ -21,7 +22,8 @@ import { approverRecord, approverRefusal, grantGivesApprove } from './two-admin'
  * enabled, of an enabled realm with an issuer (the approval page signs it in
  * there), holding `approvals.approve` on the realm through a live grant that
  * covers it, read as the admin API reads a caller's grants
- * (`grantCoversRealm`). Of those it counts only the eligible ones, by the
+ * (`grantCoversRealm`), and no service account (#522). Of those it counts
+ * only the eligible ones, by the
  * two-admin rule's rules 1 to 3 (`./two-admin.ts`), with the request made
  * now: none created, granted a role or changed in the last 7 days. Rule 4,
  * the credential an approver uses, is judged only when it approves.
@@ -128,9 +130,16 @@ export async function eligibleApprovers(
       account: {
         realmId: account.realmId,
         accountId: live.grant.userId,
-        // Every admin account is a person's until service accounts exist
-        // (#522); rule 1 must then read the account's kind here.
-        kind: 'human' as const,
+        // A service account never approves (#522): rule 1 refuses it below,
+        // so it is never counted, whatever its grants give.
+        kind: (await isServiceAccountUser(
+          fastify,
+          account.realmId,
+          { id: live.grant.userId, isServiceAccount: account.isServiceAccount },
+          tx
+        ))
+          ? ('service_account' as const)
+          : ('human' as const),
         createdAt: account.createdAt,
       },
       approveGrantIds: new Set<string>(),

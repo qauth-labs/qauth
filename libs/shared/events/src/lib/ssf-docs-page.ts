@@ -44,6 +44,8 @@ function subjectCell(definition: EventTypeDefinition): string {
       return 'the event’s client, `uri` or `opaque`';
     case 'key':
       return 'the key, `opaque` with its `kid`';
+    case 'realm':
+      return 'the realm, `uri` with its issuer';
     default:
       if (definition.subject === 'client') return 'the client, `uri` or `opaque`';
       // With a session, see the Subjects section: the user, or the user
@@ -56,7 +58,9 @@ function subjectCell(definition: EventTypeDefinition): string {
 
 function deliveredCell(definition: EventTypeDefinition): string {
   const mapping = ssfMappingOf(definition);
-  if (mapping?.subject === 'key') return 'every stream of the realm that requested it';
+  if (mapping?.subject === 'key' || mapping?.subject === 'realm') {
+    return 'every stream of the realm that requested it';
+  }
   if (mapping?.clientOnly) return 'the stream of the event’s client, when it added the subject';
   return 'every stream that added the subject';
 }
@@ -208,8 +212,9 @@ deletes it once the relation has ended and every event about the user has reache
 the SET that tells of the end still arrives. A disabled user is related to no receiver, so after
 \`account-disabled\` reaches a stream the sweep deletes the user's subject there, and
 \`account-enabled\` reaches only a stream the sweep has not cleared yet: once the user is enabled,
-the receiver adds them again. The [SSF transmitter](/operate/ssf-transmitter/) guide gives the
-whole rule.`,
+the receiver adds them again. A deleted user's consents and refresh tokens go with the account, so
+after \`account-purged\` reaches a stream the sweep deletes the user's subject there too. The
+[SSF transmitter](/operate/ssf-transmitter/) guide gives the whole rule.`,
     `## Mapping`,
     mappingTable(definitions),
     notesList(definitions),

@@ -35,6 +35,7 @@ import {
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
 
+import { AccountDeletionConflictError } from '../helpers/account-deletion-errors';
 import {
   AccountFactorConflictError,
   DelegatedTokenRefusedError,
@@ -45,7 +46,10 @@ import {
   SecondFactorRequiredError,
 } from '../helpers/account-operation-errors';
 import { AccountVerificationConflictError } from '../helpers/account-verification-errors';
-import { ClientManagedByDocumentError } from '../helpers/admin-client-errors';
+import {
+  ClientManagedByDocumentError,
+  ClientOfServiceAccountError,
+} from '../helpers/admin-client-errors';
 import {
   InvalidCursorError,
   SandboxCeilingError,
@@ -269,10 +273,23 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
     code: 'conflict',
     oauthError: 'invalid_request',
   },
+  // An admin's deletion of a service account's account, or of an account
+  // that holds an admin grant (#681).
+  {
+    errorClass: AccountDeletionConflictError,
+    code: 'conflict',
+    oauthError: 'invalid_request',
+  },
   // An admin change of a client whose settings come from its Client ID
   // Metadata Document (ADR-012 Decision 3, #632): the answer names it.
   {
     errorClass: ClientManagedByDocumentError,
+    code: 'conflict',
+    oauthError: 'invalid_request',
+  },
+  // An admin deletion of a service account's client (#522).
+  {
+    errorClass: ClientOfServiceAccountError,
     code: 'conflict',
     oauthError: 'invalid_request',
   },

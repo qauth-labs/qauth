@@ -1,5 +1,5 @@
 {
-  "id": "8edceed4-dffd-44bd-b16f-89715a52a1d1",
+  "id": "9f9bce14-6b91-484d-98e6-85bdf73250df",
   "prevId": "ac43663f-b10f-4922-98f7-afa45f27270b",
   "version": "7",
   "dialect": "postgresql",
@@ -2621,6 +2621,13 @@
           "type": "varchar(320)",
           "primaryKey": false,
           "notNull": false
+        },
+        "is_service_account": {
+          "name": "is_service_account",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         }
       },
       "indexes": {
@@ -4398,117 +4405,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.protected_resources": {
-      "name": "protected_resources",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "uuidv7()"
-        },
-        "realm_id": {
-          "name": "realm_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "resource": {
-          "name": "resource",
-          "type": "varchar(2048)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scopes": {
-          "name": "scopes",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "any_client": {
-          "name": "any_client",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "client_ids": {
-          "name": "client_ids",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "protected_resources_realm_id_realms_id_fk": {
-          "name": "protected_resources_realm_id_realms_id_fk",
-          "tableFrom": "protected_resources",
-          "tableTo": "realms",
-          "columnsFrom": ["realm_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "protected_resources_realm_resource": {
-          "name": "protected_resources_realm_resource",
-          "nullsNotDistinct": false,
-          "columns": ["realm_id", "resource"]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "protected_resources_resource_form": {
-          "name": "protected_resources_resource_form",
-          "value": "\"protected_resources\".\"resource\" <> '' AND strpos(\"protected_resources\".\"resource\", '#') = 0"
-        },
-        "protected_resources_scopes_array": {
-          "name": "protected_resources_scopes_array",
-          "value": "jsonb_typeof(\"protected_resources\".\"scopes\") = 'array'"
-        },
-        "protected_resources_client_ids_array": {
-          "name": "protected_resources_client_ids_array",
-          "value": "jsonb_typeof(\"protected_resources\".\"client_ids\") = 'array'"
-        },
-        "protected_resources_any_client_lists_none": {
-          "name": "protected_resources_any_client_lists_none",
-          "value": "NOT \"protected_resources\".\"any_client\" OR \"protected_resources\".\"client_ids\" = '[]'::jsonb"
-        },
-        "protected_resources_version_positive": {
-          "name": "protected_resources_version_positive",
-          "value": "\"protected_resources\".\"version\" > 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.realm_secrets": {
       "name": "realm_secrets",
       "schema": "",
@@ -4844,6 +4740,144 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.service_accounts": {
+      "name": "service_accounts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "uuidv7()"
+        },
+        "realm_id": {
+          "name": "realm_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        }
+      },
+      "indexes": {
+        "idx_service_accounts_created_by": {
+          "name": "idx_service_accounts_created_by",
+          "columns": [
+            {
+              "expression": "created_by",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_accounts_realm_id_realms_id_fk": {
+          "name": "service_accounts_realm_id_realms_id_fk",
+          "tableFrom": "service_accounts",
+          "tableTo": "realms",
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "service_accounts_client_id_oauth_clients_id_fk": {
+          "name": "service_accounts_client_id_oauth_clients_id_fk",
+          "tableFrom": "service_accounts",
+          "tableTo": "oauth_clients",
+          "columnsFrom": ["client_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_accounts_created_by_users_id_fk": {
+          "name": "service_accounts_created_by_users_id_fk",
+          "tableFrom": "service_accounts",
+          "tableTo": "users",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "service_accounts_user_realm_fk": {
+          "name": "service_accounts_user_realm_fk",
+          "tableFrom": "service_accounts",
+          "tableTo": "users",
+          "columnsFrom": ["user_id", "realm_id"],
+          "columnsTo": ["id", "realm_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "service_accounts_realm_name_unique": {
+          "name": "service_accounts_realm_name_unique",
+          "nullsNotDistinct": false,
+          "columns": ["realm_id", "name"]
+        },
+        "service_accounts_user_id_unique": {
+          "name": "service_accounts_user_id_unique",
+          "nullsNotDistinct": false,
+          "columns": ["user_id"]
+        },
+        "service_accounts_client_id_unique": {
+          "name": "service_accounts_client_id_unique",
+          "nullsNotDistinct": false,
+          "columns": ["client_id"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "service_accounts_name_grammar": {
+          "name": "service_accounts_name_grammar",
+          "value": "\"service_accounts\".\"name\" ~ '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.session_clients": {

@@ -220,4 +220,16 @@ describe('describeSystemClientResult (#631)', () => {
       })
     ).toContain(`"system" in realm "master" is a developer's client`);
   });
+
+  // #522: a service account's client never becomes the system client.
+  it("names a service account's client it refused", () => {
+    expect(
+      describeSystemClientResult({
+        status: 'refused',
+        realm: 'master',
+        clientId: 'portal-robot',
+        reason: 'service_account',
+      })
+    ).toContain(`"portal-robot" in realm "master" is a service account's client`);
+  });
 });

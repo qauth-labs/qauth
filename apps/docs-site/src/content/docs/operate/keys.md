@@ -348,6 +348,10 @@ pnpm nx run auth-server:keys:retire --kid=<kid> --realm=<name> --yes
 tsx src/keys-retire.ts --kid <kid> --yes
 ```
 
+The break-glass CLI's `retire-key` runs the same retirement, recorded and
+announced as a break-glass run first
+([Break-glass](/operate/break-glass/#retire-a-key-in-an-emergency)).
+
 In one transaction:
 
 - the key is marked `compromised` and leaves the JWKS. When it is one key of a

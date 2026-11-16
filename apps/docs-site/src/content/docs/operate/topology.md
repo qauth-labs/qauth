@@ -236,6 +236,7 @@ What the grants give, from the map in
 | `events`                 | `web`, `api` and `admin` only insert, and read their own rows through functions; `delivery` reads and prunes. |
 | `audit_logs`             | No role: it has no writer since #458.                                                                         |
 | `admin_grants`           | `web`, `api` and `admin` read it; no role writes it.                                                          |
+| `service_accounts`       | `web`, `api` and `admin` read it; no role writes it: the host's `service-accounts` command does.              |
 | The outbox and its queue | `delivery`, with only the columns of `realms`, `oauth_clients` and the stream subjects it reads.              |
 
 No role user holds `TRUNCATE`, `REFERENCES` or `TRIGGER`, owns a table, or can

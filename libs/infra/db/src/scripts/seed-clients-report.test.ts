@@ -76,6 +76,21 @@ describe('the seed report (#1138)', () => {
     expect(created.some((line) => line.includes(note))).toBe(false);
   });
 
+  // #522: a service account's client is the service-accounts command's.
+  it("names a refused service account's client on its own, not as a first-party refusal", () => {
+    const exitCode = process.exitCode;
+    try {
+      const lines = printed([{ clientId: 'ci', action: 'refused', refusal: 'service_account' }]);
+
+      expect(lines.some((line) => line.includes("service accounts' clients"))).toBe(true);
+      expect(lines).toContain('  ci');
+      expect(lines.some((line) => line.includes('first_party_profile'))).toBe(false);
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = exitCode;
+    }
+  });
+
   it('prints nothing about secrets for a run that skipped every entry', () => {
     const lines = printed([{ clientId: 'notes-service', action: 'skipped' }]);
 

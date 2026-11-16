@@ -15,6 +15,7 @@
     "plugins.security",
     "secrets.seal",
     "users.security",
+    "users.delete",
     "clients.read",
     "clients.write",
     "clients.security",
@@ -157,6 +158,20 @@
       }
     },
     "users.security": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "security"
+          ]
+        }
+      }
+    },
+    "users.delete": {
       "type": "object",
       "required": [
         "class"

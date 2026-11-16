@@ -155,6 +155,8 @@ export const QAUTH_DOMAIN_TABLES: readonly string[] = Object.freeze([
   'users',
   'realm_hosts',
   'realms',
+  'service_accounts',
+  'admin_enrolments',
 ]);
 
 /** The `TRUNCATE` statement that resets a migrated database between tests. */

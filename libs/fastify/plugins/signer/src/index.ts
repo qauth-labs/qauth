@@ -1,4 +1,5 @@
 export * from './lib/fastify-plugin-signer';
+export * from './lib/host-key-custody';
 export * from './lib/kek-rotation';
 export * from './lib/key-custody-check';
 export * from './lib/key-retirement';

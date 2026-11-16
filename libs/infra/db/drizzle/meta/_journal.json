@@ -551,8 +551,29 @@
     {
       "idx": 78,
       "version": "7",
-      "when": 1794752781893,
-      "tag": "0078_protected_resources",
+      "when": 1794756878474,
+      "tag": "0078_service_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1794758672945,
+      "tag": "0079_admin_enrolments",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1794791292907,
+      "tag": "0080_users_delete_account",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1794792279256,
+      "tag": "0081_protected_resources",
       "breakpoints": true
     }
   ]

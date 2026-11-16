@@ -317,6 +317,8 @@ describe('event types offered to streams', () => {
       'https://schemas.openid.net/secevent/caep/event-type/token-claims-change',
       'https://schemas.openid.net/secevent/risc/event-type/account-disabled',
       'https://schemas.openid.net/secevent/risc/event-type/account-enabled',
+      'https://schemas.openid.net/secevent/risc/event-type/account-purged',
+      'urn:qauth:secevent:break-glass-used:v1-rc.0',
       'urn:qauth:secevent:key-emergency-retired:v1-rc.0',
       'urn:qauth:secevent:token-revoked:v1-rc.0',
     ]);

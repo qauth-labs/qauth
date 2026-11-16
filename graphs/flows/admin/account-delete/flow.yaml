@@ -1,0 +1,393 @@
+# Deleting an account of a realm through the admin API (#681, ADR-020 §3, ADR-019 Decision 7): who may do it, what
+# each refusal answers, the order the deletion takes in its transaction, and why a retry answers as the first call.
+#
+# - Written with the operation, so every state cites the code (`source:`): the If-Match and classification stage
+#   (apps/auth-server/src/app/plugins/admin-operations.ts), the admin pipeline's permission check and approval gate
+#   (apps/auth-server/src/app/admin/pipeline.ts), the account the operation meets and its refusals
+#   (apps/auth-server/src/app/admin/users/operations.ts), the route (apps/auth-server/src/app/admin/users/routes.ts)
+#   and the deletion's steps (apps/auth-server/src/app/admin/users/deletion.ts).
+# - Filing and giving the approval (approvals.create, the approval page, the factor) are drawn as the precondition
+#   `approval`. What the approver is shown is in the description of `checkingApproval`: each credential's identifier
+#   masked, the same for every kind of identifier, so an account with no identifier is shown alike.
+# - The back-channel logout tokens are queued in the deletion's transaction and sent after it by the delivery role
+#   (flows/core/backchannel-logout); the delivery is outside this view.
+# - Exits are HTTP answers of the admin API, named `<error>.<cause>` (graphs/README.md, "Protocol exits"). The two
+#   success exits answer alike, 204 with no body, for two causes: the account was deleted, or the realm holds none
+#   with that id.
+schema: delurio-graph/0
+kind: flow
+id: admin.account-delete
+status: captured
+title: Delete an account of a realm
+summary: >-
+  An admin of the realm, or a service account it runs, asks the admin API to delete an account, with If-Match and
+  an approval. The request needs If-Match first; the pipeline then checks the permission users.delete, which only a
+  token with qauth:admin:security uses, reads the account and refuses a service account's account and an admin's,
+  checks If-Match against the account as it stands, and runs the call only with its approval. The handler locks the
+  account, reads it again under the lock, ends every session it holds with their back-channel logouts, deletes it
+  with everything that hangs off it and records the events, in one transaction. An id the realm does not hold
+  answers as a deletion does and changes nothing, so a retry answers as the first call.
+
+scope:
+  shows: one call deleting one account of one realm, from the If-Match check to the answer
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - 'filing and giving the approval (approvals.create, the approval page, the factor): approvals.create reads the
+      account as this call does and refuses what it refuses, so no approval is filed for an account this call
+      refuses'
+    - "the token guard, the DPoP check, the request ceilings, the realm lookup and the authority stage of the admin
+      pipeline, which run before every state drawn here; a realm outside the caller's grants answers 404 there"
+    - 'sending the back-channel logout tokens the deletion queues, and the Shared Signals delivery of its events:
+      the delivery role sends both after the commit, from rows the transaction wrote'
+    - 'a deadlock with a request of the same account in flight, which aborts one of the two; the call then fails and
+      changes nothing, and its retry deletes the account'
+
+context:
+  # What the caller's grants and token give it.
+  caller:
+    values: [securityAdmin, writeScopeOnly, noPermission]
+    initial: any
+    say:
+      securityAdmin: 'its role holds users.delete and its token carries qauth:admin:security'
+      writeScopeOnly: 'its role holds users.delete, and its token carries qauth:admin:write but not qauth:admin:security'
+      noPermission: 'its role holds no permission of users.delete, whatever its token carries'
+  ifMatch:
+    values: [star, current, stale, missing]
+    initial: any
+    say:
+      star: 'If-Match is *: the call acts on the account as it stands, and the approval still binds the state it was filed against'
+      current: 'If-Match names the ETag of the account as it stands, or of the realm holding no account with that id'
+      stale: 'If-Match names another ETag: the account changed since the caller read it, or it is gone'
+      missing: 'the request sends no If-Match'
+  account:
+    values: [deletable, absent, serviceAccount, administrator]
+    initial: any
+    say:
+      deletable: "the realm holds the account, and it is neither a service account's nor an admin's"
+      absent: "the realm holds no account with that id: unknown, deleted already, or another realm's"
+      serviceAccount: "it is a service account's account, marked or bound (#522)"
+      administrator: 'it holds an admin grant that is not revoked, a grant whose role is disabled included'
+  approval:
+    values: [approved, missing]
+    initial: any
+    say:
+      approved: 'QAuth-Approval names an approval filed for exactly this request by this caller, approved and unexpired'
+      missing: 'it names none, or one for another request, or one not approved, expired or used'
+  underLock:
+    values: [same, gone, grantedAdmin, moved]
+    initial: any
+    say:
+      same: 'under the lock the account is as it was classified and approved'
+      gone: 'a concurrent deletion removed it after the classification: the lock finds no account'
+      grantedAdmin: 'it was given an admin grant after the classification'
+      moved: 'a credential was added, removed or proved after the classification: its state has another version'
+  sessionsEnded: { values: [false, true], initial: false }
+  deleted: { values: [false, true], initial: false }
+
+guards:
+  noIfMatch: "ifMatch == 'missing'"
+  roleLacksPermission: "caller == 'noPermission'"
+  scopeLacksSecurity: "caller == 'writeScopeOnly'"
+  serviceAccountsAccount: "account == 'serviceAccount'"
+  administratorsAccount: "account == 'administrator'"
+  staleIfMatch: "ifMatch == 'stale'"
+  noApproval: "approval == 'missing'"
+  notHeld: "account == 'absent'"
+  goneUnderLock: "underLock == 'gone'"
+  adminUnderLock: "underLock == 'grantedAdmin'"
+  movedUnderLock: "underLock == 'moved'"
+
+effects:
+  endSessions: { set: { sessionsEnded: true } }
+  removeAccount: { set: { deleted: true } }
+
+# The main story: a security admin deletes an account with If-Match * and an approval.
+main:
+  given:
+    caller: securityAdmin
+    ifMatch: star
+    account: deletable
+    approval: approved
+    underLock: same
+  events: [DELETE]
+
+initial: accountInRealm
+states:
+  accountInRealm:
+    title: The account, before the call
+    description: >-
+      The account the path names, or no account: the call's answer and what it records follow from what the realm
+      holds when the call is classified, and again under the lock.
+    source: apps/auth-server/src/app/admin/users/routes.ts:263
+    on:
+      DELETE:
+        target: checkingIfMatch
+        say: 'an admin or a service account sends DELETE /admin/v1-rc.0/realms/{realmId}/users/{userId}'
+
+  checkingIfMatch:
+    title: Check that the request names the state it was written against
+    description: >-
+      users.delete reads the account it acts on, so the request names the version it was written against in
+      If-Match, or * for the account as it stands. A request without it is refused before validation.
+    source: apps/auth-server/src/app/plugins/admin-operations.ts:265
+    always:
+      - guard: noIfMatch
+        target: precondition_required.no_if_match
+        say: 'no If-Match: the call is not classified and nothing is read'
+        source: apps/auth-server/src/app/plugins/admin-operations.ts:269
+      - target: preauthorizing
+        say: 'If-Match is present'
+
+  preauthorizing:
+    title: Check the permission before the account is read
+    description: >-
+      users.delete is a security operation with the effect credential-path: it needs users.delete, a permission of
+      class security of its own, so a role can grant it alone, which a token uses only with qauth:admin:security.
+      A caller that holds none of it is refused before the account is read, so the refusal tells nothing of the
+      account.
+    source: apps/auth-server/src/app/admin/pipeline.ts:689
+    always:
+      - guard: roleLacksPermission
+        target: forbidden.no_permission
+        say: 'the role lacks the permission: no token would pass, and the challenge names no scope'
+        source: apps/auth-server/src/app/admin/pipeline.ts:707
+      - guard: scopeLacksSecurity
+        target: insufficient_scope.no_security_scope
+        say: 'only the token withholds the permission: qauth:admin:write is refused'
+        source: apps/auth-server/src/app/admin/pipeline.ts:707
+      - target: readingAccount
+        say: 'the caller holds the permission, and its token the scope'
+
+  readingAccount:
+    title: Read the account and check If-Match against it
+    description: >-
+      The account is read in the realm with its credentials and the proof each holds, through the function the admin
+      role runs, which reads nothing secret; each credential's identifier is masked before the state is versioned. An
+      id the realm does not hold reads as one absent state, whatever the case of the id. A service account's account
+      and an admin's are refused here, before an approval could be checked.
+    source: apps/auth-server/src/app/admin/users/operations.ts:390
+    always:
+      - guard: serviceAccountsAccount
+        target: conflict.service_account
+        say: "a service account's account: the service account is disabled or removed through its own path"
+        source: apps/auth-server/src/app/admin/users/operations.ts:376
+      - guard: administratorsAccount
+        target: conflict.administrator
+        say: "an admin's account: its grants are removed first, under the two-admin rule"
+        source: apps/auth-server/src/app/admin/users/operations.ts:379
+      - guard: staleIfMatch
+        target: precondition_failed.state_moved
+        say: 'If-Match names another version than the account as it stands, or the account is gone'
+        source: apps/auth-server/src/app/plugins/admin-operations.ts:296
+      - target: checkingApproval
+        say: 'the account, or its absence, is classified at this version'
+
+  checkingApproval:
+    title: Check the approval of the deletion
+    description: >-
+      A security operation runs only with the approval its request names. The approver was shown the account's id,
+      when it was created, whether it is enabled, what the deletion ends, and each credential with the proof it
+      holds and its identifier masked, the first and last character of whatever kind of identifier it is; for an id
+      the realm does not hold, that nothing is deleted. An account with no identifier is shown by its id, its
+      creation time and its credentials. The approval keeps only that, and binds the account's state at that version.
+    source: apps/auth-server/src/app/admin/pipeline.ts:763
+    always:
+      - guard: noApproval
+        target: approval_required.no_approval
+        say: 'no approval for exactly this request: the operation never runs'
+        source: apps/auth-server/src/app/admin/pipeline.ts:798
+      - target: lockingAccount
+        say: 'the approval holds, and the handler transaction consumes it'
+
+  lockingAccount:
+    title: Lock the account, or find none
+    description: >-
+      Step 1 of the deletion, in the handler's transaction: the account row is locked FOR UPDATE, the one lock a
+      foreign key's check waits for, so nothing is added to the account until the commit. An id the realm does not
+      hold locks nothing, and the call ends: nothing changes, no event is written, and the audit row records the
+      call alone.
+    source: apps/auth-server/src/app/admin/users/deletion.ts:103
+    always:
+      - guard: notHeld
+        target: deleted.not_held
+        say: 'the realm holds no account with that id'
+        source: apps/auth-server/src/app/admin/users/deletion.ts:104
+      - guard: goneUnderLock
+        target: deleted.not_held
+        say: 'a concurrent deletion removed it since the classification'
+        source: apps/auth-server/src/app/admin/users/deletion.ts:104
+      - target: rereadingAccount
+        say: 'the account is locked'
+
+  rereadingAccount:
+    title: Read the account again under the lock
+    description: >-
+      Step 2: the account is read as it was classified and approved, and refused again when it became an admin's;
+      when its state has another version, the approval does not bind it.
+    source: apps/auth-server/src/app/admin/users/deletion.ts:108
+    always:
+      - guard: adminUnderLock
+        target: conflict.administrator
+        say: 'it was given an admin grant since the classification'
+        source: apps/auth-server/src/app/admin/users/operations.ts:379
+      - guard: movedUnderLock
+        target: precondition_failed.state_moved
+        say: 'its state moved since the approval was filed'
+        source: apps/auth-server/src/app/admin/users/deletion.ts:117
+      - target: endingSessions
+        say: 'the account is as it was approved'
+
+  endingSessions:
+    title: End every session of the account
+    description: >-
+      Step 3: every session ends, browser and logout-only alike, through the path every revocation takes: the rows
+      are revoked in id order, their unredeemed codes spent, their registry rows deleted, and one logout notice is
+      queued per session and client with a back-channel logout URI, which commits with the deletion or not at all.
+    source: apps/auth-server/src/app/admin/users/deletion.ts:121
+    always:
+      - target: deletingAccount
+        effect: [endSessions]
+        say: 'the sessions are ended and their notices queued'
+
+  deletingAccount:
+    title: Delete the account and record the events
+    description: >-
+      Step 4: the account is deleted through the function the admin role runs, and with it its credentials,
+      recovery codes, consents, attributes, upstream identities, refresh tokens and codes; its access tokens no
+      longer introspect. Step 5: one user.session_revoked per session ended, reason account_deleted, then
+      user.deleted, sent as RISC account-purged. The audit row keeps the account's id, creation time and the id and
+      type of each credential, never an identifier.
+    source: apps/auth-server/src/app/admin/users/deletion.ts:132
+    always:
+      - target: deleted
+        effect: [removeAccount]
+        say: 'the account is gone, and the transaction commits'
+        source: apps/auth-server/src/app/admin/users/deletion.ts:147
+
+  # The answers.
+
+  deleted:
+    type: final
+    title: Answer the deletion
+    source: apps/auth-server/src/app/admin/users/routes.ts:313
+    response:
+      status: 204
+
+  deleted.not_held:
+    type: final
+    title: Answer an id the realm does not hold as a deletion
+    description: >-
+      The same answer as a deletion, so a caller that keeps the account in a retry table until QAuth confirms the
+      deletion can send the call again with If-Match * and an approval of its own, and gets the same answer.
+    source: apps/auth-server/src/app/admin/users/routes.ts:313
+    response:
+      status: 204
+
+  precondition_required.no_if_match:
+    type: final
+    title: Refuse a request that names no state
+    source: apps/auth-server/src/app/plugins/admin-operations.ts:269
+    response:
+      status: 428
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#precondition-required
+        status: 428
+        code: precondition_required
+
+  forbidden.no_permission:
+    type: final
+    title: Refuse a caller whose role lacks the permission
+    source: apps/auth-server/src/app/admin/pipeline.ts:707
+    response:
+      status: 403
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#forbidden
+        status: 403
+        code: forbidden
+
+  insufficient_scope.no_security_scope:
+    type: final
+    title: Refuse a token without qauth:admin:security, naming the scope
+    description: >-
+      The challenge is in the DPoP scheme the admin token comes under, with error="insufficient_scope" and
+      scope="qauth:admin:security".
+    source: apps/auth-server/src/app/admin/pipeline.ts:707
+    response:
+      status: 403
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#forbidden
+        status: 403
+        code: forbidden
+
+  conflict.service_account:
+    type: final
+    title: Refuse to delete a service account's account
+    source: apps/auth-server/src/app/admin/users/operations.ts:376
+    response:
+      status: 409
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#conflict
+        status: 409
+        code: conflict
+
+  conflict.administrator:
+    type: final
+    title: Refuse to delete an admin's account
+    description: >-
+      Removing an admin is the administration's own operation, under the two-admin rule, which deleting the account
+      would bypass; the refusal stays for good, and an admin's account is deleted once its grants are removed.
+    source: apps/auth-server/src/app/admin/users/operations.ts:379
+    response:
+      status: 409
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#conflict
+        status: 409
+        code: conflict
+
+  precondition_failed.state_moved:
+    type: final
+    title: Refuse a request written against another state
+    source: apps/auth-server/src/app/plugins/admin-operations.ts:296
+    response:
+      status: 412
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#precondition-failed
+        status: 412
+        code: precondition_failed
+
+  approval_required.no_approval:
+    type: final
+    title: Refuse a security operation without its approval
+    source: apps/auth-server/src/app/admin/pipeline.ts:798
+    response:
+      status: 403
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#approval-required
+        status: 403
+        code: approval_required
+
+assertions:
+  - id: no-deletion-without-approval
+    never: 'deleted and noApproval'
+    say: 'An account is deleted only by a request an approval was given for'
+    source: apps/auth-server/src/app/admin/pipeline.ts:798
+  - id: write-scope-never-deletes
+    never: 'deleted and scopeLacksSecurity'
+    say: 'A token that carries qauth:admin:write but not qauth:admin:security never deletes an account'
+    source: apps/auth-server/src/app/admin/pipeline.ts:707
+  - id: no-service-account-or-admin-deleted
+    never: 'deleted and (serviceAccountsAccount or administratorsAccount or adminUnderLock)'
+    say: "A service account's account and an admin's are never deleted through users.delete"
+    source: apps/auth-server/src/app/admin/users/operations.ts:367
+  - id: sessions-end-before-the-account-goes
+    never: 'deleted and not sessionsEnded'
+    say: 'Every session of the account ends, with its logout notices queued, before the account is deleted'
+    source: apps/auth-server/src/app/admin/users/deletion.ts:121
+  - id: an-id-not-held-changes-nothing
+    never: "state == 'deleted.not_held' and (deleted or sessionsEnded)"
+    say: 'An id the realm does not hold ends no session and deletes nothing'
+    source: apps/auth-server/src/app/admin/users/deletion.ts:104
+  - id: an-approval-binds-the-state-it-was-filed-against
+    never: 'deleted and (staleIfMatch or movedUnderLock)'
+    say: 'An account is deleted only as it stood when its approval was filed'
+    source: apps/auth-server/src/app/admin/users/deletion.ts:117

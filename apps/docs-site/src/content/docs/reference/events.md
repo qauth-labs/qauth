@@ -234,6 +234,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0`](#userrecovery_codes_regenerated-v1-rc0)     | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.agent_ownership_refused:v1-rc.0`](#useragent_ownership_refused-v1-rc0)           | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.verified:v1-rc.0`](#userverified-v1-rc0)                                         | admin    | warning  | v0.2.3 |
+| [`urn:qauth:event:user.deleted:v1-rc.0`](#userdeleted-v1-rc0)                                           | admin    | warning  | v0.2.8 |
 | [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0 |
 | [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                           | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                   | user     | info     | v0.2.0 |
@@ -275,6 +276,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:key.next_created:v1-rc.0`](#keynext_created-v1-rc0)                                   | admin    | info     | v0.2.5 |
 | [`urn:qauth:event:key.rotated:v1-rc.0`](#keyrotated-v1-rc0)                                             | admin    | info     | v0.2.5 |
 | [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                           | admin    | info     | v0.2.0 |
+| [`urn:qauth:event:admin.break_glass_used:v1-rc.0`](#adminbreak_glass_used-v1-rc0)                       | admin    | critical | v0.2.8 |
 
 ### user.signed_in v1-rc.0
 
@@ -467,7 +469,7 @@ An operator enabled a disabled account again. The person signs in again: what wa
 
 ### user.session_revoked v1-rc.0
 
-An operator's or an admin's action on an account ended one of its browser sessions, not the person's own sign-out: the operator tool disabled the account, and ended each session it held. One event per session ended, in the transaction that ended it.
+An operator's or an admin's action on an account ended one of its sessions, not the person's own sign-out: the operator tool disabled the account, or an admin deleted it, and ended each session it held, a sign-up's or a reset's logout-only session included. One event per session ended, in the transaction that ended it.
 
 - Identifier: `urn:qauth:event:user.session_revoked:v1-rc.0`
 - Category: `admin` · Severity: `info` · Since: v0.2.4
@@ -475,10 +477,10 @@ An operator's or an admin's action on an account ended one of its browser sessio
 - Schema: [user.session_revoked.v1-rc.0.json](/schemas/events/user.session_revoked.v1-rc.0.json)
 - Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/session-revoked` ([SSF events](/reference/ssf-events/))
 
-| Member   | Type                                        | Required | Meaning                                                                            |
-| -------- | ------------------------------------------- | -------- | ---------------------------------------------------------------------------------- |
-| `sid`    | UUID                                        | yes      | The session that ended: the `sid` its ID tokens carry (#549).                      |
-| `reason` | one of `account_disabled`, or a later value | yes      | `account_disabled`: the account was disabled. The set may grow in a minor release. |
+| Member   | Type                                                           | Required | Meaning                                                                                                                             |
+| -------- | -------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `sid`    | UUID                                                           | yes      | The session that ended: the `sid` its ID tokens carry (#549).                                                                       |
+| `reason` | one of `account_disabled`, `account_deleted`, or a later value | yes      | `account_disabled`: the account was disabled. `account_deleted`: an admin deleted the account. The set may grow in a minor release. |
 
 ### user.upstream_linked v1-rc.0
 
@@ -623,6 +625,18 @@ An operator verified an account: from now on it counts as verified for the realm
 | Member   | Type                                                | Required | Meaning                                                                                                                                                                                                                                                                                                                                                                            |
 | -------- | --------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `method` | one of `operator`, `operator_cli`, or a later value | yes      | `operator`: the admin security operation `users.verify`, run with its approval; the actor is the admin account that filed it. `operator_cli`: the `verify-account` command of the migration runner, run on the server host where no admin API is set up; the actor is `operator_cli`, with the operating-system user when the host names one. The set may grow in a minor release. |
+
+### user.deleted v1-rc.0
+
+An admin deleted an account, at once: the account and everything that hangs off it are gone, its credentials, recovery codes, consents, attributes, upstream identities and refresh tokens included. Every session it held ended first, in the same transaction, each with a `user.session_revoked`, and each client a session had signed in to with a registered `backchannel_logout_uri` was queued a logout token. Its access tokens no longer introspect. A deletion of an id the realm does not hold changes nothing and records no event.
+
+- Identifier: `urn:qauth:event:user.deleted:v1-rc.0`
+- Category: `admin` · Severity: `warning` · Since: v0.2.8
+- Subject: `user`, when known
+- Schema: [user.deleted.v1-rc.0.json](/schemas/events/user.deleted.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/risc/event-type/account-purged` ([SSF events](/reference/ssf-events/))
+
+`data` has no members: the envelope carries the event.
 
 ### authorization.completed v1-rc.0
 
@@ -1230,6 +1244,20 @@ An administrator, a service account or an operator changed something in the real
 | `target.id`   | string          | yes      | The changed thing's identifier, such as a realm id or a `client_id`. It stays valid after the thing is deleted.                                                                                                        |
 | `diff`        | array of object | yes      | What the operation changed in the target, field by field. Only changed fields are listed. A nested object is diffed member by member; any other value, an array included, is shown whole. Every secret value is `***`. |
 | `approvals`   | array of object | yes      | The approvals the operation ran on, both of a two-admin operation. Empty when it needed none.                                                                                                                          |
+
+### admin.break_glass_used v1-rc.0
+
+An operator ran a break-glass command on a host that holds the database credentials and the KEK (ADR-019 Decision 7): `enrol-admin` created an admin account with a one-time enrolment, or `retire-key` retired a key of the realm in an emergency. Whoever holds the host and the KEK stands outside the two-admin rule, so every use is announced. Emitted in the transaction of the command's change, before the change: a command whose event cannot be written changes nothing. The realm's admin audit log records the operating-system user, the host and the command's arguments.
+
+- Identifier: `urn:qauth:event:admin.break_glass_used:v1-rc.0`
+- Category: `admin` · Severity: `critical` · Since: v0.2.8
+- Subject: none: the event never carries one
+- Schema: [admin.break_glass_used.v1-rc.0.json](/schemas/events/admin.break_glass_used.v1-rc.0.json)
+- Security type · SSF: `urn:qauth:secevent:break-glass-used:v1-rc.0` ([SSF events](/reference/ssf-events/))
+
+| Member    | Type                                                 | Required | Meaning                                                                                   |
+| --------- | ---------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `command` | one of `enrol-admin`, `retire-key`, or a later value | yes      | The command that ran: `enrol-admin` or `retire-key`. The set may grow in a minor release. |
 
 ## Earlier event names
 

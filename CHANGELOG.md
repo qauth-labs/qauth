@@ -9,6 +9,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Service accounts for the admin API** ([#522], ADR-019 Decision 7).
+  Automation reaches the admin API as a service account of the operator
+  realm: a `users` row with no credential, its OAuth client and a row of the
+  new `service_accounts` table (migration 0078), which binds the two, names
+  the account and switches it. Its admin grants attach to the user row, as a
+  person's do. Its client authenticates with `private_key_jwt` only, has the
+  `client_credentials` grant only and is DPoP-bound: a token request with an
+  assertion and a DPoP proof gets an admin token whose `sub` is the service
+  account's user id, not the `client_id`, for the admin API's audience
+  alone, with the realm's admin token lifetime (at most 900 seconds) and no
+  refresh token. A disabled service account, or one whose account or client
+  is disabled, gets no token (`invalid_client`), and its tokens make no
+  admin call from the next request on; the admin API also takes its token
+  only from its own client. Disabling a service account disables its account
+  too, so a token issued before stays refused once it is enabled again, and
+  the admin API's `clients.disable` ends every admin token of a service
+  account's client it suspends. A service account's client is not deleted
+  while the service account binds it (`clients.delete` answers `409`, and the
+  foreign key refuses it), and being a service account is a lasting fact of
+  the account (`users.is_service_account`, which a trigger keeps): a marked
+  account whose binding is gone is refused, never taken for a person's. A
+  service account never takes the system client's id, and the system
+  client's provisioner never rewrites a service account's client. A service account may file and read approvals
+  for its own requests, but never gives one and never counts as one of two
+  admins: every approval of its security operations comes from a human
+  admin, and a request no human could approve fails closed
+  (`approval_unavailable`). Its admin audit rows name the actor kind
+  `service_account` and its user id; the events of its operations name it
+  as the `client` acting for itself. The host command `pnpm nx run
+  auth-server:service-accounts -- create|disable|enable|list` creates one
+  with its public keys and built-in role grants, and records each creation,
+  disable and enable in the operator realm's admin audit log as
+  `serviceAccounts.create`, `serviceAccounts.disable` or
+  `serviceAccounts.enable` by the operating-system user (the two new ids are
+  reserved security operations of the admin API, beside
+  `serviceAccounts.create`); no secret is made or printed
+  ([Service accounts](https://docs.qauth.dev/operate/service-accounts/)).
+- **The break-glass CLI** ([#602], ADR-019 Decisions 7 and 9). `tsx
+  src/break-glass.ts` of the auth server is the way in when no admin can
+  act, run on a host that holds the database credentials and the KEK, and
+  has exactly two commands: `enrol-admin --realm <name> --role <role>` creates an admin
+  account with no password and no credential, its built-in role grant on
+  the realm and a one-time enrolment URL on the realm's issuer, printed once;
+  `retire-key --realm <name> --kid <kid> --confirm` runs the emergency key
+  retirement of `keys:retire`. No command sets a password or imports a key.
+  It starts only when `DATABASE_URL` is set and the KEK opens a stored key
+  (exit code 4 otherwise), registers no route and never listens, and has no
+  Nx target: Nx keeps a task's output on disk, so `enrol-admin` refuses to
+  run under Nx. The
+  enrolment token is 32 random bytes, stored only as its SHA-256 hash in the
+  new `admin_enrolments` table (migration 0079), single use, valid an hour
+  by default (`--expires-in`, up to a day), and carried in the URL's
+  fragment. The enrolled admin cannot approve another admin's request for 7
+  days, by the two-admin rule. Before a run changes anything, and in its
+  transaction, it writes an admin audit row of the realm
+  (`breakGlass.enrolAdmin` or `breakGlass.retireKey`, actor kind
+  `break_glass_operator`, with the operating-system user and uid, the audit
+  login uid, the reported sudo user, the host name, the command and its
+  arguments) and the new critical `admin.break_glass_used` event, which
+  every route that reads the event store sends (the event API, webhooks,
+  and SSF streams as `urn:qauth:secevent:break-glass-used:v1-rc.0`; the
+  CLI exports nothing to OpenTelemetry); if either fails, nothing changes. The page that turns the URL into a first passkey is
+  [#621]
+  ([Break-glass](https://docs.qauth.dev/operate/break-glass/)).
+- **`@qauth-labs/resource-guard` advertises the scopes of every operation**
+  ([#1088], ADR-007). The new `scopesSupported` option, of the core and of
+  the Fastify plugin, lists every scope a resource understands, for a resource
+  whose operations each need their own scope, such as an MCP server with one
+  scope per tool. The guard's RFC 9728 document, which the plugin's metadata
+  route serves, lists them as `scopes_supported`, and the credential-absent
+  `401` of a call that passes no per-operation scopes names them in `scope`
+  (MCP 2026-07-28, "Scope Selection Strategy"); a call that passes some still
+  names those and `requiredScopes`. They are advertised, never required: a
+  token is checked against `requiredScopes` and the per-call scopes only. The
+  option defaults to `requiredScopes` and must hold every entry of it
+  (`ResourceGuardConfigError` otherwise), so a guard without it serves the
+  same document and challenges as before.
+- **An admin deletes an account through the admin API** ([#681], ADR-020
+  §3). `DELETE /admin/v1-rc.0/realms/{realmId}/users/{userId}`
+  (`users.delete`, experimental) is a security operation with the effect
+  `credential-path`: it needs the new permission `users.delete`, which a
+  role can grant alone, and an approval, which a service account may file
+  and a person gives; its id is reserved. The deletion is immediate and
+  runs in one transaction: it locks the account, so nothing is added to it
+  until it commits, then ends every session the account holds, browser and
+  logout-only alike, through the same path as every session revocation
+  ([#624], [#893], [#1144]), each queuing one back-channel logout token per
+  client with a logout URI, then deletes the account with its credentials,
+  recovery codes, consents, attributes, upstream identities, refresh tokens
+  and codes (migration 0080 adds the two functions the admin role locks and
+  deletes through; no role deletes an account through a table grant). Its
+  access tokens no longer introspect, and the browser that held its session
+  signs in again at the next authorization request. It is idempotent by id:
+  an id the realm does not hold, whether unknown, deleted already or another
+  realm's, answers `204` as a deletion does, changes nothing and records no
+  event. A service account's account, and an account that holds an admin
+  grant, the caller's own included, are refused with `409`. It records a
+  `user.session_revoked` per session it ended, with the new reason
+  `account_deleted`, and the new admin event `user.deleted`, sent to Shared
+  Signals receivers as RISC `account-purged`; its audit row keeps the
+  account's id, creation time and credential types, never an identifier,
+  and its approver is shown, and its approval keeps, each credential's
+  identifier masked to its first and last character
+  ([Accounts](https://docs.qauth.dev/operate/accounts/#delete-an-account)).
+  A deployment that applies its database grants by hand grants the admin
+  role the new functions and its session grants first
+  ([Upgrades](https://docs.qauth.dev/operate/upgrades/#an-admin-deletes-accounts-through-migration-0080s-functions)).
+
 - **A realm registers a protected resource's scopes, open to any client the
   user brings** ([#1087], ADR-007, ADR-019 Decision 7, ADR-020 §3). An MCP
   server whose clients are whatever CIMD or dynamically registered client
@@ -16,7 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   none, a dynamic client keeps only the realm-wide scopes it registered
   with, so the MCP step-up (`403 insufficient_scope`, then authorize with
   the challenged scope) never ended. A realm now holds protected resources
-  (the `protected_resources` table, migration 0078): a resource indicator
+  (the `protected_resources` table, migration 0081): a resource indicator
   (RFC 8707, matched exactly), the scopes it defines with a consent text per
   locale (English always among them) and a `sensitive` flag, and who may ask
   for them, `any_client` or a list of `client_id`s. A scope a registered
@@ -47,6 +155,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release: a node of an earlier release grants by the client's list alone
   ([Docker](https://docs.qauth.dev/operate/docker/#registering-a-protected-resources-scopes),
   [MCP quickstart](https://docs.qauth.dev/integrate/mcp-quickstart/#register-the-mcp-servers-scopes)).
+
+### Changed
+
+- **The admin API's audience needs a client that authenticates with
+  `private_key_jwt`** ([#522], ADR-019 Decision 7). No client that
+  authenticates with a shared secret (`client_secret_basic`,
+  `client_secret_post`) or as a public client (`none`) gets the admin
+  audience or an admin scope any more, on any grant, whatever its `audience`
+  lists: the token endpoint answers `invalid_target` (event reason
+  `admin_audience_requires_private_key_jwt`), and the authorization endpoint
+  and the consent step refuse the admin audience as a `resource`. The seed
+  manifest refuses a `clients` entry that lists the admin audience with
+  another method, and a `--rotate` entry for a service account's client. A
+  static developer API key of a client that lists the admin audience is
+  neither minted nor accepted. **Breaking** for a client set up to get admin
+  tokens with a secret or as a public client: give it `private_key_jwt` and
+  its public keys before upgrading
+  ([Upgrades](https://docs.qauth.dev/operate/upgrades/#service-accounts-and-the-admin-audience-needs-private_key_jwt)).
+
+### Fixed
+
+- **A realm's mail on Resend is tried again when Resend is busy** ([#1093]).
+  The Resend SDK answers a refused or failed request as an error result and
+  never throws for one, so the provider's retry, which waited for a thrown
+  error, never ran: a mail the account's rate limit turned away
+  (`429 rate_limit_exceeded`, 10 requests a second per account by default,
+  shared by every sender on it), a `5xx`, a `409 concurrent_idempotent_requests`
+  or a request that got no answer failed at once, and the person waited for
+  a sign-up, verification or reset code that never came. These are now
+  tried again up to three times, after 2, 4 and 8 seconds or the longer
+  wait a `Retry-After` asks for (up to 10 seconds; a longer one ends the
+  send), always with the same idempotency key, so the mail goes out at most
+  once. Every other answer is final, the daily and monthly quotas
+  (`daily_quota_exceeded`, `monthly_quota_exceeded`) among them. An attempt
+  is aborted after 10 seconds and counts as no answer. A failure names
+  Resend's status and error name, never its message, which can quote an
+  address.
 
 ## [0.2.7] - 2026-11-15
 
@@ -247,7 +392,7 @@ free password failures is no longer locked out by the bot challenge.
   `<client_id>: created, no secret (authenticates with private_key_jwt)`,
   with no `secret:` or `fingerprint:` line. An entry with
   `client_secret_basic`, `client_secret_post` or no method gets its secret as
-  before, in the same block. **If 0.2.5 or earlier seeded a
+  before, in the same block. **If 0.2.6 or earlier seeded a
   `private_key_jwt` or `none` client, run its entry once more with
   `--rotate`:** the rotation replaces the hash, and the secret printed then
   verifies nowhere.
@@ -4765,6 +4910,7 @@ It adds migrations 0068 and 0069.
 [#615]: https://github.com/qauth-labs/qauth/issues/615
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#618]: https://github.com/qauth-labs/qauth/issues/618
+[#621]: https://github.com/qauth-labs/qauth/issues/621
 [#624]: https://github.com/qauth-labs/qauth/issues/624
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
@@ -4793,6 +4939,7 @@ It adds migrations 0068 and 0069.
 [#682]: https://github.com/qauth-labs/qauth/issues/682
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
+[#681]: https://github.com/qauth-labs/qauth/issues/681
 [#689]: https://github.com/qauth-labs/qauth/issues/689
 [#695]: https://github.com/qauth-labs/qauth/issues/695
 [#700]: https://github.com/qauth-labs/qauth/issues/700
@@ -4841,6 +4988,8 @@ It adds migrations 0068 and 0069.
 [#1082]: https://github.com/qauth-labs/qauth/issues/1082
 [#1083]: https://github.com/qauth-labs/qauth/issues/1083
 [#1087]: https://github.com/qauth-labs/qauth/issues/1087
+[#1088]: https://github.com/qauth-labs/qauth/issues/1088
+[#1093]: https://github.com/qauth-labs/qauth/issues/1093
 [#1106]: https://github.com/qauth-labs/qauth/issues/1106
 [#1107]: https://github.com/qauth-labs/qauth/issues/1107
 [#1108]: https://github.com/qauth-labs/qauth/issues/1108

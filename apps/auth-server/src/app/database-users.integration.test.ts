@@ -692,6 +692,76 @@ describe('each service role on a database user of its own (#498)', () => {
     );
     expect(recorded.rows[0]?.count).toBe(1);
 
+    // users.delete (#681), approved and run as the admin user: it locks and
+    // deletes the account through the functions of migration 0080 (it holds
+    // no UPDATE and no DELETE on users), and ends its session as the sessions
+    // repository's revokeForUser does: the session locked and revoked, its
+    // unredeemed code spent, its registry row deleted and a back-channel
+    // logout notice written for the client with a logout URI.
+    const doomed = (
+      await fixture.app.repositories.users.create({ realmId: realm.id }, testPrimaryCredential())
+    ).id;
+    const { rows: rp } = await fixture.app.dbPool.query<{ id: string }>(
+      `INSERT INTO oauth_clients
+         (realm_id, client_id, client_secret_hash, name, redirect_uris,
+          backchannel_logout_uri, backchannel_logout_uri_source)
+       VALUES ($1, 'roles-rp', 'h', 'Roles RP', '["https://rp.example/cb"]',
+               'https://rp.example/logout', 'client')
+       RETURNING id::text AS id`,
+      [realm.id]
+    );
+    const { rows: session } = await fixture.app.dbPool.query<{ id: string }>(
+      `INSERT INTO sessions (realm_id, user_id, auth_time, expires_at)
+       VALUES ($1, $2, $3, $4) RETURNING id::text AS id`,
+      [realm.id, doomed, Date.now(), Date.now() + 3_600_000]
+    );
+    await fixture.app.dbPool.query(
+      'INSERT INTO session_clients (session_id, oauth_client_id) VALUES ($1, $2)',
+      [session[0].id, rp[0].id]
+    );
+    await fixture.app.dbPool.query(
+      `INSERT INTO authorization_codes
+         (code, oauth_client_id, user_id, redirect_uri, code_challenge, expires_at, session_id)
+       VALUES (md5(random()::text), $1, $2, 'https://rp.example/cb', 'c', $3, $4)`,
+      [rp[0].id, doomed, Date.now() + 60_000, session[0].id]
+    );
+    const deleteFiled = await send('POST', approvals, {
+      operation: 'users.delete',
+      params: { userId: doomed },
+    });
+    expect(deleteFiled.statusCode, deleteFiled.body).toBe(201);
+    const deleteApproval = json<{ id: string }>(deleteFiled).id;
+    const deleteDecision = { ...decision, approvalId: deleteApproval };
+    const deleteChallenge = await engine.startApproval(fixture.app, test.factor, deleteDecision);
+    await engine.completeApproval(fixture.app, test.factor, {
+      ...deleteDecision,
+      response: test.answer(deleteChallenge.challenge, approver),
+    });
+    const deleted = await adminApi.inject({
+      method: 'DELETE',
+      url: `/admin/v1-rc.0/realms/${realm.id}/users/${doomed}`,
+      headers: {
+        ...(await adminCallHeaders(
+          token,
+          'DELETE',
+          `/admin/v1-rc.0/realms/${realm.id}/users/${doomed}`
+        )),
+        'if-match': '*',
+        'qauth-approval': deleteApproval,
+      },
+    });
+    expect(deleted.statusCode, deleted.body).toBe(204);
+    expect(await fixture.app.repositories.users.findById(realm.id, doomed)).toBeUndefined();
+    const notices = await fixture.app.dbPool.query<{ client_id: string; data: { sid: string } }>(
+      `SELECT client_id, data FROM events
+        WHERE realm_id = $1 AND subject_id = $2
+          AND type = 'urn:qauth:event:user.client_session_ended:v1-rc.0'`,
+      [realm.id, doomed]
+    );
+    expect(notices.rows).toEqual([
+      { client_id: 'roles-rp', data: expect.objectContaining({ sid: session[0].id }) },
+    ]);
+
     // The pipeline audited every call, in the admin user's transactions.
     const { rows } = await fixture.app.dbPool.query<{ count: number }>(
       'SELECT count(*)::int AS count FROM admin_audit_log WHERE realm_id = $1',

@@ -1,5 +1,6 @@
 export * from './admin-approvals';
 export * from './admin-audit';
+export * from './admin-enrolments';
 export * from './admin-grants';
 export * from './audit';
 export * from './auth-method-plugins';
@@ -15,6 +16,7 @@ export * from './oid4vp';
 export * from './protected-resources';
 export * from './realm-secrets';
 export * from './roles';
+export * from './service-accounts';
 export * from './sessions';
 export * from './sql-helpers';
 export * from './ssf';

@@ -13,12 +13,16 @@ import { emitUserEvent } from '../../helpers/user-events';
 import { requestClassification } from '../../plugins/admin-operations';
 import {
   ADMIN_SECURITY_SCHEME,
+  type AdminChange,
+  adminEventActor,
   adminTransaction,
   recordAdminChange,
   requestAdminCaller,
 } from '../pipeline';
+import { deleteAccountOfRealm } from './deletion';
 import {
   accountVerificationStateVersion,
+  type DeletableAccount,
   readAccountVerificationState,
   USER_OPERATION_IDS,
 } from './operations';
@@ -29,6 +33,8 @@ import {
  *
  *   POST /admin/v1-rc.0/realms/{realmId}/users/{userId}/verification — users.verify,
  *        If-Match required, an approval required
+ *   DELETE /admin/v1-rc.0/realms/{realmId}/users/{userId} — users.delete,
+ *        If-Match required, an approval required; idempotent by id (#681)
  *
  * `users.verify` reads the account (`./operations.ts`), so the pipeline
  * answers 428 without `If-Match` and 412 when it names another version of
@@ -43,6 +49,12 @@ import {
  * write (an enabled account no operator verified yet) refuses the rest. The
  * `user.verified` event, with the method `operator` and the admin as its
  * actor, commits with it and with the call's audit row.
+ *
+ * `users.delete` locks the account, ends its sessions with their
+ * back-channel logout notices and deletes it, all in the handler's
+ * transaction (`./deletion.ts`), and answers 204. An id the realm does not
+ * hold answers 204 too, and changes nothing: its audit row records the call
+ * with no change, and no event is written.
  */
 
 /** The path of an account's verification, as the admin listener routes it. */
@@ -102,29 +114,89 @@ export function accountVerificationOf(user: {
   };
 }
 
+/** The path of an account, as the admin listener routes it. */
+const ACCOUNT_PATH = '/admin/v1-rc.0/realms/:realmId/users/:userId';
+
+const accountParams = z.object({ realmId: z.uuid(), userId: z.uuid() });
+
+const deletionHeaders = z.looseObject({
+  'if-match': z.string().meta({
+    description:
+      "The ETag of the account, or * for its state as it is: the approval binds the account's state it was filed against either way. A retry sends *: one that names the account's ETag answers 412 once the account is gone.",
+  }),
+});
+
 /**
- * The account operations in the pipeline's registry, or `undefined` when it
- * holds none: a test registry built from fixture operations alone serves no
- * account route, and the server's own registry (`OPERATION_REGISTRY`) holds
- * them all.
+ * The body of a deletion: none, or an empty object. An approval binds the
+ * request as it is sent, so one filed without a body approves only a call
+ * without one, and one filed with `{}` only a call with `{}`.
  */
-function userOperations(fastify: FastifyInstance): { verify: AdminOperation } | undefined {
-  const verify = fastify.adminApi.registry.get(USER_OPERATION_IDS.verify);
-  return verify === undefined ? undefined : { verify };
+const deletionBody = z
+  .strictObject({})
+  .nullable()
+  .optional()
+  .meta({ id: 'AdminAccountDeletionRequest', description: 'No body, or an empty object.' });
+
+/**
+ * What the audit row keeps of a deleted account: its id, when it was created,
+ * whether it was enabled, the id and type of each credential and how many
+ * sessions the deletion ended. Never an address or any other attribute of the
+ * person: the account is gone, and the audit log outlives it.
+ */
+export function deletedAccountAudit(
+  userId: string,
+  account: DeletableAccount,
+  endedSessions: number
+): Record<string, string | number | boolean | Record<string, string | boolean>[]> {
+  return {
+    userId,
+    createdAt: rfc3339(account.createdAt),
+    enabled: account.enabled,
+    credentials: account.credentials.map((credential) => ({
+      id: credential.id,
+      type: credential.type,
+      primary: credential.primary,
+    })),
+    endedSessions,
+  };
+}
+
+/** The account operations the routes serve, each one the registry holds. */
+interface UserOperations {
+  readonly verify?: AdminOperation;
+  readonly delete?: AdminOperation;
+}
+
+/**
+ * The account operations in the pipeline's registry: a test registry built
+ * from fixture operations alone holds none and serves no account route, and
+ * the server's own registry (`OPERATION_REGISTRY`) holds them all. Each route
+ * is registered when its operation is held.
+ */
+function userOperations(fastify: FastifyInstance): UserOperations {
+  const { registry } = fastify.adminApi;
+  return {
+    verify: registry.get(USER_OPERATION_IDS.verify),
+    delete: registry.get(USER_OPERATION_IDS.delete),
+  };
 }
 
 /** Register the account routes behind the admin pipeline. */
 export const userRoutes: FastifyPluginAsync = async (fastify) => {
-  const typed = fastify.withTypeProvider<ZodTypeProvider>();
   const operations = userOperations(fastify);
-  if (operations === undefined) return;
+  if (operations.verify !== undefined) verificationRoute(fastify, operations.verify);
+  if (operations.delete !== undefined) deletionRoute(fastify, operations.delete);
+};
 
+/** `users.verify`'s route (#1052). */
+function verificationRoute(fastify: FastifyInstance, verify: AdminOperation): void {
+  const typed = fastify.withTypeProvider<ZodTypeProvider>();
   typed.post(
     VERIFICATION_PATH,
     {
-      config: { operation: operations.verify.id },
+      config: { operation: verify.id },
       schema: {
-        ...operationSchemaExtensions(operations.verify),
+        ...operationSchemaExtensions(verify),
         'x-qauth-stability': 'experimental' as const,
         // A DPoP-bound admin token (#520).
         security: [{ [ADMIN_SECURITY_SCHEME]: [] }],
@@ -149,7 +221,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       // again in the transaction the verification commits in.
       const state = await readAccountVerificationState(request.server, realmId, userId, tx);
       if (accountVerificationStateVersion(state) !== stateVersion) {
-        throw new PreconditionFailedError({ operation: operations.verify.id });
+        throw new PreconditionFailedError({ operation: verify.id });
       }
       // Through `users_record_operator_verification` (migration 0070): the
       // admin role writes these two columns of the account and no other.
@@ -161,14 +233,14 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       );
       // Disabled, or verified by another call, since the read.
       if (user === undefined) {
-        throw new PreconditionFailedError({ operation: operations.verify.id });
+        throw new PreconditionFailedError({ operation: verify.id });
       }
 
       await emitUserEvent(
         request,
         'urn:qauth:event:user.verified:v1-rc.0',
         { method: 'operator' },
-        { tx, realmId, userId, actor: { type: 'user', id: caller.userId } }
+        { tx, realmId, userId, actor: adminEventActor(caller) }
       );
       const verification = accountVerificationOf(user);
       recordAdminChange(request, {
@@ -185,4 +257,61 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       return verification;
     }
   );
-};
+}
+
+/** `users.delete`'s route (#681). */
+function deletionRoute(fastify: FastifyInstance, remove: AdminOperation): void {
+  const typed = fastify.withTypeProvider<ZodTypeProvider>();
+  typed.delete(
+    ACCOUNT_PATH,
+    {
+      config: { operation: remove.id },
+      schema: {
+        ...operationSchemaExtensions(remove),
+        'x-qauth-stability': 'experimental' as const,
+        // A DPoP-bound admin token (#520).
+        security: [{ [ADMIN_SECURITY_SCHEME]: [] }],
+        summary: 'Delete an account',
+        description:
+          "Deletes the account at once, with its credentials, recovery codes, consents, attributes, upstream identities, refresh tokens and codes. Every session it holds ends first, browser and logout-only alike, and each client a session signed in to with a back-channel logout URI is queued a logout token in the same transaction; its access tokens no longer introspect. A security operation: it needs users.delete and an approval, filed with approvals.create against the account as it stands. Idempotent by id: an id the realm does not hold, whether unknown, deleted already or another realm's account, is approved and answered as a deletion is, 204, and changes nothing and records no event, so a retry with If-Match: * and an approval of its own (an approval is used once) answers as the first call did. A service account's account, and an account that holds an admin grant, are refused with 409. An approval filed against the account as it stood no longer matches once a credential is added, removed or proved: the call is answered 403 approval_required, and 412 when the account changes during the call.",
+        'x-qauth-errors': [400, 401, 403, 404, 409, 412, 428],
+        params: accountParams,
+        headers: deletionHeaders,
+        body: deletionBody,
+        response: {
+          204: z.null().meta({
+            description:
+              'The account is deleted, or the realm holds no account with this id: the answer is the same.',
+          }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const caller = requestAdminCaller(request);
+      const outcome = await deleteAccountOfRealm(request, {
+        realmId: caller.targetRealm.id,
+        userId: request.params.userId,
+        stateVersion: requestClassification(request).stateVersion,
+        tx: adminTransaction(request),
+        actor: adminEventActor(caller),
+      });
+      // An id the realm does not hold changed nothing: its audit row records
+      // the call, with no change.
+      if (outcome.kind === 'deleted') {
+        recordAdminChange(request, {
+          change: {
+            before: deletedAccountAudit(
+              outcome.userId,
+              outcome.account,
+              outcome.endedSessions.length
+            ),
+            after: null,
+          },
+          annotations: {},
+        } as AdminChange);
+      }
+      reply.code(204);
+      return undefined;
+    }
+  );
+}

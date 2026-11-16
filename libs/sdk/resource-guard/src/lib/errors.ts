@@ -52,10 +52,12 @@ export class MissingTokenError extends ResourceGuardError {
   readonly statusCode = 401 as const;
   readonly bearerError = undefined;
   /**
-   * Scopes the attempted operation requires (guard defaults + any per-route
-   * step-up), for the `scope` challenge parameter. Empty when the route
-   * requires none — the challenge then omits `scope` entirely rather than
-   * emitting a meaningless `scope=""`.
+   * Scopes for the `scope` challenge parameter. From `ResourceGuard`, those
+   * the attempted operation requires (guard defaults + any per-route
+   * step-up), or, when the call names no per-operation scopes, every scope
+   * the resource supports (`scopesSupported`, which defaults to the guard's
+   * defaults). Empty when there are none — the challenge then omits `scope`
+   * entirely rather than emitting a meaningless `scope=""`.
    */
   readonly requiredScopes: string[];
 

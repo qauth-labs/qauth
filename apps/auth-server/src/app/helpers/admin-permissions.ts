@@ -197,8 +197,10 @@ export function createPermissionRegistry(
  * planning a realm-file import (#518), the AuthMethod plugin operations
  * (#600), the approval requests of security operations (#512), sealing a
  * secret for a security operation (#984), an operator's verification of
- * an account (#1052), the client operations (#632), and the resource server
- * operations (#1087).
+ * an account (#1052), the client operations (#632), an admin's deletion
+ * of an account (#681), a permission of its own so that a role can grant it
+ * alone, as a relying party's account closing needs (#1090), and the
+ * resource server operations (#1087).
  */
 export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
   definePermission({
@@ -269,6 +271,13 @@ export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
     resource: 'users',
     description:
       'Verify an account as the operator, so it counts as verified for sign-in and for owning an agent and an unclaimed account is claimed (#1052).',
+  }),
+  definePermission({
+    id: 'users.delete',
+    class: 'security',
+    resource: 'users',
+    description:
+      'Delete an account at once, with its credentials, consents and sessions, each session ending with its back-channel logouts; never a service account or an admin (#681).',
   }),
   definePermission({
     id: 'clients.read',

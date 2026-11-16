@@ -26,6 +26,8 @@ const REALM_B = '01900000-0000-7000-8000-0000000000b1';
 const MISSING = '01900000-0000-7000-8000-0000000000ff';
 const OPERATOR_ADMIN = '01900000-0000-7000-8000-000000000001';
 const ADMIN_OF_A = '01900000-0000-7000-8000-000000000002';
+/** A service account's account (#522), in the operator realm. */
+const ROBOT = '01900000-0000-7000-8000-000000000003';
 
 function realmRow(id: string, extra: Partial<IssuerRealm> = {}): IssuerRealm {
   return {
@@ -46,10 +48,17 @@ const REALMS: Record<string, IssuerRealm> = {
 
 const USERS: Record<
   string,
-  { id: string; realmId: string; enabled: boolean; notValidBefore?: number | null }
+  {
+    id: string;
+    realmId: string;
+    enabled: boolean;
+    notValidBefore?: number | null;
+    isServiceAccount?: boolean;
+  }
 > = {
   [OPERATOR_ADMIN]: { id: OPERATOR_ADMIN, realmId: OPERATOR, enabled: true },
   [ADMIN_OF_A]: { id: ADMIN_OF_A, realmId: REALM_A, enabled: true },
+  [ROBOT]: { id: ROBOT, realmId: OPERATOR, enabled: true, isServiceAccount: true },
 };
 
 let grantSeq = 0;
@@ -90,13 +99,34 @@ function grant(
   };
 }
 
-/** A server stub: realms, users and live grants as given. */
+/** A service account of the stub (#522) and its client, as the repositories read them. */
+interface ServiceAccountFixture {
+  readonly id: string;
+  readonly realmId: string;
+  readonly userId: string;
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly client: {
+    readonly id: string;
+    readonly clientId: string;
+    readonly enabled: boolean;
+    readonly suspended: boolean;
+    readonly tokenEndpointAuthMethod: string;
+  };
+}
+
+/** A server stub: realms, users, live grants and service accounts as given. */
 function server(
   grants: LiveAdminGrant[] = [],
-  options: { users?: typeof USERS; realms?: typeof REALMS } = {}
+  options: {
+    users?: typeof USERS;
+    realms?: typeof REALMS;
+    serviceAccounts?: readonly ServiceAccountFixture[];
+  } = {}
 ) {
   const realms = options.realms ?? REALMS;
   const users = options.users ?? USERS;
+  const serviceAccounts = options.serviceAccounts ?? [];
   const fastify = {
     jwtUtils: {
       // Per realm (#491): a token verifies with the realm's keys, under its issuer.
@@ -127,6 +157,22 @@ function server(
           users[userId]?.realmId === realmId
             ? grants.filter((live) => live.grant.userId === userId)
             : []
+        ),
+      },
+      serviceAccounts: {
+        findByUser: vi.fn(async (realmId: string, userId: string) => {
+          const found = serviceAccounts.find(
+            (account) => account.realmId === realmId && account.userId === userId
+          );
+          return found === undefined ? undefined : { ...found, clientId: found.client.id };
+        }),
+      },
+      oauthClients: {
+        findById: vi.fn(
+          async (realmId: string, id: string) =>
+            serviceAccounts.find(
+              (account) => account.realmId === realmId && account.client.id === id
+            )?.client
         ),
       },
     },
@@ -547,6 +593,140 @@ describe('resolveAdminAuthority', () => {
       await expect(ask(fastify, { targetRealmId: REALM_A })).resolves.toMatchObject({
         allowed: true,
         permissions: new Set(['realms.read']),
+      });
+    });
+  });
+
+  // #522: a service account is an account of the operator realm with no
+  // credential; its grants attach to its user row, and it acts only through
+  // its own client, which authenticates with private_key_jwt.
+  describe('service accounts', () => {
+    const ROBOT_CLIENT = 'ci-realm-import';
+
+    function robot(
+      changes: Partial<Omit<ServiceAccountFixture, 'client'>> & {
+        client?: Partial<ServiceAccountFixture['client']>;
+      } = {}
+    ): ServiceAccountFixture {
+      const { client, ...account } = changes;
+      return {
+        id: '01900000-0000-7000-a000-000000000001',
+        realmId: OPERATOR,
+        userId: ROBOT,
+        name: 'ci',
+        enabled: true,
+        ...account,
+        client: {
+          id: '01900000-0000-7000-a000-0000000000c1',
+          clientId: ROBOT_CLIENT,
+          enabled: true,
+          suspended: false,
+          tokenEndpointAuthMethod: 'private_key_jwt',
+          ...client,
+        },
+      };
+    }
+
+    function robotServer(account: ServiceAccountFixture = robot(), realms = REALMS) {
+      return server([grant(ROBOT, REALM_A, 'security-admin')], {
+        serviceAccounts: [account],
+        realms,
+      });
+    }
+
+    /** A request for the robot's account; `null` names no client, as the approval page does. */
+    const asRobot = (fastify: FastifyInstance, clientId: string | null = ROBOT_CLIENT) =>
+      ask(fastify, {
+        sub: ROBOT,
+        targetRealmId: REALM_A,
+        ...(clientId === null ? {} : { clientId }),
+      });
+
+    it('names a person a human caller, with no service account', async () => {
+      const fastify = server([grant(OPERATOR_ADMIN, REALM_A, 'viewer')]);
+      await expect(
+        ask(fastify, { targetRealmId: REALM_A, clientId: 'admin-console' })
+      ).resolves.toMatchObject({ allowed: true, kind: 'human', serviceAccount: null });
+    });
+
+    it('acts for a service account through its own client, by the grants of its user row', async () => {
+      const fastify = robotServer();
+      await expect(asRobot(fastify)).resolves.toMatchObject({
+        allowed: true,
+        kind: 'service_account',
+        userId: ROBOT,
+        serviceAccount: {
+          id: '01900000-0000-7000-a000-000000000001',
+          name: 'ci',
+          clientId: ROBOT_CLIENT,
+        },
+        operator: true,
+        targetRealm: { id: REALM_A },
+        permissions: ALL_PERMISSIONS,
+      });
+      expect(
+        fastify.repositories.serviceAccounts.findByUser.mock.calls.map((call) => call.slice(0, 2))
+      ).toEqual([[OPERATOR, ROBOT]]);
+    });
+
+    it("refuses its account's token held by another client, or a request that names no client", async () => {
+      const fastify = robotServer();
+      for (const clientId of ['admin-console', 'CI-REALM-IMPORT', null]) {
+        await expect(asRobot(fastify, clientId), String(clientId)).resolves.toEqual({
+          allowed: false,
+          refusal: 'account_inactive',
+        });
+      }
+    });
+
+    it('refuses a disabled service account from the next request on', async () => {
+      await expect(asRobot(robotServer(robot({ enabled: false })))).resolves.toEqual({
+        allowed: false,
+        refusal: 'account_inactive',
+      });
+    });
+
+    it('refuses one whose client is disabled, suspended or no longer private_key_jwt', async () => {
+      for (const client of [
+        { enabled: false },
+        { suspended: true },
+        { tokenEndpointAuthMethod: 'client_secret_basic' },
+        { tokenEndpointAuthMethod: 'client_secret_post' },
+        { tokenEndpointAuthMethod: 'none' },
+      ]) {
+        await expect(
+          asRobot(robotServer(robot({ client }))),
+          JSON.stringify(client)
+        ).resolves.toEqual({ allowed: false, refusal: 'account_inactive' });
+      }
+    });
+
+    // Being a service account is a lasting fact of the account: a marked
+    // account whose binding is gone is never taken for a person's, and a
+    // binding to an account not marked fails closed too.
+    it('refuses a marked account whose binding is gone, and a binding to an unmarked account', async () => {
+      const unbound = server([grant(ROBOT, REALM_A, 'security-admin')], { serviceAccounts: [] });
+      for (const clientId of [ROBOT_CLIENT, 'admin-console', null]) {
+        await expect(asRobot(unbound, clientId), String(clientId)).resolves.toEqual({
+          allowed: false,
+          refusal: 'account_inactive',
+        });
+      }
+      const unmarked = server([grant(ROBOT, REALM_A, 'security-admin')], {
+        serviceAccounts: [robot()],
+        users: { ...USERS, [ROBOT]: { ...USERS[ROBOT], isServiceAccount: false } },
+      });
+      await expect(asRobot(unmarked)).resolves.toEqual({
+        allowed: false,
+        refusal: 'account_inactive',
+      });
+    });
+
+    it('refuses one whose realm is no longer the operator realm', async () => {
+      const moved = { ...REALMS, [OPERATOR]: { ...REALMS[OPERATOR], isOperator: false } };
+      await expect(asRobot(robotServer(robot(), moved))).resolves.toEqual({
+        allowed: false,
+        refusal: 'account_inactive',
       });
     });
   });

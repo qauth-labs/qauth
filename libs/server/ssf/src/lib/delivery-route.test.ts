@@ -6,10 +6,12 @@ import {
   CAEP_TOKEN_CLAIMS_CHANGE,
   EVENT_TYPES,
   type EventEnvelope,
+  QAUTH_BREAK_GLASS_USED,
   QAUTH_KEY_EMERGENCY_RETIRED,
   QAUTH_TOKEN_REVOKED,
   RISC_ACCOUNT_DISABLED,
   RISC_ACCOUNT_ENABLED,
+  RISC_ACCOUNT_PURGED,
   ssfStreamVerificationRequested,
 } from '@qauth-labs/shared-events';
 import { describe, expect, it, vi } from 'vitest';
@@ -269,6 +271,7 @@ describe('the SETs of mapped event types (#540)', () => {
   const userDisabled = typeOf('user.disabled');
   const userEnabled = typeOf('user.enabled');
   const userSessionRevoked = typeOf('user.session_revoked');
+  const userDeleted = typeOf('user.deleted');
   const userPasswordReset = typeOf('user.password_reset');
   const userPasswordChanged = typeOf('user.password_changed');
   const userCredentialAdded = typeOf('user.credential_added');
@@ -281,6 +284,7 @@ describe('the SETs of mapped event types (#540)', () => {
   const apiKeyRevoked = typeOf('api_key.revoked');
   const walletLinked = typeOf('wallet.linked');
   const keyEmergencyRetired = typeOf('key.emergency_retired');
+  const adminBreakGlassUsed = typeOf('admin.break_glass_used');
   const ISSUER = 'https://auth.example.com';
   const USER = '0192a000-0000-7000-8000-0000000000b1';
   const TIME = '2026-10-30T09:30:00.900Z';
@@ -321,6 +325,11 @@ describe('the SETs of mapped event types (#540)', () => {
       category: 'admin',
       actor: { type: 'operator_cli', id: 'root' },
       data: { sid: '0192a000-0000-7000-8000-0000000000d3', reason: 'account_disabled' },
+    }),
+    // An admin's deletion of the account through the admin API (#681).
+    [userDeleted.type]: event(userDeleted.type, {
+      category: 'admin',
+      actor: { type: 'user', id: '0192a000-0000-7000-8000-0000000000a9' },
     }),
     // The owner's password reset (#642), from the client the sign-in was for.
     [userPasswordReset.type]: event(userPasswordReset.type, { client: { id: 'notes-app' } }),
@@ -388,6 +397,12 @@ describe('the SETs of mapped event types (#540)', () => {
       actor: { type: 'operator_cli', id: 'root' },
       subject: undefined,
       data: { keyId: 'kid-7', purpose: 'token_signing' },
+    }),
+    [adminBreakGlassUsed.type]: event(adminBreakGlassUsed.type, {
+      category: 'admin',
+      actor: { type: 'operator_cli', id: 'root' },
+      subject: undefined,
+      data: { command: 'enrol-admin' },
     }),
   };
 
@@ -473,6 +488,21 @@ describe('the SETs of mapped event types (#540)', () => {
         events: { [uri]: { event_timestamp: SECONDS, initiating_entity: 'admin' } },
       });
     }
+  });
+
+  it("sends an admin's deletion of an account as RISC account-purged about the user, by an admin (#681)", async () => {
+    const { outcome, claims, hasSubject } = await signed(SAMPLES[userDeleted.type]);
+    expect(outcome).toEqual({ ok: true, statusCode: 202 });
+    expect(hasSubject).toHaveBeenCalledWith(STREAM, { type: 'user', id: USER });
+    expect(claims).toEqual({
+      jti: EVENT_ID,
+      iat: SECONDS,
+      aud: 'receiver',
+      sub_id: { format: 'iss_sub', iss: ISSUER, sub: USER },
+      events: {
+        [RISC_ACCOUNT_PURGED]: { event_timestamp: SECONDS, initiating_entity: 'admin' },
+      },
+    });
   });
 
   it('sends the owner’s password reset as CAEP credential-change about the user, by the user (#642)', async () => {
@@ -682,6 +712,19 @@ describe('the SETs of mapped event types (#540)', () => {
     });
   });
 
+  it('sends a break-glass use about the realm, named by its issuer, and nothing for a realm with none', async () => {
+    const { claims } = await signed(SAMPLES[adminBreakGlassUsed.type]);
+    expect(claims).toMatchObject({
+      sub_id: { format: 'uri', uri: ISSUER },
+      events: {
+        [QAUTH_BREAK_GLASS_USED]: { command: 'enrol-admin', initiating_entity: 'admin' },
+      },
+    });
+    const noIssuer = await signed(SAMPLES[adminBreakGlassUsed.type], { issuer: null });
+    expect(noIssuer.outcome).toEqual({ ok: false, errorClass: 'event_not_offered', retry: false });
+    expect(noIssuer.requests).toHaveLength(0);
+  });
+
   // A delivery waits in the queue: held while its stream is paused, retried
   // for hours. It is sent as the stream is at the attempt, not as it was at
   // the fan-out.
@@ -719,14 +762,12 @@ describe('the SETs of mapped event types (#540)', () => {
     }
   });
 
-  it('sends a key event whatever subjects the stream has', async () => {
-    const { outcome, hasSubject } = await signed(
-      SAMPLES[keyEmergencyRetired.type],
-      {},
-      { hasSubject: false }
-    );
-    expect(outcome).toEqual({ ok: true, statusCode: 202 });
-    expect(hasSubject).not.toHaveBeenCalled();
+  it('sends a key or realm event whatever subjects the stream has', async () => {
+    for (const type of [keyEmergencyRetired.type, adminBreakGlassUsed.type]) {
+      const { outcome, hasSubject } = await signed(SAMPLES[type], {}, { hasSubject: false });
+      expect(outcome, type).toEqual({ ok: true, statusCode: 202 });
+      expect(hasSubject, type).not.toHaveBeenCalled();
+    }
   });
 
   it('sends nothing for an event without the subject its mapping names', async () => {
@@ -750,6 +791,7 @@ describe('the SETs of mapped event types (#540)', () => {
             CAEP_SESSION_REVOKED,
             CAEP_CREDENTIAL_CHANGE,
             QAUTH_KEY_EMERGENCY_RETIRED,
+            QAUTH_BREAK_GLASS_USED,
           ],
           subjects: [{ type: 'user', id: USER }],
         },
@@ -765,6 +807,7 @@ describe('the SETs of mapped event types (#540)', () => {
         tokenFamilyRevoked.type,
         apiKeyRevoked.type,
         keyEmergencyRetired.type,
+        adminBreakGlassUsed.type,
       ])
     );
     expect(listed.typeRules).toEqual({
@@ -773,6 +816,7 @@ describe('the SETs of mapped event types (#540)', () => {
       [apiKeyCreated.type]: { subjectFrom: 'client', clientId: 'receiver' },
       [apiKeyRevoked.type]: { subjectFrom: 'client', clientId: 'receiver' },
       [keyEmergencyRetired.type]: { subjectFrom: 'none' },
+      [adminBreakGlassUsed.type]: { subjectFrom: 'none' },
     });
   });
 

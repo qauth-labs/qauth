@@ -193,7 +193,9 @@ export const realmHostKindEnum = pgEnum('realm_host_kind', REALM_HOST_KINDS);
  * Decision 7, issue #448):
  *
  * - `human_admin` — an admin account, signed in with a passkey.
- * - `service_account` — an operator-realm service account (`client_credentials`).
+ * - `service_account` — an operator-realm service account (#522): a user with
+ *   no credential, signed in through its own `private_key_jwt` client with
+ *   `client_credentials`. The actor id is the account's user id.
  * - `break_glass_operator` — the break-glass CLI, run on a host that holds the
  *   database credentials and the KEK. The actor id is the operating-system user.
  * - `host_operator` — a host-side tool that is not break-glass, such as the

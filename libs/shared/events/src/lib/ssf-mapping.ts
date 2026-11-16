@@ -29,6 +29,7 @@ export const CAEP_SESSION_REVOKED = `${CAEP_EVENT_BASE}session-revoked`;
 export const CAEP_TOKEN_CLAIMS_CHANGE = `${CAEP_EVENT_BASE}token-claims-change`;
 export const CAEP_CREDENTIAL_CHANGE = `${CAEP_EVENT_BASE}credential-change`;
 export const CAEP_ASSURANCE_LEVEL_CHANGE = `${CAEP_EVENT_BASE}assurance-level-change`;
+export const RISC_ACCOUNT_PURGED = `${RISC_EVENT_BASE}account-purged`;
 export const RISC_ACCOUNT_DISABLED = `${RISC_EVENT_BASE}account-disabled`;
 export const RISC_ACCOUNT_ENABLED = `${RISC_EVENT_BASE}account-enabled`;
 
@@ -144,6 +145,13 @@ export const STANDARD_SSF_EVENTS: readonly SsfEventDefinition[] = Object.freeze<
     },
   },
   {
+    uri: RISC_ACCOUNT_PURGED,
+    name: 'account-purged',
+    definedIn: 'RISC 1.0 §2.2',
+    description: 'The account identified by the subject has been permanently deleted.',
+    members: {},
+  },
+  {
     uri: RISC_ACCOUNT_DISABLED,
     name: 'account-disabled',
     definedIn: 'RISC 1.0 §2.3',
@@ -170,6 +178,9 @@ export const QAUTH_TOKEN_REVOKED = 'urn:qauth:secevent:token-revoked:v1-rc.0';
 
 /** Emergency key retirement (ADR-019 Decision 9). */
 export const QAUTH_KEY_EMERGENCY_RETIRED = 'urn:qauth:secevent:key-emergency-retired:v1-rc.0';
+
+/** A break-glass command ran on a key-holding host (ADR-019 Decision 7, #602). */
+export const QAUTH_BREAK_GLASS_USED = 'urn:qauth:secevent:break-glass-used:v1-rc.0';
 
 /**
  * The QAuth-defined SSF events. Each identifier is versioned, and is a
@@ -202,6 +213,20 @@ export const QAUTH_SSF_EVENTS: readonly SsfEventDefinition[] = Object.freeze<Ssf
       purpose: {
         kind: 'string',
         description: 'What the key was for, such as `token_signing`.',
+      },
+    },
+  },
+  {
+    uri: QAUTH_BREAK_GLASS_USED,
+    name: 'break-glass-used',
+    definedIn: 'QAuth',
+    description:
+      "An operator ran a break-glass command on a host that holds the realm's database credentials and its key-encryption key (ADR-019 Decision 7): it acts outside the realm's two-admin rule, so every use is announced. The subject is the realm, as a `uri` identifier holding its issuer, and every stream of the realm that requested the event receives it.",
+    members: {
+      command: {
+        kind: 'string',
+        description: 'The command that ran, such as `enrol-admin` or `retire-key`.',
+        required: true,
       },
     },
   },
@@ -330,8 +355,14 @@ export function validateSsfMapping(definition: EventTypeDefinition): string[] {
     if (definition.subject !== undefined) {
       problems.push('ssf.subject "key" is for a type with no subject, as a realm key is');
     }
+  } else if (subject === 'realm') {
+    // A realm event reaches every stream of the realm, as a key event does:
+    // a type about a user or a client must never widen its delivery that way.
+    if (definition.subject !== undefined) {
+      problems.push('ssf.subject "realm" is for a type with no subject, as a realm is');
+    }
   } else if (subject !== 'subject' && subject !== 'client' && subject !== 'key') {
-    problems.push('ssf.subject must be subject, client or key');
+    problems.push('ssf.subject must be subject, client, key or realm');
   }
   if (mapping.session !== undefined) {
     // The session joins the user in a complex subject: only a user's event,
@@ -355,6 +386,11 @@ export function validateSsfMapping(definition: EventTypeDefinition): string[] {
   }
   if (subject === 'key' && mapping.clientOnly) {
     problems.push('an event about a key goes to every stream of the realm, never to one client');
+  }
+  if (subject === 'realm' && mapping.clientOnly) {
+    problems.push(
+      'an event about the realm goes to every stream of the realm, never to one client'
+    );
   }
   // A receiver may add any client of the realm as a subject: no relation is
   // checked for a client, as it is for a user. So an event about a client

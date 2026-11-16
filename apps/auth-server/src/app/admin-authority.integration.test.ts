@@ -4,6 +4,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { dpopProof, type DpopTestKey, dpopTestKey } from '../testing/admin-dpop';
 import {
+  clientAssertionFields,
+  type ClientAssertionKey,
+  clientAssertionKey,
+  clientJwks,
+} from '../testing/client-assertion';
+import {
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
@@ -58,7 +64,6 @@ import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
 const ADMIN = API_FAMILY_AUDIENCES.admin;
 const ALL_ADMIN_SCOPES = ADMIN_SCOPE_LIST.join(' ');
 const REDIRECT_URI = 'https://console.example.com/callback';
-const CLIENT_SECRET = 'admin-machine-secret-of-sufficient-length-42';
 
 function probePath(realmId: string): string {
   return `/admin/v1-rc.0/realms/${realmId}/probe`;
@@ -482,13 +487,30 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
   });
 
   describe('the token endpoint', () => {
+    /**
+     * The key the admin console and the machine client sign their
+     * assertions with: only a `private_key_jwt` client may hold the admin
+     * API's audience (#522).
+     */
+    let consoleKey: ClientAssertionKey;
+
+    beforeAll(async () => {
+      consoleKey = await clientAssertionKey();
+    });
+
+    /** The members that authenticate `clientId` with an assertion of {@link consoleKey}. */
+    async function authenticatedAs(clientId: string) {
+      return clientAssertionFields(consoleKey, clientId, (await defaultTokenRealm()).issuer);
+    }
+
     async function adminConsole(userId: string): Promise<string> {
       const realm = await defaultRealmId();
       const client = await app().repositories.oauthClients.create({
         realmId: realm,
         clientId: 'admin-console',
-        clientSecretHash: 'unused-public-client',
-        tokenEndpointAuthMethod: 'none',
+        clientSecretHash: 'unused-private-key-jwt-client',
+        tokenEndpointAuthMethod: 'private_key_jwt',
+        jwks: clientJwks(consoleKey),
         name: 'Admin console',
         redirectUris: [REDIRECT_URI],
         scopes: ['openid', ...ADMIN_SCOPE_LIST],
@@ -559,7 +581,7 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       });
     }
 
-    function redeem(code: { code: string; verifier: string }, key?: DpopTestKey) {
+    async function redeem(code: { code: string; verifier: string }, key?: DpopTestKey) {
       return tokenRequest(
         {
           grant_type: 'authorization_code',
@@ -567,6 +589,7 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
           redirect_uri: REDIRECT_URI,
           client_id: 'admin-console',
           code_verifier: code.verifier,
+          ...(await authenticatedAs('admin-console')),
         },
         key
       );
@@ -603,12 +626,13 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       // The grant is revoked: the refresh is refused, and the refresh token is
       // left as it was.
       await app().repositories.adminGrants.revoke(await defaultRealmId(), viewer.id);
-      const refresh = () =>
+      const refresh = async () =>
         tokenRequest(
           {
             grant_type: 'refresh_token',
             refresh_token: body.refresh_token,
             client_id: 'admin-console',
+            ...(await authenticatedAs('admin-console')),
           },
           key
         );
@@ -705,8 +729,9 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       const client = await app().repositories.oauthClients.create({
         realmId: realm,
         clientId: 'admin-console',
-        clientSecretHash: await app().passwordHasher.hashPassword(CLIENT_SECRET),
-        tokenEndpointAuthMethod: 'client_secret_post',
+        clientSecretHash: 'unused-private-key-jwt-client',
+        tokenEndpointAuthMethod: 'private_key_jwt',
+        jwks: clientJwks(consoleKey),
         name: 'Admin console',
         redirectUris: [REDIRECT_URI],
         scopes: ['openid', ...ADMIN_SCOPE_LIST],
@@ -732,20 +757,20 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
           code: code.code,
           redirect_uri: REDIRECT_URI,
           client_id: 'admin-console',
-          client_secret: CLIENT_SECRET,
           code_verifier: code.verifier,
+          ...(await authenticatedAs('admin-console')),
         },
         key
       );
       expect(issued.statusCode).toBe(200);
       const { refresh_token: refreshToken } = issued.json<{ refresh_token: string }>();
-      const refresh = (proofKey?: DpopTestKey) =>
+      const refresh = async (proofKey?: DpopTestKey) =>
         tokenRequest(
           {
             grant_type: 'refresh_token',
             refresh_token: refreshToken,
             client_id: 'admin-console',
-            client_secret: CLIENT_SECRET,
+            ...(await authenticatedAs('admin-console')),
           },
           proofKey
         );
@@ -767,12 +792,15 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       ).toMatchObject({ aud: ADMIN, cnf: { jkt: key.thumbprint } });
     });
 
+    // A client that may hold the admin audience (private_key_jwt, #522) but
+    // is no service account's: its client_credentials token names no account.
     it('gives a client_credentials token neither the admin audience nor an admin scope', async () => {
       await app().repositories.oauthClients.create({
         realmId: await defaultRealmId(),
         clientId: 'admin-machine',
-        clientSecretHash: await app().passwordHasher.hashPassword(CLIENT_SECRET),
-        tokenEndpointAuthMethod: 'client_secret_post',
+        clientSecretHash: 'unused-private-key-jwt-client',
+        tokenEndpointAuthMethod: 'private_key_jwt',
+        jwks: clientJwks(consoleKey),
         name: 'admin-machine',
         redirectUris: [],
         grantTypes: ['client_credentials'],
@@ -780,11 +808,11 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
         audience: [ADMIN, 'https://api.example.com'],
         enabled: true,
       });
-      const machine = (form: Record<string, string>) =>
+      const machine = async (form: Record<string, string>) =>
         tokenRequest({
           grant_type: 'client_credentials',
           client_id: 'admin-machine',
-          client_secret: CLIENT_SECRET,
+          ...(await authenticatedAs('admin-machine')),
           ...form,
         });
 

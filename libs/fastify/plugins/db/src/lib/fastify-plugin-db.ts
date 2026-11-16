@@ -1,6 +1,7 @@
 import {
   type AdminApprovalsRepository,
   type AdminAuditLogRepository,
+  type AdminEnrolmentsRepository,
   type AdminGrantsRepository,
   type AdminRolesRepository,
   type ApiKeysRepository,
@@ -8,6 +9,7 @@ import {
   type BackchannelLogoutClientsRepository,
   createAdminApprovalsRepository,
   createAdminAuditLogRepository,
+  createAdminEnrolmentsRepository,
   createAdminGrantsRepository,
   createAdminRolesRepository,
   createApiKeysRepository,
@@ -30,6 +32,7 @@ import {
   createRealmsRepository,
   createRealmUpstreamProvidersRepository,
   createRefreshTokensRepository,
+  createServiceAccountsRepository,
   createSessionsRepository,
   createSsfStreamsRepository,
   createUserAttributesRepository,
@@ -55,6 +58,7 @@ import {
   type RealmsRepository,
   type RealmUpstreamProvidersRepository,
   type RefreshTokensRepository,
+  type ServiceAccountsRepository,
   type SessionsRepository,
   type SsfStreamsRepository,
   type UserAttributesRepository,
@@ -165,6 +169,13 @@ declare module 'fastify' {
        */
       adminAuditLog: AdminAuditLogRepository;
       /**
+       * One-time admin enrolments (ADR-019 Decision 7, #602): the break-glass
+       * command `enrol-admin` issues one per admin account it creates, and the
+       * enrolment step of the Interaction API (#621) redeems its token once.
+       * It holds token hashes only.
+       */
+      adminEnrolments: AdminEnrolmentsRepository;
+      /**
        * Approval requests for security operations (ADR-019 Decision 7,
        * #512): the admin API files, reads and cancels them, the approval
        * engine records each approval, and the admin pipeline consumes one in
@@ -213,6 +224,13 @@ declare module 'fastify' {
        * them (authorize, the consent step, the code and refresh grants).
        */
       protectedResources: ProtectedResourcesRepository;
+      /**
+       * The service accounts of the admin API (ADR-019 Decision 7, #522):
+       * the token endpoint reads a client's for every `client_credentials`
+       * request, and the admin API reads a caller's on every call. No
+       * service role writes it.
+       */
+      serviceAccounts: ServiceAccountsRepository;
     };
   }
 }
@@ -250,6 +268,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   adminRoles: true,
   adminGrants: true,
   adminAuditLog: true,
+  adminEnrolments: true,
   adminApprovals: true,
   realmPublicKeys: true,
   realmSecrets: true,
@@ -257,6 +276,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   realmUpstreamProviders: true,
   deploymentNodes: true,
   protectedResources: true,
+  serviceAccounts: true,
 };
 
 /** Every repository the plugin can build, in the order of the type above. */
@@ -360,6 +380,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       adminGrants: () =>
         createAdminGrantsRepository(database.db, { catalog: options.adminRoleCatalog }),
       adminAuditLog: () => createAdminAuditLogRepository(database.db),
+      adminEnrolments: () => createAdminEnrolmentsRepository(database.db),
       adminApprovals: () => createAdminApprovalsRepository(database.db),
       realmPublicKeys: () => createRealmPublicKeysRepository(database.db),
       realmSecrets: () => createRealmSecretsRepository(database.db),
@@ -367,6 +388,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       realmUpstreamProviders: () => createRealmUpstreamProvidersRepository(database.db),
       deploymentNodes: () => createDeploymentNodesRepository(database.db),
       protectedResources: () => createProtectedResourcesRepository(database.db),
+      serviceAccounts: () => createServiceAccountsRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};
     for (const name of options.repositories ?? REPOSITORY_NAMES) {

@@ -131,7 +131,8 @@ export function parseKeysRetireArguments(
  * audit log and announced by a critical security event.
  */
 export function hostKeyRetirementApproval(
-  operatingSystemUser: string
+  operatingSystemUser: string,
+  onConsume?: (operationDigest: Buffer, tx: AuditTransaction) => Promise<void>
 ): RetireKeyNowInput['approval'] {
   let used = false;
   return Object.freeze({
@@ -139,11 +140,40 @@ export function hostKeyRetirementApproval(
     operation: KEY_RETIRE_OPERATION,
     requester: Object.freeze({ kind: 'break_glass' as const, operatingSystemUser }),
     nonce: newOperationNonce(),
-    async consume(): Promise<void> {
+    async consume(digest: Buffer, tx: unknown): Promise<void> {
       if (used) throw new OperationApprovalError('refused', 'A host approval is used once');
       used = true;
+      // The key library consumes the approval inside the retirement's
+      // transaction, after its reads and before its first change: what the
+      // hook writes commits with the change, or neither does.
+      await onConsume?.(Buffer.from(digest), tx as AuditTransaction);
     },
   });
+}
+
+/** The transaction the admin audit log and the event log write in. */
+export type AuditTransaction = Parameters<
+  FastifyInstance['repositories']['adminAuditLog']['appendAdminAudit']
+>[0];
+
+/**
+ * What a run writes before it changes anything, in the transaction of the
+ * change (the break-glass CLI's record of its run, #602): called once the
+ * key is found and before it is marked compromised, or, for a key
+ * compromised already, before the run is recorded again. A failure aborts
+ * the run with nothing changed.
+ */
+export type KeysRetireRecordUse = (
+  tx: AuditTransaction,
+  use: { readonly realmId: string; readonly kid: string; readonly operationDigest: Buffer }
+) => Promise<void>;
+
+/** How the command is run: by itself, or as the break-glass CLI's `retire-key`. */
+export interface KeysRetireOptions {
+  /** The command's name, as its messages name it. Default: `keys:retire`. */
+  readonly command?: string;
+  /** Writes the run's own record first ({@link KeysRetireRecordUse}). */
+  readonly recordUse?: KeysRetireRecordUse;
 }
 
 /** What the command reads and writes, besides its arguments. */
@@ -157,8 +187,14 @@ export interface KeysRetireDependencies {
     realmId: string,
     kid: string
   ) => Promise<CompromisedKey | undefined>;
-  /** Record a run for a key compromised already: its audit row and event, in one transaction. */
-  readonly recordRepeat: (repeat: KeyRetirementRepeat) => Promise<void>;
+  /**
+   * Record a run for a key compromised already: its audit row and event, in
+   * one transaction, which `before` writes in first when given.
+   */
+  readonly recordRepeat: (
+    repeat: KeyRetirementRepeat,
+    before?: (tx: AuditTransaction) => Promise<void>
+  ) => Promise<void>;
   /** `sessionService.revokeAllForRealm` of this host. */
   readonly sessions: Parameters<typeof revokeSessionsOfRetiredKey>[0];
   /** The user the command runs as, as the operating system names it. */
@@ -236,14 +272,15 @@ export function keysRetireDependencies(
         input
       ),
     findCompromisedKey: (realmId, kid) => compromisedKeyOf(host.db, realmId, kid),
-    recordRepeat: (repeat) =>
+    recordRepeat: (repeat, before) =>
       recordKeyRetirementRepeat(
         {
           transaction: (run) => host.db.transaction(run),
           events: host.repositories.events,
           adminAuditLog: host.repositories.adminAuditLog,
         },
-        repeat
+        repeat,
+        before
       ),
     sessions: host.sessionService,
     operatingSystemUser: settings.operatingSystemUser,
@@ -303,8 +340,10 @@ export function formatKeyRetirement(outcome: Omit<KeyRetirementOutcome, 'session
 export async function runKeysRetire(
   argv: readonly string[],
   defaultRealmName: string,
-  deps: KeysRetireDependencies
+  deps: KeysRetireDependencies,
+  options: KeysRetireOptions = {}
 ): Promise<number> {
+  const name = options.command ?? 'keys:retire';
   let command: KeysRetireCommand;
   try {
     command = parseKeysRetireArguments(argv, defaultRealmName);
@@ -316,27 +355,33 @@ export async function runKeysRetire(
 
   const realmId = await deps.realmIdOf(command.realmName);
   if (realmId === undefined) {
-    deps.err(`keys:retire: no realm is named '${command.realmName}'.`);
+    deps.err(`${name}: no realm is named '${command.realmName}'.`);
     return 1;
   }
   const operatingSystemUser = deps.operatingSystemUser();
   const actor = Object.freeze({ kind: 'break_glass' as const, operatingSystemUser });
 
   try {
+    const { recordUse } = options;
     const outcome = await deps.retireKeyNow({
       realmId,
       kid: command.kid,
-      approval: hostKeyRetirementApproval(operatingSystemUser),
+      approval: hostKeyRetirementApproval(
+        operatingSystemUser,
+        recordUse === undefined
+          ? undefined
+          : (operationDigest, tx) => recordUse(tx, { realmId, kid: command.kid, operationDigest })
+      ),
     });
     for (const line of formatKeyRetirement(outcome)) deps.out(line);
     deps.out(`Ended ${outcome.sessions.ended} browser sessions of the realm.`);
     return 0;
   } catch (error) {
     if (error instanceof KeyChangeRefusedError && error.reason === 'ALREADY_COMPROMISED') {
-      return endSessionsAgain(deps, realmId, command.kid, actor);
+      return endSessionsAgain(deps, realmId, command.kid, actor, { ...options, command: name });
     }
     if (isRefusal(error)) {
-      deps.err(`keys:retire: ${sentence(describeKeysRetireError(error))} Nothing was changed.`);
+      deps.err(`${name}: ${sentence(describeKeysRetireError(error))} Nothing was changed.`);
       return 1;
     }
     // Retired or not depends on where it failed: a failure before the commit
@@ -347,19 +392,19 @@ export async function runKeysRetire(
     } catch (lookupError) {
       // The database may have gone after the commit: the key may be retired.
       deps.err(
-        `keys:retire: ${sentence(describeKeysRetireError(error))} Whether the key was retired ` +
-          `cannot be read: ${sentence(describeKeysRetireError(lookupError))} Run keys:retire ` +
+        `${name}: ${sentence(describeKeysRetireError(error))} Whether the key was retired ` +
+          `cannot be read: ${sentence(describeKeysRetireError(lookupError))} Run ${name} ` +
           'again for the same kid once the database answers.'
       );
       return KEYS_RETIRE_SESSIONS_LEFT;
     }
     if (retired === undefined) {
-      deps.err(`keys:retire: ${sentence(describeKeysRetireError(error))} Nothing was changed.`);
+      deps.err(`${name}: ${sentence(describeKeysRetireError(error))} Nothing was changed.`);
       return 1;
     }
     deps.err(
-      `keys:retire: the key is retired, but ending the realm's sessions failed: ` +
-        `${sentence(describeKeysRetireError(error))} Run keys:retire again for the same kid to end them.`
+      `${name}: the key is retired, but ending the realm's sessions failed: ` +
+        `${sentence(describeKeysRetireError(error))} Run ${name} again for the same kid to end them.`
     );
     return KEYS_RETIRE_SESSIONS_LEFT;
   }
@@ -373,30 +418,38 @@ async function endSessionsAgain(
   deps: KeysRetireDependencies,
   realmId: string,
   kid: string,
-  actor: { readonly kind: 'break_glass'; readonly operatingSystemUser: string }
+  actor: { readonly kind: 'break_glass'; readonly operatingSystemUser: string },
+  options: KeysRetireOptions & { readonly command: string }
 ): Promise<number> {
+  const name = options.command;
   const key = await deps.findCompromisedKey(realmId, kid);
   if (key === undefined) {
-    deps.err('keys:retire: the key is no longer compromised; nothing was changed.');
+    deps.err(`${name}: the key is no longer compromised; nothing was changed.`);
     return 1;
   }
   const approval = hostKeyRetirementApproval(actor.operatingSystemUser);
   const digest = operationDigest(
     keyRetirementOperation({ realmId, kid, requester: actor, nonce: approval.nonce })
   );
+  const { recordUse } = options;
   try {
-    await deps.recordRepeat({
-      realmId,
-      kid,
-      algorithm: key.algorithm,
-      actor,
-      approvalId: approval.id,
-      operationDigest: Buffer.from(digest),
-      signedSince: key.signedSince,
-    });
+    await deps.recordRepeat(
+      {
+        realmId,
+        kid,
+        algorithm: key.algorithm,
+        actor,
+        approvalId: approval.id,
+        operationDigest: Buffer.from(digest),
+        signedSince: key.signedSince,
+      },
+      recordUse === undefined
+        ? undefined
+        : (tx) => recordUse(tx, { realmId, kid, operationDigest: Buffer.from(digest) })
+    );
   } catch (error) {
     deps.err(
-      `keys:retire: the run could not be recorded: ${sentence(describeKeysRetireError(error))} ` +
+      `${name}: the run could not be recorded: ${sentence(describeKeysRetireError(error))} ` +
         'Nothing was changed.'
     );
     return 1;
@@ -421,8 +474,8 @@ async function endSessionsAgain(
     return 0;
   } catch (error) {
     deps.err(
-      `keys:retire: ending the realm's sessions failed: ${sentence(describeKeysRetireError(error))} ` +
-        'Run keys:retire again for the same kid.'
+      `${name}: ending the realm's sessions failed: ${sentence(describeKeysRetireError(error))} ` +
+        `Run ${name} again for the same kid.`
     );
     return KEYS_RETIRE_SESSIONS_LEFT;
   }

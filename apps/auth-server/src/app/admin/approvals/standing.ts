@@ -33,13 +33,13 @@ export interface ApprovalAccount {
 }
 
 /**
- * The account of an admin API caller. The admin family's guard admits only a
- * user as the subject, an admin account: service accounts arrive with #522.
+ * The account of an admin API caller: a person's admin account, or a service
+ * account's (#522), as the authority stage found it.
  */
 export function callerAccount(
-  caller: Pick<AdminCaller, 'issuerRealm' | 'userId'>
+  caller: Pick<AdminCaller, 'issuerRealm' | 'userId' | 'kind'>
 ): ApprovalAccount {
-  return { realmId: caller.issuerRealm.id, accountId: caller.userId, kind: 'human' };
+  return { realmId: caller.issuerRealm.id, accountId: caller.userId, kind: caller.kind };
 }
 
 /** The parts of a stored approval its standings are read from. */

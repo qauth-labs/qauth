@@ -13,12 +13,19 @@ export type NewUser = InferInsertModel<typeof users>;
  * What an update may change. Not `notValidBefore`: the triggers of migration
  * 0044 set it when the account is disabled (#748), and no caller writes it.
  * Nor an operator's verification (#1052): only
- * {@link UsersRepository.recordOperatorVerification} records it.
+ * {@link UsersRepository.recordOperatorVerification} records it. Nor whether
+ * the account is a service account's (#522), which never changes.
  */
 export type UpdateUser = Partial<
   Omit<
     NewUser,
-    'id' | 'createdAt' | 'realmId' | 'notValidBefore' | 'operatorVerifiedAt' | 'operatorVerifiedBy'
+    | 'id'
+    | 'createdAt'
+    | 'realmId'
+    | 'notValidBefore'
+    | 'operatorVerifiedAt'
+    | 'operatorVerifiedBy'
+    | 'isServiceAccount'
   >
 > & {
   updatedAt?: number;
@@ -113,6 +120,32 @@ export interface UsersRepository extends Omit<
     operatorAccountId: string,
     tx?: DbClient
   ): Promise<RecordedOperatorVerification | undefined>;
+  /**
+   * Lock the account `id` of the realm `FOR UPDATE` in `tx`, for its deletion
+   * (`users.delete`, #681), through `users_lock_for_deletion` (migration
+   * 0080): the admin role that deletes holds no `UPDATE` on `users`, which a
+   * locking clause needs. Until `tx` ends nothing adds a row that refers to
+   * the account (a session, a token, a credential, an admin grant), since
+   * their foreign keys wait for the lock, so what the deletion's cascade
+   * removes is what the caller saw after the lock.
+   *
+   * @returns whether the realm holds the account: `false` for an unknown id,
+   *   a malformed one and another realm's account alike
+   */
+  lockForDeletion(realmId: string, id: string, tx: DbClient): Promise<boolean>;
+  /**
+   * Delete the account `id` of the realm and, through the schema's cascades,
+   * everything that hangs off it, through `users_delete_account` (migration
+   * 0080), so that no role deletes an account through a table grant. The
+   * function deletes nothing for a service account's account or one that
+   * holds an admin grant not revoked, whoever calls it. Call it after
+   * {@link lockForDeletion} in the same transaction, once the account's
+   * sessions are ended: the cascade removes their rows, and with them what a
+   * later revocation would notify.
+   *
+   * @returns whether it deleted the account
+   */
+  deleteAccount(realmId: string, id: string, tx: DbClient): Promise<boolean>;
 }
 
 /** The verification {@link UsersRepository.recordOperatorVerification} wrote. */
@@ -286,6 +319,22 @@ export function createUsersRepository(defaultDb: DbClient): UsersRepository {
         operatorVerifiedAt: Number(row.operator_verified_at),
         operatorVerifiedBy: row.operator_verified_by,
       };
+    },
+
+    async lockForDeletion(realmId: string, id: string, tx: DbClient): Promise<boolean> {
+      if (!isUserIdShape(id)) return false;
+      const { rows } = await tx.execute<{ id: string }>(
+        sql`select "id" from "users_lock_for_deletion"(${realmId}::uuid, ${id}::uuid)`
+      );
+      return rows.length > 0;
+    },
+
+    async deleteAccount(realmId: string, id: string, tx: DbClient): Promise<boolean> {
+      if (!isUserIdShape(id)) return false;
+      const { rows } = await tx.execute<{ id: string }>(
+        sql`select "id" from "users_delete_account"(${realmId}::uuid, ${id}::uuid)`
+      );
+      return rows.length > 0;
     },
 
     /**

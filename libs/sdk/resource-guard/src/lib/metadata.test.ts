@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ResourceGuard } from './core';
 import {
   buildProtectedResourceMetadata,
   metadataPathForResource,
@@ -102,5 +103,77 @@ describe('metadataUrlForResource', () => {
     expect(metadataUrlForResource('https://host.example.com/mcp/memory')).toBe(
       'https://host.example.com/.well-known/oauth-protected-resource/mcp/memory'
     );
+  });
+});
+
+// #1088 — without `scopesSupported`, the guard's document is the one 0.2.2
+// serves, byte for byte: `requiredScopes` as given (a repeated entry repeated,
+// as 0.2.2 lists it), `offline_access` left out, and no `scopes_supported`
+// key when nothing is left to list.
+describe('ResourceGuard.getProtectedResourceMetadata without scopesSupported (as 0.2.2)', () => {
+  const RESOURCE = 'https://mcp.example.com';
+  const ISSUER = 'https://auth.example.com';
+  const BASE = `"resource":"${RESOURCE}","authorization_servers":["${ISSUER}"],"bearer_methods_supported":["header"]`;
+
+  it.each([
+    [undefined, `{${BASE}}`],
+    [[], `{${BASE}}`],
+    [['offline_access'], `{${BASE}}`],
+    [['mcp:read'], `{${BASE},"scopes_supported":["mcp:read"]}`],
+    [
+      ['mcp:read', 'offline_access', 'mcp:write', 'mcp:read'],
+      `{${BASE},"scopes_supported":["mcp:read","mcp:write","mcp:read"]}`,
+    ],
+  ])('requiredScopes %j', (requiredScopes, document) => {
+    const guard = new ResourceGuard({
+      resource: RESOURCE,
+      authorizationServer: ISSUER,
+      ...(requiredScopes ? { requiredScopes } : {}),
+    });
+    expect(JSON.stringify(guard.getProtectedResourceMetadata())).toBe(document);
+  });
+});
+
+// #1088 — with `scopesSupported`, the guard's document is the one a host
+// would otherwise build itself with `buildProtectedResourceMetadata`.
+describe('ResourceGuard.getProtectedResourceMetadata with scopesSupported', () => {
+  const RESOURCE = 'https://mcp.example.com';
+  const ISSUER = 'https://auth.example.com';
+  const TOOL_SCOPES = ['notes:read', 'notes:write', 'notes:delete'];
+
+  const guard = (config: { requiredScopes?: string[]; scopesSupported?: string[] }) =>
+    new ResourceGuard({ resource: RESOURCE, authorizationServer: ISSUER, ...config });
+
+  it('lists every supported scope, as buildProtectedResourceMetadata does', () => {
+    expect(guard({ scopesSupported: TOOL_SCOPES }).getProtectedResourceMetadata()).toEqual(
+      buildProtectedResourceMetadata({
+        resource: RESOURCE,
+        authorizationServer: ISSUER,
+        scopesSupported: TOOL_SCOPES,
+      })
+    );
+  });
+
+  it('lists scopesSupported, not requiredScopes alone', () => {
+    const doc = guard({
+      requiredScopes: ['notes:read'],
+      scopesSupported: TOOL_SCOPES,
+    }).getProtectedResourceMetadata();
+    expect(doc.scopes_supported).toEqual(TOOL_SCOPES);
+  });
+
+  it('omits scopes_supported when nothing is left to advertise', () => {
+    expect(guard({ scopesSupported: [] }).getProtectedResourceMetadata()).not.toHaveProperty(
+      'scopes_supported'
+    );
+    expect(
+      guard({ scopesSupported: ['offline_access'] }).getProtectedResourceMetadata()
+    ).not.toHaveProperty('scopes_supported');
+  });
+
+  it('returns a copy whose scopes a caller cannot change', () => {
+    const perTool = guard({ scopesSupported: TOOL_SCOPES });
+    perTool.getProtectedResourceMetadata().scopes_supported?.push('notes:admin');
+    expect(perTool.getProtectedResourceMetadata().scopes_supported).toEqual(TOOL_SCOPES);
   });
 });
