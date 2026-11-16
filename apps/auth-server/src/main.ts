@@ -255,7 +255,10 @@ async function start() {
     // hardened deployment. The spec is still registered (so routes are
     // discoverable for the Zod type provider) even when the UI is off — the
     // gate only suppresses the `/docs` route. Only a process holding `api`
-    // serves `/docs` (#495): the UI registers outside the route manifest.
+    // serves `/docs` (#495): the UI registers outside the route manifest. The
+    // API documents the docs site publishes too, the Interaction API's and
+    // each family's `<prefix>/openapi.json` (#525), are served whatever the
+    // flag says (`routes/interaction-document.ts`, `routes/family-documents.ts`).
     await server.register(errorHandler);
     await server.register(swagger, openapiOptions);
     if (servesApiDocs(env.SERVICE_ROLES, env.ENABLE_SWAGGER)) {

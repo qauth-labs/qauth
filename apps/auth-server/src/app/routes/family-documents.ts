@@ -19,7 +19,8 @@ import {
  * switch is off is not in it (ADR-018 §5). It is built once, on the first
  * call, after every route is registered. Unauthenticated and cacheable, like
  * the Interaction API's document: it describes routes and holds no realm
- * data. It is not an operation of the family it describes, so it is in no
+ * data, and the docs site publishes the same document, so it is served
+ * whatever ENABLE_SWAGGER says (that flag gates only the Swagger UI). It is not an operation of the family it describes, so it is in no
  * document itself.
  *
  * A process that registered no OpenAPI collector (`@fastify/swagger`, which
