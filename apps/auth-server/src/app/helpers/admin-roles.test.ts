@@ -14,6 +14,7 @@ import {
   builtInRolesOf,
   effectivePermissions,
   isBuiltInRoleName,
+  UNATTENDED_OPERATION_IDS,
   validateCustomRole,
 } from './admin-roles';
 import { PERMISSION_CLASSES, type PermissionClass } from './admin-scopes';
@@ -21,9 +22,36 @@ import { PERMISSION_CLASSES, type PermissionClass } from './admin-scopes';
 const ids = (permissions: readonly AdminPermission[]) => permissions.map(({ id }) => id);
 
 describe('built-in roles (#507)', () => {
-  it('are viewer, editor and security-admin', () => {
-    expect(BUILT_IN_ROLE_NAMES).toEqual(['viewer', 'editor', 'security-admin']);
-    expect(Object.keys(BUILT_IN_ROLES)).toEqual(['viewer', 'editor', 'security-admin']);
+  it('are viewer, editor, security-admin and account-closer', () => {
+    const names = ['viewer', 'editor', 'security-admin', 'account-closer'];
+    expect(BUILT_IN_ROLE_NAMES).toEqual(names);
+    expect(Object.keys(BUILT_IN_ROLES)).toEqual(names);
+  });
+
+  // #1090: a relying party's service account deletes the accounts it closed.
+  it('account-closer holds users.delete alone, and is the one role with an unattended operation', () => {
+    expect(BUILT_IN_ROLES['account-closer']).toMatchObject({
+      classes: [],
+      permissionIds: ['users.delete'],
+      unattendedOperations: ['users.delete'],
+    });
+    expect(UNATTENDED_OPERATION_IDS).toEqual(['users.delete']);
+    for (const name of ['viewer', 'editor', 'security-admin'] as const) {
+      expect(BUILT_IN_ROLES[name].unattendedOperations, name).toEqual([]);
+    }
+  });
+
+  it('account-closer follows the catalog too: a retired users.delete leaves it', () => {
+    const registry = createPermissionRegistry([
+      definePermission({
+        id: 'users.delete',
+        class: 'security',
+        resource: 'users',
+        description: 'Delete.',
+        retiredIn: 'v0.9.0',
+      }),
+    ]);
+    expect(builtInRolesOf(registry)['account-closer'].permissionIds).toEqual([]);
   });
 
   it('viewer holds every read permission and nothing else', () => {
@@ -93,6 +121,7 @@ describe('built-in roles (#507)', () => {
       expect(Object.isFrozen(role)).toBe(true);
       expect(Object.isFrozen(role.permissionIds)).toBe(true);
       expect(Object.isFrozen(role.classes)).toBe(true);
+      expect(Object.isFrozen(role.unattendedOperations)).toBe(true);
     }
     expect(() => {
       (BUILT_IN_ROLES.viewer.permissionIds as string[]).push('realms.policies.security');
@@ -107,6 +136,8 @@ describe('built-in roles (#507)', () => {
     expect(isBuiltInRoleName('viewer')).toBe(true);
     expect(isBuiltInRoleName('editor')).toBe(true);
     expect(isBuiltInRoleName('security-admin')).toBe(true);
+    expect(isBuiltInRoleName('account-closer')).toBe(true);
+    expect(isBuiltInRoleName('Account Closer')).toBe(true);
     expect(isBuiltInRoleName('auditor')).toBe(false);
   });
 

@@ -134,15 +134,15 @@ states:
       - guard: roleLacksPermission
         target: forbidden.no_permission
         say: 'the role lacks the permission: no token would pass, and the challenge names no scope'
-        source: apps/auth-server/src/app/admin/pipeline.ts:558
+        source: apps/auth-server/src/app/admin/pipeline.ts:562
       - guard: scopeLacksSecurity
         target: insufficient_scope.no_security_scope
         say: 'only the token withholds the permission: qauth:admin:write is refused'
-        source: apps/auth-server/src/app/admin/pipeline.ts:558
+        source: apps/auth-server/src/app/admin/pipeline.ts:562
       - guard: noApproval
         target: approval_required.no_approval
         say: 'no approval for exactly this request: the operation never runs'
-        source: apps/auth-server/src/app/admin/pipeline.ts:620
+        source: apps/auth-server/src/app/admin/pipeline.ts:624
       - target: enabling
         say: 'the caller holds the permission and the approval, which the handler transaction consumes'
 
@@ -193,15 +193,15 @@ states:
       - guard: roleLacksPermission
         target: forbidden.no_permission
         say: 'the role lacks the permission'
-        source: apps/auth-server/src/app/admin/pipeline.ts:558
+        source: apps/auth-server/src/app/admin/pipeline.ts:562
       - guard: scopeLacksSecurity
         target: insufficient_scope.no_security_scope
         say: 'only the token withholds the permission'
-        source: apps/auth-server/src/app/admin/pipeline.ts:558
+        source: apps/auth-server/src/app/admin/pipeline.ts:562
       - guard: noApproval
         target: approval_required.no_approval
         say: 'no approval for exactly this request'
-        source: apps/auth-server/src/app/admin/pipeline.ts:620
+        source: apps/auth-server/src/app/admin/pipeline.ts:624
       - target: disabling
         say: 'the caller holds the permission and the approval'
 
@@ -270,7 +270,7 @@ states:
   forbidden.no_permission:
     type: final
     title: Refuse a caller whose role lacks the permission
-    source: apps/auth-server/src/app/admin/pipeline.ts:558
+    source: apps/auth-server/src/app/admin/pipeline.ts:562
     response:
       status: 403
       body:
@@ -281,7 +281,7 @@ states:
   insufficient_scope.no_security_scope:
     type: final
     title: Refuse a token without qauth:admin:security, naming the scope
-    source: apps/auth-server/src/app/admin/pipeline.ts:558
+    source: apps/auth-server/src/app/admin/pipeline.ts:562
     response:
       status: 403
       headers:
@@ -294,7 +294,7 @@ states:
   approval_required.no_approval:
     type: final
     title: Refuse a security operation without its approval
-    source: apps/auth-server/src/app/admin/pipeline.ts:620
+    source: apps/auth-server/src/app/admin/pipeline.ts:624
     response:
       status: 403
       body:
@@ -359,7 +359,7 @@ assertions:
   - id: no-enable-without-approval
     never: 'enabled and noApproval'
     say: 'A plugin is turned on only by a request an approval was given for'
-    source: apps/auth-server/src/app/admin/pipeline.ts:620
+    source: apps/auth-server/src/app/admin/pipeline.ts:624
   - id: no-enable-of-another-plugins-state
     never: 'enabled and stateOfAnotherPlugin'
     say: 'A plugin is never turned on over a realm state another package, or another type, wrote'

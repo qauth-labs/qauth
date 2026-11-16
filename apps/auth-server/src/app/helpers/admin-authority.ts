@@ -38,6 +38,7 @@ import {
   BUILT_IN_ROLES,
   type BuiltInRoleName,
   effectivePermissions,
+  UNATTENDED_OPERATION_IDS,
 } from './admin-roles';
 import { ADMIN_SCOPE_LIST } from './admin-scopes';
 import type { IssuerResolver } from './family-token';
@@ -225,6 +226,17 @@ export type AdminAuthority =
       readonly rolePermissions: ReadonlySet<string>;
       /** The grants that matched, in the order they were created. */
       readonly grantIds: readonly string[];
+      /**
+       * The operations the caller runs on the target realm with no approval
+       * (ADR-019 Decision 7, amended 2026-11-16; #1090): those the built-in
+       * roles of its grants on exactly that realm let a service account run
+       * ({@link unattendedOperationsOf}). Empty for a person, for a service
+       * account whose client registered itself, and for a grant on every
+       * realm. Absent reads as empty. The approval gate decides with it
+       * (`admin/approvals/unattended.ts`), and the two-admin rule still
+       * applies.
+       */
+      readonly unattendedOperations?: ReadonlySet<string>;
     }
   | { readonly allowed: false; readonly refusal: AdminAuthorityRefusal };
 
@@ -239,6 +251,32 @@ export function grantedPermissionIds(live: LiveAdminGrant): readonly string[] {
       : [];
   }
   return live.role?.permissionIds ?? [];
+}
+
+/**
+ * The operations a service account's live grants let it run on the realm
+ * `targetRealmId` with no approval (#1090): the `unattendedOperations` of
+ * each built-in role granted on exactly that realm, out of the grants that
+ * cover it. A grant on every realm lets it run none: the grant that does is
+ * one service account's on one realm, as the operator gave it. Only
+ * operations of {@link UNATTENDED_OPERATION_IDS} count, whatever a role lists.
+ */
+export function unattendedOperationsOf(
+  matching: readonly LiveAdminGrant[],
+  targetRealmId: string
+): ReadonlySet<string> {
+  const unattended = new Set<string>();
+  for (const live of matching) {
+    const name = live.grant.builtInRole;
+    if (name === null || live.grant.targetRealmId !== targetRealmId) continue;
+    if (!(BUILT_IN_ROLE_NAMES as readonly string[]).includes(name)) continue;
+    for (const operationId of BUILT_IN_ROLES[name as BuiltInRoleName].unattendedOperations) {
+      if ((UNATTENDED_OPERATION_IDS as readonly string[]).includes(operationId)) {
+        unattended.add(operationId);
+      }
+    }
+  }
+  return unattended;
 }
 
 /**
@@ -302,6 +340,9 @@ export function grantCoversRealm(
  *    own, with a live grant on it. The operator realm is never its target.
  * 5. The permissions of the matching grants, intersected with the token's
  *    scopes, are the effective permissions.
+ * 6. A service account's grant of a built-in role that lets it run an
+ *    operation unattended, on exactly the requested realm, names that
+ *    operation in `unattendedOperations` (#1090).
  *
  * A realm outside the grants, and a realm that does not exist, are both
  * `realm_not_found` (404, never 403): the answer does not confirm the realm
@@ -378,6 +419,12 @@ export async function resolveAdminAuthority(
     permissions: effectivePermissions(granted, request.scopes ?? [], registry),
     rolePermissions: effectivePermissions(granted, ADMIN_SCOPE_LIST, registry),
     grantIds: matching.map((grant) => grant.grant.id),
+    // A service account alone, and only through a client the operator made
+    // (#1090).
+    unattendedOperations:
+      account.kind === 'service_account' && !account.clientSelfRegistered
+        ? unattendedOperationsOf(matching, target)
+        : new Set<string>(),
   };
 }
 
