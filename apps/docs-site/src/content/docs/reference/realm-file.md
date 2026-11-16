@@ -289,5 +289,6 @@ scopes, audience and redirect URIs, a resource's scopes, and each policy field
 that [Realm policies](/reference/realm-policies/) marks "fewer entries" or "more
 entries". A scope's texts are sorted by locale. Strings sort by UTF-16 code
 unit, as [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) sorts object
-members. A key set is left as written. A file a person writes may be in any
+members. A key set keeps its keys in the order written, and each key's
+members are sorted. A file a person writes may be in any
 order.

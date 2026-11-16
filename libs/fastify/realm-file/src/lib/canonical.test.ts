@@ -97,9 +97,35 @@ describe('canonicalRealmFile', () => {
     expect(web?.first_party_policy?.flows).toEqual(['login', 'reset']);
   });
 
-  it('leaves a key set as written', () => {
+  it("keeps a key set's keys in the order written, each with its members sorted", () => {
     const web = canonicalRealmFile(file()).clients?.find(({ client_id }) => client_id === 'web');
     expect(web?.jwks?.keys.map((key) => key['kid'])).toEqual(['z', 'a']);
+    for (const key of web?.jwks?.keys ?? []) {
+      expect(Object.keys(key)).toEqual(['crv', 'kid', 'kty', 'x']);
+    }
+  });
+
+  it('writes two key sets that differ only in member order as the same text', () => {
+    const withKey = (key: Record<string, unknown>) =>
+      parseRealmFile({
+        realm: 'master',
+        clients: [
+          {
+            client_id: 'api',
+            name: 'API',
+            grant_types: ['client_credentials'],
+            token_endpoint_auth_method: 'private_key_jwt',
+            jwks: { keys: [key] },
+          },
+        ],
+      });
+    const { kid, ...rest } = jwk('a');
+    const reordered = { kid, x5c: ['leaf', 'intermediate'], ...rest };
+    const original = { ...jwk('a'), x5c: ['leaf', 'intermediate'] };
+    const text = serializeRealmFile(canonicalRealmFile(withKey(original)));
+    expect(serializeRealmFile(canonicalRealmFile(withKey(reordered)))).toBe(text);
+    // A certificate chain keeps its order.
+    expect(text.indexOf('"leaf"')).toBeLessThan(text.indexOf('"intermediate"'));
   });
 
   it("sorts a resource's scopes by scope and its clients", () => {

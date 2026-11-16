@@ -115,18 +115,41 @@ function sortedEntries(
 }
 
 /**
+ * A key set (`jwks`) in canonical order: its keys in the order written, each
+ * key's members in code unit order, since a JWK keeps members the format does
+ * not name, in the order the file gives them. A member's value is left as
+ * written: a JWK's `x5c` is a certificate chain, in the order its RFC gives it.
+ */
+function canonicalKeySet(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value['keys'])) return structuredClone(value);
+  const keys: unknown[] = value['keys'];
+  return {
+    ...structuredClone(value),
+    keys: keys.map((key) =>
+      isRecord(key)
+        ? Object.fromEntries(
+            Object.keys(key)
+              .sort(byCodeUnit)
+              .map((member) => [member, structuredClone(key[member])])
+          )
+        : structuredClone(key)
+    ),
+  };
+}
+
+/**
  * A client entry in canonical order. Every list of strings of a client is a
  * set (its grant types, scopes, audience, redirect URIs, origins and flows),
- * its own and those of a nested object such as `first_party_policy`. A key
- * set (`jwks`) is left as written: a JWK's `x5c` is a certificate chain, in
- * the order its RFC gives it.
+ * its own and those of a nested object such as `first_party_policy`. Its key
+ * set is in the order of {@link canonicalKeySet}.
  */
 function canonicalClient(entry: unknown): unknown {
   if (!isRecord(entry)) return structuredClone(entry);
   const canonical: Record<string, unknown> = {};
   for (const [member, value] of Object.entries(entry)) {
     if (isStringList(value)) canonical[member] = sortedSet(value);
-    else if (member !== 'jwks' && isRecord(value)) canonical[member] = canonicalClient(value);
+    else if (member === 'jwks') canonical[member] = canonicalKeySet(value);
+    else if (isRecord(value)) canonical[member] = canonicalClient(value);
     else canonical[member] = structuredClone(value);
   }
   return canonical;
