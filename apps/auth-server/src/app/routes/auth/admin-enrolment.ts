@@ -65,7 +65,7 @@ export default async function (fastify: FastifyInstance) {
           'Start the one-time enrolment of an admin account the break-glass CLI created (ADR-019 Decision 7): the ceremony app’s enrolment page posts the token of the enrolment URL’s fragment as a form, from the realm origin. A token that may still be redeemed starts an interaction at the admin_enrolment step in this browser and redirects (303) to its ceremony page; starting does not spend it. A malformed, unknown, used or expired token gets one HTML page (400), and no interaction, as does every start while passkey sign-in is off (WEBAUTHN_ENABLED); a realm that names its ceremony app’s error page (its ceremonyApp.errorPage policy) gets 303 to that page instead, with code=admin_enrolment_refused. A request from another origin is refused with 403.',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
-        'x-qauth-errors': [400, 403, 429],
+        'x-qauth-errors': [400, 403, 413, 415, 429],
         consumes: ['application/x-www-form-urlencoded'],
         // Read in the handler, not refused here: a damaged token gets the
         // refusal every other token gets, not a problem document.
