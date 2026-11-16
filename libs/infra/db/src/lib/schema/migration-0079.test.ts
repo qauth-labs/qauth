@@ -124,7 +124,7 @@ describe('migration 0079 (admin enrolments)', () => {
     );
   });
 
-  it('grants no service role anything on it', () => {
-    expect(TABLE_GRANTS['admin_enrolments']).toEqual({});
+  it('grants only `web`, which serves the enrolment step (#621), its read and its redemption', () => {
+    expect(TABLE_GRANTS['admin_enrolments']).toEqual({ web: ['SELECT', 'UPDATE'] });
   });
 });

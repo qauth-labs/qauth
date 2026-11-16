@@ -67,6 +67,18 @@ export interface IssuedAdminEnrolment {
   readonly token: string;
 }
 
+/**
+ * An enrolment whose token may still be redeemed, as
+ * {@link AdminEnrolmentsRepository.findRedeemable} reads it: never its hash.
+ */
+export interface RedeemableAdminEnrolment {
+  readonly id: string;
+  readonly realmId: string;
+  readonly userId: string;
+  readonly createdAt: number;
+  readonly expiresAt: number;
+}
+
 /** An enrolment redeemed: the account to register a first passkey for. */
 export interface RedeemedAdminEnrolment {
   readonly id: string;
@@ -108,6 +120,40 @@ export interface AdminEnrolmentsRepository {
   redeem(
     realmId: string,
     token: string,
+    now: number,
+    tx?: DbClient
+  ): Promise<RedeemedAdminEnrolment | undefined>;
+
+  /**
+   * The enrolment `token` names in the realm while it may still be redeemed
+   * at `now`: unused, made at or before `now`, expiring after it. Reads and
+   * changes nothing, so the enrolment step (#621) checks a token when the
+   * browser presents it and spends it only when the passkey is stored
+   * ({@link redeemEnrolment}). `undefined` for a token that is malformed,
+   * unknown, of another realm, used or expired, alike.
+   */
+  findRedeemable(
+    realmId: string,
+    token: string,
+    now: number,
+    tx?: DbClient
+  ): Promise<RedeemableAdminEnrolment | undefined>;
+
+  /**
+   * Redeem the enrolment `id` of `userId` in the realm, once, as
+   * {@link redeem} redeems a token: one conditional update marks it used
+   * when it is unused and not yet expired at `now`. The enrolment step
+   * (#621) calls it in the transaction that stores the account's first
+   * passkey, with the id {@link findRedeemable} read for the token its
+   * browser presented, so two passkeys never come of one token. `undefined`
+   * for an enrolment that is unknown, of another account or realm, used or
+   * expired, alike, and the trigger refuses one the database's own clock
+   * finds expired.
+   */
+  redeemEnrolment(
+    realmId: string,
+    id: string,
+    userId: string,
     now: number,
     tx?: DbClient
   ): Promise<RedeemedAdminEnrolment | undefined>;
@@ -174,6 +220,57 @@ export function createAdminEnrolmentsRepository(defaultDb: DbClient): AdminEnrol
           and(
             eq(adminEnrolments.tokenHash, tokenHash),
             eq(adminEnrolments.realmId, realmId),
+            isNull(adminEnrolments.usedAt),
+            lte(adminEnrolments.createdAt, now),
+            gt(adminEnrolments.expiresAt, now)
+          )
+        )
+        .returning({
+          id: adminEnrolments.id,
+          realmId: adminEnrolments.realmId,
+          userId: adminEnrolments.userId,
+          expiresAt: adminEnrolments.expiresAt,
+          usedAt: adminEnrolments.usedAt,
+        });
+      if (row === undefined || row.usedAt === null) return undefined;
+      return { ...row, usedAt: row.usedAt };
+    },
+
+    async findRedeemable(realmId, token, now, tx) {
+      const tokenHash = adminEnrolmentTokenHash(token);
+      if (tokenHash === undefined || !UUID.test(realmId)) return undefined;
+      const [row] = await (tx ?? defaultDb)
+        .select({
+          id: adminEnrolments.id,
+          realmId: adminEnrolments.realmId,
+          userId: adminEnrolments.userId,
+          createdAt: adminEnrolments.createdAt,
+          expiresAt: adminEnrolments.expiresAt,
+        })
+        .from(adminEnrolments)
+        .where(
+          and(
+            eq(adminEnrolments.tokenHash, tokenHash),
+            eq(adminEnrolments.realmId, realmId),
+            isNull(adminEnrolments.usedAt),
+            lte(adminEnrolments.createdAt, now),
+            gt(adminEnrolments.expiresAt, now)
+          )
+        )
+        .limit(1);
+      return row;
+    },
+
+    async redeemEnrolment(realmId, id, userId, now, tx) {
+      if (!UUID.test(realmId) || !UUID.test(id) || !UUID.test(userId)) return undefined;
+      const [row] = await (tx ?? defaultDb)
+        .update(adminEnrolments)
+        .set({ usedAt: now })
+        .where(
+          and(
+            eq(adminEnrolments.id, id),
+            eq(adminEnrolments.realmId, realmId),
+            eq(adminEnrolments.userId, userId),
             isNull(adminEnrolments.usedAt),
             lte(adminEnrolments.createdAt, now),
             gt(adminEnrolments.expiresAt, now)

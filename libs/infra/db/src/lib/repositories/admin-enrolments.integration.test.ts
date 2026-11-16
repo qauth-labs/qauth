@@ -1,6 +1,7 @@
 /**
  * Real-DB integration tests for the admin enrolments repository (#602,
- * migration 0079).
+ * migration 0079; the read and the redemption by id of the enrolment step,
+ * #621).
  *
  * Exercises what a unit test cannot: a token that works once against the
  * conditional update, the refusal of a used, an expired and another realm's
@@ -174,6 +175,74 @@ describe('admin enrolments (real Postgres, #602)', () => {
       cause: expect.objectContaining({ constraint: 'admin_enrolments_use_once' }),
     });
     expect((await repository.findByUser(realmId, userId))?.usedAt).toBeNull();
+  });
+
+  it('reads a redeemable token without spending it, and refuses what redeem refuses (#621)', async () => {
+    const acme = await realm('acme');
+    const other = await realm('other');
+    const { token, enrolment } = await issued(acme, 60_000);
+    const redeemable = {
+      id: enrolment.id,
+      realmId: acme,
+      userId: enrolment.userId,
+      createdAt: T0,
+      expiresAt: T0 + 60_000,
+    };
+
+    expect(await repository.findRedeemable(acme, token, T0 + 1)).toEqual(redeemable);
+    // Reading twice changes nothing.
+    expect(await repository.findRedeemable(acme, token, T0 + 2)).toEqual(redeemable);
+    expect((await repository.findByUser(acme, enrolment.userId))?.usedAt).toBeNull();
+
+    // Another realm's, unknown, malformed, before it was made, at and after its expiry.
+    expect(await repository.findRedeemable(other, token, T0 + 1)).toBeUndefined();
+    const unknown = Buffer.alloc(32, 7).toString('base64url');
+    expect(await repository.findRedeemable(acme, unknown, T0 + 1)).toBeUndefined();
+    for (const malformed of ['', `${token}=`, token.slice(1)]) {
+      expect(await repository.findRedeemable(acme, malformed, T0 + 1)).toBeUndefined();
+    }
+    expect(await repository.findRedeemable('not-a-uuid', token, T0 + 1)).toBeUndefined();
+    expect(await repository.findRedeemable(acme, token, T0 - 1)).toBeUndefined();
+    expect(await repository.findRedeemable(acme, token, T0 + 60_000)).toBeUndefined();
+
+    // Used: no longer redeemable.
+    expect(await repository.redeem(acme, token, T0 + 3)).toBeDefined();
+    expect(await repository.findRedeemable(acme, token, T0 + 4)).toBeUndefined();
+  });
+
+  it('redeems an enrolment by its id once, for its own account and realm only (#621)', async () => {
+    const acme = await realm('acme');
+    const other = await realm('other');
+    const stranger = await account(acme);
+    const { enrolment } = await issued(acme, 60_000);
+    const { id, userId } = enrolment;
+
+    expect(await repository.redeemEnrolment(other, id, userId, T0 + 1)).toBeUndefined();
+    expect(await repository.redeemEnrolment(acme, id, stranger, T0 + 1)).toBeUndefined();
+    expect(await repository.redeemEnrolment(acme, id, userId, T0 - 1)).toBeUndefined();
+    expect(await repository.redeemEnrolment(acme, id, userId, T0 + 60_000)).toBeUndefined();
+    expect(await repository.redeemEnrolment(acme, 'not-a-uuid', userId, T0 + 1)).toBeUndefined();
+    expect((await repository.findByUser(acme, userId))?.usedAt).toBeNull();
+
+    expect(await repository.redeemEnrolment(acme, id, userId, T0 + 1_000)).toEqual({
+      id,
+      realmId: acme,
+      userId,
+      expiresAt: T0 + 60_000,
+      usedAt: T0 + 1_000,
+    });
+    expect(await repository.redeemEnrolment(acme, id, userId, T0 + 2_000)).toBeUndefined();
+  });
+
+  it('lets two redemptions by id at once use the enrolment once (#621)', async () => {
+    const realmId = await realm('acme');
+    const { enrolment } = await issued(realmId);
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        repository.redeemEnrolment(realmId, enrolment.id, enrolment.userId, T0 + 1)
+      )
+    );
+    expect(results.filter((result) => result !== undefined)).toHaveLength(1);
   });
 
   it('lets two redemptions at once use the token once', async () => {

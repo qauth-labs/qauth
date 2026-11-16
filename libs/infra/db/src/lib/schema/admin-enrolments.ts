@@ -32,8 +32,9 @@ import { bytea } from './sql-helpers';
  *   (`users_id_realm_id_unique`). Deleting the account or the realm removes
  *   the row.
  *
- * Who writes it: only the host's command, as the table owner. No service
- * role holds anything on it until the enrolment step (#621) is served.
+ * Who writes it: the host's command, as the table owner, creates every row.
+ * The `web` role, which serves the enrolment step (#621), reads whether a
+ * token may still be redeemed and redeems it; it creates and deletes none.
  */
 export const adminEnrolments = pgTable(
   'admin_enrolments',
