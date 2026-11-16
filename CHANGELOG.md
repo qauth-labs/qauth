@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-11-16
+
+A patch release with no breaking change of the stable surface, no migration
+and no new setting. A relying party that closes an account on its side can
+now delete it on the realm with no approval: the new built-in admin role
+`account-closer`, granted to its service account on one realm, runs
+`users.delete` there unattended, and every other security operation still
+needs its approval. Grant the role only once every `admin` node runs this
+release ([upgrade guide](https://docs.qauth.dev/operate/upgrades/)).
+
 ### Added
 
 - **A relying party's service account deletes the accounts it closed, with
@@ -5902,7 +5912,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.8...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.2.9...HEAD
+[0.2.9]: https://github.com/qauth-labs/qauth/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/qauth-labs/qauth/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/qauth-labs/qauth/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/qauth-labs/qauth/compare/v0.2.5...v0.2.6
