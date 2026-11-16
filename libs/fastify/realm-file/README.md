@@ -23,11 +23,16 @@ const written = canonicalRealmFile(file); // sets and entry lists in canonical o
   its schema and natural key, and the import plan (#518) adds its diff rules.
 - `src/lib/realm-file.ts`: the Zod schema and the parser. `clients`, `cimd_clients`, `resources`
   and `system_client` are the seed manifest's own schemas
-  (`@qauth-labs/infra-db/seed-manifest`), so every seed manifest is a realm file as it is;
-  `policies` is the realm policy registry's `document` view.
+  (`@qauth-labs/infra-db/seed-manifest`), so a seed manifest is a realm file as it is, but for
+  three mistakes the seed lets pass and the file refuses: a `client_id` listed twice, a member of
+  `jwks` beside `keys`, and a URL with a user name or password. `policies` is the realm policy
+  registry's `document` view.
+- `src/lib/credentials.ts`: the rule that no string of a file is a URL with a user name or
+  password, which the parser checks the way a URL parser reads a URL, and the JSON Schema in its
+  usual form.
 - `src/lib/issues.ts`: the issue of each refused member, with its path and, for a member the
   format leaves out on purpose, the reason (a secret, a section of a later release, a client a
-  developer owns, an id the server generates).
+  developer owns, an id the server generates). No message quotes a value that holds a secret.
 - `src/lib/json-schema.ts`: the JSON Schema (draft 2020-12), generated from the Zod schema.
 
 ## Why the fastify layer

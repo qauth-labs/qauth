@@ -20,7 +20,9 @@ stability promise
 The seed manifest of `db:seed-oauth-clients` is a realm file as it is: its
 `realm`, `clients`, `cimd_clients`, `resources` and `system_client` are the
 file's, with the same schemas. A realm file can say more than a manifest: its
-`format`, its `policies` and each client's `environment`.
+`format`, its `policies` and each client's `environment`. It also refuses
+three mistakes the seed lets pass: a `client_id` listed twice, a member of a
+key set beside `keys`, and a URL with a user name or password.
 
 The JSON Schema (draft 2020-12) of the format is published at
 [`/schemas/realm-file-v1-rc.0.json`](/schemas/realm-file-v1-rc.0.json). It is
@@ -41,11 +43,14 @@ generated from the parser's own schema.
 A section a file leaves out says nothing about what it describes. Within a
 section, every member a file leaves out takes its default.
 
-Every object is strict. A member the format does not name is refused, with its
-path and, where the format has one, the reason it is not in a file: a typo
-fails, a secret fails, and a section of a later release fails instead of being
-skipped. So is `$schema`: point your editor at the published schema by its own
-settings, such as VS Code's `json.schemas`, not from inside the file.
+Every object is strict, but a JWK. A member the format does not name is
+refused, with its path and, where the format has one, the reason it is not in a
+file: a typo fails, a secret fails, and a section of a later release fails
+instead of being skipped. So is `$schema`: point your editor at the published
+schema by its own settings, such as VS Code's `json.schemas`, not from inside
+the file. A JWK keeps members the format does not name, since
+[RFC 7517](https://www.rfc-editor.org/rfc/rfc7517#section-4) leaves a key's
+members open, and refuses its private ones.
 
 ## A full example
 
@@ -173,7 +178,8 @@ Each entry is a seed-manifest client, with its OAuth metadata names
 [seed manifest](/operate/docker/#first-party-clients-adr-017) takes, such as
 `client_credentials_scopes`, `id_jag_targets` and the first-party profile. The
 manifest's rules between fields hold here too: `jwks` or `jwks_uri` but not both,
-a key set for `private_key_jwt`, and the rest.
+a key set for `private_key_jwt`, and the rest. A key set, `jwks`, holds `keys`
+and nothing else.
 
 One field is the realm file's own:
 
@@ -223,9 +229,11 @@ The developer portal's system client, as the migration runner provisions it:
 - The realm's keys and its passkey RP ID.
 - Users and sessions.
 - Secret values: a client's `client_secret`, a secret policy field such as the
-  SMTP password, and a JWK's private members (`d`, `p`, `q`, `dp`, `dq`, `qi`,
-  `oth`, `k`, `priv`). An import lists the secrets the target realm still needs
-  as `secretsToSet`.
+  SMTP password, a JWK's private members (`d`, `p`, `q`, `dp`, `dq`, `qi`,
+  `oth`, `k`, `priv`), and a user name or password in a URL, such as
+  `https://user:password@keys.example.com/jwks.json`. No string of a file is
+  such a URL, whatever member holds it. An import lists the secrets the target
+  realm still needs as `secretsToSet`.
 - Ids the server generates, and timestamps.
 - The pairing of a sandbox realm with its live realm.
 - Clients a developer owns and dynamically registered clients.
@@ -233,15 +241,27 @@ The developer portal's system client, as the migration runner provisions it:
 ## Validation
 
 The parser refuses a file with every issue it has, each with the path of the
-member at fault, such as `/clients/0/client_secret`. The published JSON Schema
-checks the shape: every member, type, enum, length and range, that no other
-member appears, and that no JWK holds private material. A few rules relate one
-value to another, and only the parser checks them, before any import:
+member at fault, such as `/clients/0/client_secret`. No message quotes a value
+that holds a secret. The published JSON Schema checks the shape: every member,
+type, enum, length and range, that no other member appears, that no JWK holds
+private material, and that no string is a URL with a user name or password in
+its usual form, `scheme://user:password@host`. Some rules only the parser
+checks, before any import:
 
-- a `client_id` or a `resource` listed once in a file;
-- the seed manifest's rules between a client's fields, such as `jwks` or
-  `jwks_uri` but not both;
-- a redirect URI the consent screen can show where the code goes to.
+- the rules between values: a `client_id` or a `resource` listed once in a
+  file, and the seed manifest's rules between a client's fields, such as
+  `jwks` or `jwks_uri` but not both;
+- the rules on one value that no JSON Schema keyword states, such as a
+  redirect URI the consent screen can show where the code goes to, the shape
+  of a CIMD `client_id` and of a resource indicator, the members a JWK of each
+  key type needs, the reserved `qauth:` scopes and `urn:qauth:aud:` audiences,
+  a back-channel logout URI, a passkey origin and a verified domain;
+- a URL with a user name or password in a form other than the usual one, as a
+  URL parser reads `https:/user:password@host`.
+
+The JSON Schema, in turn, reads a URL by RFC 3986, as JSON Schema's `uri`
+format does, where the parser reads it as a URL parser does: an editor may flag
+a URL with a host in Unicode or with a space, which the parser accepts.
 
 ## How the format grows
 
@@ -267,6 +287,7 @@ the sections in the order above. Each list of entries is sorted by its natural
 key, and each set is sorted with each value once: a client's grant types,
 scopes, audience and redirect URIs, a resource's scopes, and each policy field
 that [Realm policies](/reference/realm-policies/) marks "fewer entries" or "more
-entries". Strings sort by UTF-16 code unit, as
-[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) sorts object members. A key
-set is left as written. A file a person writes may be in any order.
+entries". A scope's texts are sorted by locale. Strings sort by UTF-16 code
+unit, as [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) sorts object
+members. A key set is left as written. A file a person writes may be in any
+order.

@@ -33,10 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (optional), `realm`, which only advises, and the sections `policies` (the
   realm representation's shape without the `<name>Set` flags), `clients`
   (a seed-manifest client with an optional `environment`), `cimd_clients`,
-  `resources` and `system_client`. Every seed manifest is a realm file as it
-  is. Every object is strict: an unknown member, a section of a later release,
-  a `client_secret`, a secret policy field and a private JWK member are each
-  refused with their path. A `client_id` and a `resource` appear once in a
+  `resources` and `system_client`. A seed manifest is a realm file as it is,
+  unless it lists a `client_id` twice, puts a member beside `keys` in a key
+  set or names a URL with a user name or password, which a realm file refuses.
+  Every object but a JWK is strict: an unknown member, a section of a later
+  release, a `client_secret`, a secret policy field, a private JWK member and
+  a URL with a user name or password are each refused with their path, and no
+  message quotes a secret. A `client_id` and a `resource` appear once in a
   file. The JSON Schema is generated from the parser's schema and published at
   `/schemas/realm-file-v1-rc.0.json` as a stable surface; the page states the
   natural keys, what a file never holds and how the format grows
