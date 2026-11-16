@@ -4,13 +4,18 @@ import {
   type ResourceSpec,
   resourceSpecSchema,
 } from '@qauth-labs/infra-db/seed-manifest';
-import { type SystemClientSpec, systemClientSpecSchema } from '@qauth-labs/infra-db/system-client';
+import type { SystemClientSpec } from '@qauth-labs/infra-db/system-client';
 import { REALM_POLICY_REGISTRY, type RealmPolicies } from '@qauth-labs/server-realm-policy';
 import { z } from 'zod';
 
+import { URL_CREDENTIALS_MESSAGE, urlCredentialPaths } from './credentials';
 import { REALM_FILE_FORMAT } from './format';
-import { type RealmFileIssue, realmFileIssues } from './issues';
-import { REALM_FILE_SECTIONS, realmFileClientSchema } from './sections';
+import { jsonPointer, type RealmFileIssue, realmFileIssues } from './issues';
+import {
+  REALM_FILE_SECTIONS,
+  realmFileClientSchema,
+  realmFileSystemClientSchema,
+} from './sections';
 
 /**
  * THE DECLARATIVE REALM FILE (ADR-018 §5, ADR-019 Decision 11, ADR-020 fork
@@ -19,9 +24,10 @@ import { REALM_FILE_SECTIONS, realmFileClientSchema } from './sections';
  *
  * Its top-level keys are `format` (optional, {@link REALM_FILE_FORMAT} by
  * default), `realm`, the realm's name, and the sections of
- * {@link REALM_FILE_SECTIONS}. Every object is strict: an unknown member is
- * refused, and named, so a typo fails, a secret fails, and a section of a
- * later release fails instead of being skipped.
+ * {@link REALM_FILE_SECTIONS}. Every object is strict but a JWK, whose
+ * members RFC 7517 leaves open: an unknown member is refused, and named, so a
+ * typo fails, a secret fails, and a section of a later release fails instead
+ * of being skipped. No string is a URL with a user name or password.
  *
  * Never in a file: the realm's host, its endpoint hosts and issuer, its keys
  * and passkey RP ID, users and sessions, secret values, ids the server
@@ -105,7 +111,7 @@ function buildSchema(policies: z.ZodType<RealmPolicies>) {
       clients: z.array(realmFileClientSchema).optional(),
       cimd_clients: z.array(cimdClientSpecSchema).optional(),
       resources: z.array(resourceSpecSchema).optional(),
-      system_client: systemClientSpecSchema.optional(),
+      system_client: realmFileSystemClientSchema.optional(),
     })
     .superRefine(uniqueNaturalKeys);
 }
@@ -170,14 +176,32 @@ function withSystemClientId(raw: unknown, options: ParseRealmFileOptions): unkno
   return { ...raw, system_client: { ...raw['system_client'], client_id: configured } };
 }
 
-/** Parse a realm file, already read as JSON, and say every issue it has. */
+/**
+ * Parse a realm file, already read as JSON, and say every issue it has.
+ *
+ * A string that is a URL with a user name or password is refused wherever it
+ * is (`./credentials`), with an issue of its own that never quotes it. Any
+ * other issue at the same string is left out, since a schema's message may
+ * quote the value it refuses.
+ */
 export function safeParseRealmFile(
   raw: unknown,
   options: ParseRealmFileOptions = {}
 ): RealmFileParseResult {
+  const credentials: RealmFileIssue[] = urlCredentialPaths(raw).map((path) => ({
+    path,
+    pointer: jsonPointer(path),
+    message: URL_CREDENTIALS_MESSAGE,
+  }));
   const result = realmFileSchema().safeParse(withSystemClientId(raw, options));
-  if (result.success) return { success: true, file: result.data as RealmFile };
-  return { success: false, issues: realmFileIssues(result.error) };
+  if (result.success && credentials.length === 0) {
+    return { success: true, file: result.data as RealmFile };
+  }
+  const quoting = new Set(credentials.map(({ pointer }) => pointer));
+  const issues = result.success
+    ? []
+    : realmFileIssues(result.error).filter(({ pointer }) => !quoting.has(pointer));
+  return { success: false, issues: [...issues, ...credentials] };
 }
 
 /**

@@ -2,6 +2,7 @@ import {
   cimdClientSpecSchema,
   clientSpecSchema,
   environmentEnum,
+  publicJwkSchema,
   resourceSpecSchema,
 } from '@qauth-labs/infra-db/seed-manifest';
 import { systemClientSpecSchema } from '@qauth-labs/infra-db/system-client';
@@ -17,27 +18,50 @@ import { z } from 'zod';
  * a file without it says nothing about what it describes. A server that does
  * not know a section refuses the file and names the section; it never skips
  * one. `clients`, `cimd_clients`, `resources` and `system_client` are the
- * seed manifest's sections, with the manifest's own schemas, so that every
+ * seed manifest's sections, with the manifest's own schemas, so that a
  * manifest is a realm file as it is (ADR-018 §5: the seed manifest becomes a
- * subset of the realm file).
+ * subset of the realm file). The file refuses three mistakes the seed lets
+ * pass: a `client_id` listed twice, a member of `jwks` beside `keys`, and a
+ * URL with a user name or password (`./credentials`).
  */
 
 /** The values of a client's `environment` (ADR-008), from the laxest to the strictest. */
 export const CLIENT_ENVIRONMENTS = environmentEnum.enumValues;
 
 /**
+ * A client's key set, `jwks`: its public keys, and no other member. Stricter
+ * than the seed manifest's, which drops a member beside `keys` without a
+ * word: in a realm file a misspelt `keys` or a key set of private keys under
+ * another name is refused. Each key is the manifest's public JWK, which
+ * refuses private key material.
+ */
+const realmFileKeySetSchema = z.strictObject({
+  keys: z.array(publicJwkSchema).min(1).max(20),
+});
+
+/**
  * A `clients` entry: a seed-manifest client, with its OAuth metadata names
  * (RFC 7591), and its ADR-008 environment, which the manifest does not set.
  * Strict, like the manifest's: a member it does not name is refused, a secret
- * among them.
+ * among them, and so is a member of `jwks` beside `keys`.
  */
 export const realmFileClientSchema = clientSpecSchema.safeExtend({
+  jwks: realmFileKeySetSchema.optional(),
   environment: z
     .enum(CLIENT_ENVIRONMENTS)
     .optional()
     .describe(
       "The client's environment profile (ADR-008): development, staging or production. Left out, the client is production, the fail-safe default; the realm's posture.maxEnvironmentLaxity caps it. A sandbox realm's client says staging here."
     ),
+});
+
+/**
+ * The `system_client` section: the system client as the migration runner
+ * provisions it, with the key set of a realm file, which refuses a member
+ * beside `keys`.
+ */
+export const realmFileSystemClientSchema = systemClientSpecSchema.safeExtend({
+  jwks: realmFileKeySetSchema.optional(),
 });
 
 /** One section of the realm file. */
@@ -81,11 +105,13 @@ function sortedEntries(
   canonicalEntry: (entry: unknown) => unknown
 ): unknown {
   if (!Array.isArray(value)) return structuredClone(value);
-  return value.map((entry) => canonicalEntry(entry)).sort((a, b) => {
-    const left = isRecord(a) ? String(a[key]) : '';
-    const right = isRecord(b) ? String(b[key]) : '';
-    return byCodeUnit(left, right);
-  });
+  return value
+    .map((entry) => canonicalEntry(entry))
+    .sort((a, b) => {
+      const left = isRecord(a) ? String(a[key]) : '';
+      const right = isRecord(b) ? String(b[key]) : '';
+      return byCodeUnit(left, right);
+    });
 }
 
 /**
@@ -106,12 +132,34 @@ function canonicalClient(entry: unknown): unknown {
   return canonical;
 }
 
+/**
+ * A scope of a protected resource in canonical order: its consent texts, a
+ * map the file keys by locale, with the locales in code unit order. Every
+ * other object of a file has the members of its schema, in the schema's
+ * order; this map is the format's only one whose keys the file chooses.
+ */
+function canonicalScope(entry: unknown): unknown {
+  if (!isRecord(entry)) return structuredClone(entry);
+  const canonical: Record<string, unknown> = {};
+  for (const [member, value] of Object.entries(entry)) {
+    canonical[member] =
+      member === 'text' && isRecord(value)
+        ? Object.fromEntries(
+            Object.entries(value)
+              .sort(([left], [right]) => byCodeUnit(left, right))
+              .map(([locale, text]) => [locale, structuredClone(text)])
+          )
+        : structuredClone(value);
+  }
+  return canonical;
+}
+
 /** A protected resource in canonical order: its scopes by scope, its clients sorted. */
 function canonicalResource(entry: unknown): unknown {
   if (!isRecord(entry)) return structuredClone(entry);
   const canonical: Record<string, unknown> = {};
   for (const [member, value] of Object.entries(entry)) {
-    if (member === 'scopes') canonical[member] = sortedEntries(value, 'scope', structuredClone);
+    if (member === 'scopes') canonical[member] = sortedEntries(value, 'scope', canonicalScope);
     else if (isStringList(value)) canonical[member] = sortedSet(value);
     else canonical[member] = structuredClone(value);
   }
@@ -177,7 +225,7 @@ export const REALM_FILE_SECTIONS: readonly RealmFileSection[] = Object.freeze([
     naturalKey: 'client_id',
     summary:
       "The developer portal's system client, as the migration runner provisions it: its redirect URIs, its public keys and its first-party reason, matched by client_id.",
-    schema: () => systemClientSpecSchema,
+    schema: () => realmFileSystemClientSchema,
     canonical: canonicalClient,
   },
 ]);

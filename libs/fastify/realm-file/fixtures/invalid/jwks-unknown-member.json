@@ -1,0 +1,20 @@
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "notes-api",
+      "name": "Notes API",
+      "grant_types": ["client_credentials"],
+      "token_endpoint_auth_method": "private_key_jwt",
+      "jwks": {
+        "kyes": [
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+          }
+        ]
+      }
+    }
+  ]
+}

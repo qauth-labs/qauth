@@ -1,4 +1,5 @@
 export * from './lib/canonical';
+export * from './lib/credentials';
 export * from './lib/format';
 export type * from './lib/issues';
 export * from './lib/issues';

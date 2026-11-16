@@ -24,7 +24,7 @@ const file = (): RealmFile =>
       {
         resource: 'https://z.example.com/mcp',
         scopes: [
-          { scope: 'files:write', text: { en: 'Change your files' } },
+          { scope: 'files:write', text: { tr: 'Dosyalarını değiştir', en: 'Change your files' } },
           { scope: 'files:read', text: { en: 'Read your files' } },
         ],
         clients: ['web', 'api'],
@@ -119,6 +119,12 @@ describe('canonicalRealmFile', () => {
       'https://portal.example.com/a',
       'https://portal.example.com/b',
     ]);
+  });
+
+  it("sorts a scope's texts by locale, the format's one map whose keys the file chooses", () => {
+    const [, resource] = canonicalRealmFile(file()).resources ?? [];
+    const write = resource?.scopes.find(({ scope }) => scope === 'files:write');
+    expect(Object.keys(write?.text ?? {})).toEqual(['en', 'tr']);
   });
 
   it('changes nothing a parse would read differently, and is stable', () => {

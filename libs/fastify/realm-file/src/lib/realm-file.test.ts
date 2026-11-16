@@ -10,6 +10,7 @@ import {
   readRepoJson,
   SHIPPED_SEED_MANIFESTS,
 } from '../testing/fixtures';
+import { hasUrlCredentials, URL_CREDENTIALS_MESSAGE, urlCredentialPaths } from './credentials';
 import { REALM_FILE_FORMAT } from './format';
 import {
   parseRealmFile,
@@ -264,6 +265,156 @@ describe('a secret value', () => {
       expect((error as Error).message).not.toContain('top-secret');
       expect((error as Error).message).toContain('/clients/0/client_secret');
     }
+  });
+});
+
+describe('a URL with a user name or password', () => {
+  const PASSWORD = 'Hunter2Pass';
+  const credentialed = `https://svc:${PASSWORD}@keys.example.com/jwks.json`;
+  const backend = {
+    client_id: 'notes-api',
+    name: 'Notes API',
+    grant_types: ['client_credentials'],
+    token_endpoint_auth_method: 'private_key_jwt',
+    jwks_uri: 'https://keys.example.com/jwks.json',
+  };
+  const systemClient = {
+    redirect_uris: ['https://portal.example.com/auth/callback'],
+    jwks_uri: 'https://portal.example.com/.well-known/jwks.json',
+  };
+
+  // A secret of its own: the user information of a URL. Each place a file
+  // names a URL, and a string the schema does not read as one.
+  it.each([
+    ['a jwks_uri', { clients: [{ ...backend, jwks_uri: credentialed }] }, '/clients/0/jwks_uri'],
+    [
+      'a redirect URI',
+      { clients: [{ ...client, redirect_uris: [credentialed] }] },
+      '/clients/0/redirect_uris/0',
+    ],
+    [
+      'a back-channel logout URI, whose own rule quotes the value',
+      { clients: [{ ...client, backchannel_logout_uri: credentialed }] },
+      '/clients/0/backchannel_logout_uri',
+    ],
+    [
+      'an audience',
+      { clients: [{ ...backend, audience: [credentialed] }] },
+      '/clients/0/audience/0',
+    ],
+    [
+      'an ID-JAG target',
+      { clients: [{ ...backend, id_jag_targets: [credentialed] }] },
+      '/clients/0/id_jag_targets/0',
+    ],
+    [
+      'a CIMD client_id',
+      { cimd_clients: [{ client_id: credentialed, scopes: [] }] },
+      '/cimd_clients/0/client_id',
+    ],
+    [
+      'a resource indicator',
+      { resources: [{ resource: credentialed, scopes: [], clients: 'any_client' }] },
+      '/resources/0/resource',
+    ],
+    [
+      "the system client's jwks_uri",
+      { system_client: { ...systemClient, jwks_uri: credentialed } },
+      '/system_client/jwks_uri',
+    ],
+    [
+      'a policy field',
+      { policies: { mail: { fromName: credentialed } } },
+      '/policies/mail/fromName',
+    ],
+    ['the format', { format: credentialed }, '/format'],
+  ])('is refused as %s, and never quoted', (_, sections, pointer) => {
+    const raw = { realm: 'master', ...sections };
+    const issues = issuesOf(raw);
+    expect(issues.filter((issue) => issue.pointer === pointer)).toEqual([
+      { path: expect.any(Array), pointer, message: URL_CREDENTIALS_MESSAGE },
+    ]);
+    expect(JSON.stringify(issues)).not.toContain(PASSWORD);
+    expect(() => parseRealmFile(raw)).toThrow(RealmFileError);
+    expect(() => parseRealmFile(raw)).not.toThrow(PASSWORD);
+  });
+
+  // The parser reads a URL as a URL parser does, as Node's fetch would.
+  it.each([
+    `https:/svc:${PASSWORD}@keys.example.com/jwks.json`,
+    `HTTPS://svc:${PASSWORD}@keys.example.com/jwks.json`,
+    `https:\\\\svc:${PASSWORD}@keys.example.com/jwks.json`,
+    'https://svc@keys.example.com/jwks.json',
+    'ftp://svc:pw@files.example.com/',
+    // Text that starts with a URL: a URL parser reads the authority up to the
+    // first slash, so everything before the @ is a user name to it.
+    'https://example.com is ours; mail me@example.com',
+  ])('is found in %s', (value) => {
+    expect(hasUrlCredentials(value)).toBe(true);
+  });
+
+  it.each([
+    'Notes: support@example.com',
+    'mailto:ops@example.com',
+    'no-reply@example.com',
+    'See https://example.com, or mail me@example.com',
+    'https://keys.example.com/jwks.json?owner=ops@example.com',
+    'https://keys.example.com/@ops/jwks.json',
+  ])('is not found in %s', (value) => {
+    expect(hasUrlCredentials(value)).toBe(false);
+  });
+
+  it('leaves text that only holds an @ alone', () => {
+    expect(() =>
+      parseRealmFile({
+        realm: 'master',
+        clients: [
+          { ...client, name: 'Notes: support@example.com', description: 'mailto:ops@example.com' },
+        ],
+        policies: { mail: { fromAddress: 'no-reply@example.com' } },
+      })
+    ).not.toThrow();
+  });
+
+  it('is found at any depth without a recursion, in document order', () => {
+    let deep: unknown = credentialed;
+    for (let level = 0; level < 100_000; level++) deep = [deep];
+    expect(urlCredentialPaths(deep)).toHaveLength(1);
+    expect(urlCredentialPaths({ b: [credentialed], a: { c: credentialed } })).toEqual([
+      ['b', 0],
+      ['a', 'c'],
+    ]);
+  });
+});
+
+describe('a key set', () => {
+  // The seed manifest drops a member of `jwks` beside `keys`; a realm file
+  // refuses it, so a misspelt `keys` or private keys under another name fail.
+  it.each([
+    ['clients', { clients: [{ ...client, token_endpoint_auth_method: 'private_key_jwt' }] }],
+    [
+      'system_client',
+      { system_client: { redirect_uris: ['https://portal.example.com/auth/callback'] } },
+    ],
+  ])('of %s holds keys and nothing else', (name, sections) => {
+    const raw = JSON.parse(JSON.stringify({ realm: 'master', ...sections })) as Record<
+      string,
+      unknown
+    >;
+    const holder = (
+      name === 'clients' ? (raw['clients'] as unknown[])[0] : raw['system_client']
+    ) as Record<string, unknown>;
+    holder['jwks'] = { keys: [publicJwk], private_keys: [{ ...publicJwk, d: 'secret' }] };
+    const prefix = name === 'clients' ? ['clients', 0] : ['system_client'];
+    const issues = issuesOf(raw);
+    expect(issues).toEqual([
+      expect.objectContaining({
+        path: [...prefix, 'jwks', 'private_keys'],
+        message: expect.stringContaining('"private_keys" is not a field of'),
+      }),
+    ]);
+    holder['jwks'] = { keys: [publicJwk] };
+    expect(() => parseRealmFile(raw)).not.toThrow();
   });
 });
 

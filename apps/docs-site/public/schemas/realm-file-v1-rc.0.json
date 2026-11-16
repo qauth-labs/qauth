@@ -2,19 +2,27 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/realm-file-v1-rc.0.json",
   "title": "urn:qauth:realm-file:v1-rc.0",
-  "description": "The declarative realm file, format urn:qauth:realm-file:v1-rc.0: a realm's configuration, without any secret value (ADR-018 §5). Generated from libs/fastify/realm-file; the docs page reference/realm-file describes every section, its natural key and the rules of growth. A member this schema does not name is refused, a section of a later release included.",
+  "description": "The declarative realm file, format urn:qauth:realm-file:v1-rc.0: a realm's configuration, without any secret value (ADR-018 §5). Generated from libs/fastify/realm-file; the docs page reference/realm-file describes every section, its natural key and the rules of growth. A member this schema does not name is refused, a section of a later release included, and so is a URL with a user name or password.",
   "type": "object",
   "properties": {
     "format": {
       "default": "urn:qauth:realm-file:v1-rc.0",
       "description": "The file's format. Optional: a file without it is read as urn:qauth:realm-file:v1-rc.0. A breaking change raises its release-candidate number before QAuth 1.0.0, and its major version after.",
       "type": "string",
-      "const": "urn:qauth:realm-file:v1-rc.0"
+      "const": "urn:qauth:realm-file:v1-rc.0",
+      "not": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+      }
     },
     "realm": {
       "type": "string",
       "minLength": 1,
-      "description": "The name of the realm the file describes. It only advises: the caller of an import chooses the target realm, and a different name is a warning, so a sandbox realm's file can go to its live realm."
+      "description": "The name of the realm the file describes. It only advises: the caller of an import chooses the target realm, and a different name is a warning, so a sandbox realm's file can go to its live realm.",
+      "not": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+      }
     },
     "policies": {
       "title": "QAuth realm policies",
@@ -222,6 +230,10 @@
                 ],
                 "secret": false,
                 "environmentBound": false
+              },
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
               }
             }
           },
@@ -376,7 +388,11 @@
                 {
                   "type": "string",
                   "maxLength": 256,
-                  "pattern": "^\\/ui(?:\\/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){1,8}$"
+                  "pattern": "^\\/ui(?:\\/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){1,8}$",
+                  "not": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                  }
                 },
                 {
                   "type": "null"
@@ -412,7 +428,11 @@
               "items": {
                 "type": "string",
                 "maxLength": 255,
-                "pattern": "^(?![qQ][aA][uU][tT][hH]:)[\\x21\\x23-\\x5B\\x5D-\\x7E]+$"
+                "pattern": "^(?![qQ][aA][uU][tT][hH]:)[\\x21\\x23-\\x5B\\x5D-\\x7E]+$",
+                "not": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                }
               },
               "description": "The scopes a dynamically registered client may hold; a scope outside the list is dropped from the registration, and no scope of the reserved qauth: namespace can be listed.",
               "uniqueItems": true,
@@ -470,6 +490,10 @@
                     ],
                     "secret": false,
                     "environmentBound": false
+                  },
+                  "not": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
                   }
                 },
                 "trustedDomains": {
@@ -479,7 +503,11 @@
                   "items": {
                     "type": "string",
                     "maxLength": 253,
-                    "pattern": "^(?:\\*\\.)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+(?![0-9]+$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"
+                    "pattern": "^(?:\\*\\.)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+(?![0-9]+$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$",
+                    "not": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                    }
                   },
                   "description": "The hosts the allowlist policy accepts, stored in lower case; an entry `*.example.com` accepts every subdomain of `example.com` but not `example.com` itself.",
                   "uniqueItems": true,
@@ -524,6 +552,10 @@
                 ],
                 "secret": false,
                 "environmentBound": true
+              },
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
               }
             },
             "fromAddress": {
@@ -533,7 +565,11 @@
                   "type": "string",
                   "maxLength": 254,
                   "format": "email",
-                  "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+                  "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+                  "not": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                  }
                 },
                 {
                   "type": "null"
@@ -569,6 +605,10 @@
                 ],
                 "secret": false,
                 "environmentBound": true
+              },
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
               }
             },
             "smtp": {
@@ -582,7 +622,11 @@
                       "type": "string",
                       "minLength": 1,
                       "maxLength": 253,
-                      "pattern": "^[^\\s/@]+$"
+                      "pattern": "^[^\\s/@]+$",
+                      "not": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                      }
                     },
                     {
                       "type": "null"
@@ -649,7 +693,11 @@
                       "type": "string",
                       "minLength": 1,
                       "maxLength": 255,
-                      "pattern": "^[^\\r\\n]*$"
+                      "pattern": "^[^\\r\\n]*$",
+                      "not": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                      }
                     },
                     {
                       "type": "null"
@@ -740,6 +788,10 @@
                 ],
                 "secret": false,
                 "environmentBound": true
+              },
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
               }
             }
           },
@@ -756,7 +808,11 @@
               "items": {
                 "type": "string",
                 "maxLength": 128,
-                "pattern": "^[a-z][a-zA-Z0-9]*(?:\\.[a-z][a-zA-Z0-9]*)+$"
+                "pattern": "^[a-z][a-zA-Z0-9]*(?:\\.[a-z][a-zA-Z0-9]*)+$",
+                "not": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                }
               },
               "description": "The admin operations that need a second admin approval in this realm, by operation id.",
               "uniqueItems": true,
@@ -780,7 +836,11 @@
                 "type": "string",
                 "maxLength": 2048,
                 "format": "uri",
-                "pattern": "^https://[^\\s?#@]+$"
+                "pattern": "^https://[^\\s?#@]+$",
+                "not": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                }
               },
               "description": "The HTTPS issuers whose workload tokens a CI service account may exchange for admin API tokens.",
               "uniqueItems": true,
@@ -810,16 +870,28 @@
           "client_id": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 255
+            "maxLength": 255,
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "name": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 255
+            "maxLength": 255,
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "description": {
             "type": "string",
-            "maxLength": 2000
+            "maxLength": 2000,
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "grant_types": {
             "minItems": 1,
@@ -832,7 +904,11 @@
                 "client_credentials",
                 "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "urn:ietf:params:oauth:grant-type:token-exchange"
-              ]
+              ],
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "response_types": {
@@ -841,14 +917,22 @@
               "type": "string",
               "enum": [
                 "code"
-              ]
+              ],
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "scopes": {
             "type": "array",
             "items": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "client_credentials_scopes": {
@@ -856,7 +940,11 @@
             "type": "array",
             "items": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "audience": {
@@ -865,7 +953,11 @@
                 "type": "array",
                 "items": {
                   "type": "string",
-                  "minLength": 1
+                  "minLength": 1,
+                  "not": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                  }
                 }
               },
               {
@@ -877,18 +969,30 @@
             "type": "array",
             "items": {
               "type": "string",
-              "format": "uri"
+              "format": "uri",
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "post_logout_redirect_uris": {
             "type": "array",
             "items": {
               "type": "string",
-              "format": "uri"
+              "format": "uri",
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "backchannel_logout_uri": {
-            "type": "string"
+            "type": "string",
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "backchannel_logout_session_required": {
             "type": "boolean"
@@ -903,7 +1007,11 @@
               "client_secret_basic",
               "private_key_jwt",
               "none"
-            ]
+            ],
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "is_agent": {
             "type": "boolean"
@@ -914,13 +1022,21 @@
               "readonly",
               "admin",
               "exec"
-            ]
+            ],
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "id_jag_targets": {
             "type": "array",
             "items": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "jwks": {
@@ -935,13 +1051,22 @@
                   "properties": {
                     "kty": {
                       "type": "string",
-                      "minLength": 1
+                      "minLength": 1,
+                      "not": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                      }
                     }
                   },
                   "required": [
                     "kty"
                   ],
-                  "additionalProperties": {},
+                  "additionalProperties": {
+                    "not": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                    }
+                  },
                   "description": "A public JWK. A member of private key material (d, p, q, dp, dq, qi, oth, k, priv) is refused: a realm file holds no secret value.",
                   "not": {
                     "anyOf": [
@@ -997,32 +1122,49 @@
             },
             "required": [
               "keys"
-            ]
+            ],
+            "additionalProperties": false
           },
           "jwks_uri": {
             "type": "string",
             "maxLength": 2048,
-            "format": "uri"
+            "format": "uri",
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "webauthn_allowed_origins": {
             "maxItems": 20,
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "string",
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "dpop_bound_access_tokens": {
             "type": "boolean"
           },
           "verified_domain": {
-            "type": "string"
+            "type": "string",
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "first_party_profile": {
             "type": "string",
             "enum": [
               "web_redirect",
               "native_backend"
-            ]
+            ],
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "first_party_policy": {
             "type": "object",
@@ -1039,7 +1181,11 @@
                     "login",
                     "register",
                     "reset"
-                  ]
+                  ],
+                  "not": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                  }
                 }
               },
               "email_code_after_password": {
@@ -1056,7 +1202,11 @@
           "first_party_reason": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 1000
+            "maxLength": 1000,
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "hosted_flows": {
             "type": "array",
@@ -1064,7 +1214,11 @@
               "type": "string",
               "enum": [
                 "register"
-              ]
+              ],
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "registration_challenge": {
@@ -1077,7 +1231,11 @@
               "development",
               "staging",
               "production"
-            ]
+            ],
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           }
         },
         "required": [
@@ -1097,13 +1255,21 @@
           "client_id": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 255
+            "maxLength": 255,
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "scopes": {
             "type": "array",
             "items": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "client_credentials_scopes": {
@@ -1111,7 +1277,11 @@
             "type": "array",
             "items": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "not": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+              }
             }
           },
           "audience": {
@@ -1120,7 +1290,11 @@
                 "type": "array",
                 "items": {
                   "type": "string",
-                  "minLength": 1
+                  "minLength": 1,
+                  "not": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                  }
                 }
               },
               {
@@ -1143,7 +1317,11 @@
         "type": "object",
         "properties": {
           "resource": {
-            "type": "string"
+            "type": "string",
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           },
           "scopes": {
             "minItems": 1,
@@ -1156,7 +1334,11 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 128,
-                  "pattern": "^[!#$%&'()*+,\\-./0-9:;=?@A-Z[\\]^_`a-z{|}~]+$"
+                  "pattern": "^[!#$%&'()*+,\\-./0-9:;=?@A-Z[\\]^_`a-z{|}~]+$",
+                  "not": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                  }
                 },
                 "text": {
                   "type": "object",
@@ -1169,7 +1351,11 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 280,
-                    "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$"
+                    "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+                    "not": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                    }
                   }
                 },
                 "sensitive": {
@@ -1187,7 +1373,11 @@
             "anyOf": [
               {
                 "type": "string",
-                "const": "any_client"
+                "const": "any_client",
+                "not": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                }
               },
               {
                 "minItems": 1,
@@ -1196,7 +1386,11 @@
                 "items": {
                   "type": "string",
                   "minLength": 1,
-                  "maxLength": 255
+                  "maxLength": 255,
+                  "not": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                  }
                 }
               }
             ]
@@ -1218,7 +1412,11 @@
           "default": "system",
           "type": "string",
           "minLength": 1,
-          "maxLength": 255
+          "maxLength": 255,
+          "not": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+          }
         },
         "redirect_uris": {
           "minItems": 1,
@@ -1226,7 +1424,11 @@
           "type": "array",
           "items": {
             "type": "string",
-            "format": "uri"
+            "format": "uri",
+            "not": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+            }
           }
         },
         "jwks": {
@@ -1241,13 +1443,22 @@
                 "properties": {
                   "kty": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "not": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                    }
                   }
                 },
                 "required": [
                   "kty"
                 ],
-                "additionalProperties": {},
+                "additionalProperties": {
+                  "not": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                  }
+                },
                 "description": "A public JWK. A member of private key material (d, p, q, dp, dq, qi, oth, k, priv) is refused: a realm file holds no secret value.",
                 "not": {
                   "anyOf": [
@@ -1303,18 +1514,27 @@
           },
           "required": [
             "keys"
-          ]
+          ],
+          "additionalProperties": false
         },
         "jwks_uri": {
           "type": "string",
           "maxLength": 2048,
-          "format": "uri"
+          "format": "uri",
+          "not": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+          }
         },
         "first_party_reason": {
           "default": "QAuth's developer portal: the web front-end this deployment runs for its own developers.",
           "type": "string",
           "minLength": 1,
-          "maxLength": 1000
+          "maxLength": 1000,
+          "not": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+          }
         }
       },
       "required": [

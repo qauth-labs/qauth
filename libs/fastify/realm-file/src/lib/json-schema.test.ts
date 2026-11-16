@@ -12,6 +12,7 @@ import {
   REPO_ROOT,
   SHIPPED_SEED_MANIFESTS,
 } from '../testing/fixtures';
+import { URL_CREDENTIALS_MESSAGE, URL_CREDENTIALS_PATTERN } from './credentials';
 import {
   REALM_FILE_EXPORT_COMMAND,
   REALM_FILE_FORMAT,
@@ -114,7 +115,7 @@ describe('the JSON Schema and the Zod schema on the fixtures', () => {
     }
   );
 
-  it('leaves to the parser only the rules between values, each said why', () => {
+  it('says why of each file only the parser refuses', () => {
     const parserOnly = Object.entries(expected).filter(([, { jsonSchema }]) => jsonSchema);
     expect(parserOnly.length).toBeGreaterThan(0);
     for (const [name, { why }] of parserOnly) expect(why, name).toBeTruthy();
@@ -126,5 +127,49 @@ describe('the JSON Schema and the Zod schema on the fixtures', () => {
       expect(fixture, name).toBeDefined();
       expect(validate(fixture?.value), name).toBe(false);
     }
+  });
+});
+
+describe('a URL with a user name or password', () => {
+  const validate = validator();
+  const credentialed = 'https://svc:Hunter2Pass@keys.example.com/jwks.json';
+
+  /** Every string of `value`, by path. */
+  function strings(value: unknown, path: (string | number)[] = []): (string | number)[][] {
+    if (typeof value === 'string') return [path];
+    if (Array.isArray(value))
+      return value.flatMap((member, index) => strings(member, [...path, index]));
+    if (typeof value === 'object' && value !== null) {
+      return Object.entries(value).flatMap(([key, member]) => strings(member, [...path, key]));
+    }
+    return [];
+  }
+
+  const full = fixtures('valid').find(({ name }) => name === 'full.json')?.value;
+
+  // Every string of the fullest valid file, in turn, made a URL with
+  // credentials: the parser and the JSON Schema both refuse the file.
+  it.each(strings(full).map((path) => [path.join('.'), path] as const))(
+    'is refused by both at %s',
+    (_, path) => {
+      const value = structuredClone(full) as Record<string | number, unknown>;
+      let parent: Record<string | number, unknown> = value;
+      for (const token of path.slice(0, -1)) parent = parent[token] as typeof parent;
+      parent[path[path.length - 1]] = credentialed;
+      const result = safeParseRealmFile(value);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.issues).toContainEqual(
+          expect.objectContaining({ path, message: URL_CREDENTIALS_MESSAGE })
+        );
+      }
+      expect(validate(value)).toBe(false);
+    }
+  );
+
+  it('is refused by the pattern the parser checks first', () => {
+    expect(JSON.stringify(realmFileJsonSchema())).toContain(
+      JSON.stringify(URL_CREDENTIALS_PATTERN)
+    );
   });
 });

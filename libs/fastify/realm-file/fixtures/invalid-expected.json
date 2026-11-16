@@ -82,6 +82,20 @@
       "message": "mutually exclusive",
       "jsonSchema": "accepts",
       "why": "A rule between two members of a seed-manifest client (RFC 7591 §2), which the parser checks."
+    },
+    "url-credentials.json": {
+      "path": ["clients", 0, "jwks_uri"],
+      "message": "carries a user name or password"
+    },
+    "url-credentials-lenient.json": {
+      "path": ["clients", 0, "jwks_uri"],
+      "message": "carries a user name or password",
+      "jsonSchema": "accepts",
+      "why": "A URL parser reads https:/svc:pass@host as a URL with a user name and password, as Node's fetch would; the JSON Schema checks the usual form, scheme://user:pass@host, and an RFC 3986 URI with the user information in its path is one it accepts."
+    },
+    "jwks-unknown-member.json": {
+      "path": ["clients", 0, "jwks", "kyes"],
+      "message": "\"kyes\" is not a field of clients.0.jwks"
     }
   }
 }
