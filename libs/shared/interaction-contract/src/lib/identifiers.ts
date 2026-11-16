@@ -57,6 +57,22 @@ export function ceremonyPagePath(interactionId: string): string {
   return `${CEREMONY_PAGE_PREFIX}${interactionId}`;
 }
 
+/**
+ * The page the break-glass CLI's enrolment URL opens (#602, #621): on the
+ * realm origin, with the one-time token in its fragment,
+ * `/ui/admin-enrolment#token=…`. The ceremony app serves it, as it serves the
+ * ceremony page, and starts the enrolment from it
+ * ({@link ADMIN_ENROLMENT_START_PATH}).
+ */
+export const ADMIN_ENROLMENT_PAGE_PATH = '/ui/admin-enrolment';
+
+/**
+ * Where the enrolment page posts the token (#621): the auth server's form
+ * post, outside `/ui/`, that starts an interaction at the `admin_enrolment`
+ * step in the browser that posts it and sets its flow cookie.
+ */
+export const ADMIN_ENROLMENT_START_PATH = '/auth/admin-enrolment';
+
 /** The flow cookie that binds an interaction to the browser that started it (#592). */
 export const FLOW_COOKIE_NAME = '__Host-qauth_flow';
 

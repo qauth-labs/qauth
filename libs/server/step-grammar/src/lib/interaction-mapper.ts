@@ -75,6 +75,7 @@ export const INTERACTION_STEP_MAPPERS: InteractionMapperTable = Object.freeze({
   device_code: same,
   device_confirm: same,
   logout_confirm: same,
+  admin_enrolment: same,
 });
 
 /** The step grammar's members of a step read. */

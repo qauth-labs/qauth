@@ -1447,6 +1447,115 @@
           }
         }
       }
+    },
+    {
+      "id": "admin-enrolment",
+      "input": {
+        "step": {
+          "type": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+          "params": {
+            "options": {
+              "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+              "rp": {
+                "id": "auth.example.com",
+                "name": "Example"
+              },
+              "pubKeyCredParams": [
+                {
+                  "type": "public-key",
+                  "alg": -8
+                },
+                {
+                  "type": "public-key",
+                  "alg": -7
+                },
+                {
+                  "type": "public-key",
+                  "alg": -257
+                }
+              ],
+              "timeout": 300000,
+              "authenticatorSelection": {
+                "residentKey": "required",
+                "userVerification": "required"
+              },
+              "attestation": "none"
+            }
+          },
+          "answer": {
+            "webauthn_response": "{\"id\":\"Xb3hH0p2SdK1nJw7eVq4yA\",\"rawId\":\"Xb3hH0p2SdK1nJw7eVq4yA\",\"type\":\"public-key\",\"response\":{\"clientDataJSON\":\"eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0\",\"attestationObject\":\"o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVjE\",\"transports\":[\"internal\",\"hybrid\"]},\"authenticatorAttachment\":\"platform\",\"clientExtensionResults\":{}}"
+          },
+          "personal": {
+            "user": {
+              "id": "YWRtaW4tdXNlci1oYW5kbGU",
+              "name": "admin-YWRtaW4t",
+              "displayName": "admin-YWRtaW4t"
+            }
+          },
+          "amr": []
+        },
+        "alternatives": [],
+        "fipa": {
+          "iss": "https://auth.example.com",
+          "auth_session": "YXV0aC1zZXNzaW9uLWhhbmRsZS1vZi0zMi1ieXRlcyE",
+          "interaction_types_supported": [
+            "urn:qauth:ia:identifier:v1-rc.0",
+            "urn:qauth:ia:password:v1-rc.0",
+            "urn:qauth:ia:email_code:v1-rc.0",
+            "urn:qauth:ia:new_password:v1-rc.0",
+            "urn:qauth:ia:password_reset:v1-rc.0",
+            "urn:qauth:ia:captcha:v1-rc.0",
+            "urn:qauth:ia:webauthn_get:v1-rc.0",
+            "urn:qauth:ia:webauthn_create:v1-rc.0",
+            "urn:qauth:ia:totp:v1-rc.0",
+            "urn:qauth:ia:admin_enrolment:v1-rc.0"
+          ]
+        }
+      },
+      "expected": {
+        "interaction": {
+          "step": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+          "alternatives": [],
+          "params": {
+            "urn:qauth:ia:admin_enrolment:v1-rc.0": {
+              "options": {
+                "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+                "rp": {
+                  "id": "auth.example.com",
+                  "name": "Example"
+                },
+                "pubKeyCredParams": [
+                  {
+                    "type": "public-key",
+                    "alg": -8
+                  },
+                  {
+                    "type": "public-key",
+                    "alg": -7
+                  },
+                  {
+                    "type": "public-key",
+                    "alg": -257
+                  }
+                ],
+                "timeout": 300000,
+                "authenticatorSelection": {
+                  "residentKey": "required",
+                  "userVerification": "required"
+                },
+                "attestation": "none"
+              }
+            }
+          }
+        },
+        "fipa": {
+          "status": 403,
+          "body": {
+            "error": "redirect_to_web",
+            "iss": "https://auth.example.com"
+          }
+        }
+      }
     }
   ]
 }

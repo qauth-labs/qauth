@@ -206,13 +206,14 @@ describe('the Interaction API mapper', () => {
   });
 
   // The contract's `maxItems` for `alternatives`. Today's grammar cannot
-  // exceed it: 21 steps, less the current one and the bot challenge, which is
-  // never an alternative, leave 19, four more than the cap. No offer names them
+  // exceed it: 22 steps, less the current one and the bot challenge, which is
+  // never an alternative, leave 20, five more than the cap. No offer names them
   // all (the engine offers a handful beside a step), so the longest offer
   // leaves out `upstream`, the step that took the grammar past the cap (#639),
   // `upstream_link`, which the host shows alone and never beside another
-  // (#670), and the path markers `register` and `sign_in` (#1079), offered
-  // only beside a flow's first step. The check is there for the steps to come.
+  // (#670), the path markers `register` and `sign_in` (#1079), offered
+  // only beside a flow's first step, and `admin_enrolment`, an interaction's
+  // only step (#621). The check is there for the steps to come.
   it('carries at most the contract’s maximum of alternatives, and accepts the longest offer the grammar allows', () => {
     const { schemas } = INTERACTION_OPENAPI['components'] as {
       schemas: { Interaction: { properties: { alternatives: { maxItems: number } } } };
@@ -225,6 +226,7 @@ describe('the Interaction API mapper', () => {
       'upstream_link',
       'register',
       'sign_in',
+      'admin_enrolment',
     ]);
     const all = STEP_NAMES.filter((name) => !left.has(name));
     expect(all).toHaveLength(MAX_INTERACTION_ALTERNATIVES);

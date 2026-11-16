@@ -2,6 +2,7 @@ import type { z } from 'zod';
 
 import type { AnyGrammarStep, StepUrnOf } from '../grammar';
 import {
+  adminEnrolment,
   emailCode,
   newPassword,
   passwordReset,
@@ -53,6 +54,7 @@ export const STEP_LIST = Object.freeze([
   deviceCode,
   deviceConfirm,
   logoutConfirm,
+  adminEnrolment,
 ] as const);
 
 /** The union of every step. A new step joins it here, and then needs a mapper on each transport. */

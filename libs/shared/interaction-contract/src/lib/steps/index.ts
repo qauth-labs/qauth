@@ -1,5 +1,6 @@
 import type { StepDefinition } from '../step-definition';
 import {
+  adminEnrolment,
   emailCode,
   newPassword,
   passwordReset,
@@ -50,6 +51,7 @@ export const STEPS: readonly StepDefinition[] = [
   deviceCode,
   deviceConfirm,
   logoutConfirm,
+  adminEnrolment,
 ];
 
 /** The step with this short name. Throws for a name no step has. */

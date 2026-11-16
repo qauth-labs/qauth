@@ -41,6 +41,7 @@ const INTERACTION_ONLY_STEPS = [
   'device_code',
   'device_confirm',
   'logout_confirm',
+  'admin_enrolment',
 ];
 
 const validator = componentValidator(INTERACTION_OPENAPI);
@@ -116,6 +117,7 @@ describe('the steps', () => {
       device_code: [],
       device_confirm: [],
       logout_confirm: [],
+      admin_enrolment: [],
     });
   });
 

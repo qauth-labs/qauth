@@ -111,6 +111,40 @@ export const passwordReset = defineStep({
   amr: [],
 });
 
+/** A passkey enrolment's creation options, as `webauthn_create` and `admin_enrolment` carry them. */
+const passkeyCreationOptions = object({
+  challenge: base64url(43, 128, 'The challenge, at least 32 random bytes.'),
+  rp: object({
+    id: host('The relying party ID: the realm’s host.'),
+    name: displayText('realm', 64, 'The realm’s display name.'),
+  }),
+  pubKeyCredParams: array(
+    object({
+      type: constant('public-key'),
+      alg: integerEnum([-8, -7, -257], 'EdDSA, ES256 or RS256.'),
+    }),
+    1,
+    8,
+    'The COSE algorithms the server accepts, preferred first.'
+  ),
+  timeout: integer(1000, 600000, 'How long the ceremony may take, in milliseconds.').optional(),
+  authenticatorSelection: object({
+    residentKey: constant('required', 'A passkey is discoverable.'),
+    userVerification: constant('required'),
+  }),
+  attestation: constant(
+    'none',
+    'QAuth asks for no attestation and claims nothing about the key store.'
+  ),
+});
+
+/** The user entity a passkey is created for: personal data. */
+const passkeyUserEntity = object({
+  id: base64url(1, 86, 'The user handle: an opaque id, at most 64 bytes.'),
+  name: displayText('account', 64, 'The account name the authenticator shows.'),
+  displayName: displayText('account', 64, 'The display name the authenticator shows.'),
+});
+
 export const webauthnCreate = defineStep({
   name: 'webauthn_create',
   transports: ['interaction', 'fipa'],
@@ -119,39 +153,11 @@ export const webauthnCreate = defineStep({
       description:
         'Whether this is an offer the person may decline: an answer with no `webauthn_response` declines it.',
     }),
-    options: object({
-      challenge: base64url(43, 128, 'The challenge, at least 32 random bytes.'),
-      rp: object({
-        id: host('The relying party ID: the realm’s host.'),
-        name: displayText('realm', 64, 'The realm’s display name.'),
-      }),
-      pubKeyCredParams: array(
-        object({
-          type: constant('public-key'),
-          alg: integerEnum([-8, -7, -257], 'EdDSA, ES256 or RS256.'),
-        }),
-        1,
-        8,
-        'The COSE algorithms the server accepts, preferred first.'
-      ),
-      timeout: integer(1000, 600000, 'How long the ceremony may take, in milliseconds.').optional(),
-      authenticatorSelection: object({
-        residentKey: constant('required', 'A passkey is discoverable.'),
-        userVerification: constant('required'),
-      }),
-      attestation: constant(
-        'none',
-        'QAuth asks for no attestation and claims nothing about the key store.'
-      ),
-    }),
+    options: passkeyCreationOptions,
   }),
   personal: object({
     identifier: accountIdentifier.optional(),
-    user: object({
-      id: base64url(1, 86, 'The user handle: an opaque id, at most 64 bytes.'),
-      name: displayText('account', 64, 'The account name the authenticator shows.'),
-      displayName: displayText('account', 64, 'The display name the authenticator shows.'),
-    }),
+    user: passkeyUserEntity,
     excludeCredentials: array(
       object({
         type: constant('public-key'),
@@ -224,5 +230,20 @@ export const recoveryCodes = defineStep({
     ),
   }),
   errors: [],
+  amr: [],
+});
+
+/**
+ * The one-time enrolment of an admin account the break-glass CLI created
+ * (ADR-019 Decision 7, #621): `webauthn_create`'s options and user, with no
+ * way to decline and no alternative. Only the Interaction API serves it.
+ */
+export const adminEnrolment = defineStep({
+  name: 'admin_enrolment',
+  transports: ['interaction'],
+  params: object({ options: passkeyCreationOptions }),
+  personal: object({ user: passkeyUserEntity }),
+  answer: object({ webauthn_response: webauthnResponse(16384, 'attestation') }),
+  errors: ['invalid_credentials'],
   amr: [],
 });
