@@ -388,6 +388,25 @@ describe('the one-time admin enrolment (#621, real containers)', () => {
     const app = await boot();
     const realm = await realmOf(app);
     const { token, accountId } = await enrolAdmin(app);
+    const { approverRefusal, loadApprover } = await import('./admin/approvals/two-admin');
+    const approverOf = async () => {
+      const loaded = await loadApprover(
+        app,
+        { realmId: realm.id, accountId, kind: 'human' },
+        realm
+      );
+      if (loaded === undefined) throw new Error('the enrolled account is not found');
+      return loaded.record;
+    };
+    const created = await approverOf();
+    const made = Math.max(created.createdAt, ...created.grants.map((grant) => grant.createdAt));
+    // The database stores both times to the second (`EXTRACT(EPOCH FROM
+    // NOW())::bigint * 1000`), so an enrolment in the run's second would
+    // record its security change as the grant's creation, and rule 3 would
+    // name the new grant first. Answer a second and a margin after it.
+    const wait = made + 1_000 + 250 - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+
     const flow = await start(app, token);
     const { options, user } = await ceremonyOf(app, flow);
     const before = Date.now();
@@ -401,15 +420,11 @@ describe('the one-time admin enrolment (#621, real containers)', () => {
     expect(providers).not.toContain('password');
 
     // The enrolment moved the grant's security change: the window runs
-    // from it, whatever the account's and the grant's creation.
-    const { approverRefusal, loadApprover } = await import('./admin/approvals/two-admin');
-    const loaded = await loadApprover(app, { realmId: realm.id, accountId, kind: 'human' }, realm);
-    if (loaded === undefined) throw new Error('the enrolled account is not found');
-    const { record } = loaded;
+    // from it, later than the account's and the grant's creation.
+    const record = await approverOf();
     const changed = Math.max(...record.grants.map((grant) => grant.lastSecurityChangeAt));
     expect(changed).toBeGreaterThanOrEqual(before - 1_000);
-    const made = Math.max(record.createdAt, ...record.grants.map((grant) => grant.createdAt));
-    expect(changed).toBeGreaterThanOrEqual(made);
+    expect(changed).toBeGreaterThan(made);
     const requester = { realmId: realm.id, accountId: randomUUID(), kind: 'human' as const };
     const refusalAt = (at: number) =>
       approverRefusal(record, { realmId: realm.id, requester, createdAt: at }, realm, at);
