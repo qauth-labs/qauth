@@ -60,6 +60,21 @@ pnpm nx run auth-server:service-accounts -- create \
   user that ran it, in the operator realm's admin audit log
   (`serviceAccounts.create`).
 
+:::caution[The key deletes any account of the realm]
+The grant reaches every account of its realm, not only the accounts that
+signed in to the relying party: QAuth does not know which accounts an app
+owns. Whoever holds the service account's private key can delete them one
+after another, with no approval. So:
+
+- grant it only on a realm whose accounts the relying party owns. On a realm
+  that other apps share, their users are within the key's reach too;
+- keep the private key where only the job that closes accounts reads it, and
+  rotate it as [Service accounts](/operate/service-accounts/#create-one)
+  shows;
+- watch the realm's audit log for `users.delete` by the service account, and
+  disable it as below the moment its key may have leaked.
+:::
+
 The deletion runs with no approval only while all of these hold:
 
 | Condition                                                                                             | Otherwise                                                     |
