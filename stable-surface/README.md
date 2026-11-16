@@ -65,6 +65,14 @@ registered as its `maximalOf`. The admin listener runs only while `ADMIN_API_ENA
 default, so the default admin document lists no operation, and every admin operation is
 `experimental` in the maximal one.
 
+Until an admin operation is promoted to `stable`, the admin baseline is empty and its break check
+compares two empty documents. That holds nothing back today, as an experimental operation may change
+without a deprecation window (ADR-018 §5). The promotion has to make the default-flag export boot the
+admin listener (`ADMIN_API_ENABLED` and the `DPOP_ENABLED` it needs, for the admin listener only),
+with the experimental switches off, so the promoted operation is in `openapi-admin`. Until then the
+tag check refuses the promotion: a `stable` operation that is not in the default-flag export fails
+"registered only behind a switch".
+
 The exporter checks its own environment against the experimental-feature registry
 (`libs/shared/stability`): it refuses to write a default export with an experimental item on, or a
 maximal export that leaves a built item off. So the routes of every built item are in the maximal

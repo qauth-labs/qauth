@@ -29,3 +29,7 @@ its copy at the last release through oasdiff, so a breaking change fails unless
 `stable-surface/approved-breaks.json` approves it. Experimental operations are left out of that
 comparison (ADR-018 §5). A family document enters the comparison with the first release that
 contains it.
+
+`openapi-admin.json` stays empty until an admin operation is promoted to `stable`. The promotion
+has to make the default-flag export boot the admin listener with the experimental switches off;
+the stable-surface README says why.
