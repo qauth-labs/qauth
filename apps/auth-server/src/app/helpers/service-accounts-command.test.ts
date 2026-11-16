@@ -55,6 +55,22 @@ describe('parseServiceAccountsArguments', () => {
     });
   });
 
+  // #1090: a relying party's service account deletes one realm's accounts.
+  it('reads an account-closer grant on one realm', () => {
+    expect(
+      parseServiceAccountsArguments(
+        [
+          'create',
+          '--name=notes-account-closing',
+          '--client-id=notes-account-closing',
+          '--jwks-uri=https://notes.example/jwks.json',
+          '--grant=account-closer@customers',
+        ],
+        noFile
+      )
+    ).toMatchObject({ grants: [{ role: 'account-closer', realm: 'customers' }] });
+  });
+
   it('reads an inline key set from the file --jwks names', () => {
     const read = vi.fn(() => JSON.stringify({ keys: [KEY] }));
     expect(
@@ -100,6 +116,16 @@ describe('parseServiceAccountsArguments', () => {
       ],
     ],
     [['create', '--name=ci', '--client-id=ci', '--jwks-uri=https://x.example/j', '--grant=viewer']],
+    // The unattended deletion is granted on one realm, never on every realm (#1090).
+    [
+      [
+        'create',
+        '--name=rp',
+        '--client-id=rp',
+        '--jwks-uri=https://x.example/j',
+        '--grant=account-closer@*',
+      ],
+    ],
     [['disable']],
     [['disable', '--name']],
   ])('refuses %j before anything connects', (argv) => {
