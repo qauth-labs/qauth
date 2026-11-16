@@ -1584,6 +1584,26 @@ to a client that authenticates with `private_key_jwt`**, on every grant.
   that release would take a service account's token as a person's. Replace
   the `admin` nodes before you create the first service account.
 
+### The break-glass CLI and migration 0079
+
+This release adds the break-glass CLI
+([#602](https://github.com/qauth-labs/qauth/issues/602),
+[Break-glass](/operate/break-glass/)), which enrols an admin and retires a
+key in an emergency from the host that holds the database credentials and
+the KEK.
+
+- **Migration 0079 adds the empty `admin_enrolments` table**, which holds the
+  hash of each enrolment token. Its foreign keys briefly lock `realms` and
+  `users` against writes, so a sign-up waits for the runner's commit. No
+  service role holds a grant on it: only the CLI writes it, as the table
+  owner. A deployment that applies the grants by hand applies nothing for it.
+- **Run the CLI once every node runs this release.** A node of the previous
+  release does not know the new `admin.break_glass_used` event, which every
+  run writes.
+- **SSF receivers see a new event type.** The transmitter's configuration
+  lists `urn:qauth:secevent:break-glass-used:v1-rc.0` in `events_supported`,
+  before `key-emergency-retired`.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

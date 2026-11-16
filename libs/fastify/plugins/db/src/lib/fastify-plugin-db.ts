@@ -1,6 +1,7 @@
 import {
   type AdminApprovalsRepository,
   type AdminAuditLogRepository,
+  type AdminEnrolmentsRepository,
   type AdminGrantsRepository,
   type AdminRolesRepository,
   type ApiKeysRepository,
@@ -8,6 +9,7 @@ import {
   type BackchannelLogoutClientsRepository,
   createAdminApprovalsRepository,
   createAdminAuditLogRepository,
+  createAdminEnrolmentsRepository,
   createAdminGrantsRepository,
   createAdminRolesRepository,
   createApiKeysRepository,
@@ -165,6 +167,13 @@ declare module 'fastify' {
        */
       adminAuditLog: AdminAuditLogRepository;
       /**
+       * One-time admin enrolments (ADR-019 Decision 7, #602): the break-glass
+       * command `enrol-admin` issues one per admin account it creates, and the
+       * enrolment step of the Interaction API (#621) redeems its token once.
+       * It holds token hashes only.
+       */
+      adminEnrolments: AdminEnrolmentsRepository;
+      /**
        * Approval requests for security operations (ADR-019 Decision 7,
        * #512): the admin API files, reads and cancels them, the approval
        * engine records each approval, and the admin pipeline consumes one in
@@ -250,6 +259,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   adminRoles: true,
   adminGrants: true,
   adminAuditLog: true,
+  adminEnrolments: true,
   adminApprovals: true,
   realmPublicKeys: true,
   realmSecrets: true,
@@ -360,6 +370,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       adminGrants: () =>
         createAdminGrantsRepository(database.db, { catalog: options.adminRoleCatalog }),
       adminAuditLog: () => createAdminAuditLogRepository(database.db),
+      adminEnrolments: () => createAdminEnrolmentsRepository(database.db),
       adminApprovals: () => createAdminApprovalsRepository(database.db),
       realmPublicKeys: () => createRealmPublicKeysRepository(database.db),
       realmSecrets: () => createRealmSecretsRepository(database.db),

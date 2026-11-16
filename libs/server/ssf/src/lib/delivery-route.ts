@@ -132,15 +132,15 @@ export function receiverErrorClass(errorClass: string): string {
 }
 
 /**
- * How the fan-out reads a mapped type for one stream: an event about a key
- * passes the subject filter whatever subjects the receiver added; a client's
+ * How the fan-out reads a mapped type for one stream: an event about a key or
+ * the realm passes the subject filter whatever subjects the receiver added; a client's
  * credential event is matched on its client; a type sent only to its own
  * client reaches only the stream whose receiver that client is.
  */
 function typeRuleOf(mapping: SsfEventMapping, audience: string): DestinationTypeRule | undefined {
   const rule: { subjectFrom?: 'client' | 'none'; clientId?: string } = {};
   if (mapping.subject === 'client') rule.subjectFrom = 'client';
-  if (mapping.subject === 'key') rule.subjectFrom = 'none';
+  if (mapping.subject === 'key' || mapping.subject === 'realm') rule.subjectFrom = 'none';
   if (mapping.clientOnly) rule.clientId = audience;
   return Object.keys(rule).length > 0 ? rule : undefined;
 }
@@ -163,6 +163,9 @@ function subjectOf(
       const keyId = event.data['keyId'];
       return typeof keyId === 'string' ? { format: 'opaque', id: keyId } : undefined;
     }
+    case 'realm':
+      // The realm is named by its issuer; a realm with none names nothing.
+      return issuer === null ? undefined : { format: 'uri', uri: issuer };
     default:
       if (event.subject === undefined) return undefined;
       // A user is named under the realm's issuer; a realm with none names no user.
@@ -183,8 +186,8 @@ function subjectOf(
 /**
  * The event store subject the fan-out matched a mapped event on, by the
  * mapping's `subject` (`typeRuleOf`): the envelope's subject, or its client
- * as a client subject. `null` for a key event, which every stream that
- * requested it receives whatever its subjects; `undefined` when the event
+ * as a client subject. `null` for a key or realm event, which every stream
+ * that requested it receives whatever its subjects; `undefined` when the event
  * does not carry what the mapping names.
  */
 function matchedSubjectOf(
@@ -193,6 +196,7 @@ function matchedSubjectOf(
 ): EventSubject | null | undefined {
   switch (mapping.subject ?? 'subject') {
     case 'key':
+    case 'realm':
       return null;
     case 'client':
       return event.client === undefined ? undefined : { type: 'client', id: event.client.id };

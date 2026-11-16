@@ -44,6 +44,8 @@ function subjectCell(definition: EventTypeDefinition): string {
       return 'the event’s client, `uri` or `opaque`';
     case 'key':
       return 'the key, `opaque` with its `kid`';
+    case 'realm':
+      return 'the realm, `uri` with its issuer';
     default:
       if (definition.subject === 'client') return 'the client, `uri` or `opaque`';
       // With a session, see the Subjects section: the user, or the user
@@ -56,7 +58,9 @@ function subjectCell(definition: EventTypeDefinition): string {
 
 function deliveredCell(definition: EventTypeDefinition): string {
   const mapping = ssfMappingOf(definition);
-  if (mapping?.subject === 'key') return 'every stream of the realm that requested it';
+  if (mapping?.subject === 'key' || mapping?.subject === 'realm') {
+    return 'every stream of the realm that requested it';
+  }
   if (mapping?.clientOnly) return 'the stream of the event’s client, when it added the subject';
   return 'every stream that added the subject';
 }

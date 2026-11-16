@@ -1,5 +1,6 @@
 export * from './admin-approvals';
 export * from './admin-audit';
+export * from './admin-enrolments';
 export * from './admin-grants';
 export * from './audit';
 export * from './auth-method-plugins';

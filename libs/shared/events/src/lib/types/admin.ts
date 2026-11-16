@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { adminDiffSchema } from '../admin-diff';
 import { defineEventType } from '../definition';
 import { ACTOR_TYPES, extensibleEnum } from '../envelope';
+import { QAUTH_BREAK_GLASS_USED } from '../ssf-mapping';
 import { FIRST_RELEASE } from './fields';
 
 /**
@@ -108,7 +109,38 @@ export const adminChangeApplied = defineEventType({
   }),
 });
 
-export const ADMIN_EVENT_TYPES = [adminChangeApplied] as const;
+/**
+ * The break-glass commands (ADR-019 Decision 7, issue #602), as
+ * `admin.break_glass_used` names them: what an operator on a host that holds
+ * the database credentials and the KEK can do outside the two-admin rule.
+ */
+export const BREAK_GLASS_COMMAND_NAMES = ['enrol-admin', 'retire-key'] as const;
+
+export const adminBreakGlassUsed = defineEventType({
+  name: 'admin.break_glass_used',
+  version: 1,
+  rc: 0,
+  description:
+    "An operator ran a break-glass command on a host that holds the database credentials and the KEK (ADR-019 Decision 7): `enrol-admin` created an admin account with a one-time enrolment, or `retire-key` retired a key of the realm in an emergency. Whoever holds the host and the KEK stands outside the two-admin rule, so every use is announced. Emitted in the transaction of the command's change, before the change: a command whose event cannot be written changes nothing. The realm's admin audit log records the operating-system user, the host and the command's arguments.",
+  category: 'admin',
+  severity: 'critical',
+  since: 'v0.2.8',
+  data: z.strictObject({
+    command: extensibleEnum(BREAK_GLASS_COMMAND_NAMES).describe(
+      'The command that ran: `enrol-admin` or `retire-key`. The set may grow in a minor release.'
+    ),
+  }),
+  security: true,
+  ssf: {
+    event: QAUTH_BREAK_GLASS_USED,
+    subject: 'realm',
+    members: { command: { data: 'command' } },
+  },
+  ssfNote:
+    'Recorded once per run of a break-glass command (#602), whatever it changes: an emergency retirement also sends `key-emergency-retired` for each key it retires. Every stream of the realm that requested the event receives it.',
+});
+
+export const ADMIN_EVENT_TYPES = [adminChangeApplied, adminBreakGlassUsed] as const;
 
 /** One approval, as an admin event records it. */
 export type AdminApproval = z.infer<typeof adminApprovalSchema>;

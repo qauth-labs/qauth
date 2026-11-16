@@ -96,6 +96,10 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // transaction; its trigger reads the chain head and the checkpoints.
   admin_audit_log: { admin: SI },
   admin_audit_log_checkpoints: { admin: S },
+  // One-time admin enrolments (#602): written by the host's break-glass
+  // command as the owner. No role holds anything on it until the enrolment
+  // step of the Interaction API (#621) redeems a token.
+  admin_enrolments: {},
   // Who administers (#510): read on every admin request and at sign-in and
   // token issuance, written by no role yet. A security change of an account
   // moves its grants' last_security_change_at through migration 0074's
