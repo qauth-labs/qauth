@@ -654,12 +654,17 @@ describe('users.delete by a relying party, unattended (#1090, real containers)',
   it('runs nothing unattended for a service account whose client registered itself', async () => {
     const realm = await realmOf();
     const rp = await relyingPartyAccount([{ role: 'account-closer', realmId: realm.id }]);
+    // The token endpoint refuses such a client the admin audience, so the
+    // token is minted first, and the client marked as registered at
+    // /oauth/register afterwards: the admin API reads the client on every
+    // call.
+    const token = await tokenOf(rp.clientId);
     await app().dbPool.query('UPDATE oauth_clients SET dynamic_registered_at = $2 WHERE id = $1', [
       rp.clientRowId,
       Date.now(),
     ]);
     const userId = await bareAccount(realm.id);
-    const refused = await remove(realm.id, userId, await tokenOf(rp.clientId));
+    const refused = await remove(realm.id, userId, token);
     expect(refused.statusCode, refused.body).toBe(403);
     expect(refused.json()).toMatchObject({ code: 'approval_required' });
     expect(await app().repositories.users.findById(realm.id, userId)).toBeDefined();
