@@ -190,6 +190,23 @@
 >
 > - Decision 9: the switch to a provider-issued key waiting as `next` runs as soon as it is
 >   approved, with no pre-publication window. Keys QAuth generates keep the overlap.
+>
+> **Amended 2026-11-16** with the maintainer's issue of 2026-11-12 on account closing at a relying
+> party (#1090). Decision 7 runs a service account's security operation only after a human
+> approves it. A relying party that closes a person's account on its own side deletes the account
+> on its realm the moment the person confirms, as a service account; had a human to approve each
+> deletion, the account would stay alive and signed in until one did, while the relying party has
+> already told the person it is gone.
+>
+> - Decision 7: one security operation runs with no approval. A service account that holds the
+>   built-in role `account-closer`, which grants `users.delete` alone, on one realm deletes that
+>   realm's accounts unattended. The operator grants it on the host, on one named realm, never on
+>   every realm. A person who holds the role, a grant on every realm and a service account whose
+>   client registered itself run every deletion with its approval. The two-admin rule still binds
+>   it: where the realm makes a second admin mandatory for `users.delete`, the deletion needs its
+>   approvals from anyone, so one admin of the realm can switch the unattended deletion off by
+>   adding it to the mandatory set. The deletion still refuses a service account's account and an
+>   admin's, and its audit row names the service account.
 
 ## Context
 
@@ -723,7 +740,10 @@ from the realm row (Decision 1).
 A service account has no passkey. It can file a security operation, for example a realm-file import
 from CI, but the operation runs only after a human admin approves it with a fresh passkey. That
 approval stands in for the requester's own; where the realm requires a second admin, a second,
-different human admin approves too.
+different human admin approves too. The one exception (amended 2026-11-16, #1090): a service account
+that holds the built-in role `account-closer` on one realm, granted on the host, deletes that
+realm's accounts with no approval, unless the realm makes a second admin mandatory for the
+deletion. It lets a relying party that closes an account on its side delete it at once.
 
 **Two-admin approval**, decided 2026-10-10 (maintainer).
 
