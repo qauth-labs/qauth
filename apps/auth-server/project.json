@@ -176,7 +176,15 @@
         "parallel": false,
         "cwd": "apps/auth-server"
       },
-      "description": "Boot the real app (no Postgres/Redis required, no listening port) twice: under default flags to write stable-surface/openapi.json, and under the maximal flag surface to write apps/docs-site/public/openapi.json"
+      "description": "Boot the real app (no Postgres/Redis required, no listening port) twice: under default flags to write stable-surface/openapi.json and the family baselines in docs/api-baseline/, and under the maximal flag surface, with the admin listener, to write apps/docs-site/public/openapi.json and the family documents openapi-{admin,account,developer}.json beside it (#525)"
+    },
+    "api-baseline": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/openapi-export.ts --surface default",
+        "cwd": "apps/auth-server"
+      },
+      "description": "Regenerate the stable surfaces of the default flags alone: stable-surface/openapi.json and the family baselines docs/api-baseline/openapi-{admin,account,developer}.json (#525). openapi-export writes these and the docs site's documents too; the stable-surface check compares the baselines with the last release"
     },
     "admin-permissions-export": {
       "executor": "nx:run-commands",

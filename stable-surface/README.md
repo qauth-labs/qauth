@@ -10,6 +10,7 @@ committed copy and with the last release, and fails on any change nobody approve
 | `surfaces.json`                                         | The registry: one entry per surface                                                   |
 | `approved-breaks.json`                                  | The breaks a release will ship on purpose                                             |
 | `openapi.json`                                          | The auth server's API under default flags. Generated; never edit it by hand           |
+| [`docs/api-baseline/`](../docs/api-baseline/)           | Each API family's own document under default flags (#525). Generated, likewise        |
 | [`scripts/stable-surface/`](../scripts/stable-surface/) | The check (`check.mjs`), its logic (`lib.mjs`) and the pinned oasdiff (`oasdiff.mjs`) |
 | `scripts/stable-surface/__fixtures__/break-rules/`      | The fixtures that pin what oasdiff reports as a break                                 |
 
@@ -57,6 +58,13 @@ only the second has sits behind a switch, so it must be `experimental` (ADR-018 
 both have carries the same tag in both. The default export has no `experimental` operation at all:
 an experimental route is registered only while its switch is on, and every switch is off there.
 
+The admin, account and developer APIs each have a document of their own too (#525), exported the
+same two ways: `docs/api-baseline/openapi-<family>.json` under default flags, registered `stable`
+like `openapi`, and `apps/docs-site/public/openapi-<family>.json` under the maximal surface,
+registered as its `maximalOf`. The admin listener runs only while `ADMIN_API_ENABLED` is on, off by
+default, so the default admin document lists no operation, and every admin operation is
+`experimental` in the maximal one.
+
 The exporter checks its own environment against the experimental-feature registry
 (`libs/shared/stability`): it refuses to write a default export with an experimental item on, or a
 maximal export that leaves a built item off. So the routes of every built item are in the maximal
@@ -96,6 +104,16 @@ own error-level checks, and these rules, which oasdiff rates lower and the check
 `RAISED_TO_BREAK` in `scripts/stable-surface/lib.mjs` lists the raised rules. The self-test fixtures
 pin one case for each row, and the cases that must pass: an added optional response field, an
 added optional request field, a widened request enum, and any change to an experimental operation.
+A second base, `family-openapi.json`, shaped like an API family's document, pins the changes the
+family documents' gate names (#525): a removed field, a changed type, a removed operation and a
+tightened enum break, and an additive change passes.
+
+Security requirements are alternatives: a request meets an operation when it meets one of them. A
+requirement added beside the ones an operation keeps, such as the account and developer operations'
+DPoP alternative to Bearer (#525), is met by every request that met the operation before, so it
+passes. oasdiff reports it under `api-security-added`, the rule raised above for an operation that
+had no requirement, and the check takes it back to compatible (`rateFindings`). A requirement that
+gains or loses a scheme, or changes its scopes, still breaks, and so does a removed alternative.
 
 A value added to a response enum is a break too, because a client may not handle it. A value set
 that is meant to grow, such as error codes or event types, is declared with `x-extensible-enum`

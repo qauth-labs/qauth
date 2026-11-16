@@ -12,7 +12,18 @@
  *     the stable-surface check requires every operation it adds over the
  *     default export to be tagged `x-qauth-stability: experimental`.
  *
- * Run both via `pnpm exec nx run auth-server:openapi-export` (see project.json).
+ * Each surface also writes one document per API family (#525,
+ * `openapi-export-files.ts`): `openapi-admin.json`, `openapi-account.json` and
+ * `openapi-developer.json`, under `docs/api-baseline/` for the default surface
+ * and beside the whole document in `apps/docs-site/public/` for the maximal
+ * one. The account and developer documents are cut from the public
+ * listener's document, the admin one from the admin listener's, which the
+ * maximal surface boots too (ADMIN_API_ENABLED, off by default, so the default
+ * admin document lists no operation). The listeners serve the same documents
+ * at `<prefix>/openapi.json`.
+ *
+ * Run both via `pnpm exec nx run auth-server:openapi-export` (see project.json),
+ * or the default surface alone via `pnpm exec nx run auth-server:api-baseline`.
  *
  * ## Why this exists instead of hitting the live server
  *
@@ -84,25 +95,31 @@
  * check (`libs/server/config/src/lib/schemas/crypto.ts`).
  */
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
+// Types only, erased at run time: the modules themselves load after the
+// environment is set (see "Ordering" above).
+import type { OpenApiDocument } from './app/api-conventions/family-documents';
 import { experimentalSurfaceProblem, type FlagSurface } from './openapi-export-surface';
 
 const FLAG_SURFACES: readonly FlagSurface[] = ['default', 'maximal'];
 
 /**
- * Output path per surface, resolved from this file's own location rather than
+ * The repository root, resolved from this file's own location rather than
  * `process.cwd()` so the script behaves the same whether it is run via the Nx
  * target (`cwd: apps/auth-server`) or directly with `tsx` from any directory.
- * `stable-surface/surfaces.json` registers both paths.
+ * The files each surface writes under it are `EXPORT_LOCATIONS`
+ * (`openapi-export-files.ts`); `stable-surface/surfaces.json` registers them.
  */
-const OUTPUT_PATHS: Readonly<Record<FlagSurface, string>> = {
-  default: resolve(__dirname, '..', '..', '..', 'stable-surface', 'openapi.json'),
-  maximal: resolve(__dirname, '..', '..', 'docs-site', 'public', 'openapi.json'),
-};
+const REPO_ROOT = resolve(__dirname, '..', '..', '..');
+
+/**
+ * Where the maximal surface's admin listener says it is served. Only the
+ * configuration's parsing reads it: the export listens on no port.
+ */
+const EXPORT_ADMIN_API_BASE_URL = 'http://127.0.0.1:3002';
 
 /** Read `--surface default|maximal` (or `--surface=…`) from the command line. */
 function parseFlagSurface(argv: readonly string[]): FlagSurface {
@@ -210,6 +227,9 @@ function setEphemeralEnv(surface: FlagSurface): void {
     // sign-in pages' callbacks of one deployment, not part of QAuth's API, and
     // a caller's `AUTH_METHOD_PLUGINS` cannot add any.
     AUTH_METHOD_PLUGINS: '',
+
+    // Where the admin listener says it is served, when the surface runs it.
+    ADMIN_API_BASE_URL: EXPORT_ADMIN_API_BASE_URL,
   });
 
   // The committed documents are no release's: a caller's `QAUTH_VERSION`
@@ -229,6 +249,10 @@ function setEphemeralEnv(surface: FlagSurface): void {
       PLUGIN_API_ENABLED: 'false',
       // No hosted pages, so no account page is registered (#844).
       INTERACTION_UI_ENABLED: 'false',
+      // No admin listener (#511), off by default: the admin document lists no
+      // operation (#525). DPoP at its default too.
+      ADMIN_API_ENABLED: 'false',
+      DPOP_ENABLED: 'false',
     });
     return;
   }
@@ -273,39 +297,42 @@ function setEphemeralEnv(surface: FlagSurface): void {
     // The hosted pages, with which the account pages register (#844).
     INTERACTION_UI_ENABLED: 'true',
     CEREMONY_APP_DEPLOYED: 'true',
+    // The admin listener (#511), whose routes the admin document lists
+    // (#525). It takes only DPoP-bound tokens, so it needs DPoP on (#520).
+    ADMIN_API_ENABLED: 'true',
+    DPOP_ENABLED: 'true',
   });
-}
-
-/** Minimal shape of `@fastify/swagger`'s generated document this script needs. */
-interface OpenApiDocument {
-  readonly paths?: Record<string, unknown>;
 }
 
 async function main(): Promise<void> {
   const surface = parseFlagSurface(process.argv.slice(2));
-  const outputPath = OUTPUT_PATHS[surface];
   setEphemeralEnv(surface);
 
   // Dynamic imports, not static ones: every one of these transitively
   // reaches `../config/env`, which validates `process.env` at import time.
   // Deferring them until after `setEphemeralEnv()` has run is what makes the
-  // ordering in the module doc comment true. `./app/openapi-options` itself
-  // has no such dependency (it only imports `fastify-type-provider-zod`),
-  // but it's grouped here anyway to keep every import in one place.
+  // ordering in the module doc comment true. `./app/openapi-options` does not
+  // reach the environment schema, but it reads QAUTH_VERSION when it loads,
+  // which `setEphemeralEnv()` clears, so it and `./openapi-export-files`,
+  // which imports it, wait too.
   const [
     { default: Fastify },
     { default: swagger },
     typeProviderZod,
     { app },
+    { createAdminServer },
     { openapiOptions },
     { EXPERIMENTAL_SWITCHES, listEnabledExperimental },
+    { exportFiles, writeExportFiles },
   ] = await Promise.all([
     import('fastify'),
     import('@fastify/swagger'),
     import('fastify-type-provider-zod'),
     import('./app/app'),
+    import('./app/admin/listener'),
     import('./app/openapi-options'),
     import('./config/experimental-features'),
+    import('./openapi-export-files'),
   ]);
   const { serializerCompiler, validatorCompiler } = typeProviderZod;
 
@@ -328,6 +355,10 @@ async function main(): Promise<void> {
   const server = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
+  // The admin listener (#511), on the surface that turns it on, built as
+  // `main.ts` builds it. The app installs the admin API on it and closes it
+  // with itself (a `preClose` hook), so the `finally` below closes both.
+  const adminServer = surface === 'maximal' ? createAdminServer() : undefined;
 
   // Everything from here on MUST close `server` on every exit path, success
   // or failure. The cache plugin connects with `lazyConnect: true` and
@@ -345,11 +376,24 @@ async function main(): Promise<void> {
     await server.register(swagger, openapiOptions);
 
     // No database behind this boot, so no default realm step (#484).
-    await server.register(app, { defaultRealmBoot: false });
+    await server.register(app, {
+      defaultRealmBoot: false,
+      ...(adminServer === undefined ? {} : { adminListener: { server: adminServer } }),
+    });
     await server.ready();
 
     const spec = server.swagger() as OpenApiDocument;
     const pathCount = Object.keys(spec.paths ?? {}).length;
+    let adminSpec: OpenApiDocument | null = null;
+    if (adminServer !== undefined) {
+      await adminServer.ready();
+      adminSpec = adminServer.swagger() as OpenApiDocument;
+      if (Object.keys(adminSpec.paths ?? {}).length === 0) {
+        throw new Error(
+          'openapi-export: the admin listener registered no operation; refusing to write an empty admin document for the maximal surface'
+        );
+      }
+    }
 
     if (pathCount < MIN_EXPECTED_PATHS) {
       // Thrown, not just logged-and-returned, so this failure goes through
@@ -364,10 +408,15 @@ async function main(): Promise<void> {
       );
     }
 
-    mkdirSync(dirname(outputPath), { recursive: true });
-    writeFileSync(outputPath, `${JSON.stringify(spec, null, 2)}\n`);
+    // Each file is written only when its bytes changed: a second run of the
+    // same export writes nothing (#525).
+    const files = exportFiles(surface, { combined: spec, admin: adminSpec });
+    const written = writeExportFiles(REPO_ROOT, files);
     console.log(
-      `openapi-export: wrote ${pathCount} path(s) for the ${surface} surface to ${outputPath}`
+      `openapi-export: ${pathCount} path(s) for the ${surface} surface; ` +
+        (written.length === 0
+          ? `${files.size} file(s) already current`
+          : `wrote ${written.join(', ')}`)
     );
   } finally {
     // A `finally` block that itself throws REPLACES whatever error was
