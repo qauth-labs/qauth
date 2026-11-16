@@ -29,6 +29,11 @@ import type { JWTPayload } from '../types/jwt-service';
 const actClaimSchema: z.ZodType<NonNullable<JWTPayload['act']>> = z.lazy(() =>
   z.object({
     sub: z.string(),
+    // An admin acting for a user is named by its issuer and client too
+    // (#523): the account API tells an admin's act chain from an agent's by
+    // them, so they are kept, never stripped.
+    iss: z.string().optional(),
+    client_id: z.string().optional(),
     act: actClaimSchema.optional(),
   })
 );

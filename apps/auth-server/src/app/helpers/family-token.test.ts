@@ -404,6 +404,21 @@ describe('requireFamilyToken (#509)', () => {
       expect(actChainCheck).toHaveBeenCalledTimes(1);
     });
 
+    it("hands the check an admin's act chain whole, as the verifier read it from the token (#523)", async () => {
+      actChainCheck.mockClear();
+      const adminAct = {
+        sub: '0192a000-0000-7000-8000-000000000022',
+        iss: 'https://operator.example.test',
+        client_id: 'admin-console',
+      };
+      const response = await call(
+        probePath('account', 'delegated'),
+        await mint({ aud: API_FAMILY_AUDIENCES.account, act: adminAct })
+      );
+      expect(response.statusCode).toBe(200);
+      expect(actChainCheck.mock.calls[0][1].act).toEqual(adminAct);
+    });
+
     it("is refused when the route's check refuses it", async () => {
       actChainCheck.mockImplementationOnce(async () => {
         throw new JWTInvalidError('The act-chain token is no longer valid');
