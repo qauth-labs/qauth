@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import { readPage } from '../../api-conventions/cursor';
+import { familyTokenSecurity } from '../../api-conventions/family-documents';
 import { pageQuerySchema, pageSchema } from '../../api-conventions/paging';
 import { rfc3339, rfc3339OrNull } from '../../api-conventions/time';
 import {
@@ -73,7 +74,7 @@ export function registerDeveloperApiKeyRoutes(fastify: FastifyInstance): void {
         description:
           "List the static API keys of one of the token's developer's clients, newest first, one page at a time: masked fields only, revoked keys included. A client of another developer is 404.",
         tags: TAGS,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...readKeys.schema,
         'x-qauth-errors': [400, 401, 403, 404],
@@ -116,7 +117,7 @@ export function registerDeveloperApiKeyRoutes(fastify: FastifyInstance): void {
         description:
           "Mint a static API key for one of the token's developer's clients. Permitted only while the client's effective environment is development (ADR-008 §6); any other is 403 and uses the client_credentials grant. The plaintext `key` is in this answer once and never again. A client of another developer is 404.",
         tags: TAGS,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...writeKeys.schema,
         'x-qauth-errors': [400, 401, 403, 404],
@@ -158,7 +159,7 @@ export function registerDeveloperApiKeyRoutes(fastify: FastifyInstance): void {
         description:
           "Revoke one static API key of one of the token's developer's clients, and answer it with `revokedAt` set. Idempotent: the key is kept, revoked, and never authenticates again. A client or key of another developer is 404.",
         tags: TAGS,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...writeKeys.schema,
         'x-qauth-errors': [400, 401, 403, 404],

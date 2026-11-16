@@ -7,6 +7,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import { familyTokenSecurity } from '../../api-conventions/family-documents';
 import { rfc3339 } from '../../api-conventions/time';
 import { InvalidCurrentPasswordError } from '../../helpers/account-operation-errors';
 import {
@@ -95,7 +96,7 @@ export function registerAccountSignInMethodRoutes(fastify: FastifyInstance): voi
       description:
         "Read the token's user's sign-in methods at a glance: whether a password is set and when it was last set, how many passkeys, whether an authenticator app (TOTP) is on, how many recovery codes are left, how many upstream accounts and wallets are linked, whether there is a contact address, and the factor a fresh authentication must hold.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...read.schema,
       'x-qauth-errors': [400, 401, 403],
@@ -133,7 +134,7 @@ export function registerAccountSignInMethodRoutes(fastify: FastifyInstance): voi
       description:
         "Change the token's user's password, with the current one. Needs a fresh sign-in with the account's strongest factor and refuses an act-chain token. A wrong current password is 400 invalid_current_password and counts on the account's failure ladder; a new password the realm's password policy or breach list refuses is 422 weak_password with its reasons. Afterwards the account's other browser sessions and its refresh-token families end, the session the token names stays, and the owner is told. An account without a password is 404.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...change.schema,
       'x-qauth-errors': [400, 401, 403, 404, 422, 429, 503],

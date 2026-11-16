@@ -13,6 +13,7 @@ import {
   requireMergePatch,
 } from '../../api-conventions/conditional-requests';
 import { readPage } from '../../api-conventions/cursor';
+import { familyTokenSecurity } from '../../api-conventions/family-documents';
 import { type PageQuery, pageQuerySchema, pageSchema } from '../../api-conventions/paging';
 import { rfc3339, rfc3339OrNull } from '../../api-conventions/time';
 import { removeCredential, renamePasskey } from '../../helpers/account-credentials';
@@ -221,7 +222,7 @@ export function registerAccountPasskeyRoutes(fastify: FastifyInstance): void {
       description:
         "List the passkeys bound to the token's user, newest first: each one's name, whether it syncs to other devices, when it was added and when it last signed in. Adding one is no operation here: it runs in the ceremony app on the realm host, through an authorization request with `qauth_action=setup_passkey`.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...list.schema,
       'x-qauth-errors': [400, 401, 403],
@@ -260,7 +261,7 @@ export function registerAccountPasskeyRoutes(fastify: FastifyInstance): void {
       description:
         "Read one of the token's user's passkeys, with the `ETag` a rename names. A passkey of another user is 404, as one that does not exist.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...read.schema,
       'x-qauth-errors': [400, 401, 403, 404],
@@ -287,7 +288,7 @@ export function registerAccountPasskeyRoutes(fastify: FastifyInstance): void {
       description:
         "Rename one of the token's user's passkeys with a JSON Merge Patch (RFC 7396) of its `nickname`. `If-Match` must name the passkey's current `ETag`: 428 without it, 412 when the passkey changed since. A name is no credential, so it needs no fresh sign-in, but an act-chain token is refused. A passkey of another user is 404.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...rename.schema,
       'x-qauth-errors': [400, 401, 403, 404, 412, 415, 428],
@@ -339,7 +340,7 @@ export function registerAccountPasskeyRoutes(fastify: FastifyInstance): void {
       description:
         "Remove one of the token's user's passkeys. Needs a fresh sign-in with the account's strongest factor, or one that used a recovery code in place of a lost factor; a passkey still new (bound after a sign-in that proved only the password) is removed after a fresh sign-in with the password, and its removal ends the sessions whose sign-in bound or proved it, their codes and refresh tokens, the account's recovery codes and every sign-in in progress. Refuses an act-chain token. The account's last way to sign in is 409 last_credential; the last second factor the realm requires, 409 second_factor_required. The owner gets the \"passkey removed\" notice. A passkey of another user is 404.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...remove.schema,
       'x-qauth-errors': [400, 401, 403, 404, 409, 503],

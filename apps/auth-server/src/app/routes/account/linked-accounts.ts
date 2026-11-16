@@ -2,6 +2,7 @@ import { NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import { familyTokenSecurity } from '../../api-conventions/family-documents';
 import { type PageQuery, pageQuerySchema, pageSchema } from '../../api-conventions/paging';
 import { rfc3339 } from '../../api-conventions/time';
 import { LastCredentialError } from '../../helpers/account-operation-errors';
@@ -64,7 +65,7 @@ export function registerAccountLinkedAccountRoutes(fastify: FastifyInstance): vo
       description:
         "List the upstream accounts linked to the token's user, newest first: the provider and when it was linked, never the identity's subject at the provider.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...list.schema,
       'x-qauth-errors': [400, 401, 403],
@@ -103,7 +104,7 @@ export function registerAccountLinkedAccountRoutes(fastify: FastifyInstance): vo
       description:
         "Unlink one of the token's user's upstream accounts: the account no longer signs in through its provider. Needs a fresh sign-in with the account's strongest factor and refuses an act-chain token. The account's last way to sign in is 409 last_credential; one of another user is 404, as one that does not exist.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...unlink.schema,
       'x-qauth-errors': [400, 401, 403, 404, 409],

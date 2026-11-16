@@ -15,6 +15,7 @@ import {
 } from '../../api-conventions/conditional-requests';
 import { readPage } from '../../api-conventions/cursor';
 import { API_FAMILY_PREFIXES } from '../../api-conventions/families';
+import { familyTokenSecurity } from '../../api-conventions/family-documents';
 import { pageQuerySchema, pageSchema } from '../../api-conventions/paging';
 import { rfc3339, rfc3339OrNull } from '../../api-conventions/time';
 import { UnprocessableContentError } from '../../helpers/api-request-errors';
@@ -169,7 +170,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         description:
           "List the OAuth clients the token's developer owns, newest first, one page at a time. A client registered anonymously (dynamic registration, a Client ID Metadata Document) has no owner and is never listed (ADR-012).",
         tags: TAGS,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...readClients.schema,
         'x-qauth-errors': [400, 401, 403],
@@ -210,7 +211,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         description:
           "Create an OAuth client owned by the token's developer. The server generates `client_id` and, for a confidential client, `client_secret`, which this answer carries once and never again. The checks of dynamic registration apply: the realm's scope allowlist, the redirect URI rules and the per-developer client limit.",
         tags: TAGS,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...writeClients.schema,
         'x-qauth-errors': [400, 401, 403],
@@ -262,7 +263,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         description:
           "Read one of the token's developer's OAuth clients, with its `ETag`. A client that does not exist or that another developer owns is 404 (ADR-012). Never returns the client secret.",
         tags: TAGS,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...readClients.schema,
         'x-qauth-errors': [400, 401, 403, 404],
@@ -301,7 +302,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         description:
           "Change one of the token's developer's OAuth clients with a JSON Merge Patch (RFC 7396). `If-Match` must name the client's current `ETag`: 428 without it, 412 when the client changed since. A member set to `null` takes the value a create gives it when it is left out; `client_name` has none, so `null` there is 422. `enabled` is the owner's switch and does not lift an operator's suspension. A client of another developer is 404.",
         tags: TAGS,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...writeClients.schema,
         'x-qauth-errors': [400, 401, 403, 404, 412, 415, 422, 428],
@@ -356,7 +357,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         description:
           "Delete one of the token's developer's OAuth clients. It can no longer authenticate. A client of another developer is 404.",
         tags: TAGS,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...writeClients.schema,
         'x-qauth-errors': [400, 401, 403, 404],
@@ -382,7 +383,7 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
         description:
           "Issue a new `client_secret` for one of the token's developer's confidential clients. The previous secret stops working at once; this answer carries the new one once. A public client has no secret (400). A client of another developer is 404.",
         tags: TAGS,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...writeClients.schema,
         'x-qauth-errors': [400, 401, 403, 404],

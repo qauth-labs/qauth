@@ -2,6 +2,7 @@ import { RECOVERY_CODE_COUNT } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import { familyTokenSecurity } from '../../api-conventions/family-documents';
 import { rfc3339OrNull } from '../../api-conventions/time';
 import {
   type AccountFactors,
@@ -68,7 +69,7 @@ export function registerAccountRecoveryCodeRoutes(
       description:
         "How many of the token's user's recovery codes are left, and when the set was issued. Never the codes.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...read.schema,
       'x-qauth-errors': [400, 401, 403],
@@ -94,7 +95,7 @@ export function registerAccountRecoveryCodeRoutes(
       description:
         'Issue a new set of ten recovery codes for the token\'s user, answered once; every code of the old set stops working. Needs a fresh sign-in with the account\'s strongest factor and refuses an act-chain token. An account without a second factor or a passkey is 409 conflict. The "recovery codes regenerated" notice goes out.',
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...regenerate.schema,
       'x-qauth-errors': [400, 401, 403, 409],

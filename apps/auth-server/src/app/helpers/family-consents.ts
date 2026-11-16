@@ -8,6 +8,7 @@ import type {
 } from 'fastify';
 import { z } from 'zod';
 
+import { familyTokenSecurity } from '../api-conventions/family-documents';
 import { type PageQuery, pageQuerySchema, pageSchema } from '../api-conventions/paging';
 import { rfc3339 } from '../api-conventions/time';
 import {
@@ -128,7 +129,7 @@ export function familyConsentRoutes(family: ConsentFamily): {
         description:
           "List the active OAuth consents of the token's user, one page at a time, by when each was first given, newest first. A new grant to the same client keeps its consent where it is in the list.",
         tags,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...read.schema,
         'x-qauth-errors': [400, 401, 403],
@@ -156,7 +157,7 @@ export function familyConsentRoutes(family: ConsentFamily): {
         description:
           "Revoke one of the token's user's OAuth consents, with every refresh token and unredeemed authorization code issued under it. A consent of another user is 404, as one that does not exist.",
         tags,
-        security: [{ bearerAuth: [] }],
+        security: familyTokenSecurity(),
         'x-qauth-stability': 'stable',
         ...write.schema,
         'x-qauth-errors': [400, 401, 403, 404],

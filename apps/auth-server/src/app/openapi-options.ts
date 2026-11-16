@@ -177,7 +177,7 @@ const COMPONENT_SCHEMA_REF = '#/components/schemas/';
  * accepts, and `Problem` on a surface with no operation that answers it. Only
  * what a reference reaches is published.
  */
-function withReferencedSchemasOnly<
+export function withReferencedSchemasOnly<
   Document extends { paths?: unknown; components?: { schemas?: Record<string, unknown> } },
 >(document: Document): Document {
   const schemas: Record<string, unknown> = { ...document.components?.schemas };
@@ -322,6 +322,14 @@ export const openapiOptions: SwaggerPlugin.FastifyDynamicSwaggerOptions = {
           scheme: 'bearer',
           bearerFormat: 'JWT',
           description: 'Access token obtained from login, refresh, or OAuth token endpoint.',
+        },
+        // The account and developer operations take a family token as a
+        // Bearer token or a DPoP-bound one (`familyTokenSecurity`, #525).
+        dpopAuth: {
+          type: 'http',
+          scheme: 'DPoP',
+          description:
+            "An access token bound to a key (RFC 9449): `Authorization: DPoP <token>`, and a `DPoP` header holding a proof signed with the key the token names in `cnf.jkt`, for the request's method and URL. Accepted while DPOP_ENABLED is on.",
         },
       },
     },
