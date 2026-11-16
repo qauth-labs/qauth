@@ -216,6 +216,8 @@ export const NOT_IN_SECURITY_LOG: Readonly<Record<string, string>> = {
   'request.account_operation_refused':
     'A refused account change changes nothing on the account; the change, once made, is the entry.',
   'user.passkey_renamed': 'A passkey’s name is no credential: the passkey signs in as before.',
+  'admin.enrolment_completed':
+    'The admin events’ record of an admin account’s first passkey; the passkey it stored is the entry (`credential_added`).',
 };
 
 /** How long the log keeps an entry by default; a realm setting (#689). */
