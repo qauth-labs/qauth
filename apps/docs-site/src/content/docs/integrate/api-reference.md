@@ -887,6 +887,11 @@ audience in its `audience` and the scopes in its `scopes`
 **Ownership.** Every route reads only the caller's own clients. A client that does not exist, that
 another developer owns, or that belongs to another realm is `404` `not_found`, never `403`.
 
+**Document.** `GET /developer/v1-rc.0/openapi.json` returns the developer API's own OpenAPI 3.1
+document, unauthenticated, with `Cache-Control: public, max-age=3600`: the operations below that
+the server serves, with the API's contract version as `info.version`
+([Admin API](/reference/admin-api/#the-documents) lists the three family documents).
+
 ### `GET /developer/v1-rc.0/clients`
 
 List the caller's clients, newest first.
@@ -1028,7 +1033,10 @@ An end user's own account (#524), for the account console's backend. A token who
 is `urn:qauth:aud:account:v1-rc.0`, sent as a Bearer or DPoP token; a token for the developer API is
 refused here with `401`, and the reverse. A read needs `qauth:account:read` and a change
 `qauth:account:write` (#933), or `403` `forbidden` with the `insufficient_scope` challenge. The
-conventions are those of the developer API above.
+conventions are those of the developer API above. `GET /account/v1-rc.0/openapi.json` returns the
+account API's own document, as the developer API's does: the operations below that the server
+serves. The whole contract, with the operations still to come, is on
+[Account API](/reference/account-api/).
 
 ### `GET /account/v1-rc.0/consents`
 
