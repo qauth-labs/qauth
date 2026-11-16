@@ -27,6 +27,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `admin_enrolment_refused`. The `web` role's database user gets `SELECT`
   and `UPDATE` on `admin_enrolments`, which the migration runner applies
   ([Break-glass access](https://docs.qauth.dev/operate/break-glass/)).
+- **An admin acts for a user only with an act-chain token, which only an
+  approved security operation mints** ([#523], ADR-019 Decision 7, ADR-020
+  §3). `mintActChainToken(authorizedOperation, params)` takes as its first
+  argument a capability that only the admin pipeline issues, while the
+  handler of an approved `issue-for-other` operation runs, and spends it
+  once. The token's `sub` is the user and its `act` names the admin with
+  `sub`, `iss` and `client_id`; its only audience is
+  `urn:qauth:aud:account:v1-rc.0`, it lives at most ten minutes, is bound to
+  the admin's DPoP key and carries no `auth_time`, `amr` or `sid`. It reads
+  the account unless the approval names `qauth:account:write`. The new
+  `admin_act_sessions` table (migration 0082) records each token in the
+  operation's transaction, beside its audit row; `listAdminAccess` lists who
+  acted for a user, when and on which approval. The HTTP operation that
+  mints one comes later. On the account API, a family route now refuses a
+  token with an `act` claim unless it declares it takes one (403
+  `delegated_token_refused`); the account operations declare it and hold an
+  admin's token to its record on every call, so revoking the admin's grant
+  or disabling the admin stops it on its next use (401 `invalid_token`).
+  Every call made with one appends an admin audit row with the full act
+  chain, and a successful call whose row cannot be written answers 503.
+  `requireFreshAuthentication(request)` refuses an act-chain token. The
+  signer lets the `admin` role sign `at+jwt` tokens of this profile and no
+  other. The `api` role's database user gets `SELECT` on
+  `admin_act_sessions`, `SELECT` and `INSERT` on `admin_audit_log`, `SELECT`
+  on `admin_audit_log_checkpoints` and on the `id`, `realm_id` and `status`
+  of `admin_approvals`; the `admin` role's gets `SELECT` and `INSERT` on
+  `admin_act_sessions`. The migration runner applies them.
 - **The declarative realm file has a fixed format,
   `urn:qauth:realm-file:v1-rc.0`** ([#515], ADR-018 §5). One JSON document
   describes a realm's configuration with no secret value: `format`
@@ -4962,6 +4989,7 @@ It adds migrations 0068 and 0069.
 [#517]: https://github.com/qauth-labs/qauth/issues/517
 [#520]: https://github.com/qauth-labs/qauth/issues/520
 [#521]: https://github.com/qauth-labs/qauth/issues/521
+[#523]: https://github.com/qauth-labs/qauth/issues/523
 [#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
 [#527]: https://github.com/qauth-labs/qauth/issues/527
