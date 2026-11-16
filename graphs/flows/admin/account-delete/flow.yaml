@@ -1,5 +1,7 @@
 # Deleting an account of a realm through the admin API (#681, ADR-020 §3, ADR-019 Decision 7): who may do it, what
 # each refusal answers, the order the deletion takes in its transaction, and why a retry answers as the first call.
+# A relying party's service account that the operator gave account-closer on the realm deletes with no approval
+# (#1090, ADR-019 Decision 7 amended 2026-11-16), unless the realm makes a second admin mandatory for users.delete.
 #
 # - Written with the operation, so every state cites the code (`source:`): the If-Match and classification stage
 #   (apps/auth-server/src/app/plugins/admin-operations.ts), the admin pipeline's permission check and approval gate
@@ -23,7 +25,9 @@ summary: >-
   An admin of the realm, or a service account it runs, asks the admin API to delete an account, with If-Match and
   an approval. The request needs If-Match first; the pipeline then checks the permission users.delete, which only a
   token with qauth:admin:security uses, reads the account and refuses a service account's account and an admin's,
-  checks If-Match against the account as it stands, and runs the call only with its approval. The handler locks the
+  checks If-Match against the account as it stands, and runs the call only with its approval, or with none for a
+  relying party's service account that holds account-closer on the realm where the realm needs one approval for the
+  deletion. The handler locks the
   account, reads it again under the lock, ends every session it holds with their back-channel logouts, deletes it
   with everything that hangs off it and records the events, in one transaction. An id the realm does not hold
   answers as a deletion does and changes nothing, so a retry answers as the first call.
@@ -45,10 +49,13 @@ scope:
 context:
   # What the caller's grants and token give it.
   caller:
-    values: [securityAdmin, writeScopeOnly, noPermission]
+    values: [securityAdmin, accountCloser, writeScopeOnly, noPermission]
     initial: any
     say:
       securityAdmin: 'its role holds users.delete and its token carries qauth:admin:security'
+      accountCloser: >-
+        a service account whose client the operator made, holding account-closer on exactly this realm, and its token
+        carries qauth:admin:security (#1090)
       writeScopeOnly: 'its role holds users.delete, and its token carries qauth:admin:write but not qauth:admin:security'
       noPermission: 'its role holds no permission of users.delete, whatever its token carries'
   ifMatch:
@@ -67,6 +74,12 @@ context:
       absent: "the realm holds no account with that id: unknown, deleted already, or another realm's"
       serviceAccount: "it is a service account's account, marked or bound (#522)"
       administrator: 'it holds an admin grant that is not revoked, a grant whose role is disabled included'
+  twoAdmin:
+    values: [recommended, mandatory]
+    initial: any
+    say:
+      recommended: "the realm's admin.twoAdminMandatoryOperations does not list users.delete: one approval is needed"
+      mandatory: 'it lists users.delete: a second admin is mandatory, and the deletion needs two approvals from anyone'
   approval:
     values: [approved, missing]
     initial: any
@@ -92,6 +105,9 @@ guards:
   administratorsAccount: "account == 'administrator'"
   staleIfMatch: "ifMatch == 'stale'"
   noApproval: "approval == 'missing'"
+  closerCaller: "caller == 'accountCloser'"
+  secondAdminMandatory: "twoAdmin == 'mandatory'"
+  runsUnattended: "caller == 'accountCloser' and twoAdmin == 'recommended' and approval == 'missing'"
   notHeld: "account == 'absent'"
   goneUnderLock: "underLock == 'gone'"
   adminUnderLock: "underLock == 'grantedAdmin'"
@@ -145,16 +161,16 @@ states:
       class security of its own, so a role can grant it alone, which a token uses only with qauth:admin:security.
       A caller that holds none of it is refused before the account is read, so the refusal tells nothing of the
       account.
-    source: apps/auth-server/src/app/admin/pipeline.ts:689
+    source: apps/auth-server/src/app/admin/pipeline.ts:693
     always:
       - guard: roleLacksPermission
         target: forbidden.no_permission
         say: 'the role lacks the permission: no token would pass, and the challenge names no scope'
-        source: apps/auth-server/src/app/admin/pipeline.ts:707
+        source: apps/auth-server/src/app/admin/pipeline.ts:711
       - guard: scopeLacksSecurity
         target: insufficient_scope.no_security_scope
         say: 'only the token withholds the permission: qauth:admin:write is refused'
-        source: apps/auth-server/src/app/admin/pipeline.ts:707
+        source: apps/auth-server/src/app/admin/pipeline.ts:711
       - target: readingAccount
         say: 'the caller holds the permission, and its token the scope'
 
@@ -185,17 +201,24 @@ states:
   checkingApproval:
     title: Check the approval of the deletion
     description: >-
-      A security operation runs only with the approval its request names. The approver was shown the account's id,
+      A security operation runs only with the approval its request names, but for one: a service account the
+      operator gave account-closer on this realm, through a client it made, deletes with no approval while the realm
+      needs one for the deletion, and a call that names no approval then runs unattended; where the realm makes a
+      second admin mandatory for users.delete, the grant stands in for nothing. The approver was shown the account's id,
       when it was created, whether it is enabled, what the deletion ends, and each credential with the proof it
       holds and its identifier masked, the first and last character of whatever kind of identifier it is; for an id
       the realm does not hold, that nothing is deleted. An account with no identifier is shown by its id, its
       creation time and its credentials. The approval keeps only that, and binds the account's state at that version.
-    source: apps/auth-server/src/app/admin/pipeline.ts:763
+    source: apps/auth-server/src/app/admin/pipeline.ts:770
     always:
+      - guard: runsUnattended
+        target: lockingAccount
+        say: 'a relying party that holds account-closer on the realm, which needs one approval: it runs with none'
+        source: apps/auth-server/src/app/admin/pipeline.ts:791
       - guard: noApproval
         target: approval_required.no_approval
         say: 'no approval for exactly this request: the operation never runs'
-        source: apps/auth-server/src/app/admin/pipeline.ts:798
+        source: apps/auth-server/src/app/admin/pipeline.ts:815
       - target: lockingAccount
         say: 'the approval holds, and the handler transaction consumes it'
 
@@ -297,7 +320,7 @@ states:
   forbidden.no_permission:
     type: final
     title: Refuse a caller whose role lacks the permission
-    source: apps/auth-server/src/app/admin/pipeline.ts:707
+    source: apps/auth-server/src/app/admin/pipeline.ts:711
     response:
       status: 403
       body:
@@ -311,7 +334,7 @@ states:
     description: >-
       The challenge is in the DPoP scheme the admin token comes under, with error="insufficient_scope" and
       scope="qauth:admin:security".
-    source: apps/auth-server/src/app/admin/pipeline.ts:707
+    source: apps/auth-server/src/app/admin/pipeline.ts:711
     response:
       status: 403
       body:
@@ -358,7 +381,7 @@ states:
   approval_required.no_approval:
     type: final
     title: Refuse a security operation without its approval
-    source: apps/auth-server/src/app/admin/pipeline.ts:798
+    source: apps/auth-server/src/app/admin/pipeline.ts:815
     response:
       status: 403
       body:
@@ -368,13 +391,19 @@ states:
 
 assertions:
   - id: no-deletion-without-approval
-    never: 'deleted and noApproval'
-    say: 'An account is deleted only by a request an approval was given for'
-    source: apps/auth-server/src/app/admin/pipeline.ts:798
+    never: 'deleted and noApproval and (not closerCaller or secondAdminMandatory)'
+    say: >-
+      An account is deleted only by a request an approval was given for, or by a relying party that holds
+      account-closer on the realm where the realm needs one approval for the deletion
+    source: apps/auth-server/src/app/admin/pipeline.ts:815
+  - id: a-mandatory-second-admin-binds-the-closer
+    never: 'deleted and noApproval and secondAdminMandatory'
+    say: 'Where the realm makes a second admin mandatory for users.delete, no deletion runs without its approvals'
+    source: apps/auth-server/src/app/admin/approvals/unattended.ts:41
   - id: write-scope-never-deletes
     never: 'deleted and scopeLacksSecurity'
     say: 'A token that carries qauth:admin:write but not qauth:admin:security never deletes an account'
-    source: apps/auth-server/src/app/admin/pipeline.ts:707
+    source: apps/auth-server/src/app/admin/pipeline.ts:711
   - id: no-service-account-or-admin-deleted
     never: 'deleted and (serviceAccountsAccount or administratorsAccount or adminUnderLock)'
     say: "A service account's account and an admin's are never deleted through users.delete"
