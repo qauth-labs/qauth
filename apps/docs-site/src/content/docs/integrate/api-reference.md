@@ -778,7 +778,7 @@ generic `403` `forbidden`, audited as `request.csrf_rejected` with `form: intera
 answers its step view once: a processed answer, a refused one included, gives the step a new value,
 while an answer refused before it is processed (a `400`, a `429`, a `503`) leaves it as it was. A
 body is JSON or `application/x-www-form-urlencoded` (else `415`), at most 16 KiB, or 64 KiB for an
-answer to `webauthn_create` (else `413`); a form field may not be repeated (`400` `invalid_answer`).
+answer to `webauthn_create` or `admin_enrolment` (else `413`); a form field may not be repeated (`400` `invalid_answer`).
 A form post gets `303` to the ceremony app's page of the interaction (under the realm's
 sign-in pages), or to the final redirect; a JSON answer gets the next step or the redirect as JSON. The redirect is
 taken from the interaction and the realm, never from the request. When a sign-in finishes, its

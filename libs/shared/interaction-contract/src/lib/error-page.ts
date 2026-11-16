@@ -28,7 +28,7 @@ export const ERROR_PAGE_CODES = {
   logout_finished:
     'A sign-out ended with no app the browser is sent back to: `signed_out` says whether this browser now holds no session of the realm, and `host`, when present, names the app the person would go back to, which the browser is not sent to because the operator did not set the app up.',
   admin_enrolment_refused:
-    'An admin enrolment URL enrolled nothing: its token is unknown, used, expired or damaged, or it was spent or expired before the passkey could be stored. Every one of these gets this code alone. The account has no credential; the operator who ran the break-glass CLI enrols again.',
+    'An admin enrolment URL stored no passkey this time: its token is unknown, used, expired or damaged; its account is gone or disabled; passkey sign-in is off on the server (`WEBAUTHN_ENABLED`); or the enrolment was spent, expired or its account disabled or deleted before the passkey could be stored. Every one of these gets this code alone, so the page says only that the link registered no passkey. A URL refused while passkey sign-in is off works once it is on, until it expires; the operator who ran the break-glass CLI knows which case applies.',
   admin_enrolment_finished:
     'An admin enrolment ended: `enrolled` says whether the account’s first passkey was stored. With `true` the admin signs in with it from now on, and cannot approve another admin’s request for 7 days; with `false` the person cancelled, nothing was stored, and the URL works until it expires.',
 } as const;
