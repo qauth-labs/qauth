@@ -425,6 +425,49 @@ describe('decideAdminEnrolment (#621)', () => {
     expect(repositories.events.emit).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['the trigger refuses by the database clock', '23514', 'admin_enrolments_use_once'],
+    ['the account was deleted', '23503', 'user_credentials_user_id_users_id_fk'],
+  ])('ends as refused, recording nothing, when %s', async (_label, code, constraint) => {
+    const { fastify, request, repositories } = fakeServer();
+    const refusal = Object.assign(new Error('refused by the database'), { code, constraint });
+    // As drizzle throws it: the driver's error as the cause.
+    const thrown = new Error('Failed query', { cause: refusal });
+    if (code === '23503') repositories.userCredentials.create.mockRejectedValueOnce(thrown);
+    else repositories.adminEnrolments.redeemEnrolment.mockRejectedValueOnce(thrown);
+    const answered = vi.fn();
+    const decision = await decideAdminEnrolment(
+      fastify,
+      request,
+      stateOf() as never,
+      '{}',
+      answered,
+      fakeProvider() as never
+    );
+    expect(decision).toEqual({ kind: 'finished' });
+    expect(answered).toHaveBeenCalledWith('refused');
+    expect(repositories.events.emit).not.toHaveBeenCalled();
+  });
+
+  it('fails on a database error of another constraint', async () => {
+    const { fastify, request, repositories } = fakeServer();
+    const refusal = Object.assign(new Error('another check'), {
+      code: '23514',
+      constraint: 'user_credentials_some_check',
+    });
+    repositories.userCredentials.create.mockRejectedValueOnce(refusal);
+    await expect(
+      decideAdminEnrolment(
+        fastify,
+        request,
+        stateOf() as never,
+        '{}',
+        vi.fn(),
+        fakeProvider() as never
+      )
+    ).rejects.toBe(refusal);
+  });
+
   it('fails, so the turn is given back, on an error that is no refusal', async () => {
     const { fastify, request } = fakeServer();
     const provider = fakeProvider();

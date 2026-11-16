@@ -8,7 +8,12 @@ import {
   type WebAuthnProvider,
   WebAuthnRejection,
 } from '@qauth-labs/fastify-plugin-federation';
-import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  extractConstraintName,
+  pgErrorCodeOf,
+  UniqueConstraintError,
+} from '@qauth-labs/shared-errors';
 import { stepUrn } from '@qauth-labs/shared-interaction-contract';
 import { resolveRpId } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -104,6 +109,29 @@ class AdminEnrolmentSpentError extends Error {
     super('the admin enrolment was spent or expired before the passkey was stored');
     this.name = 'AdminEnrolmentSpentError';
   }
+}
+
+/**
+ * Why the passkey's transaction found nothing left to enrol, or `undefined`
+ * for an error that says nothing of the enrolment. Besides the checks of
+ * {@link AdminEnrolmentSpentError}, the database refuses two of these
+ * itself: the trigger `admin_enrolments_use_once` when its own clock passed
+ * the expiry before the request's did, and the credential's foreign key when
+ * the account was deleted, as an operator does with an account whose URL
+ * leaked. Each ends the enrolment as refused, as an expired or used token
+ * does, rather than failing every answer until the interaction expires.
+ */
+function spentReasonOf(error: unknown): string | undefined {
+  if (error instanceof AdminEnrolmentSpentError) return error.message;
+  const code = pgErrorCodeOf(error);
+  const constraint = extractConstraintName(error);
+  if (code === '23514' && constraint === 'admin_enrolments_use_once') {
+    return "the admin enrolment expired by the database's clock before the passkey was stored";
+  }
+  if (code === '23503' && constraint === 'user_credentials_user_id_users_id_fk') {
+    return 'the admin enrolment’s account was deleted before the passkey was stored';
+  }
+  return undefined;
 }
 
 /** The name of an admin account in its passkey: `admin-` and 8 characters of its user handle. */
@@ -336,8 +364,9 @@ export async function decideAdminEnrolment(
       }
     );
   } catch (error) {
-    if (error instanceof AdminEnrolmentSpentError) {
-      request.log.info({ realmId: realm.id }, error.message);
+    const spent = spentReasonOf(error);
+    if (spent !== undefined) {
+      request.log.info({ realmId: realm.id }, spent);
       answered('refused');
       return { kind: 'finished' };
     }
@@ -386,7 +415,7 @@ const PAGES: Readonly<Record<AdminEnrolmentResult, { title: string; text: string
   },
   refused: {
     title: 'This enrolment link is no longer valid',
-    text: 'The link has expired, has already been used, or is incomplete. Ask the operator who enrolled you to enrol you again.',
+    text: 'This link registered no passkey. It may have expired, been used already or be incomplete, or the server may not accept passkeys yet. Ask the operator who enrolled you.',
   },
 };
 
