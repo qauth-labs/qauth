@@ -14,6 +14,7 @@ import {
   MissingAccessTokenError,
   TooManyRequestsError,
 } from '@qauth-labs/shared-errors';
+import type { SecurityEffect } from '@qauth-labs/shared-validation';
 import type {
   FastifyInstance,
   FastifyReply,
@@ -59,6 +60,11 @@ import { isApprovalEngineOperation } from './approvals/operations';
 import { callerAccount } from './approvals/standing';
 import { approvalsFromOthers, operationApprovalRequirement } from './approvals/two-admin';
 import { runsUnattended } from './approvals/unattended';
+import {
+  type AuthorizedOperation,
+  issueAuthorizedOperation,
+  retireAuthorizedOperation,
+} from './authorized-operation';
 import { runInAdminHandler } from './handler-scope';
 import { adminRealmRouteProblem } from './route-placement';
 import { secretMemberSchemaProblem } from './secrets/secret-members';
@@ -175,6 +181,12 @@ export interface AdminPipelineState {
   approval?: GatedApproval;
   /** That approval as the call's transaction consumed it, for the `succeeded` row. */
   consumedApproval?: AdminApproval;
+  /**
+   * The capability of the approved security operation, while its handler
+   * runs (#523, `./authorized-operation.ts`): issued after its approval was
+   * consumed, for an operation whose effects a capability-taking write needs.
+   */
+  authorizedOperation?: AuthorizedOperation;
   /**
    * Whether stage 8 started, from the opening of the handler's transaction:
    * a later failure is `failed`, an earlier refusal `denied`.
@@ -383,6 +395,73 @@ export function adminTransaction(request: FastifyRequest): AdminTransaction {
     throw new Error('There is no admin transaction outside the handler of an admin route');
   }
   return transaction;
+}
+
+/**
+ * The effects whose writes take an {@link AuthorizedOperation}: an approved
+ * security operation that names one is issued the capability.
+ * `issue-for-other`: an act-chain token for an admin who acts for a user
+ * (`mintActChainToken`, #523).
+ */
+const CAPABILITY_EFFECTS: readonly SecurityEffect[] = Object.freeze(['issue-for-other']);
+
+/**
+ * The capability of the approved security operation whose handler runs
+ * (#523): what a write that only such an operation may make, such as
+ * `mintActChainToken`, takes as its first argument. It works while the handler
+ * runs, and for one write.
+ *
+ * @throws {Error} outside the handler of an admin route, or for an operation
+ *   that was issued none: not a security operation consumed on an approval, or
+ *   one whose effects no such write needs
+ */
+export function requestAuthorizedOperation(request: FastifyRequest): AuthorizedOperation {
+  const state = request.adminPipeline;
+  if (state?.transaction === undefined || state.authorizedOperation === undefined) {
+    throw new Error(
+      'There is no approved operation outside the handler of a security operation run on its approval'
+    );
+  }
+  return state.authorizedOperation;
+}
+
+/** The capability of the call's operation, or none (#523): see {@link CAPABILITY_EFFECTS}. */
+function authorizedOperationOf(
+  request: FastifyRequest,
+  caller: AdminCaller,
+  transaction: AdminTransaction,
+  consumed: AdminApproval
+): AuthorizedOperation | undefined {
+  const classification = requestClassification(request);
+  if (
+    classification.class !== 'security' ||
+    !classification.effects.some((effect) => CAPABILITY_EFFECTS.includes(effect))
+  ) {
+    return undefined;
+  }
+  const token = request.jwtPayload;
+  const jkt = token?.cnf?.jkt;
+  if (
+    typeof token?.iss !== 'string' ||
+    typeof token.clientId !== 'string' ||
+    typeof jkt !== 'string'
+  ) {
+    // The token guard admitted a DPoP-bound admin token: one without its
+    // issuer, client or key is the server's error, never the caller's.
+    throw new Error('The admin token of an approved operation names no issuer, client or key');
+  }
+  return issueAuthorizedOperation({
+    request,
+    transaction,
+    caller,
+    operationId: classification.operationId,
+    effects: classification.effects,
+    permissions: classification.permissions,
+    approvalId: consumed.id,
+    adminToken: { issuer: token.iss, clientId: token.clientId, jkt },
+    params: request.params,
+    body: request.body,
+  });
 }
 
 /**
@@ -1064,6 +1143,11 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
         // included, fails on the server too (5xx) or is refused.
         state.handlerStarted = true;
         state.transaction = tx;
+        // The approved operation's capability (#523), for this handler alone.
+        state.authorizedOperation =
+          state.consumedApproval === undefined
+            ? undefined
+            : authorizedOperationOf(request, caller, tx, state.consumedApproval);
         refuseAnswering(reply);
         let result: unknown;
         try {
@@ -1073,6 +1157,10 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
         } finally {
           allowAnswering(reply);
           state.transaction = undefined;
+          if (state.authorizedOperation !== undefined) {
+            retireAuthorizedOperation(state.authorizedOperation);
+            state.authorizedOperation = undefined;
+          }
         }
         assertNothingAnswered(reply);
         const prepared = prepareAnswer(reply, result);
