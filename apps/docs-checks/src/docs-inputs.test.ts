@@ -33,19 +33,25 @@ const DOCS_OWNERS = new Set(['docs-site', 'docs-checks']);
  * - The auth server generates two pages from its registries (`pnpm nx test
  *   auth-server -- -u`), and its tests compare the table of problem codes on
  *   the third with the code. No other project may import an application (the
- *   module boundaries in .oxlintrc.json), so these checks stay with it.
+ *   module boundaries in .oxlintrc.json), so these checks stay with it. Its
+ *   OpenAPI export writes the API families' baselines under
+ *   `docs/api-baseline/` (#525), and its tests validate them and compare them
+ *   with the cut of the whole document.
  * - The three contract libraries publish their page together with the JSON
  *   files under the docs site's `public/` and the stable-surface registry,
  *   all written by the library's export target and compared as one set.
  *
- * Every page here is generated or checked against the code, so an edit that
- * is not a code change fails that project's tests anyway.
+ * Every page and file here is generated or checked against the code, so an
+ * edit that is not a code change fails that project's tests anyway.
  */
 const SOURCE_PAGES: Readonly<Record<string, readonly string[]>> = {
   'auth-server': [
     'apps/docs-site/src/content/docs/reference/admin-permissions.md',
     'apps/docs-site/src/content/docs/reference/api-conventions.md',
     'apps/docs-site/src/content/docs/reference/security-operations.md',
+    'docs/api-baseline/openapi-account.json',
+    'docs/api-baseline/openapi-admin.json',
+    'docs/api-baseline/openapi-developer.json',
   ],
   'shared-account-contract': ['apps/docs-site/src/content/docs/reference/account-api.md'],
   'shared-events': [
