@@ -402,6 +402,29 @@ describe('decideAdminEnrolment (#621)', () => {
     expect(repositories.adminGrants.recordSecurityChange).not.toHaveBeenCalled();
   });
 
+  it('ends as refused, storing nothing, when the account was disabled since the start', async () => {
+    const { fastify, request, repositories } = fakeServer();
+    // The start read it enabled; the passkey's transaction reads it disabled.
+    repositories.users.findById.mockImplementation(async (...args: unknown[]) => ({
+      id: USER_ID,
+      enabled: args[2] !== TX,
+    }));
+    const answered = vi.fn();
+    const decision = await decideAdminEnrolment(
+      fastify,
+      request,
+      stateOf() as never,
+      '{}',
+      answered,
+      fakeProvider() as never
+    );
+    expect(decision).toEqual({ kind: 'finished' });
+    expect(answered).toHaveBeenCalledWith('refused');
+    expect(repositories.users.findById).toHaveBeenCalledWith(REALM_ID, USER_ID, TX);
+    expect(repositories.adminEnrolments.redeemEnrolment).not.toHaveBeenCalled();
+    expect(repositories.events.emit).not.toHaveBeenCalled();
+  });
+
   it('fails, so the turn is given back, on an error that is no refusal', async () => {
     const { fastify, request } = fakeServer();
     const provider = fakeProvider();

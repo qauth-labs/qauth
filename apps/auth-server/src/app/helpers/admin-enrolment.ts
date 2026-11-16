@@ -95,7 +95,10 @@ export type AdminEnrolmentStart =
   | { readonly kind: 'started'; readonly id: string }
   | { readonly kind: 'refused' };
 
-/** The enrolment was spent or expired between the start and the stored passkey. */
+/**
+ * The enrolment was spent or expired between the start and the stored
+ * passkey, or its account was disabled or deleted meanwhile.
+ */
 class AdminEnrolmentSpentError extends Error {
   constructor() {
     super('the admin enrolment was spent or expired before the passkey was stored');
@@ -251,9 +254,9 @@ function parseResponse(text: string): unknown {
  *   under another RP ID than the realm's: the step again, with
  *   `invalid_credentials` and a new ceremony. Nothing is stored and the
  *   enrolment stays unspent.
- * - An enrolment spent or expired since the start: the interaction
- *   finishes as `refused`, and the transaction that would have stored the
- *   passkey rolls back.
+ * - An enrolment spent or expired since the start, or an account disabled
+ *   or deleted since: the interaction finishes as `refused`, and the
+ *   transaction that would have stored the passkey rolls back.
  * - Otherwise the interaction finishes as `enrolled`.
  */
 export async function decideAdminEnrolment(
@@ -297,6 +300,11 @@ export async function decideAdminEnrolment(
         // In the passkey's transaction: the enrolment is spent once, and its
         // records commit with the passkey, or nothing does.
         recorded: async (credential, tx) => {
+          // The account may have been disabled since the start, as an
+          // operator does with an account whose URL leaked: it gets no
+          // passkey, and its enrolment stays as it is.
+          const account = await fastify.repositories.users.findById(realm.id, held.userId, tx);
+          if (account === undefined || !account.enabled) throw new AdminEnrolmentSpentError();
           const redeemed = await fastify.repositories.adminEnrolments.redeemEnrolment(
             realm.id,
             held.enrolmentId,

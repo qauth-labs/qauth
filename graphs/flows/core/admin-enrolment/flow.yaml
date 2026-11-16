@@ -103,7 +103,9 @@ context:
     initial: any
     say:
       stored: 'the credential id is new, the RP ID is the realm one, and the enrolment is unspent and unexpired'
-      spent: 'another browser enrolled with the same token first, or the enrolment expired since the start'
+      spent: >-
+        another browser enrolled with the same token first, the enrolment expired since the start, or its account was
+        disabled or deleted since
       held: 'the realm holds the credential id already'
       rpIdChanged: "the realm's RP ID changed under the ceremony"
   # The status page's result.
@@ -221,7 +223,7 @@ states:
     description: >-
       The account's one credential will be a passkey. While WEBAUTHN_ENABLED is off it could not sign in, so the token
       is not read, and stays usable once passkeys are on; the log says why at warn.
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:195
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:198
     always:
       - guard: "passkeysOff and errorPageNamed"
         target: admin_enrolment_refused.at_start
@@ -235,7 +237,7 @@ states:
       - guard: "token == 'absent'"
         target: bad_request.no_token
         say: 'no token: the body is read in the handler, so a bad body answers as a bad token'
-        source: apps/auth-server/src/app/helpers/admin-enrolment.ts:202
+        source: apps/auth-server/src/app/helpers/admin-enrolment.ts:205
       - target: readingEnrolment
         say: 'a token'
 
@@ -244,7 +246,7 @@ states:
     description: >-
       By the token's SHA-256, in the request's realm, unused, created and unexpired by the request's clock. A token of
       another shape reads no row. Starting spends nothing, so a link scanner or an abandoned ceremony costs nothing.
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:204
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:207
     invoke: { external: adminEnrolmentStore }
     on:
       DONE:
@@ -254,19 +256,19 @@ states:
         - guard: "token == 'damaged'"
           target: bad_request.damaged_token
           say: 'a damaged token'
-          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:209
+          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:212
         - guard: "token == 'unknown'"
           target: bad_request.unknown_token
           say: 'a token no enrolment of this realm holds'
-          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:209
+          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:212
         - guard: "token == 'used'"
           target: bad_request.used_token
           say: 'a used one'
-          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:209
+          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:212
         - guard: "token == 'expired'"
           target: bad_request.expired_token
           say: 'an expired one'
-          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:209
+          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:212
         - target: readingAccount
           say: 'an enrolment that may still be redeemed'
       FAIL.server:
@@ -275,7 +277,7 @@ states:
 
   readingAccount:
     title: Read the account the enrolment is for
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:210
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:213
     invoke: { external: accountStore }
     on:
       DONE:
@@ -285,7 +287,7 @@ states:
         - guard: "account == 'unusable'"
           target: bad_request.account_unusable
           say: 'the account is gone or disabled'
-          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:211
+          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:214
         - target: startingCeremony
           say: 'the account is enabled'
       FAIL.server:
@@ -298,7 +300,7 @@ states:
       Under a new ceremony key and a new user handle, with an account name made from the handle (admin-<8 characters>),
       which names nobody: a discoverable passkey (residentKey required), user verification required, attestation none,
       the realm's RP ID and origin. The challenge is stored for 5 minutes.
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:143
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:146
     invoke: { external: passkeyChallenges }
     on:
       DONE:
@@ -314,7 +316,7 @@ states:
       An interaction record of purpose admin_enrolment, holding the enrolment's id, the account's id, the ceremony key
       and the user handle, never the token or its hash; it expires with the enrolment, or sooner. A new secret in the
       __Host-qauth_flow cookie binds it to this browser; interaction.created is recorded.
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:223
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:226
     invoke: { external: interactionStore }
     on:
       DONE:
@@ -427,14 +429,14 @@ states:
     description: >-
       The provider takes the ceremony's challenge once, whatever it finds, and verifies the response with user
       verification required.
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:277
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:280
     invoke: { external: passkeyChallenges }
     on:
       DONE:
         - guard: ceremonyRefused
           target: askingAfterRefusal
           say: 'refused: the step again with invalid_credentials and a new ceremony; nothing is stored'
-          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:283
+          source: apps/auth-server/src/app/helpers/admin-enrolment.ts:286
         - target: storingPasskey
           effect: [verifyCeremony]
           say: 'a passkey created with user verification'
@@ -445,12 +447,13 @@ states:
   storingPasskey:
     title: Store the passkey and spend the enrolment, in one transaction
     description: >-
-      The realm's RP ID is locked and checked, the webauthn credential written, then the enrolment spent by its id under
+      The realm's RP ID is locked and checked, the webauthn credential written, the account read again (a disabled one
+      gets nothing), then the enrolment spent by its id under
       the same conditions as the read, by the database's clock too: once, before it expires. user.credential_added
       and admin.enrolment_completed are recorded in the same transaction; the first moves the admin grant's
       last_security_change_at, so the account cannot approve for 7 days. No password credential is written. A failure
       rolls all of it back.
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:287
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:290
     invoke: { external: credentialStore }
     on:
       DONE:
@@ -459,16 +462,18 @@ states:
         say: 'the passkey is the account’s, and the enrolment is spent'
       FAIL.spent:
         target: endingInteraction
-        say: 'the enrolment was spent or expired meanwhile: nothing is stored, and the enrolment ends as refused'
-        source: apps/auth-server/src/app/helpers/admin-enrolment.ts:307
+        say: >-
+          the enrolment was spent or expired meanwhile, or its account disabled: nothing is stored, and the enrolment
+          ends as refused
+        source: apps/auth-server/src/app/helpers/admin-enrolment.ts:315
       FAIL.held:
         target: askingAfterHeldCredential
         say: 'the realm holds the credential id: the step again with a new ceremony'
-        source: apps/auth-server/src/app/helpers/admin-enrolment.ts:338
+        source: apps/auth-server/src/app/helpers/admin-enrolment.ts:346
       FAIL.rpIdChanged:
         target: askingUnderNewRpId
         say: "the realm's RP ID changed: the step again with a new ceremony under the new one"
-        source: apps/auth-server/src/app/helpers/admin-enrolment.ts:339
+        source: apps/auth-server/src/app/helpers/admin-enrolment.ts:347
       FAIL.server:
         target: server_error.credential_store
         say: 'the database fails; the turn is given back'
@@ -564,7 +569,7 @@ states:
     description: >-
       The page an enrolment ends on when the realm names no error page. It says what its result names; a value that is
       no result reads as refused, the page that claims nothing was stored, so a crafted URL can claim no enrolment.
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:443
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:451
     always:
       - guard: "errorPageNamed and result == 'enrolled'"
         target: status.error_page_enrolled
@@ -607,7 +612,7 @@ states:
   bad_request.passkeys_off:
     type: final
     title: Refuse every start while passkeys are off
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:422
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:430
     response: &refusedPage
       status: 400
       headers:
@@ -652,7 +657,7 @@ states:
   admin_enrolment_refused.at_start:
     type: final
     title: Send a refused start to the realm's error page
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:431
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:439
     response: &refusedErrorPage
       status: 303
       headers:
@@ -665,7 +670,7 @@ states:
   enrolled:
     type: final
     title: Send the browser to the page that says the passkey is registered
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:366
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:374
     response:
       status: 303
       headers:
@@ -675,7 +680,7 @@ states:
   admin_enrolment_finished.enrolled:
     type: final
     title: Send the browser to the realm's error page, enrolled
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:362
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:370
     response:
       status: 303
       headers:
@@ -759,7 +764,7 @@ states:
   status.enrolled:
     type: final
     title: Say that the passkey is registered
-    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:386
+    source: apps/auth-server/src/app/helpers/admin-enrolment.ts:394
     response:
       status: 200
       headers:
