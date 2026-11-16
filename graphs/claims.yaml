@@ -13,6 +13,8 @@ operations:
   POST /oauth/end-session: { flow: [logout] }
   GET /oauth/end-session/status: { flow: [logout] }
   POST /auth/login: { flow: [sign-in-token] }
+  POST /auth/admin-enrolment: { flow: [admin-enrolment] }
+  GET /auth/admin-enrolment/status: { flow: [admin-enrolment] }
   GET /ui/login: { flow: [sign-in-page] }
   POST /ui/login: { flow: [sign-in-page] }
   GET /ui/resume/{handle}: { flow: [sign-in-page] }
