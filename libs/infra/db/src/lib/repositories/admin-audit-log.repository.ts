@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, sql } from 'drizzle-orm';
 
 import type {
+  AdminActChainCallEntry,
   AdminAuditChainBreakReason,
   AdminAuditChainReport,
   AdminAuditEntry,
@@ -176,6 +177,59 @@ function buildAdminAuditRowContent(
 
 const hex = (hash: Buffer): string => hash.toString('hex');
 
+/** A row of `admin_audit_log` as `admin_audit_append_act_chain_call` returns it. */
+type StoredAdminAuditRow = {
+  realm_id: string;
+  seq: string | number;
+  prev_hash: Buffer;
+  row_hash: Buffer;
+  actor_kind: AdminAuditRecord['actorKind'];
+  actor_id: string;
+  actor_realm_id: string | null;
+  act_chain: AdminAuditActChain | null;
+  operation_id: string;
+  operation_class: AdminAuditRecord['operationClass'];
+  effects: string[];
+  outcome: AdminAuditRecord['outcome'];
+  masked_diff: AdminAuditRecord['maskedDiff'];
+  approvals: AdminAuditApproval[];
+  request_digest: Buffer | null;
+  trace_id: string | null;
+  created_at: string | number;
+};
+
+function recordOfStoredRow(row: StoredAdminAuditRow): AdminAuditRecord {
+  return {
+    realmId: row.realm_id,
+    seq: Number(row.seq),
+    prevHash: row.prev_hash,
+    rowHash: row.row_hash,
+    actorKind: row.actor_kind,
+    actorId: row.actor_id,
+    actorRealmId: row.actor_realm_id,
+    actChain: row.act_chain,
+    operationId: row.operation_id,
+    operationClass: row.operation_class,
+    effects: row.effects,
+    outcome: row.outcome,
+    maskedDiff: row.masked_diff,
+    approvals: row.approvals,
+    requestDigest: row.request_digest,
+    traceId: row.trace_id,
+    createdAt: Number(row.created_at),
+  };
+}
+
+/** Throw unless `record`, as Postgres stored it, hashes to its own `row_hash`. */
+function assertStoredRowHashes(record: AdminAuditRecord, caller: string): void {
+  const { prevHash: storedPrev, rowHash: storedHash, ...stored } = record;
+  if (!computeAdminAuditRowHash(storedPrev, stored).equals(storedHash)) {
+    throw new Error(
+      `${caller}: the stored row does not hash to its row_hash; nothing was appended`
+    );
+  }
+}
+
 /** Why a row does not continue the chain at `expectedSeq` after `expectedPrev`, if it does not. */
 function checkRow(
   row: AdminAuditRecord,
@@ -233,12 +287,76 @@ export function createAdminAuditLogRepository(
       // The row as Postgres stored it must hash to its row_hash, or the chain
       // would break at this row for good. Throwing here rolls it back with
       // the caller's change.
-      const { prevHash: storedPrev, rowHash: storedHash, ...stored } = record;
-      if (!computeAdminAuditRowHash(storedPrev, stored).equals(storedHash)) {
+      assertStoredRowHashes(record, 'appendAdminAudit');
+
+      await options.afterAppend?.(tx, record);
+      return record;
+    },
+
+    async appendActChainCall(
+      tx: DbTransaction,
+      entry: AdminActChainCallEntry
+    ): Promise<AdminAuditRecord> {
+      if (typeof entry.operationId !== 'string' || !entry.operationId.startsWith('account.')) {
+        throw new TypeError('appendActChainCall: the call is not an account API operation');
+      }
+      if (typeof entry.tokenJti !== 'string' || entry.tokenJti === '') {
+        throw new TypeError('appendActChainCall: the call names no act-chain token');
+      }
+      const draft = buildAdminAuditRowContent({
+        realmId: entry.realmId,
+        actorKind: 'human_admin',
+        actorId: entry.actorId,
+        actorRealmId: entry.actorRealmId,
+        actChain: entry.actChain,
+        operationId: entry.operationId,
+        operationClass: entry.operationClass,
+        effects: [],
+        outcome: entry.outcome,
+        diff: null,
+        approvals: [],
+        requestDigest: null,
+        traceId: entry.traceId ?? null,
+      });
+
+      // The database takes the realm's chain lock and reads the head: the
+      // caller's role reads nothing of the log itself.
+      const {
+        rows: [head],
+      } = await tx.execute<{ o_seq: string | number; o_row_hash: Buffer }>(
+        sql`select o_seq, o_row_hash from admin_audit_act_chain_head(${draft.realmId}::uuid)`
+      );
+      if (head === undefined) throw new Error('appendActChainCall: the chain head was not read');
+      const content: AdminAuditRowContent = {
+        ...draft,
+        seq: Number(head.o_seq) + 1,
+        createdAt: now(),
+      };
+      const rowHash = computeAdminAuditRowHash(head.o_row_hash, content);
+
+      const { rows } = await tx.execute<StoredAdminAuditRow>(
+        sql`select * from admin_audit_append_act_chain_call(
+          ${content.realmId}::uuid,
+          ${entry.tokenJti},
+          ${content.seq},
+          ${head.o_row_hash},
+          ${rowHash},
+          ${content.operationId},
+          ${content.operationClass},
+          ${content.outcome},
+          ${JSON.stringify(content.actChain)}::jsonb,
+          ${content.traceId},
+          ${content.createdAt}
+        )`
+      );
+      const [stored] = rows;
+      if (stored === undefined) {
         throw new Error(
-          'appendAdminAudit: the stored row does not hash to its row_hash; nothing was appended'
+          "appendActChainCall: the database wrote no row: the call does not match its act-chain token's record"
         );
       }
+      const record = recordOfStoredRow(stored);
+      assertStoredRowHashes(record, 'appendActChainCall');
 
       await options.afterAppend?.(tx, record);
       return record;

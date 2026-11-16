@@ -53,6 +53,13 @@ export interface AdminActSessionsRepository {
   findLive(realmId: string, jti: string, now: number): Promise<AdminActSession | undefined>;
 
   /**
+   * The row of the token `jti` of `realmId`, live or not: what the account
+   * API names in the audit row of a call it refuses with the token.
+   * `undefined` for an unknown token.
+   */
+  findByJti(realmId: string, jti: string): Promise<AdminActSession | undefined>;
+
+  /**
    * The act-chain tokens issued for `userId` in `realmId`, newest first, at
    * most `limit` ({@link ADMIN_ACT_SESSIONS_LIST_MAX} by default and at most).
    */
@@ -139,6 +146,18 @@ export function createAdminActSessionsRepository(defaultDb: DbClient): AdminActS
             )
           )
         )
+        .limit(1);
+      return row;
+    },
+
+    async findByJti(realmId, jti) {
+      if (!isAdminRecordId(realmId) || typeof jti !== 'string' || jti.length === 0) {
+        return undefined;
+      }
+      const [row] = await defaultDb
+        .select()
+        .from(adminActSessions)
+        .where(and(eq(adminActSessions.realmId, realmId), eq(adminActSessions.tokenJti, jti)))
         .limit(1);
       return row;
     },

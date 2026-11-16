@@ -24,6 +24,7 @@ import {
   type AdminApprovalsRepository,
   createAdminApprovalsRepository,
 } from './admin-approvals.repository';
+import { createAdminAuditLogRepository } from './admin-audit-log.repository';
 import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
 import { createRealmsRepository, type RealmsRepository } from './realms.repository';
 import { createUsersRepository, type UsersRepository } from './users.repository';
@@ -71,7 +72,8 @@ describe('act-chain tokens issued to admins (real Postgres, #523)', () => {
 
   /** A realm, a user of it, its admin, and an approval of `status` in it. */
   async function fixture(status: 'approved' | 'consumed' = 'consumed') {
-    const realm = await realms.create({ name: `realm-${randomBytes(4).toString('hex')}` });
+    const name = `realm-${randomBytes(4).toString('hex')}`;
+    const realm = await realms.create({ name, issuer: `https://${name}.example.test` });
     const user = await users.create({ realmId: realm.id }, testPrimaryCredential());
     const admin = await users.create({ realmId: realm.id }, testPrimaryCredential());
     const opHash = sha256('operation');
@@ -118,7 +120,13 @@ describe('act-chain tokens issued to admins (real Postgres, #523)', () => {
         approvals.consume(realm.id, approval.id, { opHash, now: NOW + 2_000 }, tx)
       );
     }
-    return { realmId: realm.id, userId: user.id, adminId: admin.id, approvalId: approval.id };
+    return {
+      realmId: realm.id,
+      issuer: `https://${name}.example.test`,
+      userId: user.id,
+      adminId: admin.id,
+      approvalId: approval.id,
+    };
   }
 
   function session(
@@ -225,6 +233,115 @@ describe('act-chain tokens issued to admins (real Postgres, #523)', () => {
     await expect(
       db().transaction((tx) => sessions.create(tx, session(at, { userId: other.userId })))
     ).rejects.toMatchObject({ cause: { constraint: 'admin_act_sessions_user_realm_fk' } });
+  });
+
+  it('finds a row by its token id whether it is live or not, in its realm only', async () => {
+    const pending = await fixture('approved');
+    const written = await db().transaction((tx) =>
+      sessions.create(tx, session(pending, { createdAt: NOW - TEN_MINUTES, expiresAt: NOW - 1 }))
+    );
+    expect(await sessions.findLive(pending.realmId, written.tokenJti, NOW)).toBeUndefined();
+    expect(await sessions.findByJti(pending.realmId, written.tokenJti)).toEqual(written);
+    const other = await fixture();
+    expect(await sessions.findByJti(other.realmId, written.tokenJti)).toBeUndefined();
+    expect(await sessions.findByJti('not-a-uuid', written.tokenJti)).toBeUndefined();
+  });
+
+  describe('the audit row of a call made with the token (migration 0082)', () => {
+    function call(
+      at: Awaited<ReturnType<typeof fixture>>,
+      tokenJti: string,
+      overrides: Record<string, unknown> = {}
+    ) {
+      return {
+        realmId: at.realmId,
+        tokenJti,
+        actorId: at.adminId,
+        actorRealmId: at.realmId,
+        actChain: {
+          sub: at.userId,
+          act: { sub: at.adminId, iss: at.issuer, client_id: 'admin-console' },
+        },
+        operationId: 'account.consents.list',
+        operationClass: 'read' as const,
+        outcome: 'succeeded' as const,
+        traceId: 'trace-1',
+        ...overrides,
+      };
+    }
+
+    it("appends the row through the functions, with its token's actor and act chain, and the chain verifies", async () => {
+      const at = await fixture();
+      const written = await db().transaction((tx) => sessions.create(tx, session(at)));
+      const audit = createAdminAuditLogRepository(db());
+      const first = await db().transaction((tx) =>
+        audit.appendActChainCall(tx, call(at, written.tokenJti))
+      );
+      const second = await db().transaction((tx) =>
+        audit.appendActChainCall(
+          tx,
+          call(at, written.tokenJti, { operationId: 'account.consents.delete', outcome: 'denied' })
+        )
+      );
+      expect(first).toMatchObject({
+        realmId: at.realmId,
+        seq: 1,
+        actorKind: 'human_admin',
+        actorId: at.adminId,
+        actorRealmId: at.realmId,
+        actChain: call(at, written.tokenJti).actChain,
+        operationId: 'account.consents.list',
+        effects: [],
+        maskedDiff: null,
+        approvals: [],
+        requestDigest: null,
+        traceId: 'trace-1',
+      });
+      expect(second.seq).toBe(2);
+      expect(second.prevHash.equals(first.rowHash)).toBe(true);
+      expect(await audit.verifyAdminAuditChain(at.realmId)).toMatchObject({ ok: true });
+    });
+
+    it('writes no row for an unknown token, an act chain or actor other than its row, or another API', async () => {
+      const at = await fixture();
+      const written = await db().transaction((tx) => sessions.create(tx, session(at)));
+      const audit = createAdminAuditLogRepository(db());
+      const refused = (entry: ReturnType<typeof call>) =>
+        db().transaction((tx) => audit.appendActChainCall(tx, entry));
+
+      await expect(refused(call(at, randomUUID()))).rejects.toThrow(/wrote no row/);
+      await expect(
+        refused(
+          call(at, written.tokenJti, {
+            actChain: {
+              sub: at.userId,
+              act: {
+                sub: at.adminId,
+                iss: 'https://elsewhere.example.test',
+                client_id: 'admin-console',
+              },
+            },
+          })
+        )
+      ).rejects.toThrow(/wrote no row/);
+      // The actor is the row's: another one is stored as the row's, so the
+      // caller's hash does not match what was stored and nothing commits.
+      const stranger = await users.create({ realmId: at.realmId }, testPrimaryCredential());
+      await expect(refused(call(at, written.tokenJti, { actorId: stranger.id }))).rejects.toThrow(
+        /does not hash/
+      );
+      await expect(
+        refused(call(at, written.tokenJti, { operationId: 'users.delete' }))
+      ).rejects.toThrow(TypeError);
+      // The other realm's token is not this realm's.
+      const other = await fixture();
+      await expect(refused(call(other, written.tokenJti))).rejects.toThrow(/wrote no row/);
+
+      const { rows } = await db().execute<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM admin_audit_log WHERE realm_id IN (${at.realmId}, ${other.realmId})`
+      );
+      expect(rows[0].n).toBe(0);
+    });
   });
 
   it('goes with the user, and stays when the admin account is deleted', async () => {
