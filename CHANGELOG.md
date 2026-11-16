@@ -73,6 +73,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI exports nothing to OpenTelemetry); if either fails, nothing changes. The page that turns the URL into a first passkey is
   [#621]
   ([Break-glass](https://docs.qauth.dev/operate/break-glass/)).
+- **`@qauth-labs/resource-guard` advertises the scopes of every operation**
+  ([#1088], ADR-007). The new `scopesSupported` option, of the core and of
+  the Fastify plugin, lists every scope a resource understands, for a resource
+  whose operations each need their own scope, such as an MCP server with one
+  scope per tool. The guard's RFC 9728 document, which the plugin's metadata
+  route serves, lists them as `scopes_supported`, and the credential-absent
+  `401` of a call that passes no per-operation scopes names them in `scope`
+  (MCP 2026-07-28, "Scope Selection Strategy"); a call that passes some still
+  names those and `requiredScopes`. They are advertised, never required: a
+  token is checked against `requiredScopes` and the per-call scopes only. The
+  option defaults to `requiredScopes` and must hold every entry of it
+  (`ResourceGuardConfigError` otherwise), so a guard without it serves the
+  same document and challenges as before.
 
 ### Changed
 
@@ -4885,6 +4898,7 @@ It adds migrations 0068 and 0069.
 [#1081]: https://github.com/qauth-labs/qauth/issues/1081
 [#1082]: https://github.com/qauth-labs/qauth/issues/1082
 [#1083]: https://github.com/qauth-labs/qauth/issues/1083
+[#1088]: https://github.com/qauth-labs/qauth/issues/1088
 [#1106]: https://github.com/qauth-labs/qauth/issues/1106
 [#1107]: https://github.com/qauth-labs/qauth/issues/1107
 [#1108]: https://github.com/qauth-labs/qauth/issues/1108

@@ -2,8 +2,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { type CryptoKey, exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { ResourceGuardConfigError } from './errors';
-import { resourceGuardPlugin } from './fastify-plugin';
+import { ResourceGuardConfigError, ResourceGuardError } from './errors';
+import { resourceGuardPlugin, sendBearerChallenge } from './fastify-plugin';
 
 const ISSUER = 'https://auth.example.com';
 const RESOURCE = 'https://mcp.example.com';
@@ -587,5 +587,162 @@ describe('resource-guard Fastify plugin — sender-constrained tokens (RFC 9449 
       expect(res.statusCode).toBe(401);
       expect(res.headers['www-authenticate']).toBe(invalidTokenChallenge(DPOP_REASON));
     });
+  });
+});
+
+// #1088 — a plugin registered without `scopesSupported` serves what 0.2.2
+// serves: the metadata route's bytes, and the 401 of each kind of route.
+describe('resource-guard Fastify plugin — without scopesSupported, as 0.2.2', () => {
+  const BASE = `"resource":"${RESOURCE}","authorization_servers":["${ISSUER}"],"bearer_methods_supported":["header"]`;
+
+  it.each([
+    [[], `{${BASE}}`, `Bearer resource_metadata="${METADATA_URL}"`],
+    [
+      ['mcp:read'],
+      `{${BASE},"scopes_supported":["mcp:read"]}`,
+      `Bearer scope="mcp:read", resource_metadata="${METADATA_URL}"`,
+    ],
+  ])('requiredScopes %j', async (requiredScopes, document, challenge) => {
+    app = await buildApp(requiredScopes);
+
+    const prm = await app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource' });
+    expect(prm.statusCode).toBe(200);
+    expect(prm.body).toBe(document);
+
+    const bearer = await app.inject({ method: 'GET', url: '/data' });
+    expect(bearer.statusCode).toBe(401);
+    expect(bearer.headers['www-authenticate']).toBe(challenge);
+    expect(bearer.body).toBe('{}');
+
+    const stepUp = await app.inject({ method: 'POST', url: '/admin' });
+    expect(stepUp.statusCode).toBe(401);
+    expect(stepUp.headers['www-authenticate']).toBe(
+      `Bearer scope="${[...requiredScopes, 'mcp:admin'].join(' ')}", resource_metadata="${METADATA_URL}"`
+    );
+  });
+});
+
+// #1088 — an MCP server with one scope per tool: no scope is required of
+// every request, each tool call checks its own, and the metadata route and
+// the first 401 name every tool's scope.
+describe('resource-guard Fastify plugin — scopesSupported', () => {
+  const TOOL_SCOPES: Record<string, string> = {
+    'notes.search': 'notes:read',
+    'notes.create': 'notes:write',
+  };
+  const SUPPORTED = [...Object.values(TOOL_SCOPES), 'mcp:admin'];
+
+  async function buildPerToolApp(requiredScopes?: string[]): Promise<FastifyInstance> {
+    const perTool = Fastify();
+    await perTool.register(resourceGuardPlugin, {
+      resource: RESOURCE,
+      authorizationServer: ISSUER,
+      ...(requiredScopes ? { requiredScopes } : {}),
+      scopesSupported: SUPPORTED,
+      fetch: jwksFetch({ keys: [publicJwk] }),
+    });
+    perTool.post('/mcp', { preHandler: perTool.requireBearer }, async (request, reply) => {
+      const tool = (request.body as { tool: string }).tool;
+      try {
+        perTool.resourceGuard.assertScopes(request.tokenClaims!, [TOOL_SCOPES[tool]]);
+      } catch (error) {
+        if (error instanceof ResourceGuardError) {
+          return sendBearerChallenge(perTool.resourceGuard, reply, error);
+        }
+        throw error;
+      }
+      return { ok: true, tool };
+    });
+    perTool.post('/admin', { preHandler: perTool.requireScopes('mcp:admin') }, async () => ({
+      ok: true,
+    }));
+    await perTool.ready();
+    return perTool;
+  }
+
+  const callTool = (target: FastifyInstance, tool: string, token?: string) =>
+    target.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      payload: { tool },
+    });
+
+  it('serves every supported scope in the metadata document', async () => {
+    app = await buildPerToolApp();
+    const prm = await app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource' });
+    expect(prm.statusCode).toBe(200);
+    expect(prm.json().scopes_supported).toEqual(SUPPORTED);
+    expect(prm.json()).toEqual(app.resourceGuard.getProtectedResourceMetadata());
+  });
+
+  it('names every supported scope on the 401 of a requireBearer route', async () => {
+    app = await buildPerToolApp();
+    const res = await callTool(app, 'notes.create');
+    expect(res.statusCode).toBe(401);
+    expect(res.headers['www-authenticate']).toBe(
+      `Bearer scope="notes:read notes:write mcp:admin", resource_metadata="${METADATA_URL}"`
+    );
+    expect(res.json()).toEqual({});
+  });
+
+  it('accepts a token carrying none of the supported scopes, then checks the tool scope', async () => {
+    app = await buildPerToolApp();
+    const reader = await signToken({ sub: 'u', client_id: 'c', scope: 'notes:read' });
+    expect((await callTool(app, 'notes.search', reader)).json()).toEqual({
+      ok: true,
+      tool: 'notes.search',
+    });
+
+    const write = await callTool(app, 'notes.create', reader);
+    expect(write.statusCode).toBe(403);
+    expect(write.headers['www-authenticate']).toBe(
+      `Bearer error="insufficient_scope", scope="notes:write", resource_metadata="${METADATA_URL}"`
+    );
+
+    // The guard itself requires nothing: the tool's own check refuses.
+    const bare = await signToken({ sub: 'u', client_id: 'c' });
+    expect((await callTool(app, 'notes.search', bare)).statusCode).toBe(403);
+  });
+
+  it('names only the step-up scope on the 401 and 403 of a requireScopes route', async () => {
+    app = await buildPerToolApp();
+    const unauthenticated = await app.inject({ method: 'POST', url: '/admin' });
+    expect(unauthenticated.statusCode).toBe(401);
+    expect(unauthenticated.headers['www-authenticate']).toBe(
+      `Bearer scope="mcp:admin", resource_metadata="${METADATA_URL}"`
+    );
+
+    const token = await signToken({ sub: 'u', client_id: 'c', scope: 'notes:read' });
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: '/admin',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(forbidden.statusCode).toBe(403);
+    expect(forbidden.headers['www-authenticate']).toBe(
+      `Bearer error="insufficient_scope", scope="mcp:admin", resource_metadata="${METADATA_URL}"`
+    );
+  });
+
+  it('still requires requiredScopes of every request', async () => {
+    app = await buildPerToolApp(['notes:read']);
+    const bare = await signToken({ sub: 'u', client_id: 'c' });
+    const res = await callTool(app, 'notes.search', bare);
+    expect(res.statusCode).toBe(403);
+    expect(res.json().scope).toBe('notes:read');
+  });
+
+  it('refuses to register with a requiredScopes entry missing from scopesSupported', async () => {
+    app = Fastify();
+    await expect(
+      app.register(resourceGuardPlugin, {
+        resource: RESOURCE,
+        authorizationServer: ISSUER,
+        requiredScopes: ['mcp:read'],
+        scopesSupported: SUPPORTED,
+        fetch: jwksFetch({ keys: [publicJwk] }),
+      })
+    ).rejects.toThrow(ResourceGuardConfigError);
   });
 });
