@@ -122,9 +122,11 @@ What a stream hears when an operator switches something off ([Accounts](/operate
 - **An account an admin deleted** (`users.delete` of the admin API,
   [Accounts](/operate/accounts/#delete-an-account)). The deletion ends every session of the account
   in its own transaction, and the stream receives one CAEP `session-revoked` for each, naming it,
-  then RISC `account-purged` for the user, with `initiating_entity` `admin` (none when a service
-  account deleted it). The account's consents and refresh tokens go with it, so the sweep deletes
-  the subject once both have reached the stream.
+  and RISC `account-purged` for the user, with `initiating_entity` `admin` (none when a service
+  account deleted it). They are recorded in that order, but a retried delivery can reach the
+  receiver after a later one, so a receiver does not rely on their order. The account's consents
+  and refresh tokens go with it, so the sweep deletes the subject once both have reached the
+  stream.
 - **An account disabled by hand** (`UPDATE users SET enabled = false`). Nothing is sent: no event
   is recorded. QAuth still refuses everything the account held at its next use, but a receiver
   that verifies tokens itself does not hear of it. Use the tool.
