@@ -87,6 +87,7 @@ import { CLIENT_OPERATION_DEFINITIONS } from '../admin/clients/operations';
 import { PLUGIN_KEY_OPERATION_DEFINITIONS } from '../admin/plugins/key-operations';
 import { PLUGIN_OPERATION_DEFINITIONS } from '../admin/plugins/operations';
 import { REALM_OPERATION_DEFINITIONS } from '../admin/realms/operations';
+import { RESOURCE_SERVER_OPERATION_DEFINITIONS } from '../admin/resource-servers/operations';
 import { SECRET_OPERATION_DEFINITIONS } from '../admin/secrets/operations';
 import { isSecretMemberPattern } from '../admin/secrets/secret-members';
 import { USER_OPERATION_DEFINITIONS } from '../admin/users/operations';
@@ -1117,8 +1118,8 @@ export function createAdminOperationRegistry(
  * Every admin operation, but the approval engine's own: sealing a secret for
  * a security operation (#984), reading a realm and patching its policies
  * (#517, the reference for every later one), the plugin operations (#600)
- * and their client-assertion key operations (#1073), an operator's verification of an account (#1052) and the client
- * operations (#632).
+ * and their client-assertion key operations (#1073), an operator's verification of an account (#1052), the client
+ * operations (#632) and the resource server operations (#1087).
  */
 export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
   [
@@ -1128,6 +1129,7 @@ export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
     ...PLUGIN_KEY_OPERATION_DEFINITIONS,
     ...USER_OPERATION_DEFINITIONS,
     ...CLIENT_OPERATION_DEFINITIONS,
+    ...RESOURCE_SERVER_OPERATION_DEFINITIONS,
   ].map((operation) => defineOperation(operation))
 );
 

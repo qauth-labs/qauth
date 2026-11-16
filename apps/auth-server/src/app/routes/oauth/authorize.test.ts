@@ -268,6 +268,8 @@ function makeFastify() {
           ...data,
         })),
       },
+      // No registered protected resource (#1087): the client's list alone.
+      protectedResources: { listByRealm: async () => [] },
       oauthConsents: {
         findActive,
         // The locked re-read in the code-insert transaction sees what the
@@ -1192,6 +1194,8 @@ describeModes('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', ()
             dynamicRegisteredAt: null,
           })),
         },
+        // No registered protected resource (#1087): the client's list alone.
+        protectedResources: { listByRealm: async () => [] },
         oauthConsents: { findActive: vi.fn() },
         authorizationCodes: { create: vi.fn().mockResolvedValue({ id: 'code-1' }) },
         realmUpstreamProviders: { listByRealm: vi.fn(async () => []), find: vi.fn() },

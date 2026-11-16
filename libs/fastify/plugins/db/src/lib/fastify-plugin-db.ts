@@ -25,6 +25,7 @@ import {
   createOAuthClientsRepository,
   createOAuthConsentsRepository,
   createOid4vpRequestStatesRepository,
+  createProtectedResourcesRepository,
   createRealmAuthMethodPluginsRepository,
   createRealmPublicKeysRepository,
   createRealmSecretsRepository,
@@ -50,6 +51,7 @@ import {
   OAuthClientsRepository,
   type OAuthConsentsRepository,
   type Oid4vpRequestStatesRepository,
+  type ProtectedResourcesRepository,
   type RealmAuthMethodPluginsRepository,
   type RealmPublicKeysRepository,
   type RealmSecretsRepository,
@@ -216,6 +218,13 @@ declare module 'fastify' {
        */
       deploymentNodes: DeploymentNodesRepository;
       /**
+       * The protected resources each realm registered (#1087), with the
+       * scopes each defines and the clients that may ask for them: the admin
+       * API writes them, and every path that grants a user's scopes reads
+       * them (authorize, the consent step, the code and refresh grants).
+       */
+      protectedResources: ProtectedResourcesRepository;
+      /**
        * The service accounts of the admin API (ADR-019 Decision 7, #522):
        * the token endpoint reads a client's for every `client_credentials`
        * request, and the admin API reads a caller's on every call. No
@@ -266,6 +275,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   realmAuthMethodPlugins: true,
   realmUpstreamProviders: true,
   deploymentNodes: true,
+  protectedResources: true,
   serviceAccounts: true,
 };
 
@@ -377,6 +387,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       realmAuthMethodPlugins: () => createRealmAuthMethodPluginsRepository(database.db),
       realmUpstreamProviders: () => createRealmUpstreamProvidersRepository(database.db),
       deploymentNodes: () => createDeploymentNodesRepository(database.db),
+      protectedResources: () => createProtectedResourcesRepository(database.db),
       serviceAccounts: () => createServiceAccountsRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};

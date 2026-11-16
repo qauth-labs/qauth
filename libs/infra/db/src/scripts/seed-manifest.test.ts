@@ -947,3 +947,62 @@ describe('the registration challenge (#643, ADR-017 Decision 7)', () => {
     expect(parse({ ...webClient, registration_challenge: 'yes' }).success).toBe(false);
   });
 });
+
+describe('resources (#1087)', () => {
+  const resource = {
+    resource: 'https://mcp.example.com/mcp',
+    scopes: [
+      { scope: 'files:read', text: { en: 'Read your files', tr: 'Dosyalarınızı okusun' } },
+      { scope: 'files:write', text: { en: 'Change your files' }, sensitive: true },
+    ],
+    clients: 'any_client',
+  };
+
+  it('accepts a manifest that registers only resources', () => {
+    const manifest = { realm: 'master', resources: [resource] };
+    expect(manifestSchema.parse(manifest)).toEqual(manifest);
+  });
+
+  it('accepts a resource open to a list of clients', () => {
+    const listed = { ...resource, clients: ['app', 'https://agent.example/client.json'] };
+    expect(manifestSchema.safeParse({ realm: 'master', resources: [listed] }).success).toBe(true);
+  });
+
+  it('still refuses a manifest that lists nothing', () => {
+    expect(manifestSchema.safeParse({ realm: 'master', resources: [] }).success).toBe(false);
+  });
+
+  it.each([
+    ['a relative resource indicator', { ...resource, resource: '/mcp' }],
+    ['a fragment', { ...resource, resource: 'https://mcp.example.com/mcp#x' }],
+    ['a QAuth API audience', { ...resource, resource: 'urn:qauth:aud:admin' }],
+    ['no scope', { ...resource, scopes: [] }],
+    ['a scope of QAuth’s own', { ...resource, scopes: [{ scope: 'openid', text: { en: 'x' } }] }],
+    ['an agent mode', { ...resource, scopes: [{ scope: 'agent:exec', text: { en: 'x' } }] }],
+    ['a text without English', { ...resource, scopes: [{ scope: 'a', text: { tr: 'x' } }] }],
+    ['markup in a text', { ...resource, scopes: [{ scope: 'a', text: { en: '<b>x</b>' } }] }],
+    [
+      'a scope listed twice',
+      {
+        ...resource,
+        scopes: [
+          { scope: 'a', text: { en: 'x' } },
+          { scope: 'a', text: { en: 'y' } },
+        ],
+      },
+    ],
+    ['an empty client list', { ...resource, clients: [] }],
+    ['a client listed twice', { ...resource, clients: ['app', 'app'] }],
+    ['an unknown member', { ...resource, audience: ['x'] }],
+  ])('refuses %s', (_name, entry) => {
+    expect(manifestSchema.safeParse({ realm: 'master', resources: [entry] }).success).toBe(false);
+  });
+
+  it('refuses a resource listed twice', () => {
+    const result = manifestSchema.safeParse({ realm: 'master', resources: [resource, resource] });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.message)).toContain(
+      '"https://mcp.example.com/mcp" is listed twice in resources'
+    );
+  });
+});

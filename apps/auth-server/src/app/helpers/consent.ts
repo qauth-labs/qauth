@@ -152,14 +152,22 @@ export function administrativeConsentScopes(
  * RFC 8707 resources need no stored grant either: the operator vouched for
  * the client that names them, and a QAuth API audience the client does not
  * list was refused before the consent decision.
+ *
+ * `userConsentOnly` lists the requested scopes only the user's own consent
+ * covers: a registered protected resource's scopes the client gets through
+ * the resource alone, which its own list does not hold (#1087). No operator
+ * vouched for the client having them, so a request for one gets `null`, and
+ * a stored consent, or the screen, decides.
  */
 export function administrativeConsentFor(
   client: FirstPartyClientFields,
-  requestedScopes: readonly string[]
+  requestedScopes: readonly string[],
+  userConsentOnly: readonly string[] = []
 ): AdministrativeConsent | null {
   const profile = resolveFirstPartyProfile(client);
   if (profile === null) return null;
   if (requestedScopes.some(isDangerousScope)) return null;
+  if (requestedScopes.some((scope) => userConsentOnly.includes(scope))) return null;
   return { basis: profile.profile, scopes: [...requestedScopes] };
 }
 
@@ -183,8 +191,9 @@ export function forcesLoginPrompt(client: FirstPartyClientFields): boolean {
  *
  * Returns true, whatever the consent row, when an administrative consent
  * covers the request ({@link administrativeConsentFor}): an operator-flagged
- * first-party client asking for no dangerous scope (ADR-017 Decision 9).
- * That is the one condition beside a stored consent.
+ * first-party client asking for no dangerous scope and none of
+ * `userConsentOnly` (ADR-017 Decision 9, #1087). That is the one condition
+ * beside a stored consent.
  *
  * Otherwise returns false when:
  *   - the client is an AI agent (fail-closed `isAgentClient`): every
@@ -216,13 +225,14 @@ export function canSkipConsent(
   consent: OAuthConsentLike | undefined,
   client: OAuthClientLike,
   requestedScopes: string[],
-  requestedResources: readonly string[]
+  requestedResources: readonly string[],
+  userConsentOnly: readonly string[] = []
 ): boolean {
   if (isAgentClient(client)) return false;
   if (resolveFirstPartyProfile(client) !== null && requestedScopes.some(isDangerousScope)) {
     return false;
   }
-  if (administrativeConsentFor(client, requestedScopes) !== null) return true;
+  if (administrativeConsentFor(client, requestedScopes, userConsentOnly) !== null) return true;
   if (!consent) return false;
   if (consent.revokedAt !== null) return false;
   if (isDynamicClientWithinBadgeWindow(client)) return false;

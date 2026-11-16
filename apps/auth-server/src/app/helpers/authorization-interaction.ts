@@ -35,7 +35,7 @@ import {
 } from './client-auth';
 import { clientDisplay } from './client-display';
 import { isAgentClient } from './client-resolution';
-import { filterRequestedScopes, forcesLoginPrompt, standardScopeText } from './consent';
+import { forcesLoginPrompt, standardScopeText } from './consent';
 import {
   continueInteraction,
   type InteractionContinuation,
@@ -50,6 +50,12 @@ import {
 } from './interaction-record';
 import { interactionCancelRedirect } from './interaction-redirect';
 import { buildRedirectUrl } from './oauth-redirect';
+import {
+  grantRequestedScopes,
+  registeredResourcesOf,
+  resourceScopeDisplay,
+  uiLocalesOf,
+} from './protected-resources';
 import { buildRealmUrl, realmIssuer } from './realm-url';
 import { registrationSwitchAllowed } from './registration';
 import { requestRealm } from './request-realm';
@@ -207,6 +213,14 @@ export interface ConsentStepSubject {
   readonly agent: boolean;
   /** The realm's `sso_max_lifespan`, in seconds, `null` when it sets none. */
   readonly ssoMaxLifespan: number | null;
+  /**
+   * A registered protected resource's text and sensitivity for one of its
+   * scopes the request is granted (#1087), the text in the interaction's
+   * locale; `undefined` for any other scope, which keeps QAuth's own text.
+   */
+  readonly resourceScope?: (
+    scope: string
+  ) => { readonly text: string | undefined; readonly sensitive: boolean } | undefined;
 }
 
 /**
@@ -218,8 +232,10 @@ export interface ConsentStepSubject {
  *
  * - Each scope carries QAuth's own text for a scope it defines
  *   (`standardScopeText`), and whether it is dangerous, by the server's own
- *   classification (`isDangerousScope`). No realm scope catalog exists yet, so
- *   no scope is marked sensitive.
+ *   classification (`isDangerousScope`). A registered protected resource's
+ *   scope (#1087) carries the resource's text in the interaction's locale,
+ *   English when it has none in it, and is sensitive when the realm flags it
+ *   so; no other scope is marked sensitive.
  * - `audience`: where the tokens may be used when the request names no
  *   resource, exactly the `aud` `/oauth/token` gives them from the client's
  *   configured audience (the resources are the audience otherwise).
@@ -244,11 +260,12 @@ export function consentStep(
     name: CONSENT_STEP,
     params: {
       scopes: scopes.map((scope) => {
-        const text = standardScopeText(scope);
+        const registered = subject.resourceScope?.(scope);
+        const text = registered === undefined ? standardScopeText(scope) : registered.text;
         return {
           scope,
           ...(text === undefined ? {} : { text }),
-          sensitive: false,
+          sensitive: registered?.sensitive ?? false,
           dangerous: isDangerousScope(scope),
         };
       }),
@@ -363,10 +380,16 @@ export async function authorizationInteractionStart(
   // it started with. First, as on the consent page: a redirect it cannot show
   // refuses the step, and no error is sent to it.
   const display = clientDisplay(client, { redirectUri: query.redirect_uri });
+  // A registered protected resource's own words for its scopes (#1087), in
+  // the request's `ui_locales` (OpenID Connect Core 1.0 §3.1.2.1).
+  const registered = await registeredResourcesOf(fastify, target.realm.id);
+  const locales = uiLocalesOf(query.ui_locales);
   const step = consentStep(outcome.scopes, outcome.resources, {
     clientAudience: userGrantDefaultAudience(client),
     agent: isAgentClient(client),
     ssoMaxLifespan: target.realm.ssoMaxLifespan,
+    resourceScope: (scope) =>
+      resourceScopeDisplay(scope, client, outcome.resources, registered, locales),
   });
   if (typeof step === 'string') {
     return {
@@ -740,10 +763,13 @@ export async function finishConsent(
 
   // Scope-presentation integrity (#150): the grant is the scope set the step
   // showed, which the interaction holds; the answer carries no scope. Each of
-  // them must still be in the client's allowlist: an owner who removed one
-  // since the step was shown gets no code for it.
+  // them must still be in the client's allowlist, or for a registered
+  // protected resource's scope still granted by a resource the request names
+  // (#1087): an owner who removed one since the step was shown, or an
+  // operator who closed the resource to the client, gets no code for it.
   const scopes = shownScopes(step);
-  if (!sameSet(filterRequestedScopes(scopes.join(' '), client), scopes)) {
+  const registered = await registeredResourcesOf(fastify, realm.id);
+  if (!sameSet(grantRequestedScopes(scopes.join(' '), client, resources, registered), scopes)) {
     return refuse(
       'invalid_scope',
       'consent_scope_mismatch',

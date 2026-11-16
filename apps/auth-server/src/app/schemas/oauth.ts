@@ -62,6 +62,27 @@ export const maxAgeParamSchema = z
 export const LOGIN_HINT_MAX_BYTES = 254;
 
 /**
+ * The longest `ui_locales` accepted: room for eight BCP 47 tags of 31
+ * characters, space-separated. The consent step reads at most eight tags of up
+ * to 35 characters each (`uiLocalesOf`), the rest is skipped.
+ */
+export const UI_LOCALES_MAX_LENGTH = 255;
+
+/**
+ * OpenID Connect Core 1.0 §3.1.2.1 `ui_locales` (#1087): the person's
+ * preferred languages for the screens, as space-separated BCP 47 tags,
+ * preferred first. The consent step shows a registered protected resource's
+ * consent text in the first of them the text is given in, else in English
+ * (`helpers/protected-resources.ts`). A malformed or unsupported tag is
+ * skipped, never refused; a value longer than {@link UI_LOCALES_MAX_LENGTH}
+ * is refused with `invalid_request`, as it round-trips through the sign-in.
+ */
+export const uiLocalesParamSchema = z.string().max(UI_LOCALES_MAX_LENGTH).optional().meta({
+  description:
+    "OpenID Connect Core 1.0 §3.1.2.1: the person's preferred languages, as space-separated BCP 47 tags, preferred first, at most 255 characters. The consent screen shows a registered protected resource's consent text for its scopes in the first of them the resource gives one in, and in English otherwise. A malformed or unsupported tag is skipped.",
+});
+
+/**
  * OpenID Connect Core 1.0 §3.1.2.1 `login_hint` (#628): a hint at the
  * identifier the person signs in with, at most {@link LOGIN_HINT_MAX_BYTES}
  * bytes in UTF-8; a longer one is refused with `invalid_request`. With
@@ -340,6 +361,8 @@ export const authorizeQuerySchema = z.object({
   dpop_jkt: dpopJktParamSchema,
   // OIDC Core §3.1.2.1 (#628): pre-fills the identifier step of an interaction.
   login_hint: loginHintParamSchema,
+  // OIDC Core §3.1.2.1 (#1087): the language of a protected resource's consent text.
+  ui_locales: uiLocalesParamSchema,
   // QAuth's direct-routing parameter (#639): start the realm's upstream
   // provider of this type at once.
   qauth_upstream: upstreamRouteParamSchema,

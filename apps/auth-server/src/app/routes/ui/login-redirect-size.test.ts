@@ -196,6 +196,8 @@ function makeFastify() {
     },
     repositories: {
       oauthClients: { findByClientId: vi.fn().mockResolvedValue(CLIENT) },
+      // No registered protected resource (#1087): the client's list alone.
+      protectedResources: { listByRealm: async () => [] },
       oauthConsents: { findActive: vi.fn(), upsertGrant: vi.fn().mockResolvedValue({}) },
       authorizationCodes: { create: vi.fn().mockResolvedValue({ id: 'code-1' }) },
       // `resolveBrowserSession` only accepts a session whose user is still enabled.

@@ -65,8 +65,10 @@ scope:
     - 'with RATE_LIMIT_ENABLED=false the authorize limit is not applied'
     - 'when the pending-authorization store is down, the login redirect carries the authorize URL itself in return_to
       instead of a handle'
-    - "the scope allowlist: the scopes decided on are the requested ones the client's allowlist holds, and a client
-      with no allowlist is granted none (filterRequestedScopes); an empty set is a request like any other"
+    - "the scope rule (grantRequestedScopes, #1087): a scope a registered protected resource defines is granted only
+      when the request names that resource, every resource it names is registered, defines the scope and is open to
+      the client, whatever the client's own list holds, and is dropped otherwise; every other scope is granted when the client's allowlist holds it, and a
+      client with no allowlist and no open resource is granted none; an empty set is a request like any other"
     - "staging reads as production in every check drawn here; the environment is the stricter of the client's and its
       realm's ceiling, and a development client is spared only the dangerous-scope rule of the step-up gate"
     - 'a code the mint transaction stored whose event store write then failed: the transaction rolls back, and no code
@@ -189,7 +191,8 @@ context:
     say:
       covers: >-
         a stored consent covers every requested scope at each requested resource, or the client's administrative
-        consent does (ADR-017 Decision 9), and nothing asks for the screen
+        consent does (ADR-017 Decision 9; never for a scope only a registered resource grants it, #1087), and nothing
+        asks for the screen
       missing: >-
         no stored consent covers the request, prompt=consent asks for the screen, the request widens a prior grant, or
         the client is an AI agent, which never skips the screen (ADR-015 Decision 11)
@@ -361,7 +364,7 @@ states:
       authorizeQuerySchema, for the query of a GET and the form of a POST alike: response_type code, client_id,
       redirect_uri, code_challenge and code_challenge_method S256 (PKCE), and the optional scope, state, nonce, prompt,
       max_age, resource, dpop_jkt and login_hint (at most 254 bytes in UTF-8, #628).
-    source: apps/auth-server/src/app/schemas/oauth.ts:282
+    source: apps/auth-server/src/app/schemas/oauth.ts:303
     always:
       - guard: inputInvalid
         target: invalid_request.schema
@@ -377,73 +380,73 @@ states:
       A pre-registered client first; otherwise a URL client_id is resolved as a CIMD document, fetched through the
       egress client and materialised as a row. authorization.failed is recorded for every refusal of this and the next
       checks.
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:132
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:136
     always:
       - guard: clientUnknown
         target: invalid_request.unknown_client
         say: 'the client_id names no client of the realm'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:144
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:148
       - target: checkingRedirectUri
         say: 'the client is found'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:147
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:151
 
   checkingRedirectUri:
     title: Check the redirect URI against the client's registration
     description: An exact match; a loopback URI may differ only in its port (RFC 8252 §7.3).
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:160
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:164
     always:
       - guard: redirectUnregistered
         target: invalid_request.redirect_uri_not_registered
         say: 'redirect_uri is not registered for the client'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:167
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:171
       - target: checkingEnvironment
         say: 'redirect_uri is registered'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:182
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:186
 
   checkingEnvironment:
     title: Check the redirect URI against the environment policy
     description: >-
       ADR-008 §5 (#197): the effective environment of the client and its realm, then the scheme and plain-http gate.
       Refused before any redirect, since the redirect target is what is under suspicion.
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:182
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:186
     always:
       - guard: redirectNotPermitted
         target: invalid_request.redirect_uri_not_permitted
         say: 'no environment permits that redirect_uri'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:197
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:201
       - target: checkingClientGrant
         say: 'the environment permits the redirect URI'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:207
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:211
 
   checkingClientGrant:
     title: Check that the client may use the endpoint
     description: >-
       A disabled or suspended client, and one not registered for the authorization_code grant or the code response
       type, are answered with a 400 that never redirects, whoever provisioned them (RFC 9700 §4.11.2).
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:207
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:211
     always:
       - guard: clientDisabled
         target: unauthorized_client.disabled
         say: 'the client is disabled or suspended'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:208
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:212
       - guard: noCodeGrant
         target: unauthorized_client.grant_type
         say: 'the client is not registered for the authorization_code grant'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:212
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:216
       - guard: noCodeResponse
         target: unauthorized_client.response_type
         say: 'the client is not registered for the code response type'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:216
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:220
       - target: readingDpopKey
         say: 'the client may use the endpoint'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:235
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:239
 
   readingDpopKey:
     title: Read the DPoP key the code is to be bound to
     description: >-
       RFC 9449 §10 (#480), read only while DPoP is on. This is the last check that needs no user: an interaction is
       created only for a request that passed every one before it, client_id, redirect_uri and PKCE included.
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:235
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:239
     always:
       - guard: dpopJktMalformed and operatorClient
         target: invalid_request.malformed_dpop_jkt
@@ -581,7 +584,7 @@ states:
       - guard: (noSession or unusableSession) and silent and operatorClient
         target: login_required.no_session
         say: 'no usable session under prompt=none, for a client an operator provisioned; step_up.required is recorded'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:330
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:334
       - guard: (noSession or unusableSession) and silent
         target: login_required.no_session_shown
         say: 'no usable session under prompt=none, for a client no operator provisioned'
@@ -589,22 +592,22 @@ states:
       - guard: noSession or unusableSession
         target: signInNeeded
         say: 'no usable session: the person signs in first, and the request is decided again with that session'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:349
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:353
       - target: checkingAgentCap
         say: 'the session is live'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:352
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:356
 
   # The decision, shared by both modes and by the finish of an interaction (decideAuthorization).
 
   checkingAgentCap:
     title: Refuse an agent scope above the client's cap
-    description: ADR-007 §2 (#184). On the raw scope parameter, before the allowlist filter.
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:371
+    description: ADR-007 §2 (#184). On the raw scope parameter, before the scope rule.
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:375
     always:
       - guard: overAgentCap and finishing
         target: invalid_scope.agent_scope_mode_exceeded_after_sign_in
         say: 'an agent scope is above the cap, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:392
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:415
       - guard: overAgentCap and operatorClient
         target: invalid_scope.agent_scope_mode_exceeded
         say: 'an agent scope is above the cap, for a client an operator provisioned'
@@ -614,18 +617,18 @@ states:
         say: 'an agent scope is above the cap, for a client no operator provisioned'
         source: apps/auth-server/src/app/helpers/authorization-error.ts:104
       - target: checkingAudience
-        say: "no agent scope is above the cap; the scopes are the requested ones the client's allowlist holds"
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:393
+        say: 'no agent scope is above the cap; the scopes are the requested ones the scope rule grants the client'
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:416
 
   checkingAudience:
     title: Refuse a QAuth API audience the client does not list
     description: RFC 8707 §2 (#509), before a consent screen offers what the token endpoint would refuse.
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:410
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:418
     always:
       - guard: audienceUnlisted and finishing
         target: invalid_target.unlisted_reserved_audience_after_sign_in
         say: 'a resource names a QAuth API audience the client does not list, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:392
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:415
       - guard: audienceUnlisted and operatorClient
         target: invalid_target.unlisted_reserved_audience
         say: 'a resource names a QAuth API audience the client does not list, for a client an operator provisioned'
@@ -636,7 +639,7 @@ states:
         source: apps/auth-server/src/app/helpers/authorization-error.ts:104
       - target: decidingStepUp
         say: 'every QAuth API audience among the resources is one the client lists'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:428
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:436
 
   decidingStepUp:
     title: Read the consent, and decide whether the sign-in is fresh enough and the consent covers the request
@@ -646,12 +649,12 @@ states:
       shown (OpenID Connect Core §3.1.2.1): a fresh sign-in the request needs answers login_required, and a consent it
       needs answers consent_required, with step_up.required recorded. Otherwise a fresh sign-in comes first, then the
       consent (step_up.required is recorded for both, for the consent when the request widens a prior grant).
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:468
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:480
     always:
       - guard: silent and needsFreshLogin and operatorClient
         target: login_required.fresh_login
         say: 'prompt=none, and the sign-in is too old for what is asked, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:505
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:517
       - guard: silent and needsFreshLogin
         target: login_required.fresh_login_shown
         say: 'prompt=none, and the sign-in is too old for what is asked, for a client no operator provisioned'
@@ -659,7 +662,7 @@ states:
       - guard: silent and consentMissing and operatorClient
         target: consent_required.prompt_none
         say: 'prompt=none, and no consent covers the request, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:505
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:517
       - guard: silent and consentMissing
         target: consent_required.prompt_none_shown
         say: 'prompt=none, and no consent covers the request, for a client no operator provisioned'
@@ -668,14 +671,14 @@ states:
         target: signInNeeded
         effect: [forFreshLogin]
         say: 'the sign-in is too old for what is asked: the person signs in again'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:537
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:551
       - guard: consentMissing
         target: consentNeeded
         say: 'no consent covers the request: the person is asked'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:565
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:579
       - target: mintingCode
         say: 'the sign-in is fresh enough and a consent covers the request'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:604
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:619
 
   mintingCode:
     title: Mint the authorization code under the consent and the session
@@ -686,7 +689,7 @@ states:
       consent let through; authorization.completed. The code binds the client, the user, the redirect URI, the PKCE
       challenge, the nonce, the scopes, the resources, the DPoP key and the session. A refusal is answered, once,
       as a request arriving after the sign-out or the revocation would be.
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:604
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:619
     invoke: { action: AuthorizationCode.mint }
     on:
       DONE:
@@ -694,7 +697,7 @@ states:
           target: code_issued.after_sign_in
           effect: [mintCode]
           say: 'the code is stored, for the request whose interaction finished'
-          source: apps/auth-server/src/app/helpers/authorization-interaction.ts:390
+          source: apps/auth-server/src/app/helpers/authorization-interaction.ts:413
         - target: code_issued
           effect: [mintCode]
           say: 'the code is stored'
@@ -703,7 +706,7 @@ states:
         - guard: silent and operatorClient
           target: login_required.session_ended
           say: 'the session ended under the request, under prompt=none, for a client an operator provisioned'
-          source: apps/auth-server/src/app/helpers/authorization-request.ts:691
+          source: apps/auth-server/src/app/helpers/authorization-request.ts:706
         - guard: silent
           target: login_required.session_ended_shown
           say: 'the session ended under the request, under prompt=none, for a client no operator provisioned'
@@ -711,12 +714,12 @@ states:
         - target: signInNeeded
           effect: [forEndedSession]
           say: 'the session ended under the request: the person signs in again'
-          source: apps/auth-server/src/app/helpers/authorization-request.ts:702
+          source: apps/auth-server/src/app/helpers/authorization-request.ts:717
       FAIL.consentWithdrawn:
         - guard: silent and operatorClient
           target: consent_required.consent_withdrawn
           say: 'the consent was revoked under the request, under prompt=none, for a client an operator provisioned'
-          source: apps/auth-server/src/app/helpers/authorization-request.ts:716
+          source: apps/auth-server/src/app/helpers/authorization-request.ts:731
         - guard: silent
           target: consent_required.consent_withdrawn_shown
           say: 'the consent was revoked under the request, under prompt=none, for a client no operator provisioned'
@@ -724,7 +727,7 @@ states:
         - target: consentNeeded
           effect: [forWithdrawnConsent]
           say: 'the consent was revoked under the request: the person is asked again'
-          source: apps/auth-server/src/app/helpers/authorization-request.ts:727
+          source: apps/auth-server/src/app/helpers/authorization-request.ts:742
       FAIL.server:
         - guard: finishing
           target: server_error.store_after_sign_in
@@ -744,7 +747,7 @@ states:
       - guard: finishing
         target: continuingToSignIn
         say: 'the request is decided at the finish of an interaction: the next interaction continues it'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:394
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:417
       - guard: pages
         target: parkingRequest
         say: 'INTERACTION_UI_ENABLED is off'
@@ -773,15 +776,15 @@ states:
       - guard: scopesUnshowable and finishing
         target: invalid_scope.consent_not_shown_after_sign_in
         say: 'the consent step cannot show the scopes, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:397
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:420
       - guard: resourcesUnshowable and finishing
         target: invalid_target.consent_not_shown_after_sign_in
         say: 'the consent step cannot show the resources, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:397
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:420
       - guard: scopesUnshowable and operatorClient
         target: invalid_scope.consent_not_shown
         say: 'the consent step cannot show the scopes, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:190
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:196
       - guard: scopesUnshowable
         target: invalid_scope.consent_not_shown_shown
         say: 'the consent step cannot show the scopes, for a client no operator provisioned'
@@ -789,7 +792,7 @@ states:
       - guard: resourcesUnshowable and operatorClient
         target: invalid_target.consent_not_shown
         say: 'the consent step cannot show the resources, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:192
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:198
       - guard: resourcesUnshowable
         target: invalid_target.consent_not_shown_shown
         say: 'the consent step cannot show the resources, for a client no operator provisioned'
@@ -797,7 +800,7 @@ states:
       - guard: finishing
         target: continuingToConsent
         say: 'the consent step can show the request, which an interaction just finished: the next one continues it'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:403
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:426
       - target: startingConsent
         say: 'the consent step can show the request'
         source: apps/auth-server/src/app/routes/oauth/authorize.ts:207
@@ -943,19 +946,19 @@ states:
       cancelAuthorization: the cancel has ended the interaction, its record deleted and its secret out of the flow
       cookie; the request it held is checked again as the endpoint checks it, as a finish is, so a client disabled, or
       a redirect URI removed, since the interaction started gets no redirect.
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:761
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:787
     always:
       - guard: "since == 'clientGone'"
         target: invalid_request.client_changed
         say: 'the client, or its redirect URI, no longer passes'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:144
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:148
       - guard: "since == 'clientUnusable'"
         target: unauthorized_client.client_changed
         say: 'the client may no longer use the endpoint'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:228
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:232
       - target: access_denied.cancelled
         say: 'the request still passes'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:762
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:788
 
   # The answer that finishes an interaction (POST /interaction/v1-rc.0/{id}/answer).
 
@@ -993,26 +996,26 @@ states:
       checkAuthorizationRequest on the request the record holds: the client may have been deleted, disabled or
       changed since the interaction started. A refusal is thrown, so nothing is sent to a redirect URI the client no
       longer holds.
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:365
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:382
     always:
       - guard: "since == 'clientGone'"
         target: invalid_request.client_changed
         say: 'the client, or its redirect URI, no longer passes'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:144
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:148
       - guard: "since == 'clientUnusable'"
         target: unauthorized_client.client_changed
         say: 'the client may no longer use the endpoint'
-        source: apps/auth-server/src/app/helpers/authorization-request.ts:228
+        source: apps/auth-server/src/app/helpers/authorization-request.ts:232
       - target: findingTransactionSession
         say: 'the request still passes'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:368
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:389
 
   findingTransactionSession:
     title: Find the session the interaction holds
     description: >-
       By its sid, not by the cookie, which the answer is only now setting: live, its user's, and its account still
       allowed to use it (liveBrowserSession, the cookie path's rules).
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:368
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:389
     always:
       - guard: "finishSession == 'unusable'"
         target: signInNeeded
@@ -1021,7 +1024,7 @@ states:
         source: apps/auth-server/src/app/helpers/browser-session.ts:190
       - target: checkingAgentCap
         say: 'the session is live: the request is decided again for it'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:369
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:390
 
   continuingToSignIn:
     title: Continue the request in a new sign-in interaction
@@ -1035,7 +1038,7 @@ states:
         target: atSignInCeremony
         effect: [openInteraction]
         say: 'the next interaction is stored'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:407
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:430
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large_after_sign_in
         say: 'the record of the next interaction is over 32 KiB'
@@ -1055,7 +1058,7 @@ states:
         target: atConsentCeremony
         effect: [openInteraction]
         say: 'the next interaction is stored'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:407
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:430
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large_after_sign_in
         say: 'the record of the next interaction is over 32 KiB'
@@ -1236,7 +1239,7 @@ states:
     type: final
     title: Refuse a finish or a cancel whose client or redirect URI no longer passes
     redirect: never
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:365
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:382
     response:
       status: 400
       headers:
@@ -1252,7 +1255,7 @@ states:
     type: final
     title: Refuse a finish or a cancel whose client may no longer use the endpoint
     redirect: never
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:365
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:382
     response:
       status: 400
       headers:
@@ -1315,7 +1318,7 @@ states:
     title: Tell the client an agent scope is above its cap, once the person signed in
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:392
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:415
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1329,7 +1332,7 @@ states:
     title: Tell the client it named an audience it does not list, once the person signed in
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:392
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:415
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1343,7 +1346,7 @@ states:
     title: Tell the client the consent step cannot show its scopes, once the person signed in
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:397
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:420
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1357,7 +1360,7 @@ states:
     title: Tell the client the consent step cannot show its resources, once the person signed in
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:397
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:420
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1485,7 +1488,7 @@ states:
     title: Tell the client prompt=none found no session
     redirect: error
     code: login_required
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:330
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:334
     response:
       status: 302
       headers:
@@ -1507,7 +1510,7 @@ states:
     title: Tell the client an agent scope is above its cap
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:371
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:375
     response:
       status: 302
       headers:
@@ -1528,7 +1531,7 @@ states:
     title: Tell the client it named a QAuth API audience it does not list
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:410
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:418
     response:
       status: 302
       headers:
@@ -1549,7 +1552,7 @@ states:
     title: Tell the client prompt=none cannot give the fresh sign-in the request needs
     redirect: error
     code: login_required
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:505
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:517
     response:
       status: 302
       headers:
@@ -1570,7 +1573,7 @@ states:
     title: Tell the client prompt=none cannot ask for the consent the request needs
     redirect: error
     code: consent_required
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:505
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:517
     response:
       status: 302
       headers:
@@ -1591,7 +1594,7 @@ states:
     title: Tell the client under prompt=none that the session ended under the request
     redirect: error
     code: login_required
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:691
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:706
     response:
       status: 302
       headers:
@@ -1612,7 +1615,7 @@ states:
     title: Tell the client under prompt=none that the consent was revoked under the request
     redirect: error
     code: consent_required
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:716
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:731
     response:
       status: 302
       headers:
@@ -1633,7 +1636,7 @@ states:
     title: Tell the client the consent step cannot show its scopes
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:190
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:196
     response:
       status: 302
       headers:
@@ -1654,7 +1657,7 @@ states:
     title: Tell the client the consent step cannot show its resources
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:192
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:198
     response:
       status: 302
       headers:
@@ -1691,7 +1694,7 @@ states:
     title: Refuse a client_id that names no client
     redirect: never
     code: invalid_request
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:144
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:148
     response:
       status: 400
       headers:
@@ -1705,7 +1708,7 @@ states:
     title: Refuse a redirect URI the client did not register
     redirect: never
     code: invalid_request
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:167
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:171
     response:
       status: 400
       headers:
@@ -1719,7 +1722,7 @@ states:
     title: Refuse a redirect URI no environment permits
     redirect: never
     code: invalid_request
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:197
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:201
     response:
       status: 400
       headers:
@@ -1733,7 +1736,7 @@ states:
     title: Refuse a disabled or suspended client
     redirect: never
     code: unauthorized_client
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:228
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:232
     response:
       status: 400
       headers:
@@ -1747,7 +1750,7 @@ states:
     title: Refuse a client not registered for the authorization_code grant
     redirect: never
     code: unauthorized_client
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:228
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:232
     response:
       status: 400
       headers:
@@ -1761,7 +1764,7 @@ states:
     title: Refuse a client not registered for the code response type
     redirect: never
     code: unauthorized_client
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:228
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:232
     response:
       status: 400
       headers:
@@ -1867,7 +1870,7 @@ assertions:
       silent and (interactionStarted or state in ['parkingRequest', 'consent_screen.page',
       'consent_screen.consent_withdrawn', 'atSignInCeremony', 'atConsentCeremony'])
     say: 'A request with prompt=none starts no interaction and is sent to no page, in either mode'
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:330
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:334
   - id: no-code-while-an-interaction-is-open
     never: 'codeMinted and interactionOpen'
     say: >-
@@ -1877,17 +1880,17 @@ assertions:
   - id: no-code-without-consent
     never: 'codeMinted and consentMissing'
     say: 'A code is minted only under a stored or administrative consent that covers the request'
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:611
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:626
   - id: no-code-on-a-stale-sign-in
     never: 'codeMinted and needsFreshLogin'
     say: 'No code is minted on a sign-in older than what the request or its scopes ask for'
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:537
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:551
   - id: no-code-for-a-refused-request
     never: "codeMinted and (overAgentCap or audienceUnlisted or (finishing and since != 'unchanged'))"
     say: >-
       No code is minted above the agent cap, for an audience the client does not list, or for a client that no longer
       passes the checks when its interaction finishes
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:365
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:382
   - id: shown-not-redirected-before-any-page
     never: >-
       provisioning == 'selfService' and state in ['invalid_request.malformed_dpop_jkt', 'login_required.no_session',

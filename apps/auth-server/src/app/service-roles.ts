@@ -146,6 +146,8 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     // (`serviceAccounts`, #522), and so does the count of who may approve.
     // An admin's deletion of an account (#681) ends its `sessions`, each
     // with its back-channel logout notices, before it deletes the account.
+    // The resource server operations (#1087) read and write
+    // `protectedResources`.
     repositories: [
       'users',
       'oauthClients',
@@ -157,6 +159,7 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
       'adminApprovals',
       'realmSecrets',
       'realmAuthMethodPlugins',
+      'protectedResources',
       'serviceAccounts',
       'sessions',
     ],

@@ -165,6 +165,8 @@ describe('what each role loads (the boot-time list)', () => {
       // The plugin operations (#600).
       'realmAuthMethodPlugins',
       'deploymentNodes',
+      // The resource server operations (#1087).
+      'protectedResources',
       // Whether a caller, or a would-be approver, is a service account (#522).
       'serviceAccounts',
     ]);

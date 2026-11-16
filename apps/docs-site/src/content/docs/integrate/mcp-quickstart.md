@@ -3,7 +3,7 @@ title: MCP Quickstart
 description: Wire QAuth as the OAuth 2.1 authorization server for an MCP resource server, end to end.
 sidebar:
   order: 1
-lastVerified: '2026-11-08'
+lastVerified: '2026-11-15'
 ---
 
 This guide takes you from nothing to a **working MCP authorization handshake** on
@@ -95,11 +95,6 @@ JWT_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----
 -----END PUBLIC KEY-----"
 
 JWT_ISSUER=http://localhost:3000
-
-# Let dynamically-registered MCP clients request MCP scopes.
-# The default allows only OIDC-core scopes (openid profile email offline_access),
-# so an MCP client's `mcp:read`/`mcp:write` request would otherwise be denied.
-DEFAULT_DYNAMIC_REGISTRATION_SCOPES=openid profile email offline_access mcp:read mcp:write
 ```
 
 Start the stack (auth-server + PostgreSQL 18 + Redis 7 + migrations) and verify:
@@ -145,6 +140,51 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
 > Interactive API docs (Swagger UI) are served at `http://localhost:3000/docs`.
 > See the [Docker guide](/operate/docker/) for development mode, CIMD settings, and
 > production considerations.
+
+### Register the MCP server's scopes
+
+Tell QAuth which scopes the MCP server defines, so that any MCP client your
+users bring can be granted them. Register the server's protected resource in
+the realm with the seed manifest's `resources` section: its canonical URL, its
+scopes with the words the consent screen shows, and `"any_client"`, so that
+every client may ask for them, one identified by a Client ID Metadata Document
+(CIMD) or registered dynamically included:
+
+```bash
+# The auth-server creates the default realm ("master", from
+# DEFAULT_REALM_NAME) when it boots, so the stack above already has it.
+cat > /tmp/mcp-resource.json <<'JSON'
+{
+  "realm": "master",
+  "resources": [
+    {
+      "resource": "http://localhost:8088",
+      "scopes": [
+        { "scope": "mcp:read", "text": { "en": "Read your memory store" } },
+        { "scope": "mcp:write", "text": { "en": "Change your memory store" } }
+      ],
+      "clients": "any_client"
+    }
+  ]
+}
+JSON
+
+DATABASE_URL="postgresql://qauth:${DB_PASSWORD}@localhost:5432/qauth" \
+  pnpm nx run infra-db:db:seed-oauth-clients -- --manifest=/tmp/mcp-resource.json
+# → Protected resources in realm "master":
+#     http://localhost:8088: created
+#       scope added: mcp:read
+#       scope added: mcp:write
+#       open to: any client
+```
+
+A registered resource's scopes are granted only for that resource: a client
+gets `mcp:write` when its authorization request names
+`resource=http://localhost:8088`, after the user consents, whatever scopes the
+client registered with, and never for another resource or without one. So a
+token's `aud` and its MCP scopes always agree. See
+[Registering a protected resource's scopes](/operate/docker/#registering-a-protected-resources-scopes)
+for every rule, the consent texts in other languages included.
 
 ---
 
@@ -208,6 +248,14 @@ On first use the client will:
    at QAuth (you'll register/sign in and approve the `mcp:read` / `mcp:write`
    scopes),
 5. retry the call with the issued token — `resource-guard` validates it and returns `200`.
+
+When a later tool call needs a scope the token lacks, the server answers
+`403 insufficient_scope` with the scopes the call needs. The client authorizes
+again with them (MCP 2026-07-28, Scope Challenge Handling), the user consents to
+the new one, and the new token carries it, because the scope belongs to the
+resource you registered above, not to the client's own list. This loop, from
+the first `401` to the call that succeeds, is held by QAuth's end-to-end test
+`apps/auth-server/src/app/mcp-quickstart.integration.test.ts`.
 
 Because the client passes the resource URL as the RFC 8707 `resource` parameter,
 the token's `aud` is bound to `http://localhost:8088` and is useless at any other
@@ -300,7 +348,7 @@ CIMD for anything you deploy.
 | Mechanism                                                                          | When QAuth uses it                                                | Best for                                                                                                                                                                                                                                                                                                                                                                               |
 | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **CIMD** — Client ID Metadata Documents (MCP 2026-07-28, **preferred**)            | `client_id` is an **HTTPS URL** resolving to a metadata document  | Production clients with a stable, public metadata URL. A row IS persisted, but idempotently — keyed by the (validated) URL, so re-resolving updates one row instead of creating new ones; there is no record to spam. It is not manageable from the developer portal, by design ([ADR-012](/reference/records/adr/012-dynamic-client-ownership/)): edit the metadata document instead. |
-| **DCR** — Dynamic Client Registration (RFC 7591, **deprecated** by MCP 2026-07-28) | `POST /oauth/register`, **open mode** (no `initial_access_token`) | Local development and clients without a public URL. Scopes are **capped to the realm allowlist** (`DEFAULT_DYNAMIC_REGISTRATION_SCOPES`) — this is why Step 1 adds `mcp:read mcp:write`.                                                                                                                                                                                               |
+| **DCR** — Dynamic Client Registration (RFC 7591, **deprecated** by MCP 2026-07-28) | `POST /oauth/register`, **open mode** (no `initial_access_token`) | Local development and clients without a public URL. The scopes a client registers with are **capped to the realm allowlist** (`DEFAULT_DYNAMIC_REGISTRATION_SCOPES`); the scopes of a [registered resource](#register-the-mcp-servers-scopes) need no entry there, and a client gets them for that resource whatever it registered with.                                               |
 
 - **CIMD** is on by default: `CIMD_ENABLED=true` seeds it on for each new
   realm, and from then on the realm's own `registration.cimd` policy decides
@@ -315,8 +363,9 @@ CIMD for anything you deploy.
   whole document if one of them fails it (for example an `http://` URI on a
   host that is not loopback, or one with a fragment): the client does not
   resolve, so every request for it gets `invalid_client`. A CIMD client starts
-  with no scopes; the operator grants them in the seed manifest's
-  `cimd_clients` section
+  with no scopes of its own: it gets a [registered resource's](#register-the-mcp-servers-scopes)
+  scopes for that resource, and any other scope only by the operator's grant in
+  the seed manifest's `cimd_clients` section
   ([Granting scopes to a CIMD client](/operate/docker/#granting-scopes-to-a-cimd-client)).
   A document may declare `client_credentials` too, but that grant issues the
   client no token until its entry lists, in `client_credentials_scopes`, the
@@ -362,14 +411,15 @@ proofs.
 
 ## Troubleshooting
 
-| Symptom                           | Likely cause / fix                                                                                                                                                                                               |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `401` even with a token           | Token `aud` ≠ the server's `MCP_RESOURCE`. Ensure the `resource` you requested matches `MCP_RESOURCE` exactly.                                                                                                   |
-| `invalid_scope` at `/oauth/token` | The client's `scopes` (machine client) or the realm allowlist (DCR client) doesn't include the requested scope. Re-check Step 1's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` or the seeded client's `scopes`.         |
-| `unsupported scheme: cursor:`     | The client calls back on a scheme without a period. List it in `REDIRECT_URI_CUSTOM_SCHEMES` (here `cursor`); see [Redirect URI schemes for native apps](/operate/docker/#redirect-uri-schemes-for-native-apps). |
-| Seed script: realm not found      | The auth-server has not booted against this database yet, or the manifest's `realm` is not `DEFAULT_REALM_NAME`. Start the stack (Step 1) and check its log for the `default realm ready` line.                  |
-| `resource-guard` can't fetch JWKS | `QAUTH_ISSUER` must be reachable from the resource server and serve `/.well-known/jwks.json`.                                                                                                                    |
-| Port already in use               | Override `PORT` for the example, or remap `3000`/`5432`/`6379` in `docker-compose.yml`.                                                                                                                          |
+| Symptom                           | Likely cause / fix                                                                                                                                                                                                            |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `401` even with a token           | Token `aud` ≠ the server's `MCP_RESOURCE`. Ensure the `resource` you requested matches `MCP_RESOURCE` exactly.                                                                                                                |
+| `invalid_scope` at `/oauth/token` | The machine client's `scopes` don't include the requested scope. Re-check the seeded client's `scopes`.                                                                                                                       |
+| Token without `mcp:write`         | The authorization request named no `resource`, or another one than the registered `http://localhost:8088`, or the resource was not registered. Re-check [Register the MCP server's scopes](#register-the-mcp-servers-scopes). |
+| `unsupported scheme: cursor:`     | The client calls back on a scheme without a period. List it in `REDIRECT_URI_CUSTOM_SCHEMES` (here `cursor`); see [Redirect URI schemes for native apps](/operate/docker/#redirect-uri-schemes-for-native-apps).              |
+| Seed script: realm not found      | The auth-server has not booted against this database yet, or the manifest's `realm` is not `DEFAULT_REALM_NAME`. Start the stack (Step 1) and check its log for the `default realm ready` line.                               |
+| `resource-guard` can't fetch JWKS | `QAUTH_ISSUER` must be reachable from the resource server and serve `/.well-known/jwks.json`.                                                                                                                                 |
+| Port already in use               | Override `PORT` for the example, or remap `3000`/`5432`/`6379` in `docker-compose.yml`.                                                                                                                                       |
 
 ---
 
