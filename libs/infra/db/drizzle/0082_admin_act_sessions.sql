@@ -53,12 +53,13 @@ CREATE INDEX "idx_admin_act_sessions_user" ON "admin_act_sessions" USING btree (
 -- lock: the key appendAdminAudit and admin_audit_log_prune take, from the same
 -- expression, held until the transaction ends. The newest row, else the
 -- newest checkpoint, else the genesis hash, as the trigger
--- admin_audit_log_follows_head (0026) reads it.
+-- admin_audit_log_follows_head (0026) reads it; and the database's clock, in
+-- epoch milliseconds, which the row's time must be.
 --
 -- SECURITY DEFINER: it reads the log as its owner. Its search_path is pinned,
 -- every table is named with its schema, and EXECUTE is revoked from PUBLIC;
 -- the per-role grants give it to `api`.
-CREATE FUNCTION "admin_audit_act_chain_head"(p_realm_id uuid, OUT o_seq bigint, OUT o_row_hash bytea)
+CREATE FUNCTION "admin_audit_act_chain_head"(p_realm_id uuid, OUT o_seq bigint, OUT o_row_hash bytea, OUT o_now bigint)
 LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
@@ -66,6 +67,7 @@ SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('qauth:admin-audit:' || p_realm_id::text, 0));
+  o_now := (extract(epoch FROM clock_timestamp()) * 1000)::bigint;
   SELECT l."seq", l."row_hash" INTO o_seq, o_row_hash
     FROM public."admin_audit_log" l
    WHERE l."realm_id" = p_realm_id
@@ -90,7 +92,9 @@ REVOKE ALL ON FUNCTION "admin_audit_act_chain_head"(uuid) FROM PUBLIC;--> statem
 -- the token's admin_act_sessions row names, its act chain must be that row's
 -- user and admin with the admin's realm issuer and client, and its operation
 -- an account API operation, with no effect, diff, approval or request digest.
--- Any other row is not inserted, and the caller gets no row back. The caller
+-- Its time is the database's clock of the last minute, within a minute of the
+-- token's life, so no row lands outside a call the token could have made. Any
+-- other row is not inserted, and the caller gets no row back. The caller
 -- hashes the row; the chain triggers of 0026 check its place.
 --
 -- SECURITY DEFINER: it writes the log as its owner. Its search_path is pinned,
@@ -130,6 +134,9 @@ AS $$
    WHERE s."realm_id" = p_realm_id
      AND s."token_jti" = p_token_jti
      AND starts_with(p_operation_id, 'account.')
+     AND p_created_at BETWEEN (extract(epoch FROM clock_timestamp()) * 1000)::bigint - 60000
+                          AND (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+     AND p_created_at BETWEEN s."created_at" - 60000 AND s."expires_at" + 60000
      AND p_act_chain = jsonb_build_object(
            'sub', s."user_id"::text,
            'act', jsonb_build_object(

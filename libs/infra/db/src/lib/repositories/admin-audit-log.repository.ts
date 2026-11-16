@@ -319,18 +319,23 @@ export function createAdminAuditLogRepository(
         traceId: entry.traceId ?? null,
       });
 
-      // The database takes the realm's chain lock and reads the head: the
-      // caller's role reads nothing of the log itself.
+      // The database takes the realm's chain lock, reads the head and tells
+      // the time, which the row must carry: the caller's role reads nothing
+      // of the log itself, and picks no time of its own.
       const {
         rows: [head],
-      } = await tx.execute<{ o_seq: string | number; o_row_hash: Buffer }>(
-        sql`select o_seq, o_row_hash from admin_audit_act_chain_head(${draft.realmId}::uuid)`
+      } = await tx.execute<{
+        o_seq: string | number;
+        o_row_hash: Buffer;
+        o_now: string | number;
+      }>(
+        sql`select o_seq, o_row_hash, o_now from admin_audit_act_chain_head(${draft.realmId}::uuid)`
       );
       if (head === undefined) throw new Error('appendActChainCall: the chain head was not read');
       const content: AdminAuditRowContent = {
         ...draft,
         seq: Number(head.o_seq) + 1,
-        createdAt: now(),
+        createdAt: Number(head.o_now),
       };
       const rowHash = computeAdminAuditRowHash(head.o_row_hash, content);
 

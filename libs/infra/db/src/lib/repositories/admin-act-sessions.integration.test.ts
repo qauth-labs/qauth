@@ -248,6 +248,11 @@ describe('act-chain tokens issued to admins (real Postgres, #523)', () => {
   });
 
   describe('the audit row of a call made with the token (migration 0082)', () => {
+    /** A token issued a moment ago: the database dates the row now. */
+    function issuedNow(at: Awaited<ReturnType<typeof fixture>>, startedAt = Date.now() - 1_000) {
+      return session(at, { createdAt: startedAt, expiresAt: startedAt + TEN_MINUTES });
+    }
+
     function call(
       at: Awaited<ReturnType<typeof fixture>>,
       tokenJti: string,
@@ -272,7 +277,7 @@ describe('act-chain tokens issued to admins (real Postgres, #523)', () => {
 
     it("appends the row through the functions, with its token's actor and act chain, and the chain verifies", async () => {
       const at = await fixture();
-      const written = await db().transaction((tx) => sessions.create(tx, session(at)));
+      const written = await db().transaction((tx) => sessions.create(tx, issuedNow(at)));
       const audit = createAdminAuditLogRepository(db());
       const first = await db().transaction((tx) =>
         audit.appendActChainCall(tx, call(at, written.tokenJti))
@@ -283,6 +288,7 @@ describe('act-chain tokens issued to admins (real Postgres, #523)', () => {
           call(at, written.tokenJti, { operationId: 'account.consents.delete', outcome: 'denied' })
         )
       );
+      expect(Math.abs(first.createdAt - Date.now())).toBeLessThan(60_000);
       expect(first).toMatchObject({
         realmId: at.realmId,
         seq: 1,
@@ -304,7 +310,7 @@ describe('act-chain tokens issued to admins (real Postgres, #523)', () => {
 
     it('writes no row for an unknown token, an act chain or actor other than its row, or another API', async () => {
       const at = await fixture();
-      const written = await db().transaction((tx) => sessions.create(tx, session(at)));
+      const written = await db().transaction((tx) => sessions.create(tx, issuedNow(at)));
       const audit = createAdminAuditLogRepository(db());
       const refused = (entry: ReturnType<typeof call>) =>
         db().transaction((tx) => audit.appendActChainCall(tx, entry));
@@ -336,6 +342,14 @@ describe('act-chain tokens issued to admins (real Postgres, #523)', () => {
       // The other realm's token is not this realm's.
       const other = await fixture();
       await expect(refused(call(other, written.tokenJti))).rejects.toThrow(/wrote no row/);
+      // No call lands outside the token's life: one that ended an hour ago,
+      // or one the clock has not reached.
+      for (const startedAt of [Date.now() - 70 * 60_000, NOW]) {
+        const outside = await db().transaction((tx) =>
+          sessions.create(tx, issuedNow(at, startedAt))
+        );
+        await expect(refused(call(at, outside.tokenJti))).rejects.toThrow(/wrote no row/);
+      }
 
       const { rows } = await db().execute<{ n: number }>(
         sql`SELECT count(*)::int AS n FROM admin_audit_log WHERE realm_id IN (${at.realmId}, ${other.realmId})`

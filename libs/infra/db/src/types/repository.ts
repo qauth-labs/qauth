@@ -2172,13 +2172,14 @@ export interface AdminAuditLogRepository {
    * (`api`). The database takes the realm's chain lock, as
    * {@link appendAdminAudit} does, and inserts the row only when its actor
    * and act chain are those of the token's `admin_act_sessions` row in the
-   * realm and its operation is an account API operation. The stored row is
-   * hashed and checked as {@link appendAdminAudit} checks it.
+   * realm, its operation is an account API operation, and its time, the
+   * database's clock, falls within a minute of the token's life. The stored
+   * row is hashed and checked as {@link appendAdminAudit} checks it.
    *
    * @throws TypeError on an entry {@link appendAdminAudit} would refuse, and
    *   on an operation that is not the account API's
    * @throws Error when the database inserted no row: no such token in the
-   *   realm, or an actor or act chain that is not its row's
+   *   realm, an act chain that is not its row's, or a call outside its life
    */
   appendActChainCall(tx: DbTransaction, entry: AdminActChainCallEntry): Promise<AdminAuditRecord>;
 

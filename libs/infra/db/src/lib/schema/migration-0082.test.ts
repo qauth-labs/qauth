@@ -84,6 +84,16 @@ describe('migration 0082 (the act-chain tokens issued to admins)', () => {
     // account operation's row, with no effect, diff, approval or digest.
     expect(functions[2]).toContain(`s."admin_user_id"::text, s."admin_realm_id", p_act_chain`);
     expect(functions[2]).toContain(`starts_with(p_operation_id, 'account.')`);
+    // The row's time is the database's, and within the token's life.
+    expect(functions[0]).toContain(
+      'o_now := (extract(epoch FROM clock_timestamp()) * 1000)::bigint;'
+    );
+    expect(functions[2]).toMatch(
+      /p_created_at BETWEEN \(extract\(epoch FROM clock_timestamp\(\)\) \* 1000\)::bigint - 60000\s+AND \(extract\(epoch FROM clock_timestamp\(\)\) \* 1000\)::bigint/
+    );
+    expect(functions[2]).toContain(
+      `p_created_at BETWEEN s."created_at" - 60000 AND s."expires_at" + 60000`
+    );
     expect(functions[2]).toMatch(
       /'\[\]'::jsonb,\s+p_outcome::public\."admin_audit_outcome", NULL, '\[\]'::jsonb, NULL/
     );
