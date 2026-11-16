@@ -421,6 +421,35 @@ expired pass, or one of another realm, gets one `400` HTML page and no
 interaction. Every answer carries `Cache-Control: no-store` and
 `Referrer-Policy: no-referrer`, and the request log censors the `pass` value.
 
+### `POST /auth/admin-enrolment`
+
+The start of an admin's one-time enrolment (ADR-019 Decision 7, #621). The
+break-glass CLI's `enrol-admin` prints `<issuer>/ui/admin-enrolment#token=<43-char base64url>`;
+the ceremony app's page at that path reads the token from the fragment and,
+when the person presses its button, posts it here as a form with the one
+member `token`, from the realm origin. A post from another site gets `403`.
+
+A token that may still be redeemed starts an interaction in this browser at
+the Interaction API's `admin_enrolment` step, with a flow cookie of its own,
+and answers `303` to the interaction's ceremony page. Starting spends nothing:
+the step's answer stores the account's first passkey and spends the token in
+one transaction. A missing, damaged, unknown, used or expired token gets one
+`400` HTML page and no interaction, and so does every post while passkey
+sign-in (`WEBAUTHN_ENABLED`) is off. A realm that names its ceremony app's
+error page (`ceremonyApp.errorPage`) gets `303` to it instead, with
+`code=admin_enrolment_refused`. Every answer carries `Cache-Control: no-store`
+and `Referrer-Policy: no-referrer`; the token is never echoed or logged.
+
+### `GET /auth/admin-enrolment/status`
+
+The page an admin enrolment ends on, when the realm names no ceremony error
+page. **Query**: `result` — `enrolled` (the passkey is stored), `cancelled`
+(nothing is stored; the URL works until it expires) or `refused` (the URL
+enrolled nothing). Any other value, or none, reads as `refused`. A realm that
+names its ceremony app's error page gets `303` to it instead, with
+`code=admin_enrolment_finished` and `enrolled=true|false`, or
+`code=admin_enrolment_refused`.
+
 ---
 
 ## OAuth 2.1
