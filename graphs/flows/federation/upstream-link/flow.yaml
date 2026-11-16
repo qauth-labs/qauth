@@ -315,7 +315,7 @@ states:
     description: >-
       The Interaction API checks the origin, the flow cookie and the step's CSRF value on every answer; another
       browser holds no flow cookie of the interaction.
-    source: apps/auth-server/src/app/helpers/interaction.ts:513
+    source: apps/auth-server/src/app/helpers/interaction.ts:530
     always:
       - guard: answeredElsewhere
         target: interaction_expired.other_browser
@@ -391,7 +391,7 @@ states:
       realm, picked beside the first step (#1080), whose start and callback are federation.upstream-sign-in's. A
       session the browser already holds is not asked for and counts for nothing.
     by: human
-    source: apps/auth-server/src/app/routes/interaction-api.ts:549
+    source: apps/auth-server/src/app/routes/interaction-api.ts:528
     on:
       SIGNED_IN:
         guard: "signInWay == 'ownFactors'"
@@ -428,7 +428,7 @@ states:
 
   checkingSignIn:
     title: Link only after a sign-in that succeeded in the interaction's own browser
-    source: apps/auth-server/src/app/routes/interaction-api.ts:871
+    source: apps/auth-server/src/app/routes/interaction-api.ts:865
     always:
       - guard: answeredElsewhere
         target: interaction_expired.other_browser
@@ -439,7 +439,7 @@ states:
       - target: linking
         effect: [signIn]
         say: 'the sign-in finished: the account it proved is the one the identity joins'
-        source: apps/auth-server/src/app/routes/interaction-api.ts:892
+        source: apps/auth-server/src/app/routes/interaction-api.ts:886
 
   linking:
     title: Link the identity under the account's row lock
@@ -461,7 +461,7 @@ states:
 
   decidingLink:
     title: Go on as the link's transaction answered
-    source: apps/auth-server/src/app/routes/interaction-api.ts:899
+    source: apps/auth-server/src/app/routes/interaction-api.ts:893
     always:
       - guard: "linkCheck == 'takenMeanwhile'"
         target: link_refused.already_linked
@@ -560,7 +560,7 @@ states:
       for an account page's link. The same at the Interaction API's last answer, at the provider's callback whose
       proof finished the sign-in (#1080), and at the account page's finish.
     redirect: never
-    source: apps/auth-server/src/app/routes/interaction-api.ts:904
+    source: apps/auth-server/src/app/routes/interaction-api.ts:898
     response: &linkRefused
       status: 303
       headers:
