@@ -16,6 +16,8 @@ export type * from './lib/operator-verification';
 export * from './lib/operator-verification';
 export type * from './lib/password';
 export * from './lib/password';
+export type * from './lib/protected-resource';
+export * from './lib/protected-resource';
 export type * from './lib/public-jwk';
 export * from './lib/public-jwk';
 export type * from './lib/realm-host';

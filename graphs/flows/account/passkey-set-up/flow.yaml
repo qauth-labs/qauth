@@ -301,7 +301,7 @@ states:
     title: Tell the client prompt=none cannot set up a passkey
     redirect: error
     code: login_required
-    source: apps/auth-server/src/app/helpers/authorization-request.ts:345
+    source: apps/auth-server/src/app/helpers/authorization-request.ts:349
     response:
       status: 302
       headers:

@@ -140,6 +140,8 @@ function makeAuthCodeStub(opts: {
       refreshTokens: {
         create: vi.fn().mockResolvedValue(undefined),
       },
+      // No registered protected resource (#1087): the client's list alone.
+      protectedResources: { listByRealm: async () => [] },
       oauthConsents: {
         findActive: vi.fn().mockResolvedValue({
           scopes: ['openid'],

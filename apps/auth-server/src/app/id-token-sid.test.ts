@@ -349,7 +349,7 @@ describe('the ID token’s sid comes from the code exchange alone (#549)', () =>
       {
         file: 'apps/auth-server/src/app/routes/oauth/token.ts',
         within: 'handleAuthorizationCode',
-        spread: 'resolveProfileClaimsForScopes(user, authCode.scopes)',
+        spread: 'resolveProfileClaimsForScopes(user, codeScopes)',
       },
       {
         file: 'apps/auth-server/src/app/routes/oauth/token.ts',

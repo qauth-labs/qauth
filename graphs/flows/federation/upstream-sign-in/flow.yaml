@@ -215,7 +215,7 @@ initial: idle
 states:
   idle:
     title: Wait for a person who chooses an upstream provider
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:101
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:107
     on:
       PICK:
         target: resolvingProvider

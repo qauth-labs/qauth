@@ -28,7 +28,7 @@ title: Ask the signed-in person to allow a client's access, as a step of the Int
 summary: >-
   When decideAuthorization answers that a request needs consent and INTERACTION_UI_ENABLED is on, a consent interaction
   starts for the signed-in browser session. Its step holds the client as the server's own records describe it, the
-  scopes the client's allowlist holds (each marked when it is dangerous), the resources or else the client's audience,
+  scopes the scope rule grants the client (each marked when it is dangerous), the resources or else the client's audience,
   for an AI agent a line in QAuth's own words, and "Remember this decision", checked by default; a request the step
   cannot show is refused at the start. The answer carries only allow or deny and the remember choice. The interaction
   finishes before anything is decided; the request is checked again, deny sends access_denied to the client, and allow
@@ -168,7 +168,7 @@ context:
       agentChanged: >-
         the client changed whether it is an agent since the step was shown: params.agent is present and the client is
         no agent now, or the other way round (a CIMD document that changed)
-      scopesNarrowed: "the shown scopes, filtered by the client's allowlist as it is now, are not the shown set"
+      scopesNarrowed: 'the shown scopes, filtered by the scope rule as it is now, are not the shown set'
       resourcesDiffer: "the shown resources are not the request's (defensive: they cannot differ by construction)"
       promptLogin: >-
         prompt=login, or the client's first-party profile is native_backend (forcesLoginPrompt), and the sign-in is more
@@ -294,8 +294,11 @@ states:
   buildingStep:
     title: Build the consent step from the request
     description: >-
-      consentStep: the requested scopes the client's allowlist holds (filterRequestedScopes), in request order, each {
-      scope, text?, sensitive: false, dangerous } (text is describeScope's for the scopes QAuth defines, dangerous is
+      consentStep: the requested scopes the scope rule grants the client (grantRequestedScopes, #1087: a scope a
+      registered protected resource defines only when each resource the request names defines it and is open to the
+      client, any other scope by the client's allowlist), in request order, each { scope, text?, sensitive, dangerous }
+      (text is describeScope's for the scopes QAuth defines and, for a registered resource's scope, the resource's own text
+      in the request's ui_locales, else English; sensitive is the resource's flag, else false; dangerous is
       isDangerousScope); the request's resource indicators; when the request named none, the token's aud from the
       audience an operator configured for the client, without QAuth API audiences (userGrantDefaultAudience); agent ({}
       or { max_lifespan } from the realm's sso_max_lifespan) for an AI agent client only; remember_default true. A
@@ -597,7 +600,7 @@ states:
   checkingScopes:
     title: Grant only the scopes the step showed, while the client may still have them
     description: >-
-      The shown scopes, filtered by the client's allowlist as it is now, must be the shown set. The grant is the shown
+      The shown scopes, filtered by the scope rule as it is now, must be the shown set. The grant is the shown
       set, from the record: never the request's scope parameter, never a field of the answer.
     always:
       - guard: scopesNarrowed

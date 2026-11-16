@@ -106,6 +106,8 @@ async function buildServer(
   const findActive = vi.fn();
   fastify.decorate('repositories', {
     oauthClients: { findByClientId: vi.fn().mockResolvedValue(CLIENT) },
+    // No registered protected resource (#1087): the client's list alone.
+    protectedResources: { listByRealm: async () => [] },
     oauthConsents: {
       findActive,
       // The locked re-read before the code insert sees what the first read saw.

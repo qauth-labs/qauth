@@ -230,6 +230,16 @@ describe('administrativeConsentFor', () => {
     expect(administrativeConsentFor(nativeBackend(), ['email', 'write:foo'])).toBeNull();
   });
 
+  it("never covers a registered resource's scope the client's own list does not hold (#1087)", () => {
+    expect(
+      administrativeConsentFor(webRedirect(), ['email', 'files:read'], ['files:read'])
+    ).toBeNull();
+    expect(administrativeConsentFor(webRedirect(), ['email'], ['files:read'])).toEqual({
+      basis: 'web_redirect',
+      scopes: ['email'],
+    });
+  });
+
   it('is null for a client without a profile: nothing else widens the waiver', () => {
     expect(administrativeConsentFor(client(), ['email'])).toBeNull();
     expect(
@@ -320,6 +330,17 @@ describe('canSkipConsent with an administrative consent (ADR-017 Decision 9)', (
     );
     // The same stored consent still skips it for a client without a profile.
     expect(canSkipConsent(covering, client(), ['read:foo', 'write:foo'], [])).toBe(true);
+  });
+
+  it("leaves a registered resource's scope the client's list does not hold to a stored consent (#1087)", () => {
+    const rs = 'https://rs.example/';
+    expect(canSkipConsent(undefined, webRedirect(), ['files:read'], [rs], ['files:read'])).toBe(
+      false
+    );
+    const covering = consent({ scopes: ['files:read'], resourceScopes: { [rs]: ['files:read'] } });
+    expect(canSkipConsent(covering, webRedirect(), ['files:read'], [rs], ['files:read'])).toBe(
+      true
+    );
   });
 
   it('leaves clients without a profile to the stored consent alone', () => {

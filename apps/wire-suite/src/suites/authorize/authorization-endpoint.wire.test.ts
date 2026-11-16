@@ -135,6 +135,30 @@ describe('[GET /oauth/authorize] OIDC Core 1.0 §3.1.2.1 — login_hint, at most
   });
 });
 
+describe('[GET /oauth/authorize] OIDC Core 1.0 §3.1.2.1 — ui_locales, at most 255 characters', () => {
+  // Three tags and one malformed one, 255 characters in all: a tag the
+  // server cannot read is skipped, never refused; one more character is.
+  const prefix = 'tr de-DE en ';
+  const longestLocales = `${prefix}${'x'.repeat(255 - prefix.length)}`;
+
+  it('takes a ui_locales of 255 characters, a malformed tag in it, and sends the browser to sign in (§3.1.2.1)', async () => {
+    const { params } = authorizationRequest({ ui_locales: longestLocales });
+
+    const response = await call('GET /oauth/authorize', { query: params });
+
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get('location') ?? '', baseUrl);
+    expect(location.pathname, 'a sign-in page of the issuer, not the client').toMatch(/^\/ui\//);
+    expect(location.searchParams.get('error')).toBeNull();
+  });
+
+  it('refuses a ui_locales over 255 characters with 400 invalid_request, without redirecting (§3.1.2.1)', async () => {
+    const { params } = authorizationRequest({ ui_locales: `${longestLocales}x` });
+
+    await expectRefusedWithoutRedirect(await call('GET /oauth/authorize', { query: params }));
+  });
+});
+
 describe('[GET /oauth/authorize] RFC 9207 §2 — iss on every authorization response', () => {
   it('adds the iss equal to the published issuer to a login_required error under prompt=none (§2, §2.3; OIDC Core 1.0 §3.1.2.1)', async () => {
     const request = authorizationRequest({ prompt: 'none' });

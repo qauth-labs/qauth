@@ -25,7 +25,6 @@ import {
   agentPersistenceLine,
   canSkipConsent,
   describeScope,
-  filterRequestedScopes,
   forcesLoginPrompt,
 } from '../../helpers/consent';
 import { malformedDpopJktError, readAuthorizationDpopJkt } from '../../helpers/dpop';
@@ -40,6 +39,12 @@ import {
   unregisteredRedirectUriError,
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
+import {
+  grantRequestedScopes,
+  registeredResourcesOf,
+  resourceScopeDisplay,
+  uiLocalesOf,
+} from '../../helpers/protected-resources';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { realmIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
@@ -61,7 +66,7 @@ import { authorizeQuerySchema } from '../../schemas/oauth';
  * Order-independent equality of two scope sets. Used by the consent POST to
  * confirm the POSTed (allowlist-filtered) scopes match exactly the set bound to
  * the session on the GET render — defence against a tampered hidden `scope`
- * field. Both inputs are already de-duplicated by `filterRequestedScopes`.
+ * field. Both inputs are already de-duplicated by `grantRequestedScopes`.
  */
 function scopeSetsEqual(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
@@ -202,6 +207,12 @@ function consentPage(opts: {
   client: ClientDisplay;
   audience: string[];
   scopes: string[];
+  /**
+   * The consent text of a registered protected resource's scope (#1087), in
+   * the request's `ui_locales` or English, by scope. A scope it does not hold
+   * is described by QAuth's own text, or shown as its value.
+   */
+  scopeTexts: ReadonlyMap<string, string>;
   csrfToken: string;
   /** Per-request CSP nonce (issue #113) stamped onto the page's own inline <style>. */
   cspNonce: string;
@@ -217,7 +228,9 @@ function consentPage(opts: {
   agent?: { ssoMaxLifespanSeconds: number | null };
 }): string {
   const scopeRows = opts.scopes.length
-    ? opts.scopes.map((s) => html`<li><code>${s}</code> — ${describeScope(s)}</li>`)
+    ? opts.scopes.map(
+        (s) => html`<li><code>${s}</code> — ${opts.scopeTexts.get(s) ?? describeScope(s)}</li>`
+      )
     : [html`<li><em>No scopes requested.</em></li>`];
 
   const hidden = [
@@ -473,13 +486,25 @@ export default async function (fastify: FastifyInstance) {
       // the session, since a redirect it cannot show refuses the screen.
       const display = clientDisplay(client, { redirectUri: query.redirect_uri });
 
-      const scopes = filterRequestedScopes(query.scope, client);
-
       // RFC 8707: the validated, array-normalized `resource` (never a
       // re-parse of request.url — see the note in oauth/authorize.ts). Shown
       // as the audience, bound to the session below and recorded on the
       // grant, so what the user approves is what the token is issued for.
       const resources = query.resource ?? [];
+
+      // The client's allowlist, and a registered protected resource's scopes
+      // for the resources the request names (#1087): the rule /oauth/authorize
+      // applies, so the screen lists what the code will carry.
+      const registered = await registeredResourcesOf(fastify, realm.id);
+      const scopes = grantRequestedScopes(query.scope, client, resources, registered);
+      // The resource's own words for its scopes, in the request's
+      // `ui_locales` (OpenID Connect Core 1.0 §3.1.2.1) or English.
+      const locales = uiLocalesOf(query.ui_locales);
+      const scopeTexts = new Map<string, string>();
+      for (const scope of scopes) {
+        const text = resourceScopeDisplay(scope, client, resources, registered, locales)?.text;
+        if (text !== undefined) scopeTexts.set(scope, text);
+      }
 
       // #509: a QAuth API audience (`urn:qauth:aud:`) is issued only to a
       // client that lists it. /oauth/authorize refuses such a request before
@@ -560,6 +585,7 @@ export default async function (fastify: FastifyInstance) {
           // so the screen names the resource server the token will be for.
           audience: resources.length > 0 ? resources : (client.audience ?? []),
           scopes,
+          scopeTexts,
           csrfToken,
           cspNonce: reply.cspNonce.style,
           authorizeParams: {
@@ -799,7 +825,15 @@ export default async function (fastify: FastifyInstance) {
       // silently granting a set the user never saw. A missing binding (a POST
       // with no preceding GET in this session) is likewise refused.
       const boundScopes = side.consentScopes[client.clientId];
-      const postedScopes = filterRequestedScopes(body.scope, client);
+      // Re-filtered by the rule the GET applied, at the resources it bound
+      // (#1087): a resource's scopes only for those, and only while it is
+      // open to the client. The resources themselves are checked below.
+      const postedScopes = grantRequestedScopes(
+        body.scope,
+        client,
+        side.consentResources[client.clientId] ?? [],
+        await registeredResourcesOf(fastify, realm.id)
+      );
       if (boundScopes === undefined || !scopeSetsEqual(boundScopes, postedScopes)) {
         await emitUserEvent(
           request,

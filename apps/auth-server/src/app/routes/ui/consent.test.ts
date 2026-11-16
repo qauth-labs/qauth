@@ -174,6 +174,8 @@ function makeFastify() {
       oauthClients: {
         findByClientId: vi.fn(),
       },
+      // No registered protected resource (#1087): the client's list alone.
+      protectedResources: { listByRealm: async () => [] },
       oauthConsents: {
         upsertGrant: vi.fn().mockResolvedValue({}),
       },

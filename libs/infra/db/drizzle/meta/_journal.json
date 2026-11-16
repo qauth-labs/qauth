@@ -568,6 +568,13 @@
       "when": 1794791292907,
       "tag": "0080_users_delete_account",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1794792279256,
+      "tag": "0081_protected_resources",
+      "breakpoints": true
     }
   ]
 }

@@ -3,7 +3,7 @@ title: OAuth 2.1 Flow
 description: QAuth's OAuth 2.1 / OIDC endpoints with copy-paste curl for every step, to implement a client by hand.
 sidebar:
   order: 2
-lastVerified: '2026-11-13'
+lastVerified: '2026-11-15'
 ---
 
 This page documents QAuth's OAuth 2.1 / OIDC endpoints with copy-paste `curl`
@@ -136,22 +136,46 @@ http://localhost:3000/oauth/authorize
   &resource=http://localhost:8088
 ```
 
-| Parameter               | Required    | Notes                                                                     |
-| ----------------------- | ----------- | ------------------------------------------------------------------------- |
-| `response_type`         | yes         | Must be `code`.                                                           |
-| `client_id`             | yes         | Your client. At most 2048 printable ASCII characters.                     |
-| `redirect_uri`          | yes         | Must match a registered URI — see below.                                  |
-| `code_challenge`        | yes         | From step 1.                                                              |
-| `code_challenge_method` | yes         | Must be `S256`.                                                           |
-| `scope`                 | no          | Space-separated; filtered to the client's allowlist.                      |
-| `state`                 | recommended | Opaque CSRF value; echoed back verbatim.                                  |
-| `nonce`                 | OIDC        | Bound into the ID token when issued.                                      |
-| `resource`              | no          | RFC 8707 target(s); binds the token `aud`. Repeat for multiple, up to 10. |
-| `login_hint`            | no          | At most 254 bytes in UTF-8; pre-fills an interaction's sign-in.           |
-| `prompt`                | no          | `none`, `login`, `consent`, or `create` to register. See below.           |
-| `qauth_upstream`        | no          | An upstream provider's type; starts the sign-in there. See below.         |
-| `qauth_link`            | no          | An upstream provider's type; links an account of it. See below.           |
-| `qauth_action`          | no          | `setup_passkey` asks the person to add a passkey. See below.              |
+| Parameter               | Required    | Notes                                                                                                                              |
+| ----------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `response_type`         | yes         | Must be `code`.                                                                                                                    |
+| `client_id`             | yes         | Your client. At most 2048 printable ASCII characters.                                                                              |
+| `redirect_uri`          | yes         | Must match a registered URI — see below.                                                                                           |
+| `code_challenge`        | yes         | From step 1.                                                                                                                       |
+| `code_challenge_method` | yes         | Must be `S256`.                                                                                                                    |
+| `scope`                 | no          | Space-separated; filtered to the client's allowlist, or for a registered resource's scope, to that resource. See below.            |
+| `state`                 | recommended | Opaque CSRF value; echoed back verbatim.                                                                                           |
+| `nonce`                 | OIDC        | Bound into the ID token when issued.                                                                                               |
+| `resource`              | no          | RFC 8707 target(s); binds the token `aud`. Repeat for multiple, up to 10.                                                          |
+| `login_hint`            | no          | At most 254 bytes in UTF-8; pre-fills an interaction's sign-in.                                                                    |
+| `ui_locales`            | no          | Space-separated BCP 47 tags, preferred first, at most 255 characters; picks the language of a registered resource's consent texts. |
+| `prompt`                | no          | `none`, `login`, `consent`, or `create` to register. See below.                                                                    |
+| `qauth_upstream`        | no          | An upstream provider's type; starts the sign-in there. See below.                                                                  |
+| `qauth_link`            | no          | An upstream provider's type; links an account of it. See below.                                                                    |
+| `qauth_action`          | no          | `setup_passkey` asks the person to add a passkey. See below.                                                                       |
+
+#### Scopes of a registered resource
+
+A realm may register a protected resource, such as an MCP server: its
+resource indicator, the scopes it defines with their consent texts, and the
+clients that may ask for them, every client of the realm or a list
+([Registering a protected resource's scopes](/operate/docker/#registering-a-protected-resources-scopes)).
+A scope a registered resource defines is granted only when the request names
+that resource in `resource`, and then to any client the resource is open to,
+a CIMD or a dynamically registered client included, whatever the client's own
+`scopes` hold. The user still consents, and the consent screen shows the
+resource's own text for the scope, in the first `ui_locales` tag the resource
+has a text for, English otherwise; a first-party client's administrative
+consent does not cover the scope unless its own allowlist holds it. Asked for
+without its resource, with another resource, or by a client the resource is
+not open to, the scope is dropped like any scope outside the allowlist. A
+request that names several resources gets it only when each of them is
+registered, defines it and is open to the client. So a token's `aud` and the
+resource scopes it carries always agree. The token endpoint applies the rule
+again at the code's redemption and on every refresh: a `resource` that
+narrows the audience drops the scopes of the resources it leaves out, and a
+resource closed to the client since drops its own. Every other scope keeps the
+client's allowlist as its ceiling.
 
 `redirect_uri` and each `resource` are absolute URIs of at most 2048
 characters, written in ASCII as RFC 3986 requires: an internationalised host in
