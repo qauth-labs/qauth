@@ -347,7 +347,9 @@ describe('the dry run of a realm-file import (#518, real containers)', () => {
       }));
     expect(clientChanges).toEqual([
       { key: 'portal', path: 'name', op: 'update', direction: 'neutral', class: 'write' },
-      { key: 'portal', path: 'scopes', op: 'update', direction: 'loosening', class: 'security' },
+      // A scope outside the reserved qauth: namespace is a write, as
+      // clients.update has it, though it loosens.
+      { key: 'portal', path: 'scopes', op: 'update', direction: 'loosening', class: 'write' },
       { key: 'reports', path: '', op: 'create', direction: 'loosening', class: 'security' },
     ]);
     expect(body.changes.find((change) => change.path === 'password.minScore')).toMatchObject({
