@@ -1,10 +1,16 @@
 import { generateKeyPairSync } from 'node:crypto';
 
-import { type ActClaim, jwtPlugin, type JwtPluginOptions } from '@qauth-labs/fastify-plugin-jwt';
+import {
+  type ActClaim,
+  type JWTPayload,
+  jwtPlugin,
+  type JwtPluginOptions,
+} from '@qauth-labs/fastify-plugin-jwt';
 import {
   createTestSigner,
   type TestSigner,
 } from '@qauth-labs/fastify-plugin-signer/src/testing/memory-signer';
+import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { decodeJwt, decodeProtectedHeader, importPKCS8, SignJWT } from 'jose';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +48,10 @@ const UNKNOWN_USER_ID = '44444444-4444-4444-8444-444444444444';
 const REENABLED_USER_ID = '55555555-5555-4555-8555-555555555555';
 const REENABLED_USER_DISABLED_AT = Date.now() - 300_000;
 const REVOKED_JTI = 'revoked-jti';
+/** The check of the probe route that takes act-chain tokens (#523). */
+const actChainCheck = vi.fn<(request: FastifyRequest, claims: JWTPayload) => Promise<void>>(
+  async () => undefined
+);
 
 /**
  * Two realms, told apart by the host, as the realm resolver tells them
@@ -192,6 +202,17 @@ beforeEach(async () => {
     app.get(
       probePath(family, 'clients'),
       { preHandler: requireFamilyToken(family, { subjects: ['client'] }) },
+      reply
+    );
+    app.get(
+      probePath(family, 'delegated'),
+      {
+        preHandler: requireFamilyToken(family, {
+          subjects: ['user', 'client'],
+          allowActChain: true,
+          checkActChain: actChainCheck,
+        }),
+      },
       reply
     );
   }
@@ -349,12 +370,80 @@ describe('requireFamilyToken (#509)', () => {
       expect(response.headers['www-authenticate']).toContain('error="invalid_token"');
     });
 
-    it('is left to the account routes, which decide per operation', async () => {
+    // #523: the default is deny. An account route takes a token with an act
+    // chain only when it declares so, after its own check of the chain.
+    it('is refused on an account route that does not declare it takes one', async () => {
+      actChainCheck.mockClear();
       const response = await call(
         probePath('account'),
         await mint({ aud: API_FAMILY_AUDIENCES.account, act })
       );
+      expect(response.statusCode).toBe(403);
+      expect(actChainCheck).not.toHaveBeenCalled();
+      // A token with no act chain passes the same route.
+      expect(
+        (await call(probePath('account'), await mint({ aud: API_FAMILY_AUDIENCES.account })))
+          .statusCode
+      ).toBe(200);
+    });
+
+    it('reaches an account route that declares it takes one, through its check', async () => {
+      actChainCheck.mockClear();
+      const response = await call(
+        probePath('account', 'delegated'),
+        await mint({ aud: API_FAMILY_AUDIENCES.account, act })
+      );
       expect(response.statusCode).toBe(200);
+      expect(actChainCheck).toHaveBeenCalledTimes(1);
+      expect(actChainCheck.mock.calls[0][1]).toMatchObject({ act });
+      // A token with no act chain is not handed to the check.
+      await call(
+        probePath('account', 'delegated'),
+        await mint({ aud: API_FAMILY_AUDIENCES.account })
+      );
+      expect(actChainCheck).toHaveBeenCalledTimes(1);
+    });
+
+    it("hands the check an admin's act chain whole, as the verifier read it from the token (#523)", async () => {
+      actChainCheck.mockClear();
+      const adminAct = {
+        sub: '0192a000-0000-7000-8000-000000000022',
+        iss: 'https://operator.example.test',
+        client_id: 'admin-console',
+      };
+      const response = await call(
+        probePath('account', 'delegated'),
+        await mint({ aud: API_FAMILY_AUDIENCES.account, act: adminAct })
+      );
+      expect(response.statusCode).toBe(200);
+      expect(actChainCheck.mock.calls[0][1].act).toEqual(adminAct);
+    });
+
+    it("is refused when the route's check refuses it", async () => {
+      actChainCheck.mockImplementationOnce(async () => {
+        throw new JWTInvalidError('The act-chain token is no longer valid');
+      });
+      const response = await call(
+        probePath('account', 'delegated'),
+        await mint({ aud: API_FAMILY_AUDIENCES.account, act })
+      );
+      expect(response.statusCode).toBe(401);
+    });
+
+    it('is refused on the developer and admin families even where a route declares it takes one', async () => {
+      for (const family of ['developer', 'admin'] as const) {
+        const response = await call(
+          probePath(family, 'delegated'),
+          await mint({ aud: API_FAMILY_AUDIENCES[family], act })
+        );
+        expect(response.statusCode, family).toBe(401);
+      }
+    });
+
+    it('refuses to build a route that takes act-chain tokens without checking them', () => {
+      expect(() =>
+        requireFamilyToken('account', { subjects: ['user'], allowActChain: true })
+      ).toThrow(/checks them/);
     });
   });
 

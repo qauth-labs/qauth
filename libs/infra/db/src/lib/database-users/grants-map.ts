@@ -89,11 +89,18 @@ const I: readonly TablePrivilege[] = Object.freeze(['INSERT']);
 
 /** Every table of the schema, in name order, with the roles that hold anything on it. */
 export const TABLE_GRANTS: TableGrants = Object.freeze({
+  // Act-chain tokens issued to admins (#523): written in the transaction of
+  // the admin operation that mints one, read by the account API (`api`) on
+  // every call made with one. Written once: no role updates or deletes it.
+  admin_act_sessions: { api: S, admin: SI },
   // Approval requests for security operations (#512): filed, approved,
   // consumed and expired on the admin listener.
   admin_approvals: { admin: SIU },
   // The admin audit log (#448): appended in the admin pipeline's
-  // transaction; its trigger reads the chain head and the checkpoints.
+  // transaction; its trigger reads the chain head and the checkpoints. The
+  // account API (`api`) appends the row of each call an admin makes with an
+  // act-chain token through the functions of migration 0082 alone (#523,
+  // FUNCTION_GRANTS below), and holds nothing here.
   admin_audit_log: { admin: SI },
   admin_audit_log_checkpoints: { admin: S },
   // One-time admin enrolments (#602): written by the host's break-glass
@@ -232,6 +239,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
 });
 
 /**
+ * The columns `api` reads of an approval: whether the approval an admin's
+ * act-chain token ran on is still `consumed` (#523).
+ *
  * The columns `delivery` reads of tables it may not read whole: whether a
  * stream may receive events and where its subjects point, and a client's
  * back-channel logout metadata (`EVENT_DELIVERY_COLUMNS`), and each realm's
@@ -245,6 +255,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
  * its config, whose client id and authentication method name it.
  */
 export const COLUMN_GRANTS: ColumnGrants = Object.freeze({
+  // Whether the approval an act-chain token ran on is still consumed (#523):
+  // the account API reads its status, never its request, display or digest.
+  admin_approvals: { api: ['id', 'realm_id', 'status'] },
   oauth_clients: {
     delivery: [
       'id',
@@ -335,6 +348,13 @@ export const FUNCTION_GRANTS: FunctionGrants = Object.freeze({
   // DELETE on `users`.
   '"users_lock_for_deletion"(uuid, uuid)': ['admin'],
   '"users_delete_account"(uuid, uuid)': ['admin'],
+  // The audit row of a call an admin makes with an act-chain token (migration
+  // 0082, #523): the realm's chain head under its lock, and the row, whose
+  // actor and act chain the token's admin_act_sessions row decides. The
+  // account API (`api`) reads and writes nothing else of the log.
+  '"admin_audit_act_chain_head"(uuid)': ['api'],
+  '"admin_audit_append_act_chain_call"(uuid, text, bigint, bytea, bytea, text, text, text, jsonb, text, bigint)':
+    ['api'],
   // The admin audit log's prune and the admin chain's trigger function stay
   // with the owner: no role runs them.
 });

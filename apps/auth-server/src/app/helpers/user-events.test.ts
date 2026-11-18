@@ -156,6 +156,29 @@ describe('emitUserEvent', () => {
     });
   });
 
+  it('makes the admin who acts for the user the actor, as the person it is (#523)', async () => {
+    const { request, events } = createRequest();
+    const adminId = '0192a000-0000-7000-8000-000000000022';
+
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:token.issued:v1-rc.0',
+      { grantType: 'authorization_code' },
+      {
+        realmId: REALM_ID,
+        userId: USER_ID,
+        clientId: 'admin-console',
+        actor: 'user',
+        act: { sub: adminId, iss: 'https://operator.example.test', client_id: 'admin-console' },
+      }
+    );
+
+    const [event] = events.emitInOwnTransaction.mock.calls[0];
+    // Not a client and no agent's chain: the admin audit log keeps the chain.
+    expect(event.actor).toEqual({ type: 'user', id: adminId });
+    expect(event.subject).toEqual({ type: 'user', id: USER_ID });
+  });
+
   it('names the client as the actor of an undelegated client request', async () => {
     const { request, events } = createRequest();
 

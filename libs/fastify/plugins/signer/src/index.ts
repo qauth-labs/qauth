@@ -14,6 +14,14 @@ export type * from './types';
 export { AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX } from '@qauth-labs/server-keys';
 // The same for a value sealed for an admin operation's secret member (#984).
 export { ADMIN_SEALED_VALUE_CONTEXT_PREFIX } from '@qauth-labs/server-keys';
+// The act-chain token profile the signer holds the admin role to (#523): the
+// auth server pins its account API values equal to it, and mints within it.
+export {
+  ACT_CHAIN_TOKEN_AUDIENCE,
+  ACT_CHAIN_TOKEN_MAX_LIFETIME_SECONDS,
+  ACT_CHAIN_TOKEN_SCOPES,
+  actChainTokenClaimsProblem,
+} from '@qauth-labs/server-keys';
 // The same for an OID4VP request state's ephemeral response key (#546), and
 // the request-object typ the signer stamps, which the auth server pins equal to
 // the federation library's.

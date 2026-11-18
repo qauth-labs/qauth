@@ -87,7 +87,7 @@ describe('SIGNER_POLICY', () => {
         'getJwks',
         'getUpstreamJwks',
       ],
-      admin: ['getVerificationKeys', 'getJwks', 'getUpstreamJwks'],
+      admin: ['signJws:at+jwt', 'signHybrid', 'getVerificationKeys', 'getJwks', 'getUpstreamJwks'],
     });
   });
 

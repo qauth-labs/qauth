@@ -20,6 +20,7 @@ import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 import { type JWTPayload, SignJWT } from 'jose';
 
 import type { KeyIdentity } from './aad';
+import { actChainTokenClaimsProblem } from './act-chain-token-claims';
 import { BoundedCache } from './bounded-cache';
 import {
   COOKIE_KID_PATTERN,
@@ -755,6 +756,18 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     return new SignJWT(payload).setProtectedHeader(header).sign(key);
   }
 
+  /**
+   * Refuse an access token the `admin` role asks for that is not an
+   * act-chain token (#523, `actChainTokenClaimsProblem`): the role's grant
+   * names `at+jwt`, and its tokens are held to that one profile. Every other
+   * role's are not checked here.
+   */
+  function assertActChainProfile(caller: SignerCaller, claims: Record<string, unknown>): void {
+    if (caller !== 'admin') return;
+    const problem = actChainTokenClaimsProblem(claims, Math.floor(now() / 1000));
+    if (problem !== undefined) throw new SignerRequestRefusedError('INVALID_CLAIMS', problem);
+  }
+
   return Object.freeze({
     async signJws(caller: SignerCaller, request: SignJwsRequest): Promise<string> {
       const fields = readRequest(request, REQUEST_FIELDS.signJws);
@@ -829,6 +842,9 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         const problem = eventTokenClaimsProblem(typ, claims, Math.floor(now() / 1000));
         if (problem !== undefined) throw new SignerRequestRefusedError('INVALID_CLAIMS', problem);
       }
+      // The admin role signs one kind of access token: an act-chain token
+      // for an admin who acts for a user (#523), held to its profile here.
+      assertActChainProfile(caller, claims);
 
       const issuer = await realmIssuer(realmId);
       for (let pick = 1; ; pick += 1) {
@@ -873,6 +889,8 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         throw new SignerAccessDeniedError(caller, 'signHybrid', 'token_signing');
       }
       const claims = resolveClaims(fields['claims']);
+      // As through signJws: the admin role's one kind of access token (#523).
+      assertActChainProfile(caller, claims);
 
       const issuer = await realmIssuer(realmId);
       for (let pick = 1; ; pick += 1) {

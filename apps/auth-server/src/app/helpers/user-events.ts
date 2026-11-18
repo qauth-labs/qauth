@@ -31,6 +31,7 @@ import {
 } from '@qauth-labs/shared-events';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
+import { isAdminActChain } from './admin-act-chain';
 import { recordAdminSecurityChange, securityChangeOfEvent } from './admin-security-change';
 import { delegationChainColumn } from './agent-audit';
 import { requestRealm } from './request-realm';
@@ -81,6 +82,12 @@ export interface UserEventOptions {
 
 /** The actor the options name, or `undefined` when they name none. */
 function actorOf(options: UserEventOptions): EventActor | undefined {
+  // An admin acting for the user (#523) is a person, named by the account
+  // id its act chain names: not a client, and no agent's delegation chain.
+  // The admin audit log keeps the full chain.
+  if (isAdminActChain(options.act) && typeof options.act?.sub === 'string') {
+    return { type: 'user', id: options.act.sub };
+  }
   const chain = delegationChainColumn(options.act);
   if (chain !== null) {
     return { type: 'client', id: chain[0], delegationChain: chain };

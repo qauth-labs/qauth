@@ -1,3 +1,4 @@
+export * from './admin-act-sessions';
 export * from './admin-approvals';
 export * from './admin-audit';
 export * from './admin-enrolments';

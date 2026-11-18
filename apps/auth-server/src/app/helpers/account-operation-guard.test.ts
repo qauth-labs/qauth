@@ -22,6 +22,7 @@ import {
   isFreshSignIn,
   provedOnlyThroughNew,
   requiredFactorOf,
+  requireFreshAuthentication,
 } from './account-operation-guard';
 
 const REALM_ID = '00000000-0000-4000-8000-0000000000aa';
@@ -129,6 +130,26 @@ async function buildHarness(): Promise<Harness> {
       handler: async () => ({ ran: id }),
     });
   }
+  // A route that asks for a fresh sign-in itself (#523).
+  app.post('/account/v1-rc.0/fresh', {
+    schema: { operationId: 'account.fixture.freshProbe' },
+    preValidation: async (request) => {
+      request.jwtPayload = harness.claims;
+    },
+    handler: async (request) => {
+      await requireFreshAuthentication(request);
+      return { ran: 'fresh' };
+    },
+  });
+  app.post('/account/v1-rc.0/fresh-unnamed', {
+    preValidation: async (request) => {
+      request.jwtPayload = harness.claims;
+    },
+    handler: async (request) => {
+      await requireFreshAuthentication(request);
+      return { ran: 'fresh' };
+    },
+  });
   // A removal that names its passkey (#1108), as the account API's route
   // hands it to the guard (`accountOperation`'s `removing`).
   const removal = rulesOf('account.passkeys.delete');
@@ -321,6 +342,57 @@ describe('the account operation guard (#663)', () => {
       expect(isFreshSignIn(now + 60_000, now)).toBe(true);
       expect(isFreshSignIn(now + 60_001, now)).toBe(false);
       expect(isFreshSignIn(now + 86_400_000, now)).toBe(false);
+    });
+  });
+
+  describe('requireFreshAuthentication (#523)', () => {
+    const fresh = (harness: Harness, path = 'fresh') =>
+      harness.app.inject({
+        method: 'POST',
+        url: `/account/v1-rc.0/${path}`,
+        headers: { authorization: 'Bearer a.b.c' },
+      });
+
+    it('passes a fresh sign-in with the strongest bound factor, and challenges an old one', async () => {
+      const harness = await buildHarness();
+      expect((await fresh(harness)).statusCode).toBe(200);
+      harness.claims = { ...harness.claims, authTime: signedInAgo(301) };
+      const response = await fresh(harness);
+      expect(response.statusCode).toBe(401);
+      expect(harness.events).toMatchObject([
+        {
+          type: REFUSED,
+          data: { operation: 'account.fixture.freshProbe', reason: 'authentication_too_old' },
+        },
+      ]);
+      await harness.app.close();
+    });
+
+    it.each([
+      [
+        "an admin's act-chain token",
+        { sub: 'admin-1', iss: 'https://operator.test', client_id: 'c' },
+      ],
+      ["an agent's delegation token", { sub: 'agent-client' }],
+    ])('refuses %s, however fresh the sign-in behind it', async (_case, act) => {
+      const harness = await buildHarness();
+      harness.claims = { ...harness.claims, act, authTime: signedInAgo(1) };
+      const response = await fresh(harness);
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ code: 'delegated_token_refused' });
+      expect(harness.events).toMatchObject([
+        {
+          type: REFUSED,
+          data: { operation: 'account.fixture.freshProbe', reason: 'delegated_token' },
+        },
+      ]);
+      await harness.app.close();
+    });
+
+    it('runs only on the route of an account operation', async () => {
+      const harness = await buildHarness();
+      expect((await fresh(harness, 'fresh-unnamed')).statusCode).toBe(500);
+      await harness.app.close();
     });
   });
 

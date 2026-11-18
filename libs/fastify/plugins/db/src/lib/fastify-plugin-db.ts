@@ -1,4 +1,5 @@
 import {
+  type AdminActSessionsRepository,
   type AdminApprovalsRepository,
   type AdminAuditLogRepository,
   type AdminEnrolmentsRepository,
@@ -7,6 +8,7 @@ import {
   type ApiKeysRepository,
   type AuthorizationCodesRepository,
   type BackchannelLogoutClientsRepository,
+  createAdminActSessionsRepository,
   createAdminApprovalsRepository,
   createAdminAuditLogRepository,
   createAdminEnrolmentsRepository,
@@ -183,6 +185,13 @@ declare module 'fastify' {
        */
       adminApprovals: AdminApprovalsRepository;
       /**
+       * Act-chain tokens issued to admins who act for a user (ADR-019
+       * Decision 7, #523): written in the transaction of the security
+       * operation that mints one, read on every call made with one, and
+       * listed for the user's account page.
+       */
+      adminActSessions: AdminActSessionsRepository;
+      /**
        * The published keys of each realm (`realm_public_keys`, #491): public
        * material every service role reads. A process without the signer
        * verifies a realm's tokens and serves its JWKS with them (#495).
@@ -270,6 +279,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   adminAuditLog: true,
   adminEnrolments: true,
   adminApprovals: true,
+  adminActSessions: true,
   realmPublicKeys: true,
   realmSecrets: true,
   realmAuthMethodPlugins: true,
@@ -382,6 +392,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       adminAuditLog: () => createAdminAuditLogRepository(database.db),
       adminEnrolments: () => createAdminEnrolmentsRepository(database.db),
       adminApprovals: () => createAdminApprovalsRepository(database.db),
+      adminActSessions: () => createAdminActSessionsRepository(database.db),
       realmPublicKeys: () => createRealmPublicKeysRepository(database.db),
       realmSecrets: () => createRealmSecretsRepository(database.db),
       realmAuthMethodPlugins: () => createRealmAuthMethodPluginsRepository(database.db),

@@ -3,7 +3,7 @@ title: Account API from a backend
 description: How a backend for frontend, such as the account console's, calls the account API — the token it holds, the fresh-authentication challenge it answers, and the refusals it must not retry.
 sidebar:
   order: 8
-lastVerified: '2026-11-14'
+lastVerified: '2026-11-16'
 ---
 
 The [account API](/reference/account-api/) is called by backends that hold a person's access
@@ -187,6 +187,28 @@ operations needs a fresh sign-in, and each takes an act-chain token.
   browser whose session you kept.
 
 Access tokens already issued stay valid until they expire, on every path above.
+
+## An admin acting for the person
+
+An admin who acts for a person holds an act-chain token, which only an approved security operation
+of the admin API issues. Its `sub` is the person and its `act` names the admin, with the admin's
+`sub`, `iss` and `client_id`. Its only audience is the account API, it lives at most ten minutes,
+it is bound to the admin's DPoP key and it carries no `auth_time`, so it never counts as the
+person's sign-in. It reads the account unless the approval named `qauth:account:write`. The person
+is not asked: each token is recorded, with the admin, the time and the approval, for the person to
+see.
+
+- Only an operation whose `x-qauth-act-chain` is `accepted` takes one; every other route answers 403
+  `delegated_token_refused`, and so does an operation that asks for a fresh sign-in.
+- Each call is held to the token's record: once the admin's grant is revoked, or the admin's account
+  or realm is disabled, the next call answers 401 `invalid_token`.
+- Each call writes a row of the admin audit log with the whole act chain and the call's outcome,
+  once the token's record is found: a call refused after that, such as one after the grant was
+  revoked, is recorded as denied, while one refused before it, such as one whose DPoP proof or
+  token does not verify, is not recorded. A call that would succeed but whose row cannot be
+  written answers 503 with `Retry-After` instead of its answer.
+
+A BFF never holds such a token: it holds the person's own.
 
 ## Refusals a step-up cannot lift
 

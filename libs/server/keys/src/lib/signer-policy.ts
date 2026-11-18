@@ -205,7 +205,13 @@ const NOTHING_ELSE = {
  *   with {@link DELIVERY_SECRET_CONTEXT_PREFIX}: a destination's secret, such
  *   as an SSF receiver's `Authorization` header that the api role stored
  *   encrypted and that each push sends (#410).
- * - `admin` reads public keys, and encrypts and decrypts only a value sealed
+ * - `admin` signs one kind of access token, an act-chain token for an admin
+ *   who acts for a user (`at+jwt` with the `token_signing` key, hybrid
+ *   included, #523): the signer holds every access token the role asks for
+ *   to the act-chain profile (`actChainTokenClaimsProblem`): the account
+ *   API's audience and scopes only, the admin as the one actor, bound to a
+ *   DPoP key, at most ten minutes, and no sign-in claim. It reads public
+ *   keys, and encrypts and decrypts only a value sealed
  *   for an admin operation's secret member
  *   ({@link ADMIN_SEALED_VALUE_CONTEXT_PREFIX}, #984): it seals one for a
  *   caller, and opens it in the handler of the operation it was sealed for. The
@@ -278,6 +284,8 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
   },
   admin: {
     ...NOTHING_ELSE,
+    signJws: ['at+jwt'],
+    signHybrid: true,
     encrypt: [ADMIN_SEALED_VALUE_CONTEXT_PREFIX],
     decrypt: [ADMIN_SEALED_VALUE_CONTEXT_PREFIX],
     ...PUBLIC_READS,

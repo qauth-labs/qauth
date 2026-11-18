@@ -2055,6 +2055,29 @@ export interface AdminAuditEntry {
   traceId?: string | null;
 }
 
+/**
+ * The audit row of one call an admin made with an act-chain token (#523): an
+ * account API operation, with no effect, diff, approval or request digest.
+ */
+export interface AdminActChainCallEntry {
+  /** The realm of the user acted for: its chain receives the row. */
+  realmId: string;
+  /** The token's `jti`: its `admin_act_sessions` row decides the actor and the act chain. */
+  tokenJti: string;
+  /** The admin's account, as the token's row names it. */
+  actorId: string;
+  /** The realm of the admin's account, as the token's row names it. */
+  actorRealmId: string;
+  /** The user, and the admin with its `sub`, `iss` and `client_id`. */
+  actChain: AdminAuditActChain;
+  /** The account API operation, such as `account.consents.list`. */
+  operationId: string;
+  operationClass: AdminOperationClass;
+  outcome: AdminAuditOutcome;
+  /** The id under which QAuth logged the request, at most 128 characters. */
+  traceId?: string | null;
+}
+
 /** Why {@link AdminAuditLogRepository.verifyAdminAuditChain} stopped at a row. */
 export type AdminAuditChainBreakReason =
   /** The row's `seq` is not the one after the row (or the checkpoint) before it. */
@@ -2141,6 +2164,26 @@ export interface AdminAuditLogRepository {
    *   value outside the I-JSON model.
    */
   appendAdminAudit(tx: DbTransaction, entry: AdminAuditEntry): Promise<AdminAuditRecord>;
+
+  /**
+   * Append the row of one call an admin made with an act-chain token (#523),
+   * in the caller's transaction, through the functions of migration 0082, so
+   * a role that holds nothing on the log can write it: the account API
+   * (`api`). The database takes the realm's chain lock, as
+   * {@link appendAdminAudit} does, and inserts the row only when its actor
+   * and act chain are those of the token's `admin_act_sessions` row in the
+   * realm, its operation is an account API operation, and its time, the
+   * database's clock, falls between a minute before the token was issued and
+   * ten minutes after it ended, so a call admitted while the token lived keeps
+   * its row. The stored row is hashed and checked as {@link appendAdminAudit}
+   * checks it.
+   *
+   * @throws TypeError on an entry {@link appendAdminAudit} would refuse, and
+   *   on an operation that is not the account API's
+   * @throws Error when the database inserted no row: no such token in the
+   *   realm, an act chain that is not its row's, or a token long gone
+   */
+  appendActChainCall(tx: DbTransaction, entry: AdminActChainCallEntry): Promise<AdminAuditRecord>;
 
   /**
    * Check a realm's chain from its oldest retained row to its newest, and

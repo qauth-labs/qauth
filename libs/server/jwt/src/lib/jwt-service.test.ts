@@ -587,6 +587,33 @@ describe('verifyAccessToken runtime claim-shape validation (F-10)', () => {
     await expect(verifyAccessToken(token, publicKey)).rejects.toThrow(JWTInvalidError);
   });
 
+  it("keeps every actor's sub, iss and client_id, and drops what an actor names beyond them (#523)", async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const act = {
+      sub: 'admin-1',
+      iss: 'https://operator.example.com',
+      client_id: 'admin-console',
+      act: { sub: 'agent', iss: 'https://agents.example.com', client_id: 'agent-client' },
+    };
+    const token = await signRawClaims(
+      { sub: 'user-1', client_id: 'admin-console', act: { ...act, extra: 'dropped' } },
+      privateKey
+    );
+
+    const payload = await verifyAccessToken(token, publicKey);
+    expect(payload.act).toEqual(act);
+  });
+
+  it('rejects a correctly-signed token whose actor names an issuer that is not a string', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const token = await signRawClaims(
+      { sub: 'user-1', client_id: 'c', act: { sub: 'admin-1', iss: 42 } },
+      privateKey
+    );
+
+    await expect(verifyAccessToken(token, publicKey)).rejects.toThrow(JWTInvalidError);
+  });
+
   it('rejects a correctly-signed token whose email is not a valid email', async () => {
     const { privateKey, publicKey } = await generateEdDSAKeyPair();
     const token = await signRawClaims(

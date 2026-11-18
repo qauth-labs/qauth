@@ -483,7 +483,7 @@ What the signer guarantees:
   | `web`      | `getCookieSecrets`, `getCookieDerivedKey`, `signRequestObject`, `signClientAssertion`, `encrypt` of an `oid4vp-response-key:` or `totp-secret:` context, `decrypt` of a `realm_secrets:mail.`, `upstream-oidc:client-secret:`, `auth-method-plugin:` or `totp-secret:` context only. It signs no token. |
   | `api`      | `signJws` for `at+jwt`, `JWT` and `oauth-id-jag+jwt`, `signHybrid`, `signClientAssertion`, `getCookieDerivedKey`, `verifyCookieMac`, `encrypt`, `decrypt` of a `realm_secrets:mail.`, `upstream-oidc:client-secret:`, `auth-method-plugin:`, `oid4vp-response-key:` or `totp-secret:` context only.     |
   | `delivery` | `signJws` for `secevent+jwt` and `logout+jwt`, `signWebhook`, `decrypt` of a `delivery:` context only.                                                                                                                                                                                                  |
-  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                                                                                                                                                                                                                                 |
+  | `admin`    | `signJws` for `at+jwt` and `signHybrid`, held to the act-chain profile (`actChainTokenClaimsProblem`, #523): the account API's audience and scopes, the admin as the one actor, DPoP-bound, at most ten minutes, no sign-in claim. `encrypt` and `decrypt` of an `admin-sealed-value:` context only.    |
 
   The public keys are `getVerificationKeys`, `getJwks` and `getUpstreamJwks`.
 

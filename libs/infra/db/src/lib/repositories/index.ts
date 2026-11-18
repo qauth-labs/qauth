@@ -2,6 +2,7 @@
 export * from './base.repository';
 
 // Export all repositories
+export * from './admin-act-sessions.repository';
 export * from './admin-approvals.repository';
 export * from './admin-audit-log.repository';
 export * from './admin-enrolments.repository';

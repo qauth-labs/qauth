@@ -184,12 +184,12 @@ describe('the signer service (#497)', () => {
   it('refuses a role with no grant for the operation before it reads the body', async () => {
     const service = createSignerService(setup.signer);
     // Not even an object: a role with a grant would get 400 for it.
-    const answer = await service.call('admin', 'signJws', 'not an object');
+    const answer = await service.call('web', 'signJws', 'not an object');
     expect(answer.status).toBe(403);
-    expect(answer.refused).toEqual({ caller: 'admin', operation: 'signJws' });
+    expect(answer.refused).toEqual({ caller: 'web', operation: 'signJws' });
     expect((await service.call('api', 'signJws', 'not an object')).status).toBe(400);
     // The same refusal with no body at all, for a route to answer before it reads one.
-    expect(service.precheck('admin', 'signJws')).toEqual(answer);
+    expect(service.precheck('web', 'signJws')).toEqual(answer);
     expect(service.precheck('local', 'signJws')).toMatchObject({ status: 403 });
     expect(service.precheck('api', 'signJws')).toBeUndefined();
   });

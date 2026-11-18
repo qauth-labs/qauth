@@ -499,6 +499,56 @@ export interface AccountOperationGuard {
   };
 }
 
+/** The fresh-authentication rules a route may require itself: every rule but `none`. */
+export type FreshAuthenticationRequirement = Exclude<FreshAuthenticationRule, 'none'>;
+
+/**
+ * Require the person's fresh sign-in for the call, from inside a route of the
+ * account API (#523): the rule {@link checkAccountOperation} applies to an
+ * operation whose contract names `requirement`, for a route that decides it
+ * needs one at run time. An act-chain token never counts as the person's
+ * fresh sign-in (ADR-019 Decision 7): an agent's or an admin's is refused
+ * with 403 `DelegatedTokenRefusedError`, whatever the route takes otherwise.
+ * Each refusal is recorded as the operation guard records one.
+ *
+ * Call it after the route's guard: it reads the verified token
+ * (`request.jwtPayload`), and the operation from the route's schema
+ * (`operationId`, an account operation id).
+ *
+ * @throws {DelegatedTokenRefusedError} for a token with an act chain
+ * @throws {InsufficientUserAuthenticationError} without a fresh sign-in with
+ *   the account's strongest bound factor
+ * @throws {Error} outside a route of an account operation, or before its guard
+ */
+export async function requireFreshAuthentication(
+  request: FastifyRequest,
+  requirement: FreshAuthenticationRequirement = 'strongest-factor',
+  removing?: CredentialTarget
+): Promise<void> {
+  if (!FRESH_AUTHENTICATION_RULES.includes(requirement) || (requirement as string) === 'none') {
+    throw new Error(`requireFreshAuthentication: ${String(requirement)} requires no sign-in`);
+  }
+  const operationId = (request.routeOptions.schema as { operationId?: unknown } | undefined)
+    ?.operationId;
+  if (typeof operationId !== 'string' || !OPERATION_ID.test(operationId)) {
+    throw new Error('requireFreshAuthentication runs on the route of an account operation');
+  }
+  const claims = request.jwtPayload as JWTPayload | undefined;
+  subjectOf(claims);
+  await checkAccountOperation(
+    request,
+    {
+      operationId,
+      // Neither is read by the check; the route's guard checked its scope.
+      operationClass: 'write',
+      permission: 'account.write',
+      freshAuthentication: requirement,
+      actChain: 'refused',
+    },
+    removing
+  );
+}
+
 /** What a route adds to its operation's rules. */
 export interface AccountOperationOptions {
   /**
@@ -538,10 +588,26 @@ export function accountOperation(
   }
   const frozen: AccountOperationRules = Object.freeze({ ...rules });
   // The scope of the operation's class (#933); throws for another class.
+  // The family guard lets an act-chain token through to the operation's own
+  // rule (`checkAccountOperation`), which refuses it where the contract says
+  // and records the refusal; an admin's token is held to its record first,
+  // and its call audited (`admin-access.ts`, #523).
+  const operation = { operationId: frozen.operationId, operationClass: frozen.operationClass };
   const access = familyOperation(
     'account',
     { operationClass: frozen.operationClass, permission: frozen.permission },
-    { subjects: ['user'] }
+    {
+      subjects: ['user'],
+      allowActChain: true,
+      checkActChain: async (request, claims) => {
+        // Loaded on the act path alone: the browser's account pages read
+        // this module's factor rules and never take a token (`ui/account`),
+        // and the account API's module loads `admin-access` itself, with the
+        // repositories it reads.
+        const { checkAdminActChain } = await import('./admin-access');
+        await checkAdminActChain(request, claims, operation);
+      },
+    }
   );
   return Object.freeze({
     guard: async function accountOperationGuard(request: FastifyRequest, reply: FastifyReply) {

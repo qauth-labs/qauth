@@ -13,8 +13,22 @@
  * ```
  */
 export interface ActClaim {
-  /** Identifier of the actor (for QAuth, the agent client's `client_id`). */
+  /**
+   * Identifier of the actor: an agent client's `client_id` on a token-exchange
+   * token, an admin's account id on an act-chain token (#523).
+   */
   sub: string;
+  /**
+   * The issuer the actor's `sub` belongs to (RFC 8693 §4.1 lets `act` carry
+   * identity claims). Only an act-chain token names it: the issuer of the
+   * admin's own token.
+   */
+  iss?: string;
+  /**
+   * The client the actor called through (RFC 8693 §4.3). Only an act-chain
+   * token names it: the admin's client, which is the token's `client_id`.
+   */
+  client_id?: string;
   /** Nested prior actor in the delegation chain (RFC 8693 §4.1). */
   act?: ActClaim;
 }

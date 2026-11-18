@@ -14,14 +14,20 @@
  *
  * Requires Docker; self-skips without it, same as the sibling suites.
  */
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { randomUUID } from 'node:crypto';
+
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Database, NewRealmKey } from '../../types';
+import { createAdminActSessionsRepository } from '../repositories/admin-act-sessions.repository';
+import { createAdminAuditLogRepository } from '../repositories/admin-audit-log.repository';
 import { type IntegrationDb, setupIntegrationDb } from '../repositories/integration-setup';
 import { createRealmKeysRepository } from '../repositories/realm-keys.repository';
+import { createRealmsRepository } from '../repositories/realms.repository';
+import { createUsersRepository } from '../repositories/users.repository';
 import { applyDatabaseUserGrants, checkDatabaseUserGrants, DatabaseUserGrantsError } from './apply';
 import { DATABASE_ROLES, type DatabaseRole, type DatabaseUserAssignment } from './roles';
 
@@ -430,6 +436,79 @@ describe('the roles’ database users (real Postgres, #498)', () => {
       }
       await expect(checkDatabaseUserGrants(target(), USERS)).resolves.toEqual([]);
     });
+  });
+
+  it("lets api append an act-chain call's admin audit row through the functions alone, and reach nothing else of the log (#523)", async () => {
+    if (!ctx) throw new Error('no ctx');
+    const ownerDb = ctx.database.db;
+    const name = `realm-${randomUUID()}`;
+    const issuer = `https://${name}.example.test`;
+    const realm = await createRealmsRepository(ownerDb).create({ name, issuer });
+    const users = createUsersRepository(ownerDb);
+    const user = await users.create({ realmId: realm.id }, testPrimaryCredential());
+    const admin = await users.create({ realmId: realm.id }, testPrimaryCredential());
+    const issuedAt = Date.now() - 1_000;
+    const token = await ownerDb.transaction((tx) =>
+      createAdminActSessionsRepository(ownerDb).create(tx, {
+        realmId: realm.id,
+        userId: user.id,
+        adminRealmId: realm.id,
+        adminUserId: admin.id,
+        adminClientId: 'admin-console',
+        approvalId: randomUUID(),
+        operationId: 'users.actChainTokens.create',
+        permissionIds: ['users.security'],
+        tokenJti: randomUUID(),
+        scopes: ['qauth:account:read'],
+        createdAt: issuedAt,
+        expiresAt: issuedAt + 10 * 60_000,
+      })
+    );
+
+    // The account API's own repository, on its own user.
+    const apiDb = drizzle(roleUser('api')) as unknown as Database;
+    const audit = createAdminAuditLogRepository(apiDb);
+    const appended = await apiDb.transaction((tx) =>
+      audit.appendActChainCall(tx, {
+        realmId: realm.id,
+        tokenJti: token.tokenJti,
+        actorId: admin.id,
+        actorRealmId: realm.id,
+        actChain: { sub: user.id, act: { sub: admin.id, iss: issuer, client_id: 'admin-console' } },
+        operationId: 'account.consents.list',
+        operationClass: 'read',
+        outcome: 'succeeded',
+        traceId: null,
+      })
+    );
+    expect(appended).toMatchObject({ realmId: realm.id, seq: 1, actorId: admin.id });
+
+    // It neither reads nor writes the log or its checkpoints itself.
+    for (const statement of [
+      'SELECT 1 FROM admin_audit_log',
+      'SELECT 1 FROM admin_audit_log_checkpoints',
+    ]) {
+      expect(await sqlState(roleUser('api').query(statement)), statement).toBe(DENIED);
+    }
+    expect(
+      await sqlState(
+        roleUser('api').query(
+          `INSERT INTO admin_audit_log (realm_id, seq, prev_hash, row_hash, actor_kind, actor_id,
+             operation_id, operation_class, effects, outcome, approvals, created_at)
+           VALUES ($1, 2, $2, $2, 'human_admin', $3, 'account.consents.list', 'read', '[]', 'succeeded', '[]', 0)`,
+          [realm.id, appended.rowHash, admin.id]
+        )
+      )
+    ).toBe(DENIED);
+    // And no other role runs the functions.
+    for (const role of DATABASE_ROLES.filter((role) => role !== 'api')) {
+      expect(
+        await sqlState(
+          roleUser(role).query('SELECT * FROM admin_audit_act_chain_head($1::uuid)', [realm.id])
+        ),
+        role
+      ).toBe(DENIED);
+    }
   });
 
   it('lets every role keep its node in the list through the functions alone, and only its own (#499)', async () => {
