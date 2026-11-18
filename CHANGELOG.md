@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An import of a realm file shows its plan first** ([#518], ADR-019
+  Decisions 7 and 11, ADR-020 fork G). The admin API's new
+  `POST /admin/v1-rc.0/realms/{realmId}/imports`, with `mode: "dry-run"`,
+  answers every change importing the file would make to the realm's
+  policies and to the clients the operator manages: each with its section,
+  item, field, value before and after, whether it tightens or loosens, and
+  the class, effects, permissions and scopes of the single operation it
+  equals. The plan is as strict as its strictest change, names the secrets
+  the file's choices need and the realm lacks (`secretsToSet`, such as
+  `mail.smtp.password` once the file selects `smtp`), and carries a SHA-256
+  digest over the RFC 8785 form of the realm, the base policies version,
+  the prune flag and the changes, which the approval of the import will
+  bind to. Nothing is deleted unless the request prunes. It is the read
+  operation `realms.imports.plan` (`qauth:admin:read`) and applies nothing;
+  a file holding `cimd_clients`, `resources` or `system_client`, or naming
+  a client no realm file manages, is refused. A text rendering for the CLI
+  and the approval page marks each loosening change and shows no secret.
+  [Realm file](https://docs.qauth.dev/reference/realm-file/#the-import-plan)
+  describes the plan.
 - **Each API family publishes an OpenAPI document of its own, and a break
   in one fails CI** ([#525], ADR-018 §5, ADR-019 Decision 7). The admin
   listener serves the admin API's document at `/admin/v1-rc.0/openapi.json`,
@@ -5013,6 +5032,7 @@ It adds migrations 0068 and 0069.
 [#515]: https://github.com/qauth-labs/qauth/issues/515
 [#516]: https://github.com/qauth-labs/qauth/issues/516
 [#517]: https://github.com/qauth-labs/qauth/issues/517
+[#518]: https://github.com/qauth-labs/qauth/issues/518
 [#520]: https://github.com/qauth-labs/qauth/issues/520
 [#521]: https://github.com/qauth-labs/qauth/issues/521
 [#523]: https://github.com/qauth-labs/qauth/issues/523

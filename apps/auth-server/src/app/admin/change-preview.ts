@@ -18,10 +18,10 @@ import type { TwoAdmin } from './approvals/two-admin';
  *
  * One shape for every preview: the realm policy preview
  * (`realms.policies.preview`, #589) answers it, and the client update's
- * preview (#632) and the realm-file plan (#518, #531) answer it too. Each
- * change names its field by a dotted path; a preview that spans resources
- * adds what it needs to name the resource beside the members below and keeps
- * these.
+ * preview (#632) answers it too, and the realm-file import plan (#518)
+ * keeps its change members (`AdminImportChange`). Each change names its
+ * field by a dotted path; a preview that spans resources adds what it needs
+ * to name the resource beside the members below and keeps these.
  *
  * A secret never appears: a secret field's `before` and `after` are `set` or
  * `not set` ({@link SECRET_STATES}), and the preview takes no value to show.

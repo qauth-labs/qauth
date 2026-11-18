@@ -11,9 +11,10 @@ A realm file describes one realm's configuration as a JSON document: its
 scopes granted to Client ID Metadata Document (CIMD) clients, the protected
 resources it registers and the developer portal's system client. It holds no
 secret value. The admin API and the CLI will export and import it, and an import
-will first show a dry-run diff of every change, authorized change by change
+first shows a dry-run diff of every change, authorized change by change
 ([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/),
-Decision 11). The format itself is fixed now, and it is inside the 1.0
+Decision 11). That dry run is served now, for the `policies` and `clients`
+sections ([The import plan](#the-import-plan)); applying an import comes later. The format itself is fixed now, and it is inside the 1.0
 stability promise
 ([ADR-018](/reference/records/adr/018-1-0-scope-and-stability/), §5).
 
@@ -262,6 +263,51 @@ checks, before any import:
 The JSON Schema, in turn, reads a URL by RFC 3986, as JSON Schema's `uri`
 format does, where the parser reads it as a URL parser does: an editor may flag
 a URL with a host in Unicode or with a space, which the parser accepts.
+
+## The import plan
+
+`POST /admin/v1-rc.0/realms/{realmId}/imports` with `mode: "dry-run"` and the
+file as `file` answers the plan of importing it into that realm
+(`realms.imports.plan`, a read: `qauth:admin:read` is enough). It applies
+nothing.
+
+- **Each change** names its `section`, its item by the natural key (`key`, a
+  client's `client_id`; `null` for `policies`), the field's `path`, its `op`
+  (`create`, `update` or `delete`), the value `before` and `after`, its
+  `direction` (`tightening`, `loosening` or `neutral`; an unknown direction
+  counts as loosening), and the `class`, `effects`, `permissions` and
+  `scopes` of the single operation it equals: a policy field as
+  `realms.policies.update` judges it, a client field as `clients.update`
+  does, and creating or deleting a client is a security change with the
+  effect `token-content`, as `clients.create` and `clients.delete` are.
+  `environmentBound` marks a value that describes where the realm runs;
+  `needsSecret` marks a change that leaves the realm needing a secret it
+  does not hold.
+- **A client field** tightens or loosens as its table says: fewer
+  `redirect_uris`, `scopes`, `grant_types`, `response_types` or `audience`
+  entries is stricter; `require_pkce: true` is stricter;
+  `private_key_jwt` is stricter than the two secret methods, which are
+  stricter than `none`; `is_agent: false` and a lower `max_agent_mode` are
+  stricter; any change of `jwks` or `jwks_uri` loosens; an `environment`
+  toward `production` is stricter, and toward `development` loosens with the
+  effect `posture-loosening`; `name` and `description` are neutral.
+- **The plan** is as strict as its strictest change: `security`, with an
+  approval, once one change is. It lists every effect, permission and scope
+  its changes need, the secrets the file's choices need and the realm lacks
+  (`secretsToSet`), and a `digest`: the SHA-256, base64url, of the RFC 8785
+  form of the realm id, the base `policies_version`, the prune flag and the
+  changes. Anything the plan would do, and the base version, changes it.
+- **Nothing is deleted** unless the request sets `prune: true`: a client the
+  file leaves out stays, and a section the file leaves out says nothing.
+- **Refused** (422, each issue a pointer into the request's `file`): a file
+  the parser refuses; a file that holds `cimd_clients`, `resources` or
+  `system_client`, which the import does not plan yet; and a file whose
+  `clients` names a client no realm file manages: a developer's, one that
+  registered itself, a CIMD client, the system client or a service
+  account's.
+
+No plan holds a secret: a secret policy field shows only `set` or `not set`,
+and a URL the realm stores with a user name or password shows them as `***`.
 
 ## How the format grows
 

@@ -668,6 +668,14 @@ describe('the secrets a file needs (#518)', () => {
     expect(plan.changes.find((change) => change.path === 'mail.smtp.host')?.needsSecret).toBe(true);
   });
 
+  it('keeps a stored secret: a file holds none, so no change sets or clears it', () => {
+    const plan = planImport(
+      stateOf({ policies: smtp(), setSecrets: ['mail.smtp.password'] }),
+      fileOf({ policies: smtp() })
+    );
+    expect(plan.changes).toEqual([]);
+  });
+
   it('names none for a file without policies', () => {
     expect(planImport(stateOf(), fileOf({})).secretsToSet).toEqual([]);
   });
