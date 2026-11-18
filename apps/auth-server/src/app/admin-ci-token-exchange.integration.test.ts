@@ -380,6 +380,19 @@ describe('the CI token exchange for the admin API (#526, real containers)', () =
     expect(unapproved.statusCode).toBe(403);
     expect(unapproved.json()).toMatchObject({ code: 'approval_required' });
 
+    // A human admin who may approve it: without one, filing is refused, as a
+    // service account never approves its own request.
+    const approverId = (
+      await app().repositories.users.create({ realmId: realm.id }, testPrimaryCredential())
+    ).id;
+    await app().repositories.adminGrants.create({
+      userId: approverId,
+      role: { kind: 'built-in', name: 'security-admin' },
+      targetRealmId: realm.id,
+      createdBy: null,
+    });
+    await ageAdminAccount(app().dbPool, approverId);
+
     const filed = await send('POST', `/admin/v1-rc.0/realms/${realm.id}/approvals`, token, {
       operation: 'users.verify',
       params: { userId: target },
@@ -407,16 +420,6 @@ describe('the CI token exchange for the admin API (#526, real containers)', () =
     ).rejects.toMatchObject({ statusCode: 404 });
 
     // A human admin approves it; then it runs.
-    const approverId = (
-      await app().repositories.users.create({ realmId: realm.id }, testPrimaryCredential())
-    ).id;
-    await app().repositories.adminGrants.create({
-      userId: approverId,
-      role: { kind: 'built-in', name: 'security-admin' },
-      targetRealmId: realm.id,
-      createdBy: null,
-    });
-    await ageAdminAccount(app().dbPool, approverId);
     const decision = {
       realmId: realm.id,
       approvalId: approval.id,
