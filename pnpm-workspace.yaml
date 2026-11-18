@@ -70,6 +70,22 @@ auditConfig:
     # is the glob@13 above, which never runs. Until those lines carry the fix,
     # or the consumers move to 11, or 2026-12-03, whichever comes first.
     - GHSA-g3hv-75wg-m249
+    # picomatch <=4.0.7, high: an extglob with one repeated branch, such as
+    # `+(*)`, skips the repeated-extglob check and backtracks exponentially
+    # against a short crafted string, blocking the event loop (denial of
+    # service). No patched release exists (4.0.7 is the latest). Its copies
+    # (2.3.2, 4.0.4, 4.0.7) come through build and test tooling only: vitest,
+    # vite, tinyglobby, fdir and anymatch, nx, Astro under the docs site, and
+    # the TanStack Start build plugins (start-plugin-core, router-utils)
+    # under the developer portal. The auth-server reaches it only through
+    # vitest, a dev dependency, so its image holds none. The docs site ships
+    # static files. The developer portal's image carries only the server
+    # bundle its build emits, and no runtime package of it depends on
+    # picomatch. Every pattern these tools match comes from code or repository
+    # config (test includes, route files, content globs), never from a
+    # request. Until a patched picomatch is published, or 2026-12-18,
+    # whichever comes first.
+    - GHSA-fc5q-39xc-vjpf
 # Workspace deps are linked into consumers as injected (hard-linked) COPIES
 # rather than symlinks. Required for `pnpm deploy`: from pnpm 10 a deploy is
 # only self-contained when the workspace injects, and `--legacy` instead emits
