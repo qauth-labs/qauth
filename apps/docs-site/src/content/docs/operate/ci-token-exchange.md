@@ -70,12 +70,14 @@ Each entry of `admin.workloadIssuers` has four members:
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `issuer`         | The token's `iss`, an `https` URL, compared byte for byte: no trailing slash, case or path is forgiven.                                    |
 | `audience`       | A value the token's `aud` must hold. The job asks its CI platform for a token with this audience; pick one no other service of yours uses. |
-| `subject`        | The token's `sub`: exactly, or by a prefix when it ends in `:` or `/` and then `*`. No other character is a wildcard.                      |
+| `subject`        | The token's `sub`: exactly, or by a prefix of at least two segments that ends in `:` or `/` and then `*`. No other wildcard.               |
 | `serviceAccount` | The name of the service account the token acts as.                                                                                         |
 
-A prefix ends at a separator of the subject, a `:` or a `/`:
-`repo:acme/infra:*` matches every job of the repository `acme/infra`, and
-`repo:acme/infra*`, which would also match `acme/infra-tools`, is refused. When
+A prefix ends at a separator of the subject, a `:` or a `/`, and names at
+least two segments: `repo:acme/infra:*` matches every job of the repository
+`acme/infra`, while `repo:acme/infra*`, which would also match
+`acme/infra-tools`, and `repo:*`, which would match every repository the
+issuer signs for, are refused. When
 a token matches more than one entry, the most specific wins: an exact subject
 over any prefix, a longer prefix over a shorter. Two entries as specific that
 name different service accounts refuse the token.
@@ -210,27 +212,48 @@ issuers and subjects are trusted nor which service accounts exist. The
 
 - `workload_issuer_not_listed`, `workload_audience_invalid`,
   `workload_subject_not_listed`, `workload_ambiguous_service_account`: the
-  token matches no entry;
-- `workload_too_old`, `workload_issued_in_future`,
-  `workload_signature_invalid` (a bad signature, or `exp` or `nbf`),
-  `workload_claims_invalid` (no `iat`, `exp`, `sub` or `jti`): the token is
-  not usable;
-- `workload_unresolvable_key`: no key of the issuer's JWK Set verifies it, or
-  its documents could not be fetched;
+  token matches no entry, or two entries as specific that name different
+  service accounts;
+- `workload_malformed`, `workload_unsupported_algorithm` (not `EdDSA`,
+  `RS256` or `ES256`), `workload_unsupported_typ` (a `typ` other than `JWT`),
+  `workload_claims_invalid` (no `iat`, `exp`, `sub` or `jti`, or one of the
+  wrong type), `workload_issuer_invalid` (its signed `iss` is not the issuer
+  whose key verified it): the token is not one QAuth reads;
+- `workload_too_old`, `workload_issued_in_future`: its `iat` is more than 10
+  minutes old, or ahead of the clock by more than 30 seconds;
+- `workload_unresolvable_key`: no key of the issuer's JWK Set fits the
+  token's `kid` and algorithm, or the issuer's documents could not be
+  fetched or name another issuer; `workload_signature_invalid`: the key found
+  does not verify it, or its `exp` or `nbf` does not hold;
 - `workload_replayed`: its `jti` was exchanged before;
   `workload_replay_store_unavailable`: Redis could not record it, and the
   exchange fails closed;
-- `workload_service_account_disabled`, `workload_service_account_unknown`,
+- `workload_service_account_unknown`, `workload_service_account_disabled`,
   `workload_service_account_account_inactive`,
-  `workload_service_account_client_unusable`: the service account may not
-  act now.
+  `workload_service_account_account_not_marked`,
+  `workload_service_account_client_unusable`,
+  `workload_service_account_client_not_private_key_jwt`,
+  `workload_service_account_realm_not_operator`: the service account the
+  entry names may not act now;
+- `workload_client_mismatch`: the request's `client_id` is not the service
+  account's client.
 
-The request's own mistakes say what to fix: `invalid_dpop_proof` without a
-proof, `invalid_target` for a `resource` other than the admin API's audience,
-and `invalid_request` with a description for client credentials, an
-`actor_token` or another `requested_token_type`. A successful exchange is a
-`token.issued` event naming the service account's account and client, and an
-`info` line in the log naming the issuer and subject that matched.
+A workload token is spent once the token itself passes, before the service
+account is read: a request refused from there on needs a new workload
+token. That covers the service account refusals, the `client_id`,
+and a `scope` the service account's client does not hold, or none
+(`invalid_scope`, reason `scope_not_allowed_for_client` or `scope_required`).
+
+The request's own mistakes say what to fix, and spend no workload token:
+`invalid_dpop_proof` without a valid proof (reasons `dpop_*`),
+`invalid_target` for a `resource` other than the admin API's audience
+(`workload_resource_not_admin`), and `invalid_request` with a description
+for client credentials (`workload_client_authentication`), an `actor_token`
+(`workload_actor_token`), another `requested_token_type`
+(`workload_requested_token_type`) or DPoP switched off
+(`workload_dpop_disabled`). A successful exchange is a `token.issued`
+event naming the service account's account and client, and an `info` line in
+the log naming the issuer and subject that matched.
 
 ## See also
 

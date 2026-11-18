@@ -1,4 +1,5 @@
 import { type JwsAlgorithm, verifyWithHeader } from '@qauth-labs/core-crypto';
+import { WORKLOAD_SUBJECT_PATTERN } from '@qauth-labs/fastify-plugin-realm-policy';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -133,19 +134,16 @@ const workloadClaimsSchema = z.object({
  * Whether `subject` matches an entry's `subject`: exactly, or, for a pattern
  * ending in `*`, by starting with what precedes it. No other character is a
  * wildcard; the policy schema refuses a `*` anywhere but at the end, a
- * pattern that is `*` alone, and a prefix that does not end at a `:` or `/`.
+ * pattern that is `*` alone, and a prefix that does not name two segments
+ * and end at a `:` or `/`.
  */
 export function workloadSubjectMatches(pattern: string, subject: string): boolean {
+  // The schema's own pattern, checked again, so a hand-written row can never
+  // make a pattern match every subject, or another tenant's name that only
+  // starts like the one meant.
+  if (!WORKLOAD_SUBJECT_PATTERN.test(pattern)) return false;
   if (!pattern.endsWith('*')) return subject === pattern;
-  const prefix = pattern.slice(0, -1);
-  // The schema refuses these prefixes; checked again, so a hand-written row
-  // can never make a pattern match every subject, or another tenant's name
-  // that only starts like the one meant.
-  return (
-    prefix.length > 1 &&
-    (prefix.endsWith(':') || prefix.endsWith('/')) &&
-    subject.startsWith(prefix)
-  );
+  return subject.startsWith(pattern.slice(0, -1));
 }
 
 /** How specific a matching pattern is: an exact subject above any prefix, a longer prefix above a shorter. */

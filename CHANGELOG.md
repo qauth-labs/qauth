@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client authentication. The realm policy `admin.workloadIssuers` decides
   which tokens are trusted: each entry names an `issuer` (matched byte for
   byte), an `audience` the token's `aud` must hold, a `subject` (exact, or a
-  prefix ending in `:` or `/` and then `*`, the only wildcard) and the `serviceAccount` it acts
+  prefix of at least two segments ending in `:` or `/` and then `*`, the only
+  wildcard) and the `serviceAccount` it acts
   as; the most specific entry wins, and a tie between two service accounts
   refuses. The issuer's keys come from its discovery document and JWK Set
   through the egress client, as the ID-JAG issuer keys do (the resolver is

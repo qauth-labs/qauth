@@ -893,7 +893,7 @@ describe('parseRealmPolicies', () => {
     ).toEqual(issuers);
   });
 
-  it('refuses a workload issuer entry whose subject has a wildcard anywhere but at the end, alone, or after no separator', () => {
+  it('refuses a workload issuer entry whose subject has a wildcard anywhere but at the end, alone, or after no tenant segment', () => {
     for (const subject of [
       '*',
       'repo:*:main',
@@ -904,6 +904,10 @@ describe('parseRealmPolicies', () => {
       'repo:acme*',
       'repo:acme/infra-*',
       ':*',
+      'repo:*',
+      'repo:/*',
+      'repo::*',
+      ':acme/*',
     ]) {
       expect(
         () => parseRealmPolicies({ admin: { workloadIssuers: [workloadIssuer({ subject })] } }),

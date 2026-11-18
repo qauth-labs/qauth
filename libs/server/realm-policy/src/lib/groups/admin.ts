@@ -29,13 +29,14 @@ const WORKLOAD_AUDIENCE_PATTERN = /^[^\s\u0000-\u001f\u007f-\u009f]+$/;
  * it written with a final `*` (`repo:acme/infra:*`). The `*` is the only
  * wildcard, only at the end, and never alone, so a subject never matches
  * every token of an issuer that many tenants share. A prefix ends at a `:`
- * or a `/`, the separators of a CI subject: on an issuer every tenant shares,
- * `repo:acme*` would also match the tenant that registers `acme-evil`. No
- * control character.
+ * or a `/`, the separators of a CI subject, and names at least two segments:
+ * on an issuer every tenant shares, `repo:acme*` would also match the tenant
+ * that registers `acme-evil`, and `repo:*` every tenant. No control
+ * character.
  */
 export const WORKLOAD_SUBJECT_PATTERN =
   // eslint-disable-next-line no-control-regex -- excluding control characters is the point
-  /^(?:[^*\u0000-\u001f\u007f-\u009f]+[:/]\*|[^*\u0000-\u001f\u007f-\u009f]+)$/;
+  /^(?:[^*:/\u0000-\u001f\u007f-\u009f]+[:/][^*\u0000-\u001f\u007f-\u009f]*[^*:/\u0000-\u001f\u007f-\u009f][:/]\*|[^*\u0000-\u001f\u007f-\u009f]+)$/;
 
 /**
  * A service account's name, as the host's `service-accounts` command takes it
@@ -90,7 +91,7 @@ const workloadIssuerSchema = z.strictObject({
   }),
   subject: z.string().min(1).max(255).regex(WORKLOAD_SUBJECT_PATTERN, {
     message:
-      'is a subject, or a prefix of one ending in : or / and then a single *, which is the only wildcard',
+      'is a subject, or a prefix of one of at least two segments ending in : or / and then a single *, which is the only wildcard',
   }),
   serviceAccount: z
     .string()

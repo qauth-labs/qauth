@@ -408,6 +408,8 @@ describe('workloadSubjectMatches (#526)', () => {
   it('never lets a pattern of a star alone match', () => {
     expect(workloadSubjectMatches('*', 'anything')).toBe(false);
     expect(workloadSubjectMatches(':*', ':anything')).toBe(false);
+    expect(workloadSubjectMatches('repo:*', 'repo:anyone/anything:ref:main')).toBe(false);
+    expect(workloadSubjectMatches('repo:/*', 'repo:/x')).toBe(false);
   });
 
   it('matches by a prefix only when it ends at a separator, so a name that only starts alike is refused', () => {

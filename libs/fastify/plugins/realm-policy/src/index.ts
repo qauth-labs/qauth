@@ -41,4 +41,5 @@ export {
   type SetSeedKey,
   smtpHostRefusal,
   toRealmPoliciesRepresentation,
+  WORKLOAD_SUBJECT_PATTERN,
 } from '@qauth-labs/server-realm-policy';
