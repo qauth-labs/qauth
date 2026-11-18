@@ -8749,7 +8749,7 @@
           },
           "digest": {
             "type": "string",
-            "description": "The SHA-256 digest, base64url, of the RFC 8785 form of the realm id, the base version, the prune flag and the changes: the approval of the import binds to it, and the apply refuses a plan whose digest differs."
+            "description": "The SHA-256 digest, base64url, of the RFC 8785 form of the realm id, the base version, the prune flag and the changes as the plan shows them, a URL credential masked: the approval of the import binds to it, and the apply refuses a plan whose digest differs."
           },
           "class": {
             "type": "string",

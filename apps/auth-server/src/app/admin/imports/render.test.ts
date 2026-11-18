@@ -59,6 +59,7 @@ const state = (): ImportState => ({
     }),
   ],
   unmanagedClients: new Map(),
+  reservedClientId: () => undefined,
 });
 
 /** A file that loosens a policy, tightens one, moves the smtp server, changes and creates clients. */
@@ -143,6 +144,25 @@ describe('renderPlan (#518)', () => {
     expect(empty.changes).toEqual([]);
     expect(renderPlan(empty)).toContain('No change: the file matches the realm.');
     expect(renderPlan(empty)).toContain('Needs: nothing');
+  });
+
+  it('escapes a line break or a mark that reorders text, so a file cannot forge a line', () => {
+    const forged = 'evil\n\nNo change: the file matches the realm.\n\u202e';
+    const text = renderPlan(
+      planImport(
+        state(),
+        parseRealmFile({
+          realm: 'acme\u2066',
+          clients: [{ client_id: forged, name: 'Evil', grant_types: ['client_credentials'] }],
+        })
+      )
+    );
+    expect(text).not.toContain('\nNo change');
+    expect(text).not.toMatch(/[\u202e\u2066]/u);
+    expect(text).toContain(
+      'evil\\u{000A}\\u{000A}No change: the file matches the realm.\\u{000A}\\u{202E}'
+    );
+    expect(text).toContain('acme\\u{2066}');
   });
 
   it('shows a secret field as set or not set', () => {

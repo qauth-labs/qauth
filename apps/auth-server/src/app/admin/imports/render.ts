@@ -1,3 +1,4 @@
+import { displayText } from '../approvals/display';
 import { type ImportChange, type ImportPlan, maskUrlCredentials } from './plan';
 
 /**
@@ -13,8 +14,18 @@ import { type ImportChange, type ImportPlan, maskUrlCredentials } from './plan';
  * a secret. A created or deleted item lists its fields below it. Every value
  * is shown whole, as JSON; a secret field shows only `set` or `not set`, and
  * a URL's user name and password show as `***`: the text never holds a
- * secret.
+ * secret. A control character or a mark that reorders text, which a file's
+ * strings may hold, shows as a `\u{XXXX}` escape, so no line can be forged.
  */
+
+/**
+ * `line` as the approval display shows a string (`displayText`): a control,
+ * a line break, a mark that reorders text and every other code point that
+ * renders as nothing or cannot be vouched for escaped as `\u{XXXX}`, a
+ * backslash doubled, and nothing cut. A file's `client_id` or realm name
+ * could otherwise forge a line of the plan.
+ */
+const printable = (line: string): string => displayText(line, Number.POSITIVE_INFINITY);
 
 /** The mark of a change that loosens. */
 export const LOOSENING_MARK = '!';
@@ -109,5 +120,5 @@ export function renderPlan(plan: ImportPlan): string {
     lines.push('', `Secrets to set on the realm itself: ${plan.secretsToSet.join(', ')}`);
   }
   for (const warning of plan.warnings) lines.push('', `Warning: ${warning}`);
-  return `${lines.join('\n')}\n`;
+  return `${lines.map(printable).join('\n')}\n`;
 }

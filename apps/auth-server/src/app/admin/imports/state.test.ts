@@ -126,6 +126,7 @@ describe('a stored client as a realm file lists it (#518)', () => {
         setSecrets: [],
         clients: [entry],
         unmanagedClients: new Map<string, string>(),
+        reservedClientId: () => undefined,
       };
       const file = parseRealmFile({ realm: 'acme', clients: [entry] });
       expect(planImport(state, file).changes).toEqual([]);

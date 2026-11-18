@@ -304,7 +304,8 @@ nothing.
   `system_client`, which the import does not plan yet; and a file whose
   `clients` names a client no realm file manages: a developer's, one that
   registered itself, a CIMD client, the system client or a service
-  account's.
+  account's, or would create one under the system client's `client_id` or
+  a CIMD `client_id`.
 
 No plan holds a secret: a secret policy field shows only `set` or `not set`,
 and a URL the realm stores with a user name or password shows them as `***`.

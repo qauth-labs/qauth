@@ -4,6 +4,7 @@ import {
   type RealmFileClient,
   realmFileClientSchema,
 } from '@qauth-labs/realm-file';
+import { ADMIN_API_AUDIENCE } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
 import { IMPORT_CLIENT_FIELD_NAMES } from './client-fields';
@@ -65,6 +66,12 @@ function stateOf(edit: Partial<ImportState> = {}): ImportState {
       ['system', 'the system client, which the system_client section describes'],
       ['dev-app', 'a client a developer owns'],
     ]),
+    reservedClientId: (clientId) =>
+      clientId === 'portal-system'
+        ? 'the system client, which the system_client section describes'
+        : clientId.startsWith('https://')
+          ? 'a CIMD client_id, which its metadata document describes'
+          : undefined,
     ...edit,
   };
 }
@@ -254,6 +261,53 @@ describe('the plan of a fixture state and file (#518)', () => {
         },
       ]);
     }
+  });
+
+  it('refuses a client the file would create under an id kept for the system client or a CIMD client', () => {
+    const file = fileOf({
+      clients: [
+        APP,
+        { ...APP, client_id: 'portal-system' },
+        { ...APP, client_id: 'https://tool.example.com/client.json' },
+      ],
+    });
+    try {
+      planImport(stateOf(), file);
+      expect.unreachable('a reserved client_id is never created');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ImportPlanError);
+      expect((error as ImportPlanError).issues.map((issue) => issue.pointer)).toEqual([
+        '/clients/1/client_id',
+        '/clients/2/client_id',
+      ]);
+      expect((error as ImportPlanError).issues[0].message).toContain('the system client');
+    }
+  });
+
+  it('plans a change of a client the realm already manages, whatever its id', () => {
+    const state = stateOf({
+      clients: [client({ ...APP, client_id: 'https://legacy.example.com/app' }), client(WORKER)],
+    });
+    const plan = planImport(
+      state,
+      fileOf({
+        clients: [{ ...APP, client_id: 'https://legacy.example.com/app', name: 'Renamed' }, WORKER],
+      })
+    );
+    expect(plan.changes.map((change) => change.path)).toEqual(['name']);
+  });
+
+  it('gives creating a client whose audience names the admin API the effect administration', () => {
+    const plan = planImport(
+      stateOf(),
+      fileOf({
+        clients: [APP, WORKER, { ...WORKER, client_id: 'ops', audience: [ADMIN_API_AUDIENCE] }],
+      })
+    );
+    expect(plan.changes.find((change) => change.key === 'ops')).toMatchObject({
+      op: 'create',
+      effects: ['token-content', 'administration'],
+    });
   });
 
   it('gives a new client that authenticates with a secret needsSecret, and one with an admin scope administration', () => {

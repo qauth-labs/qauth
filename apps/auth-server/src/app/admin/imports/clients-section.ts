@@ -1,5 +1,5 @@
 import { realmFileClientSchema } from '@qauth-labs/realm-file';
-import type { SecurityEffect } from '@qauth-labs/shared-validation';
+import { ADMIN_API_AUDIENCE, type SecurityEffect } from '@qauth-labs/shared-validation';
 
 import { holdsAdminScope } from '../clients/fields';
 import {
@@ -37,13 +37,27 @@ import {
  * A file that names a client of the realm no realm file manages (one a
  * developer owns, one that registered itself, a CIMD client, the system
  * client, a service account's) cannot be planned: the import would take
- * that client over.
+ * that client over. Nor can one that would create a client under an id the
+ * server keeps for such a client (the system client's, a CIMD `client_id`)
+ * before the realm holds it: the server would take the operator's client
+ * for that one.
  */
 
-/** What creating or deleting `client` needs: `clients.create`'s or `clients.delete`'s declaration. */
+/**
+ * What creating or deleting `client` needs: `clients.create`'s or
+ * `clients.delete`'s declaration, and `administration` for a client that can
+ * obtain admin tokens, by an admin scope or an audience that names the admin
+ * API, as a change of either field has it.
+ */
 function wholeClientEffects(client: StoredClient): SecurityEffect[] {
   const effects: SecurityEffect[] = ['token-content'];
-  if (holdsAdminScope({ scopes: client.scopes as string[] })) effects.push('administration');
+  const audience = Array.isArray(client.audience) ? (client.audience as string[]) : [];
+  if (
+    holdsAdminScope({ scopes: client.scopes as string[] }) ||
+    audience.includes(ADMIN_API_AUDIENCE)
+  ) {
+    effects.push('administration');
+  }
   return effects;
 }
 
@@ -52,14 +66,26 @@ const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0
 
 function diffClientSection({ state, file, prune }: ImportSectionContext): ImportSectionDiff {
   if (file.clients === undefined) return { changes: [] };
+  const managed = new Set(state.clients.map((entry) => entry.client_id));
   const issues: ImportPlanIssue[] = [];
   file.clients.forEach((entry, index) => {
+    const pointer = `/clients/${index}/client_id`;
     const why = state.unmanagedClients.get(entry.client_id);
-    if (why === undefined) return;
-    issues.push({
-      pointer: `/clients/${index}/client_id`,
-      message: `names a client of the realm that no realm file manages (${why}): an import never takes it over`,
-    });
+    if (why !== undefined) {
+      issues.push({
+        pointer,
+        message: `names a client of the realm that no realm file manages (${why}): an import never takes it over`,
+      });
+      return;
+    }
+    if (managed.has(entry.client_id)) return;
+    const reserved = state.reservedClientId(entry.client_id);
+    if (reserved !== undefined) {
+      issues.push({
+        pointer,
+        message: `is kept for a client no realm file manages (${reserved}): an import never creates one under it`,
+      });
+    }
   });
   if (issues.length > 0) throw new ImportPlanError(issues);
 

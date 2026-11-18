@@ -155,8 +155,14 @@ async function everyClient(
 export async function readImportState(
   request: FastifyRequest,
   realm: { readonly id: string; readonly name: string },
-  systemClientId: string
+  reserved: {
+    /** The `client_id` of the realm's system client, whether or not it is provisioned yet. */
+    readonly systemClientId: string;
+    /** Whether a `client_id` is a CIMD one, which a metadata document describes. */
+    readonly isCimdClientId: (clientId: string) => boolean;
+  }
 ): Promise<ImportState> {
+  const { systemClientId } = reserved;
   const tx = adminTransaction(request);
   const policies = await readPolicyState(request, realm.id, tx);
   const rows = await everyClient(request, realm.id, tx);
@@ -179,5 +185,14 @@ export async function readImportState(
     setSecrets: setSecretsOf(policies.policies),
     clients,
     unmanagedClients,
+    reservedClientId: (clientId) => {
+      if (clientId === systemClientId) {
+        return 'the system client, which the system_client section describes';
+      }
+      if (reserved.isCimdClientId(clientId)) {
+        return 'a CIMD client_id, which its metadata document describes';
+      }
+      return undefined;
+    },
   };
 }

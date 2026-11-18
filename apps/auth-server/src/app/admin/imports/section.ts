@@ -47,6 +47,12 @@ export interface ImportState {
    * registered itself, a CIMD client, the system client, a service account's.
    */
   readonly unmanagedClients: ReadonlyMap<string, string>;
+  /**
+   * Why a file may not create a client with `clientId`, or `undefined`: an
+   * id the server keeps for a client no realm file manages, such as the
+   * system client's or a CIMD `client_id`, which no operator client takes.
+   */
+  readonly reservedClientId: (clientId: string) => string | undefined;
 }
 
 /** What a section is asked to compare. */

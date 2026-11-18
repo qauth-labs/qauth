@@ -111,12 +111,18 @@ export const importRoutes: FastifyPluginAsync = async (fastify) => {
       if (!parsed.success) {
         throw new UnprocessableContentError(parsed.issues.map(fieldOf), REALM_FILE_REFUSED_MESSAGE);
       }
-      // Imported here, not with the module: it reads the environment, and the
-      // unit tests import the routes without one.
-      const { systemClientId } = await import('../../helpers/oauth-client');
+      // Imported here, not with the module: they read the environment, and
+      // the unit tests import the routes without one.
+      const [{ systemClientId }, { isCimdClientId }] = await Promise.all([
+        import('../../helpers/oauth-client'),
+        import('../../helpers/cimd'),
+      ]);
       let state;
       try {
-        state = await readImportState(request, realm, systemClientId());
+        state = await readImportState(request, realm, {
+          systemClientId: systemClientId(),
+          isCimdClientId,
+        });
       } catch (error) {
         if (error instanceof PolicySchemaVersionError && error.reason === 'newer') {
           // A later release's policies, during a rolling upgrade: a node of

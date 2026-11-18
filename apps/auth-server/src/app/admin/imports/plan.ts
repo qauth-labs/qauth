@@ -54,7 +54,9 @@ import {
  *   flag and the changes. A change holds no display text, so the digest
  *   covers every member of every change and differs when anything the plan
  *   would do differs, the base version included; the warnings and the
- *   rendered text (`./render.ts`) are not in it.
+ *   rendered text (`./render.ts`) are not in it. It is taken over the changes
+ *   as shown, a stored URL's user name and password masked, so it never
+ *   depends on a secret.
  */
 
 /** The sections an import plans, in the realm file's order (`REALM_FILE_SECTIONS`). */
@@ -142,7 +144,7 @@ export const importPlanSchema = z
     }),
     digest: z.string().meta({
       description:
-        'The SHA-256 digest, base64url, of the RFC 8785 form of the realm id, the base version, the prune flag and the changes: the approval of the import binds to it, and the apply refuses a plan whose digest differs.',
+        'The SHA-256 digest, base64url, of the RFC 8785 form of the realm id, the base version, the prune flag and the changes as the plan shows them, a URL credential masked: the approval of the import binds to it, and the apply refuses a plan whose digest differs.',
     }),
     class: classSchema.meta({
       description:
