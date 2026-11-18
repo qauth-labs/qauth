@@ -69,6 +69,15 @@
       "stability": "stable"
     },
     {
+      "name": "event-admin-enrolment-completed-v1",
+      "description": "The urn:qauth:event:admin.enrolment_completed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, ADR-019 Decision 7, #621).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/admin.enrolment_completed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-api-key-created-v1",
       "description": "The urn:qauth:event:api_key.created:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
       "format": "json-schema",
@@ -865,6 +874,15 @@
       "role": "both",
       "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
       "path": "apps/docs-site/public/interaction/v1-rc.0/steps/logout_confirm.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-admin-enrolment-v1",
+      "description": "The urn:qauth:ia:admin_enrolment:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-019 Decision 7, #621). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/admin_enrolment.json",
       "stability": "stable"
     }
   ]

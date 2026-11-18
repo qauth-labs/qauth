@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An admin the break-glass CLI enrolled registers its first passkey with
+  the URL it was given** ([#621], ADR-019 Decision 7). The ceremony app's
+  page `/ui/admin-enrolment` posts the URL's token to the new
+  `POST /auth/admin-enrolment`, which starts the Interaction API's new
+  `admin_enrolment` step (`urn:qauth:ia:admin_enrolment:v1-rc.0`): a
+  discoverable passkey that must verify the user, under the realm's RP ID.
+  Starting reads the token and spends nothing. One transaction stores the
+  passkey, spends the token once and before it expires, and records
+  `user.credential_added` and the new `admin.enrolment_completed`, so the
+  account cannot approve another admin's request for 7 days. The step sets
+  no password and signs nobody in. An unknown, used, expired or damaged
+  token gets one answer and starts nothing, as does every URL while passkey
+  sign-in (`WEBAUTHN_ENABLED`) is off. The enrolment ends on the new
+  `GET /auth/admin-enrolment/status`, or on the realm's ceremony app error
+  page with the new codes `admin_enrolment_finished` and
+  `admin_enrolment_refused`. The `web` role's database user gets `SELECT`
+  and `UPDATE` on `admin_enrolments`, which the migration runner applies
+  ([Break-glass access](https://docs.qauth.dev/operate/break-glass/)).
+
 ## [0.2.9] - 2026-11-16
 
 A patch release with no breaking change of the stable surface, no migration

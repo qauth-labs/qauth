@@ -66,6 +66,21 @@ describe('ceremonyErrorPageUrl (#1106)', () => {
     ).toBe('false');
   });
 
+  it('adds whether an admin enrolment stored its passkey (#621)', () => {
+    for (const enrolled of [true, false]) {
+      const url = new URL(
+        ceremonyErrorPageUrl(requestWithId('req-4'), '/ui/error', 'admin_enrolment_finished', {
+          enrolled,
+        })
+      );
+      expect([...url.searchParams]).toEqual([
+        ['code', 'admin_enrolment_finished'],
+        ['trace_id', 'req-4'],
+        ['enrolled', String(enrolled)],
+      ]);
+    }
+  });
+
   it('leaves out a request id a trace_id cannot carry', () => {
     for (const id of ['x'.repeat(129), 'has space', 'quote"d', 'é']) {
       const url = new URL(ceremonyErrorPageUrl(requestWithId(id), '/ui/error', 'logout_refused'));

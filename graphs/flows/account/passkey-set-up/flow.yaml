@@ -327,7 +327,7 @@ states:
       the code.
     redirect: success
     carries: [code, state, iss]
-    source: apps/auth-server/src/app/routes/interaction-api.ts:400
+    source: apps/auth-server/src/app/routes/interaction-api.ts:370
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -340,7 +340,7 @@ states:
     title: Send the code with no passkey, which the person declined
     redirect: success
     carries: [code, state, iss]
-    source: apps/auth-server/src/app/routes/interaction-api.ts:400
+    source: apps/auth-server/src/app/routes/interaction-api.ts:370
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -353,7 +353,7 @@ states:
     title: Send the code with no passkey, which an unclaimed account cannot bind
     redirect: success
     carries: [code, state, iss]
-    source: apps/auth-server/src/app/routes/interaction-api.ts:400
+    source: apps/auth-server/src/app/routes/interaction-api.ts:370
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:

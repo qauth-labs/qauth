@@ -154,6 +154,7 @@ function walk(
 const REALM_TEXT = new Set([
   'consent scopes.*.text',
   'webauthn_create options.rp.name',
+  'admin_enrolment options.rp.name',
   'upstream providers.*.name',
   'upstream_link provider.name',
 ]);

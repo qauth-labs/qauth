@@ -3,7 +3,7 @@
   "info": {
     "title": "QAuth Interaction API",
     "version": "v1-rc.0",
-    "description": "The Interaction API is how a sign-in page reaches the QAuth engine (ADR-019 Decision 6). The reference ceremony app, and any UI that replaces it, reads the current step of an interaction, answers it and follows the result, until the interaction ends in a redirect. It shares its step grammar with the FiPA authorization challenge endpoint, the transport for first-party native apps (ADR-017 Decision 3): a step is the same object on both, and only the envelope differs.\n\nStatus: this document is the contract, published before the implementation. The auth server serves it today; the operations it describes arrive with the Interaction API implementation.\n\n## Rules\n\n- Browser-facing and same-origin. A page calls the API on the realm origin it was served from. A flow cookie (`__Host-qauth_flow`) and a CSRF value protect it, and the server sends no CORS headers.\n- Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded value with a pattern. A display value has no markup bracket, no control, format, private-use or unassigned character, no line separator, and no space at either end.\n- No URL carries `return_to`, a redirect or a client parameter. A page reads one opaque interaction id from its own URL, and the client, the redirect target and everything else it shows come from the API.\n- The interaction id alone reads the current step, with no personal data. Personal data, such as the account chooser’s list, needs the flow cookie and a same-origin request. Answering a step or cancelling the interaction needs the flow cookie, the step’s CSRF value and a same-origin request.\n- Every operation answers with `Cache-Control: no-store`.\n\n## Versioning\n\n- The path carries the major version. Until QAuth 1.0.0 it is a release candidate, `/interaction/v1-rc.<M>` (today `/interaction/v1-rc.0`), and nothing about it is promised: a breaking change raises `<M>`. The release that ships 1.0.0 serves `/interaction/v1`.\n- Within a major version, changes are additive only: new operations, new steps, new optional request members, new response members, and new values of an extensible set (step names, problem codes, fonts).\n- A client ignores response members it does not know, and a page shows its error page for a step it does not know. A request with a member the operation does not declare is refused.\n- The published schemas close response objects (`additionalProperties: false`) to describe this version exactly. A later version may add members, so a client must not validate responses strictly against an older schema, and ignores the members it does not know.\n- Removing or renaming a member, changing a type, tightening validation, changing a status code, removing an operation or a step, and adding to a closed set, such as a step’s errors, need a new major version.\n- A successor major version is served beside the previous one for at least 12 months, and the previous one stays until the next major release of QAuth.\n- A step is named `urn:qauth:ia:<name>:v1-rc.<M>` until 1.0.0 and `urn:qauth:ia:<name>:v1` from then on, with the same release candidate as the path. QAuth never renames a step; if a registry of standard step names appears, its names are added beside QAuth’s.\n\n## Paths\n\n- The prefix `/interaction/v1-rc.0/wallet/` is reserved for the wallet return leg (ADR-013). No operation of this document is served under it.\n- The auth server serves this document at `/interaction/v1-rc.0/openapi.json`.\n\n## Error page\n\nSome endings leave no interaction for a ceremony page to read: an upstream provider's callback for an interaction that expired, moved on or belongs to another browser, and the pages an RP-initiated logout ends on (#1106). A realm may name its ceremony app's error page for them, in its `ceremonyApp.errorPage` policy. With it set, the auth server answers `303 See Other` to that path with the query below and renders no page; without it, it renders its own page. A refusal that leaves the interaction live goes back to the interaction's ceremony page instead, as its step's `error` with the refusing request's `trace_id`.\n\n| Code | Meaning |\n| ---- | ------- |\n| `interaction_expired` | An upstream provider sent the browser back for a sign-in with no interaction left to continue: it expired or ended, it moved on, or the browser is not the one that started it. Nothing was signed in, and nothing went to the client. |\n| `logout_refused` | An app’s sign-out request was refused: it named a return URI the app did not register, a client that is not the ID token hint’s audience, or a client that may not be used. Nothing was signed out. |\n| `logout_finished` | A sign-out ended with no app the browser is sent back to: `signed_out` says whether this browser now holds no session of the realm, and `host`, when present, names the app the person would go back to, which the browser is not sent to because the operator did not set the app up. |\n\n| Query member | Holds |\n| ------------ | ----- |\n| `code` | Always: one of the codes. A page that does not know a code shows a general message. |\n| `trace_id` | The id the server logged the request that sent the browser here under, as a problem document’s `trace_id` (ADR-019 Decision 7): the page shows it, so an operator can find the request. Absent when that id is not one a `trace_id` can carry. |\n| `signed_out` | With `logout_finished`: `true` when this browser holds no session of the realm, `false` when it is still signed in (the person chose to stay). |\n| `host` | With `logout_finished` and `signed_out=true`, at most: the host of the app’s registered return URI, in ASCII form, for a web app the operator did not set up. Text to show, never a link. |\n\n- The page is a path of the ceremony app on the realm origin, under `/ui/` as `/ui/interaction/{interactionId}` is. The realm names it in its `ceremonyApp.errorPage` policy; the policy takes nothing but such a path, so the auth server never sends the browser to another origin from it.\n- Every member of the query is display data, as anyone can write the same URL. The page trusts nothing navigational from it (ADR-019 Decision 5): it never builds a link or a redirect from `host` or any other member, and it shows each as text. It changes nothing and asks for nothing, so a forged query can only show a wrong message.\n- The page reads no interaction: there is none to read, and no step to answer. The person’s way on is their own, such as going back to the app they came from; the realm’s brand `help` link says where to get help.",
+    "description": "The Interaction API is how a sign-in page reaches the QAuth engine (ADR-019 Decision 6). The reference ceremony app, and any UI that replaces it, reads the current step of an interaction, answers it and follows the result, until the interaction ends in a redirect. It shares its step grammar with the FiPA authorization challenge endpoint, the transport for first-party native apps (ADR-017 Decision 3): a step is the same object on both, and only the envelope differs.\n\nStatus: this document is the contract, published before the implementation. The auth server serves it today; the operations it describes arrive with the Interaction API implementation.\n\n## Rules\n\n- Browser-facing and same-origin. A page calls the API on the realm origin it was served from. A flow cookie (`__Host-qauth_flow`) and a CSRF value protect it, and the server sends no CORS headers.\n- Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded value with a pattern. A display value has no markup bracket, no control, format, private-use or unassigned character, no line separator, and no space at either end.\n- No URL carries `return_to`, a redirect or a client parameter. A page reads one opaque interaction id from its own URL, and the client, the redirect target and everything else it shows come from the API.\n- The interaction id alone reads the current step, with no personal data. Personal data, such as the account chooser’s list, needs the flow cookie and a same-origin request. Answering a step or cancelling the interaction needs the flow cookie, the step’s CSRF value and a same-origin request.\n- Every operation answers with `Cache-Control: no-store`.\n\n## Versioning\n\n- The path carries the major version. Until QAuth 1.0.0 it is a release candidate, `/interaction/v1-rc.<M>` (today `/interaction/v1-rc.0`), and nothing about it is promised: a breaking change raises `<M>`. The release that ships 1.0.0 serves `/interaction/v1`.\n- Within a major version, changes are additive only: new operations, new steps, new optional request members, new response members, and new values of an extensible set (step names, problem codes, fonts).\n- A client ignores response members it does not know, and a page shows its error page for a step it does not know. A request with a member the operation does not declare is refused.\n- The published schemas close response objects (`additionalProperties: false`) to describe this version exactly. A later version may add members, so a client must not validate responses strictly against an older schema, and ignores the members it does not know.\n- Removing or renaming a member, changing a type, tightening validation, changing a status code, removing an operation or a step, and adding to a closed set, such as a step’s errors, need a new major version.\n- A successor major version is served beside the previous one for at least 12 months, and the previous one stays until the next major release of QAuth.\n- A step is named `urn:qauth:ia:<name>:v1-rc.<M>` until 1.0.0 and `urn:qauth:ia:<name>:v1` from then on, with the same release candidate as the path. QAuth never renames a step; if a registry of standard step names appears, its names are added beside QAuth’s.\n\n## Paths\n\n- The prefix `/interaction/v1-rc.0/wallet/` is reserved for the wallet return leg (ADR-013). No operation of this document is served under it.\n- The auth server serves this document at `/interaction/v1-rc.0/openapi.json`.\n\n## Error page\n\nSome endings leave no interaction for a ceremony page to read: an upstream provider's callback for an interaction that expired, moved on or belongs to another browser, the pages an RP-initiated logout ends on (#1106), and the end of an admin enrolment, refused, finished or cancelled (#621). A realm may name its ceremony app's error page for them, in its `ceremonyApp.errorPage` policy. With it set, the auth server answers `303 See Other` to that path with the query below and renders no page; without it, it renders its own page. A refusal that leaves the interaction live goes back to the interaction's ceremony page instead, as its step's `error` with the refusing request's `trace_id`.\n\n| Code | Meaning |\n| ---- | ------- |\n| `interaction_expired` | An upstream provider sent the browser back for a sign-in with no interaction left to continue: it expired or ended, it moved on, or the browser is not the one that started it. Nothing was signed in, and nothing went to the client. |\n| `logout_refused` | An app’s sign-out request was refused: it named a return URI the app did not register, a client that is not the ID token hint’s audience, or a client that may not be used. Nothing was signed out. |\n| `logout_finished` | A sign-out ended with no app the browser is sent back to: `signed_out` says whether this browser now holds no session of the realm, and `host`, when present, names the app the person would go back to, which the browser is not sent to because the operator did not set the app up. |\n| `admin_enrolment_refused` | An admin enrolment URL stored no passkey this time: its token is unknown, used, expired or damaged; its account is gone or disabled; passkey sign-in is off on the server (`WEBAUTHN_ENABLED`); or the enrolment was spent, expired or its account disabled or deleted before the passkey could be stored. Every one of these gets this code alone, so the page says only that the link registered no passkey. A URL refused while passkey sign-in is off works once it is on, until it expires; the operator who ran the break-glass CLI knows which case applies. |\n| `admin_enrolment_finished` | An admin enrolment ended: `enrolled` says whether the account’s first passkey was stored. With `true` the admin signs in with it from now on, and cannot approve another admin’s request for 7 days; with `false` the person cancelled, nothing was stored, and the URL works until it expires. |\n\n| Query member | Holds |\n| ------------ | ----- |\n| `code` | Always: one of the codes. A page that does not know a code shows a general message. |\n| `trace_id` | The id the server logged the request that sent the browser here under, as a problem document’s `trace_id` (ADR-019 Decision 7): the page shows it, so an operator can find the request. Absent when that id is not one a `trace_id` can carry. |\n| `signed_out` | With `logout_finished`: `true` when this browser holds no session of the realm, `false` when it is still signed in (the person chose to stay). |\n| `host` | With `logout_finished` and `signed_out=true`, at most: the host of the app’s registered return URI, in ASCII form, for a web app the operator did not set up. Text to show, never a link. |\n| `enrolled` | With `admin_enrolment_finished`: `true` when the account’s first passkey was stored, `false` when the person cancelled. |\n\n- The page is a path of the ceremony app on the realm origin, under `/ui/` as `/ui/interaction/{interactionId}` is. The realm names it in its `ceremonyApp.errorPage` policy; the policy takes nothing but such a path, so the auth server never sends the browser to another origin from it.\n- Every member of the query is display data, as anyone can write the same URL. The page trusts nothing navigational from it (ADR-019 Decision 5): it never builds a link or a redirect from `host` or any other member, and it shows each as text. It changes nothing and asks for nothing, so a forged query can only show a wrong message.\n- The page reads no interaction: there is none to read, and no step to answer. The person’s way on is their own, such as going back to the app they came from; the realm’s brand `help` link says where to get help.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -1413,6 +1413,93 @@
                       ],
                       "expiresAt": "2026-10-26T10:00:00Z"
                     }
+                  },
+                  "admin_enrolment": {
+                    "summary": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+                    "value": {
+                      "step": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+                      "alternatives": [],
+                      "params": {
+                        "urn:qauth:ia:admin_enrolment:v1-rc.0": {
+                          "options": {
+                            "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+                            "rp": {
+                              "id": "auth.example.com",
+                              "name": "Example"
+                            },
+                            "pubKeyCredParams": [
+                              {
+                                "type": "public-key",
+                                "alg": -8
+                              },
+                              {
+                                "type": "public-key",
+                                "alg": -7
+                              },
+                              {
+                                "type": "public-key",
+                                "alg": -257
+                              }
+                            ],
+                            "timeout": 300000,
+                            "authenticatorSelection": {
+                              "residentKey": "required",
+                              "userVerification": "required"
+                            },
+                            "attestation": "none"
+                          }
+                        }
+                      },
+                      "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
+                      "client": {
+                        "kind": "cimd",
+                        "verifiedDomain": {
+                          "host": "app.example.com",
+                          "registrableDomain": "example.com",
+                          "sharedHosting": false
+                        },
+                        "redirect": {
+                          "target": "host",
+                          "host": "app.example.com"
+                        },
+                        "declaredName": "Example Notes",
+                        "newClient": false
+                      },
+                      "brand": {
+                        "logo": {
+                          "light": {
+                            "url": "/ui/assets/logo-3f9a1c2e.svg",
+                            "width": 160,
+                            "height": 40
+                          }
+                        },
+                        "colors": {
+                          "light": {
+                            "primary": "#1f5fbf"
+                          },
+                          "dark": {
+                            "primary": "#7aa7ef",
+                            "background": "#10141a"
+                          }
+                        },
+                        "font": "inter",
+                        "links": {
+                          "privacy": "https://example.com/privacy",
+                          "help": "https://example.com/help"
+                        },
+                        "strings": {
+                          "en": {
+                            "name": "Example",
+                            "title": "Sign in to Example"
+                          }
+                        },
+                        "darkMode": "enabled"
+                      },
+                      "uiLocales": [
+                        "en"
+                      ],
+                      "expiresAt": "2026-10-26T10:00:00Z"
+                    }
                   }
                 }
               }
@@ -1839,6 +1926,21 @@
                         }
                       }
                     }
+                  },
+                  "admin_enrolment": {
+                    "summary": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+                    "value": {
+                      "step": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+                      "data": {
+                        "urn:qauth:ia:admin_enrolment:v1-rc.0": {
+                          "user": {
+                            "id": "YWRtaW4tdXNlci1oYW5kbGU",
+                            "name": "admin-YWRtaW4t",
+                            "displayName": "admin-YWRtaW4t"
+                          }
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -2004,7 +2106,7 @@
       "post": {
         "operationId": "interactions.answer",
         "summary": "Answer the current step",
-        "description": "Answer the current step, or one of the alternatives it offers, with the CSRF value of the step read. As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The request must come from the realm origin: `Sec-Fetch-Site` must be `same-origin`; when the browser sent no `Sec-Fetch-Site`, `Origin` must equal the realm origin, and an `Origin` of `null` or of any other origin is refused. A request that fails gets 403 `forbidden`. The server checks the origin, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to `webauthn_create` (ADR-017 Decision 7); a larger one gets 413. A refused answer, such as a wrong password, is not an error: the same step comes back with `error` set and a new CSRF value.",
+        "description": "Answer the current step, or one of the alternatives it offers, with the CSRF value of the step read. As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The request must come from the realm origin: `Sec-Fetch-Site` must be `same-origin`; when the browser sent no `Sec-Fetch-Site`, `Origin` must equal the realm origin, and an `Origin` of `null` or of any other origin is refused. A request that fails gets 403 `forbidden`. The server checks the origin, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to `webauthn_create` or `admin_enrolment`, which carry a passkey registration (ADR-017 Decision 7); a larger one gets 413. A refused answer, such as a wrong password, is not an error: the same step comes back with `error` set and a new CSRF value.",
         "tags": [
           "Interaction"
         ],
@@ -2199,6 +2301,14 @@
                     "type": "urn:qauth:ia:logout_confirm:v1-rc.0",
                     "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
                     "decision": "logout"
+                  }
+                },
+                "admin_enrolment": {
+                  "summary": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+                  "value": {
+                    "type": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+                    "csrf": "cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE",
+                    "webauthn_response": "{\"id\":\"Xb3hH0p2SdK1nJw7eVq4yA\",\"rawId\":\"Xb3hH0p2SdK1nJw7eVq4yA\",\"type\":\"public-key\",\"response\":{\"clientDataJSON\":\"eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0\",\"attestationObject\":\"o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVjE\",\"transports\":[\"internal\",\"hybrid\"]},\"authenticatorAttachment\":\"platform\",\"clientExtensionResults\":{}}"
                   }
                 }
               }
@@ -3002,6 +3112,13 @@
                       "result": "redirect",
                       "location": "https://app.example.com/signed-out?state=b8f2c1"
                     }
+                  },
+                  "admin_enrolment": {
+                    "summary": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+                    "value": {
+                      "result": "redirect",
+                      "location": "https://auth.example.com/auth/admin-enrolment/status?result=enrolled"
+                    }
                   }
                 }
               }
@@ -3254,7 +3371,7 @@
       "post": {
         "operationId": "interactions.cancel",
         "summary": "Cancel the interaction",
-        "description": "End the interaction without completing it: the client gets `access_denied`, and a logout ends with the person still signed in. As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The request must come from the realm origin: `Sec-Fetch-Site` must be `same-origin`; when the browser sent no `Sec-Fetch-Site`, `Origin` must equal the realm origin, and an `Origin` of `null` or of any other origin is refused. A request that fails gets 403 `forbidden`. The server checks the origin, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to `webauthn_create` (ADR-017 Decision 7); a larger one gets 413.",
+        "description": "End the interaction without completing it: the client gets `access_denied`, and a logout ends with the person still signed in. As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The request must come from the realm origin: `Sec-Fetch-Site` must be `same-origin`; when the browser sent no `Sec-Fetch-Site`, `Origin` must equal the realm origin, and an `Origin` of `null` or of any other origin is refused. A request that fails gets 403 `forbidden`. The server checks the origin, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to `webauthn_create` or `admin_enrolment`, which carry a passkey registration (ADR-017 Decision 7); a larger one gets 413.",
         "tags": [
           "Interaction"
         ],
@@ -4205,6 +4322,28 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:admin_enrolment:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:admin_enrolment:v1-rc.0"
+                  ]
+                }
+              }
+            }
           }
         ]
       },
@@ -4233,7 +4372,8 @@
           "urn:qauth:ia:sign_in:v1-rc.0",
           "urn:qauth:ia:device_code:v1-rc.0",
           "urn:qauth:ia:device_confirm:v1-rc.0",
-          "urn:qauth:ia:logout_confirm:v1-rc.0"
+          "urn:qauth:ia:logout_confirm:v1-rc.0",
+          "urn:qauth:ia:admin_enrolment:v1-rc.0"
         ],
         "description": "A step name, `urn:qauth:ia:<name>:v1-rc.0`. A page shows its error page for a step it does not know."
       },
@@ -4325,6 +4465,9 @@
           },
           "urn:qauth:ia:logout_confirm:v1-rc.0": {
             "$ref": "#/components/schemas/LogoutConfirmParams"
+          },
+          "urn:qauth:ia:admin_enrolment:v1-rc.0": {
+            "$ref": "#/components/schemas/AdminEnrolmentParams"
           }
         }
       },
@@ -4393,6 +4536,9 @@
           },
           {
             "$ref": "#/components/schemas/LogoutConfirmAnswer"
+          },
+          {
+            "$ref": "#/components/schemas/AdminEnrolmentAnswer"
           }
         ],
         "discriminator": {
@@ -4418,7 +4564,8 @@
             "urn:qauth:ia:sign_in:v1-rc.0": "#/components/schemas/SignInAnswer",
             "urn:qauth:ia:device_code:v1-rc.0": "#/components/schemas/DeviceCodeAnswer",
             "urn:qauth:ia:device_confirm:v1-rc.0": "#/components/schemas/DeviceConfirmAnswer",
-            "urn:qauth:ia:logout_confirm:v1-rc.0": "#/components/schemas/LogoutConfirmAnswer"
+            "urn:qauth:ia:logout_confirm:v1-rc.0": "#/components/schemas/LogoutConfirmAnswer",
+            "urn:qauth:ia:admin_enrolment:v1-rc.0": "#/components/schemas/AdminEnrolmentAnswer"
           }
         }
       },
@@ -4581,6 +4728,9 @@
           },
           "urn:qauth:ia:logout_confirm:v1-rc.0": {
             "$ref": "#/components/schemas/LogoutConfirmPersonalData"
+          },
+          "urn:qauth:ia:admin_enrolment:v1-rc.0": {
+            "$ref": "#/components/schemas/AdminEnrolmentPersonalData"
           }
         }
       },
@@ -7070,6 +7220,242 @@
         },
         "required": [
           "accounts"
+        ],
+        "additionalProperties": false
+      },
+      "AdminEnrolmentParams": {
+        "type": "object",
+        "properties": {
+          "options": {
+            "type": "object",
+            "properties": {
+              "challenge": {
+                "type": "string",
+                "minLength": 43,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9_-]{43,128}$",
+                "description": "The challenge, at least 32 random bytes."
+              },
+              "rp": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 253,
+                    "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+                    "description": "The relying party ID: the realm’s host."
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+                    "x-qauth-display": "realm",
+                    "description": "The realm’s display name."
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "pubKeyCredParams": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "description": "The COSE algorithms the server accepts, preferred first.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "public-key"
+                    },
+                    "alg": {
+                      "type": "integer",
+                      "enum": [
+                        -8,
+                        -7,
+                        -257
+                      ],
+                      "description": "EdDSA, ES256 or RS256."
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "alg"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "timeout": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 600000,
+                "description": "How long the ceremony may take, in milliseconds."
+              },
+              "authenticatorSelection": {
+                "type": "object",
+                "properties": {
+                  "residentKey": {
+                    "const": "required",
+                    "description": "A passkey is discoverable."
+                  },
+                  "userVerification": {
+                    "const": "required"
+                  }
+                },
+                "required": [
+                  "residentKey",
+                  "userVerification"
+                ],
+                "additionalProperties": false
+              },
+              "attestation": {
+                "const": "none",
+                "description": "QAuth asks for no attestation and claims nothing about the key store."
+              }
+            },
+            "required": [
+              "challenge",
+              "rp",
+              "pubKeyCredParams",
+              "authenticatorSelection",
+              "attestation"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "options"
+        ],
+        "additionalProperties": false,
+        "x-qauth-step": {
+          "name": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+          "transports": [
+            "interaction"
+          ],
+          "errors": [
+            "invalid_credentials"
+          ],
+          "amr": []
+        }
+      },
+      "AdminEnrolmentAnswer": {
+        "type": "object",
+        "description": "An answer to `urn:qauth:ia:admin_enrolment:v1-rc.0`.",
+        "properties": {
+          "type": {
+            "const": "urn:qauth:ia:admin_enrolment:v1-rc.0",
+            "description": "The step this request answers."
+          },
+          "csrf": {
+            "$ref": "#/components/schemas/Csrf"
+          },
+          "webauthn_response": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 16384,
+            "contentMediaType": "application/json",
+            "contentSchema": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "rawId": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "public-key"
+                },
+                "response": {
+                  "type": "object",
+                  "properties": {
+                    "clientDataJSON": {
+                      "type": "string"
+                    },
+                    "attestationObject": {
+                      "type": "string"
+                    },
+                    "transports": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "clientDataJSON",
+                    "attestationObject"
+                  ]
+                },
+                "authenticatorAttachment": {
+                  "type": "string"
+                },
+                "clientExtensionResults": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "id",
+                "rawId",
+                "type",
+                "response",
+                "clientExtensionResults"
+              ]
+            },
+            "description": "The registration response, `PublicKeyCredential.toJSON()` (WebAuthn Level 3), as a JSON string. It is a string on both transports, so a form post carries it in one field (ADR-017 Decision 3)."
+          }
+        },
+        "required": [
+          "type",
+          "csrf",
+          "webauthn_response"
+        ],
+        "additionalProperties": false
+      },
+      "AdminEnrolmentPersonalData": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 86,
+                "pattern": "^[A-Za-z0-9_-]{1,86}$",
+                "description": "The user handle: an opaque id, at most 64 bytes."
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+                "x-qauth-display": "account",
+                "description": "The account name the authenticator shows."
+              },
+              "displayName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+                "x-qauth-display": "account",
+                "description": "The display name the authenticator shows."
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "displayName"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "user"
         ],
         "additionalProperties": false
       }

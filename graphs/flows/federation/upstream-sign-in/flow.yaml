@@ -222,7 +222,7 @@ states:
         say: >-
           the person picks a provider: the upstream alternative of the first sign-in step (Interaction API), or a
           provider link of /ui/login, which sends the browser back to the authorization request with qauth_upstream
-        source: apps/auth-server/src/app/routes/interaction-api.ts:521
+        source: apps/auth-server/src/app/routes/interaction-api.ts:491
       ROUTE:
         target: resolvingProvider
         say: >-

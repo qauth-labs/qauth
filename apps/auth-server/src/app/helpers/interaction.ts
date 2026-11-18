@@ -28,6 +28,7 @@ import { interactionCsrf, matchesInteractionCsrf, mintCsrfKey } from './interact
 import { InteractionExpiredError } from './interaction-expired';
 import {
   type AccountRequest,
+  type AdminEnrolmentRequest,
   type AnswerableInteractionRecord,
   type CarriedSession,
   deleteInteraction,
@@ -247,6 +248,10 @@ export type InteractionState =
       readonly upstreamLink?: UpstreamLink;
       /** The browser session the account page's interaction started for (#844). */
       readonly carriedSession?: CarriedSession;
+    })
+  | (InteractionStateFields & {
+      readonly purpose: 'admin_enrolment';
+      readonly request: AdminEnrolmentRequest;
     });
 
 /** Who an answer proved, for {@link InteractionDecision} `authenticated`. */
@@ -378,6 +383,13 @@ export type InteractionFinished =
       readonly continuation: InteractionContinuation;
       /** The upstream link a `link` interaction held when it finished (#670, #844). */
       readonly upstreamLink?: UpstreamLink;
+    }
+  | {
+      readonly kind: 'finished';
+      readonly purpose: 'admin_enrolment';
+      readonly request: AdminEnrolmentRequest;
+      readonly transaction: InteractionTransaction;
+      readonly continuation: InteractionContinuation;
     };
 
 /**
@@ -408,7 +420,12 @@ export type InteractionCancelResult =
       /** The browser session the logout was for: it stays. */
       readonly carriedSession?: CarriedSession;
     }
-  | { readonly kind: 'cancelled'; readonly purpose: 'account'; readonly request: AccountRequest };
+  | { readonly kind: 'cancelled'; readonly purpose: 'account'; readonly request: AccountRequest }
+  | {
+      readonly kind: 'cancelled';
+      readonly purpose: 'admin_enrolment';
+      readonly request: AdminEnrolmentRequest;
+    };
 
 /** What {@link switchInteractionUser} did. */
 export type InteractionSwitchResult =
@@ -682,7 +699,8 @@ type InteractionTarget =
   | { readonly purpose: 'authorization'; readonly request: InteractionRequest }
   | { readonly purpose: 'logout'; readonly request: LogoutRequest }
   | { readonly purpose: 'mailed_pass'; readonly request: MailedPassRequest }
-  | { readonly purpose: 'account'; readonly request: AccountRequest };
+  | { readonly purpose: 'account'; readonly request: AccountRequest }
+  | { readonly purpose: 'admin_enrolment'; readonly request: AdminEnrolmentRequest };
 
 /** The input of {@link createInteraction}. */
 interface CreateInteractionInput extends Omit<StartInteractionInput, 'request'> {
@@ -882,6 +900,44 @@ export async function startAccountInteraction(
     ...rest,
     target: { purpose: 'account', request: account },
     secrets: readFlowSecrets(request),
+  });
+}
+
+/** The input of {@link startAdminEnrolmentInteraction}. */
+export interface StartAdminEnrolmentInteractionInput {
+  /** The enrolment the token named, the account, and the ceremony's keys. */
+  readonly request: AdminEnrolmentRequest;
+  /** The `admin_enrolment` step, with the creation options of its ceremony. */
+  readonly step: InteractionStep;
+  /** The step's personal data: the user entity of the passkey. */
+  readonly personal: InteractionPersonalData;
+  /**
+   * The absolute expiry: the enrolment's, when it comes before
+   * `INTERACTION_TTL` from now, so the interaction never outlives its token.
+   */
+  readonly expiresAt: number;
+}
+
+/**
+ * Start an admin enrolment (#621; ADR-019 Decision 7): an interaction of
+ * purpose `admin_enrolment` at its one step, in the request's realm, bound
+ * to this browser as {@link startInteraction} binds one. It names no client,
+ * and its transaction stays empty: nobody signs in. It expires at
+ * `expiresAt` at the latest, and sooner while nobody has answered it.
+ *
+ * @throws {InvalidRequestError} as {@link startInteraction}
+ */
+export async function startAdminEnrolmentInteraction(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  input: StartAdminEnrolmentInteractionInput
+): Promise<StartedInteraction> {
+  return createInteraction(request, reply, {
+    step: input.step,
+    personal: input.personal,
+    target: { purpose: 'admin_enrolment', request: input.request },
+    secrets: readFlowSecrets(request),
+    expiresAt: Math.min(input.expiresAt, Date.now() + lifetimeMs()),
   });
 }
 
@@ -1209,6 +1265,9 @@ function stateOf(taken: AnswerableInteractionRecord): InteractionState {
       ...(taken.carriedSession === undefined ? {} : { carriedSession: taken.carriedSession }),
     };
   }
+  if (taken.purpose === 'admin_enrolment') {
+    return { ...fields, purpose: 'admin_enrolment', request: taken.request };
+  }
   return {
     ...fields,
     purpose: 'logout',
@@ -1242,6 +1301,15 @@ function finishedOf(
       transaction,
       continuation,
       ...(upstreamLink === undefined ? {} : { upstreamLink }),
+    };
+  }
+  if (taken.purpose === 'admin_enrolment') {
+    return {
+      kind: 'finished',
+      purpose: 'admin_enrolment',
+      request: taken.request,
+      transaction,
+      continuation,
     };
   }
   return {
@@ -1355,6 +1423,12 @@ async function settleAnswer(
     return { kind: 'step', view: viewOf(next) };
   }
 
+  if (taken.purpose === 'admin_enrolment') {
+    // An admin enrolment stores a passkey and signs nobody in (#621): its
+    // answer finishes it or shows its step again. An engine bug otherwise,
+    // thrown before anything is written, so the turn is given back.
+    throw new Error('an admin enrolment signs nobody in');
+  }
   const { signIn } = decision;
   const step = decision.step === undefined ? undefined : interactionStepSchema.parse(decision.step);
   if (taken.transaction.userId !== undefined && taken.transaction.userId !== signIn.userId) {
@@ -1566,6 +1640,9 @@ export async function cancelInteraction(
   }
   if (taken.purpose === 'account') {
     return { kind: 'cancelled', purpose: 'account', request: taken.request };
+  }
+  if (taken.purpose === 'admin_enrolment') {
+    return { kind: 'cancelled', purpose: 'admin_enrolment', request: taken.request };
   }
   return {
     kind: 'cancelled',

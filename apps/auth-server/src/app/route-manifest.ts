@@ -140,6 +140,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: ['breachedPasswords', 'dpop', 'egress', 'email', 'jwt', 'password', 'sessions'],
     repositories: [
+      'adminEnrolments',
       'adminGrants',
       'authorizationCodes',
       'events',
@@ -265,6 +266,22 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     plugins: [],
     repositories: [],
     load: () => import('./routes/assets/ui'),
+  },
+  {
+    module: 'auth/admin-enrolment',
+    prefix: '/auth',
+    roles: ['web'],
+    plugins: ['sessions'],
+    repositories: [
+      'adminEnrolments',
+      'adminGrants',
+      'events',
+      'oauthClients',
+      'realms',
+      'userCredentials',
+      'users',
+    ],
+    load: () => import('./routes/auth/admin-enrolment'),
   },
   {
     module: 'auth/link-wallet',

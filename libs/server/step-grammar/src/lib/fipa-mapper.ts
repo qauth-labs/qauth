@@ -89,6 +89,7 @@ export const FIPA_STEP_MAPPERS: FipaMapperTable = Object.freeze({
   device_code: INTERACTION_ONLY,
   device_confirm: INTERACTION_ONLY,
   logout_confirm: INTERACTION_ONLY,
+  admin_enrolment: INTERACTION_ONLY,
 });
 
 /**

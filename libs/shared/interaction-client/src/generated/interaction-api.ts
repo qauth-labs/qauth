@@ -70,6 +70,7 @@ export type StepName =
   | 'urn:qauth:ia:device_code:v1-rc.0'
   | 'urn:qauth:ia:device_confirm:v1-rc.0'
   | 'urn:qauth:ia:logout_confirm:v1-rc.0'
+  | 'urn:qauth:ia:admin_enrolment:v1-rc.0'
   | (string & {});
 
 /** Why an answer was refused. Each step names its own closed set (`x-qauth-step` beside its params, and its schema file). */
@@ -113,6 +114,7 @@ export interface StepParams {
   'urn:qauth:ia:device_code:v1-rc.0'?: DeviceCodeParams;
   'urn:qauth:ia:device_confirm:v1-rc.0'?: DeviceConfirmParams;
   'urn:qauth:ia:logout_confirm:v1-rc.0'?: LogoutConfirmParams;
+  'urn:qauth:ia:admin_enrolment:v1-rc.0'?: AdminEnrolmentParams;
 }
 
 /** An answer to one step, by its name: the envelope’s `type` and `csrf`, and the step’s answer fields. A new step adds a variant, which widens what the server accepts. */
@@ -137,7 +139,8 @@ export type AnswerRequest =
   | SignInAnswer
   | DeviceCodeAnswer
   | DeviceConfirmAnswer
-  | LogoutConfirmAnswer;
+  | LogoutConfirmAnswer
+  | AdminEnrolmentAnswer;
 
 /** What a JSON answer leads to. A form post gets the same as a `303 See Other` instead (#616). */
 export type AnswerResult = NextStepResult | RedirectResult;
@@ -192,6 +195,7 @@ export interface StepPersonalData {
   'urn:qauth:ia:device_code:v1-rc.0'?: DeviceCodePersonalData;
   'urn:qauth:ia:device_confirm:v1-rc.0'?: DeviceConfirmPersonalData;
   'urn:qauth:ia:logout_confirm:v1-rc.0'?: LogoutConfirmPersonalData;
+  'urn:qauth:ia:admin_enrolment:v1-rc.0'?: AdminEnrolmentPersonalData;
 }
 
 /** Who the client is, as the auth server’s own records say (#593). Client-supplied text is untrusted: no logo comes from a client-supplied URL, and an unverified client shows none. */
@@ -844,6 +848,54 @@ export interface LogoutConfirmPersonalData {
     /** Whether this is the account the logout request is for. */
     current: boolean;
   }>;
+}
+
+export interface AdminEnrolmentParams {
+  options: {
+    /** The challenge, at least 32 random bytes. */
+    challenge: string;
+    rp: {
+      /** The relying party ID: the realm’s host. */
+      id: string;
+      /** The realm’s display name. */
+      name: string;
+    };
+    /** The COSE algorithms the server accepts, preferred first. */
+    pubKeyCredParams: Array<{
+      type: 'public-key';
+      /** EdDSA, ES256 or RS256. */
+      alg: -8 | -7 | -257;
+    }>;
+    /** How long the ceremony may take, in milliseconds. */
+    timeout?: number;
+    authenticatorSelection: {
+      /** A passkey is discoverable. */
+      residentKey: 'required';
+      userVerification: 'required';
+    };
+    /** QAuth asks for no attestation and claims nothing about the key store. */
+    attestation: 'none';
+  };
+}
+
+/** An answer to `urn:qauth:ia:admin_enrolment:v1-rc.0`. */
+export interface AdminEnrolmentAnswer {
+  /** The step this request answers. */
+  type: 'urn:qauth:ia:admin_enrolment:v1-rc.0';
+  csrf: Csrf;
+  /** The registration response, `PublicKeyCredential.toJSON()` (WebAuthn Level 3), as a JSON string. It is a string on both transports, so a form post carries it in one field (ADR-017 Decision 3). */
+  webauthn_response: string;
+}
+
+export interface AdminEnrolmentPersonalData {
+  user: {
+    /** The user handle: an opaque id, at most 64 bytes. */
+    id: string;
+    /** The account name the authenticator shows. */
+    name: string;
+    /** The display name the authenticator shows. */
+    displayName: string;
+  };
 }
 
 /** Every operation: its method, path, path parameters, JSON request body and response bodies by status. */

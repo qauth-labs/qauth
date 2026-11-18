@@ -518,7 +518,7 @@ export const userCredentialAdded = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'A passkey or an authenticator app (TOTP) was bound to a person’s account, in a step of the hosted pages the person answered: after a sign-in that offered or asked for it, in a recovery that replaced a lost passkey, or from the hosted account page after a fresh sign-in. A passkey an account was registered with is recorded by the registration (`user.registered`). One bound after a sign-in that proved only the password is new for the realm’s `accounts.newFactorWindowDays` (#1064).',
+    'A passkey or an authenticator app (TOTP) was bound to a person’s account, in a step of the hosted pages the person answered: after a sign-in that offered or asked for it, in a recovery that replaced a lost passkey, from the hosted account page after a fresh sign-in, or, for an admin account the break-glass CLI created, at its one-time enrolment (#621), recorded with `admin.enrolment_completed`. A passkey an account was registered with is recorded by the registration (`user.registered`). One bound after a sign-in that proved only the password is new for the realm’s `accounts.newFactorWindowDays` (#1064).',
   category: 'user',
   severity: 'info',
   since: FIRST_RELEASE,

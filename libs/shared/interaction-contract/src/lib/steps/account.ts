@@ -1,3 +1,4 @@
+import { ADMIN_ENROLMENT_PAGE_PATH, ADMIN_ENROLMENT_START_PATH } from '../identifiers';
 import {
   base64url,
   closedEnum,
@@ -166,6 +167,69 @@ export const passwordReset = defineStep({
   },
 });
 
+/**
+ * The WebAuthn Level 3 creation options of a passkey enrolment, as JSON,
+ * without `user` and `excludeCredentials`, which are the account’s own data
+ * and come with the personal data: `webauthn_create`'s and `admin_enrolment`'s.
+ */
+const passkeyCreationOptions = object(
+  {
+    challenge: base64url(43, 128, 'The challenge, at least 32 random bytes.'),
+    rp: object(
+      {
+        id: host('The relying party ID: the realm’s host.'),
+        name: displayText('realm', 64, 'The realm’s display name.'),
+      },
+      ['id', 'name']
+    ),
+    pubKeyCredParams: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 8,
+      description: 'The COSE algorithms the server accepts, preferred first.',
+      items: object(
+        {
+          type: { const: 'public-key' },
+          alg: {
+            type: 'integer',
+            enum: [-8, -7, -257],
+            description: 'EdDSA, ES256 or RS256.',
+          },
+        },
+        ['type', 'alg']
+      ),
+    },
+    timeout: {
+      type: 'integer',
+      minimum: 1000,
+      maximum: 600000,
+      description: 'How long the ceremony may take, in milliseconds.',
+    },
+    authenticatorSelection: object(
+      {
+        residentKey: { const: 'required', description: 'A passkey is discoverable.' },
+        userVerification: { const: 'required' },
+      },
+      ['residentKey', 'userVerification']
+    ),
+    attestation: {
+      const: 'none',
+      description: 'QAuth asks for no attestation and claims nothing about the key store.',
+    },
+  },
+  ['challenge', 'rp', 'pubKeyCredParams', 'authenticatorSelection', 'attestation']
+);
+
+/** The user entity a passkey is created for: the account's own data, read with the flow cookie. */
+const passkeyUserEntity = object(
+  {
+    id: base64url(1, 86, 'The user handle: an opaque id, at most 64 bytes.'),
+    name: displayText('account', 64, 'The account name the authenticator shows.'),
+    displayName: displayText('account', 64, 'The display name the authenticator shows.'),
+  },
+  ['id', 'name', 'displayName']
+);
+
 export const webauthnCreate = defineStep({
   name: 'webauthn_create',
   transports: ['interaction', 'fipa'],
@@ -179,67 +243,14 @@ export const webauthnCreate = defineStep({
         description:
           'Whether this is an offer the person may decline: an answer with no `webauthn_response` declines it.',
       },
-      options: object(
-        {
-          challenge: base64url(43, 128, 'The challenge, at least 32 random bytes.'),
-          rp: object(
-            {
-              id: host('The relying party ID: the realm’s host.'),
-              name: displayText('realm', 64, 'The realm’s display name.'),
-            },
-            ['id', 'name']
-          ),
-          pubKeyCredParams: {
-            type: 'array',
-            minItems: 1,
-            maxItems: 8,
-            description: 'The COSE algorithms the server accepts, preferred first.',
-            items: object(
-              {
-                type: { const: 'public-key' },
-                alg: {
-                  type: 'integer',
-                  enum: [-8, -7, -257],
-                  description: 'EdDSA, ES256 or RS256.',
-                },
-              },
-              ['type', 'alg']
-            ),
-          },
-          timeout: {
-            type: 'integer',
-            minimum: 1000,
-            maximum: 600000,
-            description: 'How long the ceremony may take, in milliseconds.',
-          },
-          authenticatorSelection: object(
-            {
-              residentKey: { const: 'required', description: 'A passkey is discoverable.' },
-              userVerification: { const: 'required' },
-            },
-            ['residentKey', 'userVerification']
-          ),
-          attestation: {
-            const: 'none',
-            description: 'QAuth asks for no attestation and claims nothing about the key store.',
-          },
-        },
-        ['challenge', 'rp', 'pubKeyCredParams', 'authenticatorSelection', 'attestation']
-      ),
+      options: passkeyCreationOptions,
     },
     ['optional', 'options']
   ),
   personal: object(
     {
       identifier: accountIdentifier,
-      user: object(
-        {
-          id: base64url(1, 86, 'The user handle: an opaque id, at most 64 bytes.'),
-          name: displayText('account', 64, 'The account name the authenticator shows.'),
-          displayName: displayText('account', 64, 'The display name the authenticator shows.'),
-        },
-        ['id', 'name', 'displayName']
-      ),
+      user: passkeyUserEntity,
       excludeCredentials: {
         type: 'array',
         description: 'The account’s passkeys, so the authenticator does not make a second one.',
@@ -423,5 +434,57 @@ export const recoveryCodes = defineStep({
       ],
     },
     next: { redirect: EXAMPLE_REDIRECT },
+  },
+});
+
+export const adminEnrolment = defineStep({
+  name: 'admin_enrolment',
+  transports: ['interaction'],
+  summary: 'Registers the first passkey of an admin account the break-glass CLI enrolled.',
+  description: `The one-time enrolment of an admin account that the break-glass CLI created with no password and no credential (ADR-019 Decision 7). The CLI prints a URL on the realm origin, \`${ADMIN_ENROLMENT_PAGE_PATH}#token=…\`, whose token travels in the fragment, which no server, proxy log or \`Referer\` sees. The ceremony app serves that page: it reads the token from the fragment, takes it out of the address bar, and, when the person asks (a button, never on load, so a link scanner that runs scripts starts nothing), posts it as a plain HTML form with the one member \`token\` to the auth server's \`POST ${ADMIN_ENROLMENT_START_PATH}\`, from the realm origin. That starts an interaction at this step in that browser, with its own flow cookie, and sends the browser to the ceremony page. A token that is unknown, used, expired or damaged gets one answer, the same for each, and no interaction. Starting does not spend the token: it is spent once, in the transaction that stores the passkey, and the interaction ends no later than the token expires. \`options\` and the personal data are those of \`webauthn_create\`: a discoverable passkey, user verification required, the RP ID the realm’s host. The step cannot be declined and is offered with no alternative: the account never gets a password. A refused registration comes back with \`invalid_credentials\` and new options. Once the passkey is stored the interaction finishes with a redirect to a page that says so; the account signs in with its passkey from then on, and cannot approve another admin’s request for 7 days. A cancel leaves the token unspent until it expires. Enrolment adds no \`amr\` value and signs nobody in. Needs JavaScript.`,
+  params: object({ options: passkeyCreationOptions }, ['options']),
+  personal: object({ user: passkeyUserEntity }, ['user']),
+  answer: closedObject({ webauthn_response: webauthnResponse(16384, 'attestation') }, [
+    'webauthn_response',
+  ]),
+  errors: ['invalid_credentials'],
+  amr: [],
+  example: {
+    params: {
+      options: {
+        challenge: EXAMPLE_CHALLENGE,
+        rp: { id: 'auth.example.com', name: 'Example' },
+        pubKeyCredParams: [
+          { type: 'public-key', alg: -8 },
+          { type: 'public-key', alg: -7 },
+          { type: 'public-key', alg: -257 },
+        ],
+        timeout: 300000,
+        authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+        attestation: 'none',
+      },
+    },
+    answer: {
+      webauthn_response: JSON.stringify({
+        id: 'Xb3hH0p2SdK1nJw7eVq4yA',
+        rawId: 'Xb3hH0p2SdK1nJw7eVq4yA',
+        type: 'public-key',
+        response: {
+          clientDataJSON: 'eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0',
+          attestationObject: 'o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVjE',
+          transports: ['internal', 'hybrid'],
+        },
+        authenticatorAttachment: 'platform',
+        clientExtensionResults: {},
+      }),
+    },
+    personal: {
+      user: {
+        id: 'YWRtaW4tdXNlci1oYW5kbGU',
+        name: 'admin-YWRtaW4t',
+        displayName: 'admin-YWRtaW4t',
+      },
+    },
+    next: { redirect: 'https://auth.example.com/auth/admin-enrolment/status?result=enrolled' },
   },
 });

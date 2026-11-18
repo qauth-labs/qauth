@@ -1671,15 +1671,17 @@ describe('the parts (#616)', () => {
     expect(() => parseAnswerForm(text)).toThrow(expect.objectContaining({ statusCode: 400 }));
   });
 
-  it('bounds a body at 16 KiB, and at 64 KiB only for webauthn_create', () => {
+  it('bounds a body at 16 KiB, and at 64 KiB only for the registrations, webauthn_create and admin_enrolment', () => {
     expect(() => checkAnswerBodySize({ type: IDENTIFIER }, ANSWER_BODY_LIMIT)).not.toThrow();
     expect(() => checkAnswerBodySize({ type: IDENTIFIER }, ANSWER_BODY_LIMIT + 1)).toThrow();
-    expect(() =>
-      checkAnswerBodySize({ type: stepUrn('webauthn_create') }, ANSWER_BODY_LIMIT + 1)
-    ).not.toThrow();
-    expect(() =>
-      checkAnswerBodySize({ type: stepUrn('webauthn_create') }, WEBAUTHN_CREATE_BODY_LIMIT + 1)
-    ).toThrow();
+    for (const step of ['webauthn_create', 'admin_enrolment'] as const) {
+      expect(() =>
+        checkAnswerBodySize({ type: stepUrn(step) }, ANSWER_BODY_LIMIT + 1)
+      ).not.toThrow();
+      expect(() =>
+        checkAnswerBodySize({ type: stepUrn(step) }, WEBAUTHN_CREATE_BODY_LIMIT + 1)
+      ).toThrow();
+    }
   });
 
   it('takes the realm origin from the issuer, never from the request', () => {
