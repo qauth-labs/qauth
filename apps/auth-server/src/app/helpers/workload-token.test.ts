@@ -407,6 +407,14 @@ describe('workloadSubjectMatches (#526)', () => {
 
   it('never lets a pattern of a star alone match', () => {
     expect(workloadSubjectMatches('*', 'anything')).toBe(false);
+    expect(workloadSubjectMatches(':*', ':anything')).toBe(false);
+  });
+
+  it('matches by a prefix only when it ends at a separator, so a name that only starts alike is refused', () => {
+    expect(workloadSubjectMatches('repo:acme*', 'repo:acme-evil/infra:ref:main')).toBe(false);
+    expect(workloadSubjectMatches('repo:acme*', 'repo:acme')).toBe(false);
+    expect(workloadSubjectMatches('repo:acme/*', 'repo:acme/infra:ref:main')).toBe(true);
+    expect(workloadSubjectMatches('repo:acme:*', 'repo:acme:main')).toBe(true);
   });
 
   it('applies through validation: a prefix entry exchanges a subject under it and refuses the rest', async () => {

@@ -132,15 +132,20 @@ const workloadClaimsSchema = z.object({
 /**
  * Whether `subject` matches an entry's `subject`: exactly, or, for a pattern
  * ending in `*`, by starting with what precedes it. No other character is a
- * wildcard; the policy schema refuses a `*` anywhere but at the end, and a
- * pattern that is `*` alone.
+ * wildcard; the policy schema refuses a `*` anywhere but at the end, a
+ * pattern that is `*` alone, and a prefix that does not end at a `:` or `/`.
  */
 export function workloadSubjectMatches(pattern: string, subject: string): boolean {
   if (!pattern.endsWith('*')) return subject === pattern;
   const prefix = pattern.slice(0, -1);
-  // The schema refuses an empty prefix; checked again, so a hand-written row
-  // can never make one pattern match every subject.
-  return prefix.length > 0 && subject.startsWith(prefix);
+  // The schema refuses these prefixes; checked again, so a hand-written row
+  // can never make a pattern match every subject, or another tenant's name
+  // that only starts like the one meant.
+  return (
+    prefix.length > 1 &&
+    (prefix.endsWith(':') || prefix.endsWith('/')) &&
+    subject.startsWith(prefix)
+  );
 }
 
 /** How specific a matching pattern is: an exact subject above any prefix, a longer prefix above a shorter. */

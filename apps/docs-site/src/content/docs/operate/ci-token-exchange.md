@@ -70,14 +70,30 @@ Each entry of `admin.workloadIssuers` has four members:
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `issuer`         | The token's `iss`, an `https` URL, compared byte for byte: no trailing slash, case or path is forgiven.                                    |
 | `audience`       | A value the token's `aud` must hold. The job asks its CI platform for a token with this audience; pick one no other service of yours uses. |
-| `subject`        | The token's `sub`: exactly, or by a prefix when it ends in `*`. No other character is a wildcard, and `*` alone is refused.                |
+| `subject`        | The token's `sub`: exactly, or by a prefix when it ends in `:` or `/` and then `*`. No other character is a wildcard.                      |
 | `serviceAccount` | The name of the service account the token acts as.                                                                                         |
 
-A prefix should end at a separator of the subject. `repo:acme/infra:*` matches
-every job of the repository `acme/infra`; `repo:acme/infra*` also matches
-`acme/infra-tools`. When a token matches more than one entry, the most specific
-wins: an exact subject over any prefix, a longer prefix over a shorter. Two
-entries as specific that name different service accounts refuse the token.
+A prefix ends at a separator of the subject, a `:` or a `/`:
+`repo:acme/infra:*` matches every job of the repository `acme/infra`, and
+`repo:acme/infra*`, which would also match `acme/infra-tools`, is refused. When
+a token matches more than one entry, the most specific wins: an exact subject
+over any prefix, a longer prefix over a shorter. Two entries as specific that
+name different service accounts refuse the token.
+
+Choose the subject with care: on an issuer that many tenants share, it is all
+that tells your jobs from theirs, since a job asks for any audience it likes.
+
+- Pin it to what only trusted people can start: a protected branch or a
+  protected environment. A prefix over a whole repository also covers its
+  pull request runs and every branch anyone with write access pushes.
+- A subject that names an organization, a project or a repository by name
+  matches whoever holds that name next, after a rename or a deletion. Where
+  the CI platform can put the owner's and the repository's numeric ids into
+  the subject, have it do so, and list the subject with them.
+
+An entry names its service account by name. Deleting the service account
+leaves the entry in the list: remove it too, or a later service account
+given the same name takes its trust.
 
 The list is a realm policy, and changing it in any way is a security
 operation (effect `administration`): it needs `qauth:admin:security`, and an

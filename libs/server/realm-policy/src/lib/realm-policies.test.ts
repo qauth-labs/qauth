@@ -893,8 +893,18 @@ describe('parseRealmPolicies', () => {
     ).toEqual(issuers);
   });
 
-  it('refuses a workload issuer entry whose subject has a wildcard anywhere but at the end, or alone', () => {
-    for (const subject of ['*', 'repo:*:main', '*repo:acme', 'repo:acme**', 'repo:a*b*', '']) {
+  it('refuses a workload issuer entry whose subject has a wildcard anywhere but at the end, alone, or after no separator', () => {
+    for (const subject of [
+      '*',
+      'repo:*:main',
+      '*repo:acme',
+      'repo:acme**',
+      'repo:a*b*',
+      '',
+      'repo:acme*',
+      'repo:acme/infra-*',
+      ':*',
+    ]) {
       expect(
         () => parseRealmPolicies({ admin: { workloadIssuers: [workloadIssuer({ subject })] } }),
         subject
@@ -903,7 +913,8 @@ describe('parseRealmPolicies', () => {
   });
 
   it('refuses a workload issuer entry with a member missing, unknown, or out of its grammar', () => {
-    const { serviceAccount: _serviceAccount, ...withoutAccount } = workloadIssuer();
+    const withoutAccount: Record<string, unknown> = workloadIssuer();
+    delete withoutAccount['serviceAccount'];
     for (const entry of [
       withoutAccount,
       { ...workloadIssuer(), repository: 'acme/infra' },
