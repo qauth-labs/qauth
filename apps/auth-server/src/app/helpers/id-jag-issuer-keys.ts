@@ -7,8 +7,8 @@ import {
   ALLOWLISTED_ISSUER_SIGNING_ALG_VALUES,
   type AllowlistedIssuerKeyOptions,
   createAllowlistedIssuerKeyResolver,
-  type IssuerKeyRequest,
   isAllowlistedIssuerAlgorithm,
+  type IssuerKeyRequest,
   MAX_ISSUER_LENGTH,
   type ResolvedIssuerKey,
 } from './allowlisted-issuer-keys';

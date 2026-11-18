@@ -86,13 +86,13 @@ import { serviceAccountRefusal } from '../../helpers/service-accounts';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
 import { inactiveSubjectTokenError } from '../../helpers/token-subject';
-import { validateWorkloadToken, WorkloadTokenError } from '../../helpers/workload-token';
 import {
   emitUserEvent,
   type EventTransaction,
   failureData,
   oauthErrorCode,
 } from '../../helpers/user-events';
+import { validateWorkloadToken, WorkloadTokenError } from '../../helpers/workload-token';
 import {
   type IdJagTokenResponse,
   JWT_BEARER_GRANT_TYPE,
