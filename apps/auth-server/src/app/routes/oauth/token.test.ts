@@ -105,6 +105,8 @@ const { egressGet } = vi.hoisted(() => ({ egressGet: vi.fn() }));
 
 vi.mock('../../helpers/egress-get', () => ({ egressGet }));
 
+import { DpopProofError } from '@qauth-labs/fastify-plugin-dpop';
+
 import { createFakeSessionService } from '../../../testing/browser-sessions';
 import { blockedEgress } from '../../../testing/egress';
 import { testPolicyStore } from '../../../testing/realm-policies';
@@ -9379,5 +9381,404 @@ describe('POST /oauth/token — a service account (#522)', () => {
     expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
       expect.objectContaining({ reason: 'admin_audience_without_grant' }),
     ]);
+  });
+});
+
+/**
+ * THE CI WORKLOAD TOKEN EXCHANGE (#526, ADR-019 Decision 7). At the operator
+ * realm, a token exchange of a JWT subject token is a CI job's workload
+ * token: no client authenticates, the realm policy `admin.workloadIssuers`
+ * maps the token to a service account, and the job gets that account's
+ * DPoP-bound admin token. Keys come through the egress client (mocked), from
+ * the issuer's discovery document and JWK Set.
+ */
+describe('POST /oauth/token — the CI workload token exchange (#526)', () => {
+  const SA_CLIENT_ID = 'ci-realm-import';
+  const SA_USER = '01900000-0000-7000-8000-00000000ab02';
+  const WORKLOAD_ISSUER = 'https://ci.example.com';
+  const WORKLOAD_AUDIENCE = 'https://auth.example.com';
+  const WORKLOAD_SUBJECT = 'repo:acme/infra:ref:refs/heads/main';
+  const PROOF_JKT = 'w'.repeat(43);
+  const JWT_TYPE = 'urn:ietf:params:oauth:token-type:jwt';
+  const OPERATOR_REALM = testRealm({
+    id: REALM.id,
+    name: 'default',
+    isOperator: true,
+    policiesVersion: 3,
+  });
+
+  let workloadKey: { privateKey: CryptoKey; jwk: JWK } | undefined;
+
+  beforeAll(async () => {
+    const { privateKey, publicKey } = await generateKeyPair('ES256', { extractable: true });
+    workloadKey = { privateKey, jwk: { ...(await exportJWK(publicKey)), kid: 'ci-key' } };
+  });
+
+  /** A workload token of the CI issuer, with `claims` over the defaults. */
+  async function workloadToken(claims: Record<string, unknown> = {}): Promise<string> {
+    if (workloadKey === undefined) throw new Error('the workload key is made before the tests');
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      iss: WORKLOAD_ISSUER,
+      sub: WORKLOAD_SUBJECT,
+      aud: WORKLOAD_AUDIENCE,
+      iat: now,
+      exp: now + 300,
+      jti: `run-${Math.random().toString(36).slice(2)}`,
+      ref: 'refs/heads/main',
+      ...claims,
+    })
+      .setProtectedHeader({ alg: 'ES256', typ: 'JWT', kid: 'ci-key' })
+      .sign(workloadKey.privateKey);
+  }
+
+  function stub(
+    options: {
+      serviceAccount?: Record<string, unknown> | null;
+      client?: Record<string, unknown> | null;
+      user?: Record<string, unknown> | null;
+      grants?: string[];
+      entries?: Record<string, unknown>[];
+      dpop?: boolean;
+    } = {}
+  ) {
+    const { fastify, ctx, redisStore } = createFastifyStub();
+    const repositories = fastify.repositories as unknown as Record<string, Record<string, Mock>>;
+    repositories['serviceAccounts']['findByName'] = vi.fn(async (realmId: string, name: string) =>
+      options.serviceAccount === null || realmId !== REALM.id || name !== 'ci-realm-import'
+        ? undefined
+        : {
+            id: 'sa-1',
+            realmId: REALM.id,
+            name: 'ci-realm-import',
+            userId: SA_USER,
+            clientId: 'client-uuid-sa-1',
+            enabled: true,
+            ...options.serviceAccount,
+          }
+    );
+    repositories['oauthClients']['findById'] = vi.fn(async () =>
+      options.client === null
+        ? undefined
+        : keyedClient({
+            id: 'client-uuid-sa-1',
+            clientId: SA_CLIENT_ID,
+            clientSecretHash: 'unusable',
+            enabled: true,
+            suspended: false,
+            grantTypes: ['client_credentials'],
+            scopes: ['qauth:admin:read', 'qauth:admin:write', 'qauth:admin:security'],
+            audience: [ADMIN_API_AUDIENCE],
+            dpopBoundAccessTokens: true,
+            ...options.client,
+          })
+    );
+    (fastify.repositories.users.findById as unknown as Mock).mockImplementation(
+      async (realmId: string, id: string) =>
+        options.user === null || realmId !== REALM.id || id !== SA_USER
+          ? undefined
+          : {
+              id: SA_USER,
+              realmId: REALM.id,
+              enabled: true,
+              notValidBefore: null,
+              isServiceAccount: true,
+              ...options.user,
+            }
+    );
+    (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue(
+      (options.grants ?? ['editor']).map(liveBuiltInGrant)
+    );
+    (fastify as unknown as { policyStore: unknown }).policyStore = testPolicyStore(
+      { ...REALM_LIFETIMES, adminAccessTokenLifespanSeconds: 120 },
+      {
+        admin: {
+          workloadIssuers: (options.entries ?? [
+            {
+              issuer: WORKLOAD_ISSUER,
+              audience: WORKLOAD_AUDIENCE,
+              subject: 'repo:acme/infra:*',
+              serviceAccount: 'ci-realm-import',
+            },
+          ]) as never,
+        },
+      }
+    );
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.workload.jwt');
+    if (options.dpop !== false) {
+      Object.assign(fastify, {
+        dpop: {
+          algorithms: ['ES256'],
+          verifyRequest: vi.fn(async (request: { headers: Record<string, unknown> }) => {
+            if (request.headers['dpop'] === undefined) throw new DpopProofError('missing-proof');
+            return { thumbprint: PROOF_JKT };
+          }),
+        },
+      });
+    }
+    egressGet.mockImplementation(async (_fastify: unknown, url: string) => {
+      if (url === `${WORKLOAD_ISSUER}/.well-known/openid-configuration`) {
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({ issuer: WORKLOAD_ISSUER, jwks_uri: `${WORKLOAD_ISSUER}/jwks` }),
+        };
+      }
+      if (url === `${WORKLOAD_ISSUER}/jwks`) {
+        return { status: 200, headers: {}, body: JSON.stringify({ keys: [workloadKey?.jwk] }) };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    return { fastify, ctx, redisStore };
+  }
+
+  async function request(
+    options: {
+      realm?: typeof OPERATOR_REALM;
+      proof?: boolean;
+      token?: string;
+      body?: Record<string, unknown>;
+      headers?: Record<string, string>;
+    } = {}
+  ) {
+    return {
+      id: 'req-1',
+      body: {
+        grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+        subject_token: options.token ?? (await workloadToken()),
+        subject_token_type: JWT_TYPE,
+        resource: [ADMIN_API_AUDIENCE],
+        scope: 'qauth:admin:read qauth:admin:write',
+        ...options.body,
+      },
+      ip: '127.0.0.1',
+      headers: {
+        'user-agent': 'vitest',
+        ...(options.proof === false ? {} : { dpop: 'proof.header.signature' }),
+        ...options.headers,
+      },
+      realm: options.realm ?? OPERATOR_REALM,
+    };
+  }
+
+  async function run(fastify: FastifyInstance, ctx: TestContext, req: unknown) {
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+    return ctx.handler(req, createReply());
+  }
+
+  /** Whether a workload `jti` was burned in the stub's Redis. */
+  function burnedJtis(redisStore: Map<string, string>): string[] {
+    return [...redisStore.keys()].filter((key) => key.startsWith('workload:jti:'));
+  }
+
+  it("exchanges an allowlisted workload token for the service account's DPoP-bound admin token", async () => {
+    const { fastify, ctx, redisStore } = stub();
+    const result = await run(fastify, ctx, await request());
+
+    // The editor grant reaches read and write; the realm's admin lifetime.
+    expect(result).toEqual({
+      access_token: 'signed.workload.jwt',
+      issued_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+      expires_in: 120,
+      token_type: 'DPoP',
+      scope: 'qauth:admin:read qauth:admin:write',
+    });
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({
+        sub: SA_USER,
+        clientId: SA_CLIENT_ID,
+        aud: ADMIN_API_AUDIENCE,
+        cnf: { jkt: PROOF_JKT },
+        expiresInOverride: 120,
+      })
+    );
+    // No client authenticated: the workload token was the credential.
+    expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
+    expect(fastify.repositories.serviceAccounts.findByName).toHaveBeenCalledWith(
+      REALM.id,
+      'ci-realm-import'
+    );
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(burnedJtis(redisStore)).toHaveLength(1);
+    const issued = emitUserEventMock.mock.calls.find(([, type]) => type === TOKEN_ISSUED);
+    expect(issued?.[2]).toMatchObject({
+      audience: [ADMIN_API_AUDIENCE],
+      issuedTokenType: 'urn:ietf:params:oauth:token-type:access_token',
+    });
+    expect(issued?.[3]).toMatchObject({ userId: SA_USER, clientId: SA_CLIENT_ID, actor: 'client' });
+    // The discovery fetch is an admin destination: a realm admin wrote the URL.
+    expect(egressGet).toHaveBeenCalledWith(
+      fastify,
+      `${WORKLOAD_ISSUER}/.well-known/openid-configuration`,
+      expect.objectContaining({ source: 'admin', realm: 'default' })
+    );
+  });
+
+  it('refuses the exchange without a DPoP proof, before the workload token is read', async () => {
+    const { fastify, ctx, redisStore } = stub();
+    await expect(run(fastify, ctx, await request({ proof: false }))).rejects.toThrow(
+      InvalidDpopProofError
+    );
+    expect(egressGet).not.toHaveBeenCalled();
+    expect(burnedJtis(redisStore)).toEqual([]);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_dpop_proof', reason: 'dpop_missing_proof' }),
+    ]);
+  });
+
+  it('refuses the exchange while DPoP is off', async () => {
+    const { fastify, ctx } = stub({ dpop: false });
+    await expect(run(fastify, ctx, await request())).rejects.toThrow(InvalidRequestError);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ reason: 'workload_dpop_disabled' }),
+    ]);
+  });
+
+  it.each([
+    ['a disabled service account', { serviceAccount: { enabled: false } }, 'disabled'],
+    [
+      'a service account whose account is disabled',
+      { user: { enabled: false } },
+      'account_inactive',
+    ],
+    [
+      'a service account whose client is disabled',
+      { client: { enabled: false } },
+      'client_unusable',
+    ],
+    ['a service account the realm does not have', { serviceAccount: null }, 'unknown'],
+    [
+      'a binding to an account not marked a service account',
+      { user: { isServiceAccount: false } },
+      'account_not_marked',
+    ],
+  ] as const)('gives %s no token', async (_label, options, reason) => {
+    const { fastify, ctx } = stub(options);
+    await expect(run(fastify, ctx, await request())).rejects.toThrow(InvalidRequestError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({
+        error: 'invalid_request',
+        reason: `workload_service_account_${reason}`,
+      }),
+    ]);
+  });
+
+  it('answers a refused workload token and a disabled service account alike', async () => {
+    const unlisted = stub();
+    const tokenRefused = await run(
+      unlisted.fastify,
+      unlisted.ctx,
+      await request({ token: await workloadToken({ sub: 'repo:acme/other:ref:main' }) })
+    ).catch((err: unknown) => err);
+    const disabled = stub({ serviceAccount: { enabled: false } });
+    const accountRefused = await run(disabled.fastify, disabled.ctx, await request()).catch(
+      (err: unknown) => err
+    );
+    expect(wireAnswer(tokenRefused)).toEqual(wireAnswer(accountRefused));
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ reason: 'workload_subject_not_listed' }),
+      expect.objectContaining({ reason: 'workload_service_account_disabled' }),
+    ]);
+  });
+
+  it('refuses a replayed workload token', async () => {
+    const { fastify, ctx } = stub();
+    const token = await workloadToken();
+    await run(fastify, ctx, await request({ token }));
+    await expect(run(fastify, ctx, await request({ token }))).rejects.toThrow(InvalidRequestError);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ reason: 'workload_replayed' }),
+    ]);
+  });
+
+  it('refuses a request that also authenticates a client', async () => {
+    const { fastify, ctx, redisStore } = stub();
+    for (const extra of [
+      { body: { client_secret: 'secret' } },
+      { body: await assertionOf(SA_CLIENT_ID) },
+      { headers: { authorization: 'Basic Y2k6c2VjcmV0' } },
+    ]) {
+      await expect(run(fastify, ctx, await request(extra))).rejects.toThrow(InvalidRequestError);
+    }
+    expect(burnedJtis(redisStore)).toEqual([]);
+  });
+
+  it("refuses a client_id that is not the service account's client", async () => {
+    const { fastify, ctx } = stub();
+    await expect(
+      run(fastify, ctx, await request({ body: { client_id: 'another-client' } }))
+    ).rejects.toThrow(InvalidRequestError);
+    await expect(
+      run(fastify, ctx, await request({ body: { client_id: SA_CLIENT_ID } }))
+    ).resolves.toMatchObject({ token_type: 'DPoP' });
+  });
+
+  it.each([
+    ['no resource', { resource: undefined }, InvalidTargetError],
+    ['another resource', { resource: ['https://api.example.com'] }, InvalidTargetError],
+    [
+      'a second resource',
+      { resource: [ADMIN_API_AUDIENCE, 'https://api.example.com'] },
+      InvalidTargetError,
+    ],
+    ['an actor token', { actor_token: 'a.b.c', actor_token_type: JWT_TYPE }, InvalidRequestError],
+    [
+      'another requested token type',
+      { requested_token_type: 'urn:ietf:params:oauth:token-type:id_token' },
+      InvalidRequestError,
+    ],
+  ] as const)('refuses a request with %s', async (_label, body, error) => {
+    const { fastify, ctx, redisStore } = stub();
+    await expect(run(fastify, ctx, await request({ body }))).rejects.toThrow(error);
+    expect(burnedJtis(redisStore)).toEqual([]);
+  });
+
+  it('issues only the admin scopes the live grants allow, and refuses with none', async () => {
+    const viewer = stub({ grants: ['viewer'] });
+    await expect(run(viewer.fastify, viewer.ctx, await request())).resolves.toMatchObject({
+      scope: 'qauth:admin:read',
+    });
+    const none = stub({ grants: [] });
+    await expect(run(none.fastify, none.ctx, await request())).rejects.toThrow(InvalidTargetError);
+  });
+
+  // The agent exchange keeps its behaviour: a JWT subject token outside the
+  // operator realm, and an access-token subject token in it, take its path.
+  it('leaves every other realm on the agent exchange, which refuses a JWT subject token', async () => {
+    const { fastify, ctx } = stub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      undefined
+    );
+    await expect(
+      run(fastify, ctx, await request({ realm: { ...OPERATOR_REALM, isOperator: false } }))
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.repositories.serviceAccounts.findByName).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
+  });
+
+  it('takes an access-token subject token at the operator realm to the agent exchange', async () => {
+    const { fastify, ctx } = stub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      undefined
+    );
+    await expect(
+      run(
+        fastify,
+        ctx,
+        await request({
+          body: {
+            subject_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+            client_id: 'agent',
+            client_secret: 'secret',
+          },
+        })
+      )
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalled();
+    expect(fastify.repositories.serviceAccounts.findByName).not.toHaveBeenCalled();
   });
 });
