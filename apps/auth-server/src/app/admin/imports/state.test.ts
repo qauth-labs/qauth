@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { OAuthClientRecord } from '../clients/representation';
 import { planImport } from './plan';
-import { realmFileClientOf, unmanagedReason } from './state';
+import { normalizedClientOf, realmFileClientOf, unmanagedReason } from './state';
 
 /**
  * The realm as an import reads it (#518): a stored client becomes the entry a
@@ -132,6 +132,38 @@ describe('a stored client as a realm file lists it (#518)', () => {
       expect(planImport(state, file).changes).toEqual([]);
     }
   );
+});
+
+describe('a stored value the format normalizes (#518)', () => {
+  it('compares as the file holds it, so a file built from the state plans no change', () => {
+    // The admin API stores a first-party reason as given; the format trims it.
+    const stored = row({
+      clientId: 'own-app',
+      tokenEndpointAuthMethod: 'private_key_jwt',
+      jwksUri: 'https://own.example.com/jwks.json',
+      firstPartyProfile: 'web_redirect',
+      firstPartyReason: 'Our own app\n',
+    });
+    const entry = normalizedClientOf(stored);
+    expect(entry.first_party_reason).toBe('Our own app');
+    const state = {
+      realmId: REALM,
+      realmName: 'acme',
+      policiesVersion: 1,
+      policies: defaultsFromEnv({}) as unknown as Record<string, unknown>,
+      setSecrets: [],
+      clients: [entry],
+      unmanagedClients: new Map<string, string>(),
+      reservedClientId: () => undefined,
+    };
+    const file = parseRealmFile({ realm: 'acme', clients: [realmFileClientOf(stored)] });
+    expect(planImport(state, file).changes).toEqual([]);
+  });
+
+  it('keeps a stored value the format cannot hold, so a file that names the client shows the change', () => {
+    const stored = row({ firstPartyProfile: 'web_redirect', firstPartyReason: '   ' });
+    expect(normalizedClientOf(stored)).toEqual(realmFileClientOf(stored));
+  });
 });
 
 describe('the clients no realm file may name (#518)', () => {

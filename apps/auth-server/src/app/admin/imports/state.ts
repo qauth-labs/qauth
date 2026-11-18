@@ -1,5 +1,5 @@
 import { REALM_POLICY_REGISTRY } from '@qauth-labs/fastify-plugin-realm-policy';
-import type { RealmFileClient } from '@qauth-labs/realm-file';
+import { type RealmFileClient, realmFileClientSchema } from '@qauth-labs/realm-file';
 import type { FastifyRequest } from 'fastify';
 
 import {
@@ -16,7 +16,10 @@ import type { ImportState } from './section';
  * THE REALM AS AN IMPORT READS IT (issue #518): the stored policies, which
  * secret policy fields are set, and every client of the realm, split into
  * those a realm file describes and those it may not name. Read in the admin
- * handler's transaction, so the plan is of one state.
+ * handler's transaction, at its READ COMMITTED level: each read sees what
+ * was committed when it ran, so a write that commits between two of them
+ * can show in one and not the other. The apply (#531) recomputes the plan
+ * and refuses one whose digest moved, so such a plan is never applied.
  *
  * A realm file's `clients` are the clients the operator manages (#515): an
  * operator provisioned them (the seed manifest, the admin API), no developer
@@ -82,6 +85,20 @@ export function realmFileClientOf(row: OAuthClientRecord): RealmFileClient {
     if (value !== null && value !== undefined) entry[member] = structuredClone(value);
   }
   return entry as unknown as RealmFileClient;
+}
+
+/**
+ * A stored client as a file's entry for it reads once parsed: the entry of
+ * {@link realmFileClientOf} through the format's schema, so a value the
+ * format normalizes (a reason it trims, a first-party policy member it
+ * defaults) compares as the file's would, and a file built from the state
+ * plans no change. A stored value the format cannot hold keeps the entry as
+ * read, so a file that names the client shows the change.
+ */
+export function normalizedClientOf(row: OAuthClientRecord): RealmFileClient {
+  const entry = realmFileClientOf(row);
+  const parsed = realmFileClientSchema.safeParse(entry);
+  return parsed.success ? parsed.data : entry;
 }
 
 /**
@@ -172,7 +189,7 @@ export async function readImportState(
   const unmanagedClients = new Map<string, string>();
   for (const row of rows) {
     const why = unmanagedReason(row, { systemClientId, serviceAccountClients });
-    if (why === undefined) clients.push(realmFileClientOf(row));
+    if (why === undefined) clients.push(normalizedClientOf(row));
     else unmanagedClients.set(row.clientId, why);
   }
   return {

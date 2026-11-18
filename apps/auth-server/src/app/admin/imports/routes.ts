@@ -96,7 +96,7 @@ export const importRoutes: FastifyPluginAsync = async (fastify) => {
         // A DPoP-bound admin token (#520).
         security: [{ [ADMIN_SECURITY_SCHEME]: [] }],
         summary: 'Plan the import of a realm file',
-        description: `A dry run: answers every change importing the file would make to the realm's policies and to the clients the operator manages, without applying it. Each change names its section, its item (a client's client_id) and its field, the value before and after, whether it tightens, loosens or neither (an unknown direction counts as loosening), and the class, effects, permissions and scopes of the single operation it equals: a policy change as realms.policies.update judges it, a client's field as clients.update does, and creating or deleting a client is a security change, as clients.create and clients.delete are. The plan's class is the strictest of its changes, and its digest, over the realm, the base policies version, the prune flag and the changes, is what the approval of the import binds to. A client the file leaves out stays unless prune is true. secretsToSet names the secrets the file's choices need and the realm lacks, such as mail.smtp.password once the file selects smtp: they are set on the realm, never by an import. A file the format refuses (422, each member at fault under /file), one holding a section this release does not import (cimd_clients, resources, system_client), and one naming a client no realm file manages (a developer's, a self-registered or CIMD client, the system client, a service account's) are refused. It needs realms.import.plan, and realms.read and clients.read, since the plan shows the realm's policies and clients as they stand; it applies nothing and shows no secret. A realm with more than ${MAX_IMPORT_CLIENTS} clients is refused (422).`,
+        description: `A dry run: answers every change importing the file would make to the realm's policies and to the clients the operator manages, without applying it. Each change names its section, its item (a client's client_id) and its field, the value before and after, whether it tightens, loosens or neither (an unknown direction counts as loosening), and the class, effects, permissions and scopes of the single operation it equals: a policy change as realms.policies.update judges it, a client's field as clients.update does, and creating or deleting a client is a security change, as clients.create and clients.delete are. The plan's class is the strictest of its changes, and its digest, over the realm, the base policies version, the prune flag and the changes, is what the approval of the import binds to. A client the file leaves out stays unless prune is true. secretsToSet names the secrets the file's choices need and the realm lacks, such as mail.smtp.password once the file selects smtp: they are set on the realm, never by an import. A file the format refuses (422, each member at fault under /file), one holding a section this release does not import (cimd_clients, resources, system_client), one naming a client no realm file manages (a developer's, a self-registered or CIMD client, the system client, a service account's), and one that would create a client under the system client's client_id or a CIMD client_id are refused. It needs realms.import.plan, and realms.read and clients.read, since the plan shows the realm's policies and clients as they stand; it applies nothing and shows no secret. A realm with more than ${MAX_IMPORT_CLIENTS} clients is refused (422).`,
         'x-qauth-errors': [400, 401, 403, 404, 415, 422, 503],
         params: realmParams,
         body: importRequestSchema,
@@ -130,9 +130,10 @@ export const importRoutes: FastifyPluginAsync = async (fastify) => {
           throw new TemporarilyUnavailableError(30, { operation: IMPORT_OPERATION_IDS.plan });
         }
         if (error instanceof TooManyClientsError) {
+          // The realm's fault, not the file's: the pointer names the whole request.
           throw new UnprocessableContentError(
-            [{ pointer: '/file', message: error.message }],
-            REALM_FILE_REFUSED_MESSAGE
+            [{ pointer: '', message: error.message }],
+            'This realm holds more clients than an import plans.'
           );
         }
         throw error;
