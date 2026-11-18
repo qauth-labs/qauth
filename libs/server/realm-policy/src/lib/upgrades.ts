@@ -106,6 +106,31 @@ export const CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE: PolicySchemaUpgrade = Object.
 });
 
 /**
+ * 1-rc.2 to 1-rc.3 (#526): an entry of `admin.workloadIssuers` is no longer
+ * an issuer URL but an object naming the issuer, the audience and the
+ * subject a CI workload token must carry, and the service account it acts
+ * as. A URL alone names none of those, and nothing read the field before
+ * 1-rc.3, so a stored URL entry is removed rather than carried over: fewer
+ * entries is stricter, and a realm that listed an issuer trusts none until
+ * an admin writes its entries. A value that is not a list, and an entry that
+ * is not a string, are left as they are, so one the schema refuses is still
+ * refused.
+ */
+export const WORKLOAD_ISSUER_ENTRIES_UPGRADE: PolicySchemaUpgrade = Object.freeze({
+  from: '1-rc.2',
+  to: '1-rc.3',
+  upgrade(document: Record<string, unknown>): Record<string, unknown> {
+    const group = document['admin'];
+    if (!isPlainObject(group)) return document;
+    const issuers = group['workloadIssuers'];
+    if (Array.isArray(issuers)) {
+      group['workloadIssuers'] = issuers.filter((entry) => typeof entry !== 'string');
+    }
+    return document;
+  },
+});
+
+/**
  * The upgrades of QAuth's realm policy registry, one per version change,
  * oldest first, from {@link FIRST_REALM_POLICY_SCHEMA_VERSION}. The release
  * that changes `REALM_POLICY_SCHEMA_VERSION` appends its upgrade here, and the
@@ -114,6 +139,7 @@ export const CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE: PolicySchemaUpgrade = Object.
 export const REALM_POLICY_UPGRADES: readonly PolicySchemaUpgrade[] = Object.freeze([
   BRUTE_FORCE_BOUND_UPGRADE,
   CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE,
+  WORKLOAD_ISSUER_ENTRIES_UPGRADE,
 ]);
 
 /**

@@ -27,7 +27,7 @@
     "policies": {
       "title": "QAuth realm policies",
       "description": "The realm's policies, in the shape of the policies of the admin API's realm representation, without the <name>Set flag of a secret field: groups of camelCase fields, each matched by its path. A field left out takes its default.",
-      "x-qauth-schema-version": "1-rc.2",
+      "x-qauth-schema-version": "1-rc.3",
       "type": "object",
       "properties": {
         "tokens": {
@@ -833,16 +833,58 @@
               "maxItems": 20,
               "type": "array",
               "items": {
-                "type": "string",
-                "maxLength": 2048,
-                "format": "uri",
-                "pattern": "^https://[^\\s?#@]+$",
-                "not": {
-                  "type": "string",
-                  "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
-                }
+                "type": "object",
+                "properties": {
+                  "issuer": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "format": "uri",
+                    "pattern": "^https://[^\\s?#@]+$",
+                    "not": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                    }
+                  },
+                  "audience": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]+$",
+                    "not": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                    }
+                  },
+                  "subject": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255,
+                    "pattern": "^[^*\\u0000-\\u001f\\u007f-\\u009f]+\\*?$",
+                    "not": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                    }
+                  },
+                  "serviceAccount": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                    "not": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\\s]*@"
+                    }
+                  }
+                },
+                "required": [
+                  "issuer",
+                  "audience",
+                  "subject",
+                  "serviceAccount"
+                ],
+                "additionalProperties": false
               },
-              "description": "The HTTPS issuers whose workload tokens a CI service account may exchange for admin API tokens.",
+              "description": "The CI issuers whose workload tokens the operator realm exchanges for a service account admin token, with the audience, subject and service account of each.",
               "uniqueItems": true,
               "x-qauth-policy": {
                 "docs": "https://docs.qauth.dev/reference/realm-policies/#admin",

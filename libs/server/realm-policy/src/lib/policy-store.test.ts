@@ -1981,6 +1981,57 @@ describe('createPolicyStore — the one-time error page fill of 1-rc.2 (#1118)',
   });
 });
 
+describe('createPolicyStore — the workload issuer entries of 1-rc.3 (#526)', () => {
+  const ENTRY = {
+    issuer: 'https://ci.example.com',
+    audience: 'qauth-admin',
+    subject: 'repo:acme/infra:*',
+    serviceAccount: 'ci-realm-import',
+  };
+
+  /** A realm whose 1-rc.2 policies list `workloadIssuers`. */
+  function realmOfRc2(workloadIssuers: unknown[]): MemoryRealm {
+    const document = structuredClone(SEEDS) as unknown as Record<string, unknown>;
+    document['admin'] = { twoAdminMandatoryOperations: ['users.delete'], workloadIssuers };
+    return realmWithPolicies({ schemaVersion: '1-rc.2', document });
+  }
+
+  it('reads a stored issuer URL as no entry, and stores the realm so at the boot', async () => {
+    const memory = memoryStorage([realmOfRc2(['https://ci.example.com'])]);
+    const store = createPolicyStore({ storage: memory.storage, seeds: defaultsFromEnv({}) });
+
+    expect((await store.get('realm-a'))?.policies.admin).toEqual({
+      twoAdminMandatoryOperations: ['users.delete'],
+      workloadIssuers: [],
+    });
+    expect((await store.seedRealms()).upgraded).toEqual([
+      // No field takes its seed: the list is emptied, not removed.
+      { realmId: 'realm-a', realmName: 'master', from: '1-rc.2', paths: [] },
+    ]);
+    const row = memory.rows.get('realm-a');
+    expect(row?.schemaVersion).toBe(REALM_POLICY_SCHEMA_VERSION);
+    expect(row?.document['admin']).toEqual({
+      twoAdminMandatoryOperations: ['users.delete'],
+      workloadIssuers: [],
+    });
+  });
+
+  it('takes an entry once it is written under 1-rc.3', async () => {
+    const memory = memoryStorage([realmOfRc2([])]);
+    const store = createPolicyStore({ storage: memory.storage, seeds: defaultsFromEnv({}) });
+    await store.seedRealms();
+    const current = await store.get('realm-a');
+
+    await store.update(
+      'realm-a',
+      { admin: { workloadIssuers: [ENTRY] } },
+      { expectedVersion: current?.version ?? 0 }
+    );
+
+    expect((await store.get('realm-a'))?.policies.admin.workloadIssuers).toEqual([ENTRY]);
+  });
+});
+
 describe('createPolicyStore — the update guard (#517)', () => {
   const SMTP_PATCH = {
     mail: {

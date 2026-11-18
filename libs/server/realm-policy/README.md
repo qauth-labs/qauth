@@ -148,12 +148,14 @@ await store.seedRealms(tx); // at boot: fill realms with no policies, complete m
 
 ## Versions
 
-`REALM_POLICY_SCHEMA_VERSION` is `1-rc.2`. Before QAuth 1.0.0 a breaking change raises the rc
+`REALM_POLICY_SCHEMA_VERSION` is `1-rc.3`. Before QAuth 1.0.0 a breaking change raises the rc
 number; from 1.0.0 it is `1`, and every change inside it is additive: a new field with a default,
 never a removal. `1-rc.1` (#517) bounds `bruteForce.windowSeconds` and
 `bruteForce.lockoutSeconds` at 86400 (a day); a realm that stored more under `1-rc.0` reads the
 bound. `1-rc.2` (#1118) drops a stored `null` of `ceremonyApp.errorPage`, so the first boot fills
-it once from `CEREMONY_APP_ERROR_PAGE`, which 0.2.4 did not have.
+it once from `CEREMONY_APP_ERROR_PAGE`, which 0.2.4 did not have. `1-rc.3` (#526) makes an entry
+of `admin.workloadIssuers` an object naming the issuer, audience and subject of a CI workload token
+and the service account it acts as; a stored issuer URL alone is removed.
 
 A release that changes the version ships an upgrade from the one before it, appended to
 `REALM_POLICY_UPGRADES` (`src/lib/upgrades.ts`): a function from a stored document of the old

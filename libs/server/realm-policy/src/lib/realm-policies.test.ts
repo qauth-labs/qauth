@@ -95,6 +95,17 @@ const DOMAINS = {
     `${'a'.repeat(64)}.com`,
   ],
 };
+/** A trusted workload issuer entry (#526), with `overrides`. */
+function workloadIssuer(overrides: Record<string, unknown> = {}) {
+  return {
+    issuer: 'https://ci.example.com',
+    audience: 'https://auth.example.com',
+    subject: 'repo:acme/infra:ref:refs/heads/main',
+    serviceAccount: 'ci-realm-import',
+    ...overrides,
+  };
+}
+
 const ISSUERS = {
   accepted: ['https://ci.example.com', 'https://ci.example.com:8443/oidc'],
   refused: [
@@ -871,11 +882,60 @@ describe('parseRealmPolicies', () => {
     }
   });
 
-  it('accepts an https issuer with a path', () => {
-    const issuers = ['https://ci.example.com', 'https://ci.example.com/oidc/realm-1'];
+  it('accepts a workload issuer entry with an https issuer, a path, an exact or prefix subject', () => {
+    const issuers = [
+      workloadIssuer({ issuer: 'https://ci.example.com' }),
+      workloadIssuer({ issuer: 'https://ci.example.com/oidc/realm-1', subject: 'repo:acme/*' }),
+      workloadIssuer({ subject: 'project_path:acme/infra:ref_type:branch:ref:main' }),
+    ];
     expect(
       parseRealmPolicies({ admin: { workloadIssuers: issuers } }).admin.workloadIssuers
     ).toEqual(issuers);
+  });
+
+  it('refuses a workload issuer entry whose subject has a wildcard anywhere but at the end, or alone', () => {
+    for (const subject of ['*', 'repo:*:main', '*repo:acme', 'repo:acme**', 'repo:a*b*', '']) {
+      expect(
+        () => parseRealmPolicies({ admin: { workloadIssuers: [workloadIssuer({ subject })] } }),
+        subject
+      ).toThrow(PolicyValidationError);
+    }
+  });
+
+  it('refuses a workload issuer entry with a member missing, unknown, or out of its grammar', () => {
+    const { serviceAccount: _serviceAccount, ...withoutAccount } = workloadIssuer();
+    for (const entry of [
+      withoutAccount,
+      { ...workloadIssuer(), repository: 'acme/infra' },
+      workloadIssuer({ audience: 'two words' }),
+      workloadIssuer({ audience: '' }),
+      workloadIssuer({ subject: 'repo:acme/infra\nmain' }),
+      workloadIssuer({ serviceAccount: 'CI_Import' }),
+      workloadIssuer({ serviceAccount: 'ci--import' }),
+      'https://ci.example.com',
+    ]) {
+      expect(
+        () => parseRealmPolicies({ admin: { workloadIssuers: [entry] } }),
+        JSON.stringify(entry)
+      ).toThrow(PolicyValidationError);
+    }
+  });
+
+  it('refuses two workload issuer entries with the same issuer, audience and subject', () => {
+    expect(() =>
+      parseRealmPolicies({
+        admin: {
+          workloadIssuers: [workloadIssuer(), workloadIssuer({ serviceAccount: 'another-robot' })],
+        },
+      })
+    ).toThrow(PolicyValidationError);
+    expect(
+      parseRealmPolicies({
+        admin: {
+          workloadIssuers: [workloadIssuer(), workloadIssuer({ subject: 'repo:acme/other:*' })],
+        },
+      }).admin.workloadIssuers
+    ).toHaveLength(2);
   });
 
   it('bounds the token lifetimes: a day for an access token, 90 days for a refresh token', () => {
@@ -911,12 +971,14 @@ describe('parseRealmPolicies', () => {
       { password: { minScore: -1 } },
       { mail: { verificationTokenExpirySeconds: 3599 } },
       { posture: { maxEnvironmentLaxity: 'test' } },
-      { admin: { workloadIssuers: ['http://ci.example.com'] } },
-      { admin: { workloadIssuers: ['https://'] } },
-      { admin: { workloadIssuers: ['https://user:pass@ci.example.com'] } },
-      { admin: { workloadIssuers: ['https://ci.example.com?audience=x'] } },
-      { admin: { workloadIssuers: ['https://ci.example.com#f'] } },
-      ...ISSUERS.refused.map((issuer) => ({ admin: { workloadIssuers: [issuer] } })),
+      ...[
+        'http://ci.example.com',
+        'https://',
+        'https://user:pass@ci.example.com',
+        'https://ci.example.com?audience=x',
+        'https://ci.example.com#f',
+        ...ISSUERS.refused,
+      ].map((issuer) => ({ admin: { workloadIssuers: [workloadIssuer({ issuer })] } })),
       { admin: { twoAdminMandatoryOperations: ['users'] } },
       { registration: { dynamicRegistrationAllowedScopes: ['openid', 'openid'] } },
     ]) {
@@ -1066,10 +1128,16 @@ describe('toJsonSchema', () => {
         }),
       ],
       [
-        properties(input, 'admin')['workloadIssuers'],
+        {
+          items: (
+            (properties(input, 'admin')['workloadIssuers']['items'] as Record<string, unknown>)[
+              'properties'
+            ] as Record<string, unknown>
+          )['issuer'],
+        },
         ISSUERS,
         (value: string[]) => ({
-          admin: { workloadIssuers: value },
+          admin: { workloadIssuers: value.map((issuer) => workloadIssuer({ issuer })) },
         }),
       ],
     ] as const;

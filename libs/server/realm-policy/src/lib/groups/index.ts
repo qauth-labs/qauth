@@ -1,5 +1,5 @@
 import { ACCOUNTS_POLICY_GROUP } from './accounts';
-import { ADMIN_POLICY_GROUP } from './admin';
+import { ADMIN_POLICY_GROUP, WORKLOAD_SUBJECT_PATTERN, type WorkloadIssuer } from './admin';
 import { BOT_CHALLENGE_POLICY_GROUP } from './bot-challenge';
 import { BRUTE_FORCE_POLICY_GROUP } from './brute-force';
 import {
@@ -22,7 +22,7 @@ import { POSTURE_POLICY_GROUP } from './posture';
 import { REGISTRATION_POLICY_GROUP } from './registration';
 import { TOKENS_POLICY_GROUP } from './tokens';
 
-export type { MailTransportRuleOptions };
+export type { MailTransportRuleOptions, WorkloadIssuer };
 export {
   ACCOUNTS_POLICY_GROUP,
   ADMIN_POLICY_GROUP,
@@ -42,6 +42,7 @@ export {
   REGISTRATION_POLICY_GROUP,
   smtpHostRefusal,
   TOKENS_POLICY_GROUP,
+  WORKLOAD_SUBJECT_PATTERN,
 };
 
 /**

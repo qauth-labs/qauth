@@ -1,5 +1,5 @@
 {
-  "policySchemaVersion": "1-rc.2",
+  "policySchemaVersion": "1-rc.3",
   "description": "The realm policy settings, generated from the realm policy schema (libs/server/realm-policy): what the admin console shows beside each setting. Never edited by hand.",
   "settings": [
     {
@@ -647,7 +647,7 @@
     },
     {
       "path": "admin.workloadIssuers",
-      "summary": "The HTTPS issuers whose workload tokens a CI service account may exchange for admin API tokens.",
+      "summary": "The CI issuers whose workload tokens the operator realm exchanges for a service account admin token, with the audience, subject and service account of each.",
       "docs": "https://docs.qauth.dev/reference/realm-policies/#admin",
       "default": [],
       "secret": false,
