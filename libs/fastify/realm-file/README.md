@@ -20,7 +20,8 @@ const written = canonicalRealmFile(file); // sets and entry lists in canonical o
 - `src/lib/format.ts`: the format identifier and the paths it is published at.
 - `src/lib/sections.ts`: the sections (`policies`, `clients`, `cimd_clients`, `resources`,
   `system_client`), each with its natural key and canonical order. A section is added here, with
-  its schema and natural key, and the import plan (#518) adds its diff rules.
+  its schema and natural key; the import plan adds its diff rules in the auth server
+  (`apps/auth-server/src/app/admin/imports/`, #518), which refuses a section it has none for.
 - `src/lib/realm-file.ts`: the Zod schema and the parser. `clients`, `cimd_clients`, `resources`
   and `system_client` are the seed manifest's own schemas
   (`@qauth-labs/infra-db/seed-manifest`), so a seed manifest is a realm file as it is, but for

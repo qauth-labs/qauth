@@ -6131,6 +6131,159 @@
           }
         }
       }
+    },
+    "/admin/v1-rc.0/realms/{realmId}/imports": {
+      "post": {
+        "operationId": "realms.imports.plan",
+        "summary": "Plan the import of a realm file",
+        "description": "A dry run: answers every change importing the file would make to the realm's policies and to the clients the operator manages, without applying it. Each change names its section, its item (a client's client_id) and its field, the value before and after, whether it tightens, loosens or neither (an unknown direction counts as loosening), and the class, effects, permissions and scopes of the single operation it equals: a policy change as realms.policies.update judges it, a client's field as clients.update does, and creating or deleting a client is a security change, as clients.create and clients.delete are. The plan's class is the strictest of its changes, and its digest, over the realm, the base policies version, the prune flag and the changes, is what the approval of the import binds to. A client the file leaves out stays unless prune is true. secretsToSet names the secrets the file's choices need and the realm lacks, such as mail.smtp.password once the file selects smtp: they are set on the realm, never by an import. A file the format refuses (422, each member at fault under /file), one holding a section this release does not import (cimd_clients, resources, system_client), one naming a client no realm file manages (a developer's, a self-registered or CIMD client, the system client, a service account's), and one that would create a client under the system client's client_id or a CIMD client_id are refused. It needs realms.import.plan, and realms.read and clients.read, since the plan shows the realm's policies and clients as they stand; it applies nothing and shows no secret. A realm with more than 10000 clients is refused (422).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminRealmImportRequestInput"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "realmId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "dpopAuth": []
+          }
+        ],
+        "x-qauth-class": "read",
+        "x-qauth-permission": [
+          "realms.import.plan",
+          "realms.read",
+          "clients.read"
+        ],
+        "x-qauth-stability": "experimental",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminImportPlan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6142,6 +6295,33 @@
       }
     },
     "schemas": {
+      "AdminRealmImportRequestInput": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "const": "dry-run",
+            "description": "dry-run: answer the plan and apply nothing. The only mode this release takes; applying an import comes later (#531)."
+          },
+          "prune": {
+            "description": "Whether an item the realm has and the file leaves out is deleted. Left out: false, and nothing is deleted.",
+            "type": "boolean"
+          },
+          "file": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "The realm file, as JSON: format urn:qauth:realm-file:v1-rc.0, whose JSON Schema is https://docs.qauth.dev/schemas/realm-file-v1-rc.0.json. A file the format refuses is answered 422, naming each member at fault."
+          }
+        },
+        "required": [
+          "mode",
+          "file"
+        ],
+        "additionalProperties": false
+      },
       "AdminPluginKeyImportRequestInput": {
         "type": "object",
         "properties": {
@@ -8425,6 +8605,238 @@
         "required": [
           "items",
           "nextCursor"
+        ],
+        "additionalProperties": false
+      },
+      "AdminImportChange": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string",
+            "description": "The section of the realm file: policies or clients."
+          },
+          "key": {
+            "description": "The item's natural key, such as a client's client_id; null for the policies, whose fields are matched by their path.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "The dotted path of the field within the item, such as password.minScore or redirect_uris; empty when the change creates or deletes the whole item."
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "create",
+              "update",
+              "delete"
+            ],
+            "description": "create for an item the realm lacks, update for a field of one it has, delete for an item it has and the file leaves out, which only a pruning import deletes."
+          },
+          "before": {
+            "description": "The value the realm holds, as stored; null for an item it lacks. A secret field shows set or not set, never a value."
+          },
+          "after": {
+            "description": "The value the import would store; null for an item it deletes. A secret field shows set or not set, never a value."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "tightening",
+              "loosening",
+              "neutral"
+            ],
+            "description": "Whether the change tightens, loosens or neither; a change whose direction is unknown counts as loosening."
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "write",
+              "security"
+            ],
+            "description": "security when the single operation the change equals is a security operation (ADR-019 Decision 11)."
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "credential-path",
+                "token-content",
+                "issue-for-other",
+                "administration",
+                "import",
+                "federation-operator",
+                "key-custody",
+                "realm-lifecycle",
+                "authority-tree-power",
+                "posture-loosening",
+                "bulk-revocation"
+              ]
+            },
+            "description": "The effects that make the change a security change; empty for a write."
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The admin permissions the change needs."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "qauth:admin:read",
+                "qauth:admin:write",
+                "qauth:admin:security"
+              ]
+            },
+            "description": "The admin scopes the change needs."
+          },
+          "secret": {
+            "type": "boolean",
+            "description": "Whether the field is a secret, shown only as set or not set."
+          },
+          "environmentBound": {
+            "type": "boolean",
+            "description": "Whether the value describes the environment the realm runs in, which a sandbox promotion leaves out unless it is selected (ADR-019 Decision 11)."
+          },
+          "needsSecret": {
+            "type": "boolean",
+            "description": "Whether the change leaves the realm needing a secret it does not hold: one secretsToSet names, or the client secret of a client that authenticates with one."
+          }
+        },
+        "required": [
+          "section",
+          "key",
+          "path",
+          "op",
+          "before",
+          "after",
+          "direction",
+          "class",
+          "effects",
+          "permissions",
+          "scopes",
+          "secret",
+          "environmentBound",
+          "needsSecret"
+        ],
+        "additionalProperties": false
+      },
+      "AdminImportPlan": {
+        "type": "object",
+        "properties": {
+          "realmId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "description": "The realm the import targets."
+          },
+          "baseVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "The realm's policies_version the plan was made against: the realm's ETag, without its quotes."
+          },
+          "prune": {
+            "type": "boolean",
+            "description": "Whether items the realm has and the file leaves out are deleted."
+          },
+          "digest": {
+            "type": "string",
+            "description": "The SHA-256 digest, base64url, of the RFC 8785 form of the realm id, the base version, the prune flag and the changes as the plan shows them, a URL credential masked: the approval of the import binds to it, and the apply refuses a plan whose digest differs."
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "write",
+              "security"
+            ],
+            "description": "The strictest class of the changes: security when any change is; write when none is, or when there is no change."
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "credential-path",
+                "token-content",
+                "issue-for-other",
+                "administration",
+                "import",
+                "federation-operator",
+                "key-custody",
+                "realm-lifecycle",
+                "authority-tree-power",
+                "posture-loosening",
+                "bulk-revocation"
+              ]
+            },
+            "description": "Every effect of the security changes."
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every admin permission the changes need; empty when there is no change."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "qauth:admin:read",
+                "qauth:admin:write",
+                "qauth:admin:security"
+              ]
+            },
+            "description": "Every admin scope the changes need."
+          },
+          "approvalRequired": {
+            "type": "boolean",
+            "description": "Whether applying the plan needs an approval: exactly when it is security."
+          },
+          "secretsToSet": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The secret fields the file's choices need and the realm lacks, by path, such as mail.smtp.password: set on the realm itself, never by an import."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the import does not stop on but says, such as a file written for a realm of another name."
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminImportChange"
+            },
+            "description": "Every change, section by section in the order of the realm file, each section in its own order; empty when the file matches the realm."
+          }
+        },
+        "required": [
+          "realmId",
+          "baseVersion",
+          "prune",
+          "digest",
+          "class",
+          "effects",
+          "permissions",
+          "scopes",
+          "approvalRequired",
+          "secretsToSet",
+          "warnings",
+          "changes"
         ],
         "additionalProperties": false
       },

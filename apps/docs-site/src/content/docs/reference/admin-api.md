@@ -49,11 +49,12 @@ An admin operation carries the extensions of the
 
 ## Realms
 
-| Operation                                               | `operationId`             | What it does                                                                                         |
-| ------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `GET /admin/v1-rc.0/realms/{realmId}`                   | `realms.get`              | Read a realm and its policies.                                                                       |
-| `PATCH /admin/v1-rc.0/realms/{realmId}/policies`        | `realms.policies.update`  | Change a realm's policies ([Realm policies](/reference/realm-policies/)).                            |
-| `POST /admin/v1-rc.0/realms/{realmId}/policies/preview` | `realms.policies.preview` | Preview a change of a realm's policies: what it changes and which approval it needs. Writes nothing. |
+| Operation                                               | `operationId`             | What it does                                                                                                                    |
+| ------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /admin/v1-rc.0/realms/{realmId}`                   | `realms.get`              | Read a realm and its policies.                                                                                                  |
+| `PATCH /admin/v1-rc.0/realms/{realmId}/policies`        | `realms.policies.update`  | Change a realm's policies ([Realm policies](/reference/realm-policies/)).                                                       |
+| `POST /admin/v1-rc.0/realms/{realmId}/policies/preview` | `realms.policies.preview` | Preview a change of a realm's policies: what it changes and which approval it needs. Writes nothing.                            |
+| `POST /admin/v1-rc.0/realms/{realmId}/imports`          | `realms.imports.plan`     | Plan the import of a [realm file](/reference/realm-file/): every change and what it needs (`mode: "dry-run"`). Applies nothing. |
 
 `realms.get` and `realms.policies.update` are the reference operations. A new admin operation is
 built on them ([Adding an admin operation](/extend/adding-an-admin-operation/)).
