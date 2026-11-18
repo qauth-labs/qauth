@@ -535,6 +535,9 @@ importers:
       '@qauth-labs/fastify-plugin-ssf':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/ssf
+      '@qauth-labs/realm-file':
+        specifier: workspace:*
+        version: link:../../libs/fastify/realm-file
       '@qauth-labs/server-config':
         specifier: workspace:*
         version: link:../../libs/server/config
