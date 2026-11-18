@@ -2,6 +2,7 @@ import { NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
+import { familyTokenSecurity } from '../../api-conventions/family-documents';
 import { type PageQuery, pageQuerySchema, pageSchema } from '../../api-conventions/paging';
 import { rfc3339 } from '../../api-conventions/time';
 import { accountOperation } from '../../helpers/account-operation-guard';
@@ -126,7 +127,7 @@ export function registerAccountSessionRoutes(fastify: FastifyInstance): void {
       description:
         "List the token's user's live browser sessions, most recently used first: each one's device label, when it started and when it was last used, and `current` on the one the token came through (its `sid`). Never the session's address or cookie.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...list.schema,
       'x-qauth-errors': [400, 401, 403],
@@ -165,7 +166,7 @@ export function registerAccountSessionRoutes(fastify: FastifyInstance): void {
       description:
         "End one of the token's user's sessions: its cookie stops working, its refresh-token families end, and every app it signed in to with a back-channel logout URI is sent a logout token. Needs no fresh sign-in and takes an act-chain token: ending a session only takes access away. A session of another user, or one that has ended, is 404.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...end.schema,
       'x-qauth-errors': [400, 401, 403, 404],
@@ -189,7 +190,7 @@ export function registerAccountSessionRoutes(fastify: FastifyInstance): void {
       description:
         "Sign out everywhere: every session of the token's user ends, each app a session signed in to with a back-channel logout URI is sent a logout token, and every unredeemed code and refresh-token family of the user is revoked. The session the token came through stays only when `keepCurrent` is true and the token names it in `sid`, which a refreshed token does not. Needs no fresh sign-in and takes an act-chain token.",
       tags,
-      security: [{ bearerAuth: [] }],
+      security: familyTokenSecurity(),
       'x-qauth-stability': 'stable',
       ...endAll.schema,
       'x-qauth-errors': [400, 401, 403],

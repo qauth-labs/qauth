@@ -129,6 +129,15 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     load: () => import('./routes/app-association'),
   },
   {
+    // The account and developer APIs' own OpenAPI documents (#525), served
+    // beside their operations, by the role that serves them.
+    module: 'family-documents',
+    roles: ['api'],
+    plugins: [],
+    repositories: [],
+    load: () => import('./routes/family-documents'),
+  },
+  {
     module: 'health',
     roles: EVERY_ROLE,
     plugins: [],

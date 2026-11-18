@@ -184,3 +184,182 @@ export function findReferencePathsMissingFromOpenApi(
   const known = new Set(openApiPaths);
   return extractDocumentedPaths(referenceContent).filter((path) => !known.has(path));
 }
+
+// ---------------------------------------------------------------------------
+// The API families (ADR-019 Decision 7, #525)
+// ---------------------------------------------------------------------------
+
+/** The three API families, each with an OpenAPI document of its own. */
+export const API_FAMILIES = ['admin', 'account', 'developer'] as const;
+export type ApiFamily = (typeof API_FAMILIES)[number];
+
+/**
+ * The docs page that documents each family's operations, relative to
+ * `src/content/docs`. Every operation of a family's document is written there
+ * as inline code with its method, `` `GET /developer/v1-rc.0/clients` ``.
+ */
+export const FAMILY_REFERENCE_PAGES: Readonly<Record<ApiFamily, string>> = Object.freeze({
+  admin: 'reference/admin-api.md',
+  account: 'integrate/api-reference.md',
+  developer: 'integrate/api-reference.md',
+});
+
+/** A family's document: an OpenAPI document whose `info.version` is its contract version. */
+export interface FamilyDocument extends OpenApiDocument {
+  info?: { version?: string };
+}
+
+/** The family's path prefix, `/<family>/<contract version>`, from its document's `info.version`. */
+export function familyPrefix(family: ApiFamily, document: FamilyDocument): string {
+  const version = document.info?.version;
+  if (typeof version !== 'string' || version === '') {
+    throw new Error(`The ${family} document names no contract version in info.version`);
+  }
+  return `/${family}/${version}`;
+}
+
+/** Where a listener serves the family's own document: `<prefix>/openapi.json`. */
+export function familyDocumentPath(family: ApiFamily, document: FamilyDocument): string {
+  return `${familyPrefix(family, document)}/openapi.json`;
+}
+
+const OPERATION_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
+
+/** Every operation of a document, as `METHOD /path`. */
+export function documentOperations(document: OpenApiDocument): string[] {
+  return Object.entries(document.paths).flatMap(([path, item]) =>
+    OPERATION_METHODS.filter((method) => method in item).map(
+      (method) => `${method.toUpperCase()} ${path}`
+    )
+  );
+}
+
+/**
+ * The operations a page documents: inline code holding a method and a path,
+ * `` `PATCH /admin/v1-rc.0/realms/{realmId}/policies` ``, or several methods
+ * joined by `|`, `` `GET|POST /oauth/userinfo` ``. Unlike
+ * {@link extractDocumentedPaths}, the method counts: a family's page must
+ * name each operation, not only each path.
+ */
+export function extractDocumentedOperations(content: string): string[] {
+  const re = /`([A-Z]+(?:\|[A-Z]+)*)\s+(\/[^\s`]*)`/g;
+  const operations = new Set<string>();
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(content))) {
+    for (const method of match[1].split('|')) operations.add(`${method} ${match[2]}`);
+  }
+  return [...operations];
+}
+
+/** A family leg — every operation of the family's document is documented on its page. */
+export function findFamilyOperationsMissingFromPage(
+  document: OpenApiDocument,
+  pageContent: string
+): string[] {
+  const documented = new Set(extractDocumentedOperations(pageContent));
+  return documentOperations(document).filter((operation) => !documented.has(operation));
+}
+
+/**
+ * A family leg — the page documents no operation under the family's prefix
+ * that its document lacks. The `GET` of the family's own document is a route
+ * too, served beside the operations and described in none of them.
+ */
+export function findPageOperationsMissingFromDocument(
+  family: ApiFamily,
+  document: FamilyDocument,
+  pageContent: string
+): string[] {
+  const prefix = `${familyPrefix(family, document)}/`;
+  const known = new Set([
+    ...documentOperations(document),
+    `GET ${familyDocumentPath(family, document)}`,
+  ]);
+  return extractDocumentedOperations(pageContent).filter(
+    (operation) => operation.split(' ')[1].startsWith(prefix) && !known.has(operation)
+  );
+}
+
+/** A family leg — every route of the family is in the family's document. */
+export function findFamilyRoutesMissingFromDocument(
+  routes: RouteEntry[],
+  document: OpenApiDocument
+): RouteEntry[] {
+  return findRoutesMissingFromOpenApi(routes, document);
+}
+
+/** A string constant of a module: `const NAME = '…'`, or a template of other constants. */
+const PATH_CONSTANT_RE =
+  /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*(?:'([^'\n]*)'|"([^"\n]*)"|`([^`\n]*)`)\s*;/g;
+
+/**
+ * A route registration whose first argument is a path constant, a string or a
+ * template: `typed.patch(`, `admin.get(`. A constant must be one of the
+ * module's own, so `registry.get(APPROVAL_OPERATION_IDS.create)` (an
+ * identifier followed by a member access) and
+ * `repositories.oauthClients.delete(realm.id, …)` match nothing.
+ */
+const ROUTE_CALL_RE =
+  /\.(get|post|put|patch|delete)\s*(?:<[^>]*>)?\s*\(\s*(?:([A-Z][A-Z0-9_]*)|'([^'\n]*)'|"([^"\n]*)"|`([^`\n]*)`)\s*,/g;
+
+/** `${NAME}` placeholders resolved from `constants`; undefined when one names no constant. */
+function resolveTemplate(template: string, constants: Map<string, string>): string | undefined {
+  let unresolved = false;
+  const resolved = template.replace(/\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}/g, (_whole, name) => {
+    const value = constants.get(name);
+    if (value === undefined) unresolved = true;
+    return value ?? '';
+  });
+  return unresolved || resolved.includes('${') ? undefined : resolved;
+}
+
+function pathConstants(source: string): Map<string, string> {
+  const raw = new Map<string, string>();
+  for (const match of source.matchAll(PATH_CONSTANT_RE)) {
+    raw.set(match[1], match[2] ?? match[3] ?? match[4] ?? '');
+  }
+  // A constant may be built from one declared before it, as `${CLIENTS_PATH}/:clientId` is.
+  const constants = new Map<string, string>();
+  for (const [name, value] of raw) {
+    const resolved = resolveTemplate(value, constants);
+    if (resolved !== undefined) constants.set(name, resolved);
+  }
+  return constants;
+}
+
+/**
+ * Statically extract every route under `prefix` that the modules under
+ * `root` register, without booting the admin listener (#525). The admin
+ * routes are written as path constants of their module and templates built on
+ * them (`admin/clients/routes.ts`: `CLIENTS_PATH`, `` `${CLIENT_PATH}/enable` ``),
+ * which {@link extractRegisteredRoutes}' literal-only rule does not reach, so
+ * this extraction resolves a module's own constants first. A path it cannot
+ * resolve, such as one a function returns, extracts nothing: the real-tree
+ * test then finds the operation in the document and not here, and fails.
+ */
+export function extractConstantPathRoutes(root: string, prefix: string): RouteEntry[] {
+  const entries: RouteEntry[] = [];
+  const seen = new Set<string>();
+  for (const file of walkTsFiles(root).sort()) {
+    const source = readFileSync(file, 'utf8');
+    const constants = pathConstants(source);
+    for (const match of source.matchAll(ROUTE_CALL_RE)) {
+      const [, method, constant, single, double, template] = match;
+      const rawPath =
+        constant !== undefined
+          ? constants.get(constant)
+          : (single ?? double ?? resolveTemplate(template ?? '', constants));
+      if (rawPath === undefined || !rawPath.startsWith(prefix)) continue;
+      const path = toOpenApiPath(rawPath);
+      const key = `${method.toUpperCase()} ${path}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push({
+        method: method.toUpperCase(),
+        path,
+        sourceFile: relative(root, file).replace(/\\/g, '/'),
+      });
+    }
+  }
+  return entries;
+}

@@ -36,6 +36,7 @@ import {
   parseReleaseTag,
   prepareOpenApiPair,
   RAISED_TO_BREAK,
+  rateFindings,
   renderSummary,
   runBreakRuleCase,
   runChecks,
@@ -575,18 +576,121 @@ describe('the definition of a break', () => {
   });
 });
 
+describe('an added security alternative (#525)', () => {
+  const operationWith = (security?: unknown) => ({
+    openapi: '3.1.0',
+    paths: {
+      '/widgets': {
+        get: { ...(security === undefined ? {} : { security }), responses: {} },
+      },
+    },
+  });
+  const added = {
+    id: 'api-security-added',
+    level: LEVEL.ERR,
+    operation: 'GET',
+    path: '/widgets',
+    text: 'the endpoint scheme security `dpopAuth` was added to the API',
+    fingerprint: '000000000000',
+  };
+  const rate = (base: unknown, revision: unknown, finding = added) =>
+    rateFindings([finding], base, revision)[0];
+
+  it('is compatible when every requirement the operation had is kept', () => {
+    const rated = rate(
+      operationWith([{ bearerAuth: [] }]),
+      operationWith([{ bearerAuth: [] }, { dpopAuth: [] }])
+    );
+    expect(rated.level).toBe(LEVEL.INFO);
+    // Scope order and key order do not make a kept requirement a new one.
+    expect(
+      rate(
+        operationWith([{ oauth: ['b', 'a'], mtls: [] }]),
+        operationWith([{ mtls: [], oauth: ['a', 'b'] }, { dpopAuth: [] }])
+      ).level
+    ).toBe(LEVEL.INFO);
+  });
+
+  it('stays a break on an operation that had no requirement, or an empty list', () => {
+    expect(rate(operationWith(), operationWith([{ bearerAuth: [] }])).level).toBe(LEVEL.ERR);
+    expect(rate(operationWith([]), operationWith([{ bearerAuth: [] }])).level).toBe(LEVEL.ERR);
+  });
+
+  it('stays a break when the added alternative is the empty requirement, which lets anyone in', () => {
+    expect(
+      rate(operationWith([{ bearerAuth: [] }]), operationWith([{ bearerAuth: [] }, {}])).level
+    ).toBe(LEVEL.ERR);
+    expect(
+      rate(
+        operationWith([{ bearerAuth: [] }]),
+        operationWith([{ bearerAuth: [] }, { dpopAuth: [] }, {}])
+      ).level
+    ).toBe(LEVEL.ERR);
+  });
+
+  it('stays a break when a kept requirement gained a scheme or a scope', () => {
+    expect(
+      rate(operationWith([{ bearerAuth: [] }]), operationWith([{ bearerAuth: [], dpopAuth: [] }]))
+        .level
+    ).toBe(LEVEL.ERR);
+    expect(
+      rate(operationWith([{ oauth: ['a'] }]), operationWith([{ oauth: ['a', 'b'] }])).level
+    ).toBe(LEVEL.ERR);
+  });
+
+  it('reads the document-level security of an operation that names none', () => {
+    const base = { ...operationWith(), security: [{ bearerAuth: [] }] };
+    expect(rate(base, operationWith([{ bearerAuth: [] }, { dpopAuth: [] }])).level).toBe(
+      LEVEL.INFO
+    );
+    const global = {
+      ...added,
+      id: 'api-global-security-added',
+      operation: undefined,
+      path: undefined,
+    };
+    expect(
+      rate(
+        { ...operationWith(), security: [{ bearerAuth: [] }] },
+        { ...operationWith(), security: [{ bearerAuth: [] }, { dpopAuth: [] }] },
+        global as typeof added
+      ).level
+    ).toBe(LEVEL.INFO);
+    expect(
+      rate(
+        operationWith(),
+        { ...operationWith(), security: [{ bearerAuth: [] }] },
+        global as typeof added
+      ).level
+    ).toBe(LEVEL.ERR);
+  });
+
+  it('stays a break for an operation the documents do not hold, and leaves other rules alone', () => {
+    expect(rate(operationWith([{ bearerAuth: [] }]), { openapi: '3.1.0', paths: {} }).level).toBe(
+      LEVEL.ERR
+    );
+    const other = { ...added, id: 'api-removed-without-deprecation' };
+    expect(rate(operationWith([{ a: [] }]), operationWith([{ a: [] }, { b: [] }]), other)).toBe(
+      other
+    );
+  });
+});
+
 describe('the break-rule fixtures the self-test runs through oasdiff', () => {
   const dir = join(FIXTURES, 'break-rules');
   const cases = readJson(join(dir, 'cases.json'));
   const bases = {
     openapi: readJson(join(dir, 'openapi.json')),
     'json-schema': readJson(join(dir, 'schema.json')),
+    family: readJson(join(dir, 'family-openapi.json')),
   };
 
   it.each(cases.map((c: Doc) => [c.name, c]))(
     '%s: its patch applies to its base',
     (_name, testCase) => {
-      const base = applyJsonPatch(bases[testCase.format as 'openapi'], testCase.basePatch ?? []);
+      const shared = bases[(testCase.base ?? testCase.format) as 'openapi'];
+      expect(shared).toBeDefined();
+      const base = applyJsonPatch(shared, testCase.basePatch ?? []);
       const revised = applyJsonPatch(base, testCase.patch);
       expect(revised).not.toEqual(base);
       expect(Array.isArray(testCase.breaks)).toBe(true);
@@ -607,6 +711,20 @@ describe('the break-rule fixtures the self-test runs through oasdiff', () => {
       expect(expected).toContain(rule);
     }
     expect(cases.some((c: Doc) => c.breaks.length === 0)).toBe(true);
+  });
+
+  it("covers each change the family documents' gate names, on a family-shaped document (#525)", () => {
+    const family = cases.filter((c: Doc) => c.base === 'family');
+    const breaks = new Set(family.flatMap((c: Doc) => c.breaks));
+    for (const rule of [
+      'response-optional-property-removed',
+      'response-property-type-changed',
+      'api-path-removed-without-deprecation',
+      'request-property-enum-value-removed',
+    ]) {
+      expect(breaks).toContain(rule);
+    }
+    expect(family.some((c: Doc) => c.breaks.length === 0)).toBe(true);
   });
 
   it('reports a case whose rule ids differ from the expectation', async () => {

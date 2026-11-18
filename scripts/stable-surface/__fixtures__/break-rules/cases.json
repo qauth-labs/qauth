@@ -695,5 +695,183 @@
       }
     ],
     "breaks": []
+  },
+  {
+    "name": "family document: a removed response field breaks",
+    "format": "openapi",
+    "base": "family",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/components/schemas/Client/properties/redirect_uris"
+      }
+    ],
+    "breaks": ["response-optional-property-removed"]
+  },
+  {
+    "name": "family document: a changed response field type breaks",
+    "format": "openapi",
+    "base": "family",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/components/schemas/Client/properties/created_at",
+        "value": {
+          "type": "integer"
+        }
+      }
+    ],
+    "breaks": ["response-property-type-changed"]
+  },
+  {
+    "name": "family document: a removed operation breaks",
+    "format": "openapi",
+    "base": "family",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/paths/~1developer~1v1-rc.0~1clients~1{clientId}"
+      }
+    ],
+    "breaks": ["api-path-removed-without-deprecation"]
+  },
+  {
+    "name": "family document: a tightened request enum breaks",
+    "format": "openapi",
+    "base": "family",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/paths/~1developer~1v1-rc.0~1clients/post/requestBody/content/application~1json/schema/properties/token_endpoint_auth_method/enum",
+        "value": ["client_secret_basic", "none"]
+      }
+    ],
+    "breaks": ["request-property-enum-value-removed"]
+  },
+  {
+    "name": "family document: an additive change passes (a new optional response field, a new optional request field, a new operation)",
+    "format": "openapi",
+    "base": "family",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/components/schemas/Client/properties/logo_uri",
+        "value": {
+          "type": "string"
+        }
+      },
+      {
+        "op": "add",
+        "path": "/paths/~1developer~1v1-rc.0~1clients/post/requestBody/content/application~1json/schema/properties/logo_uri",
+        "value": {
+          "type": "string"
+        }
+      },
+      {
+        "op": "add",
+        "path": "/paths/~1developer~1v1-rc.0~1clients~1{clientId}/get",
+        "value": {
+          "operationId": "developer.clients.get",
+          "x-qauth-stability": "stable",
+          "x-qauth-class": "read",
+          "x-qauth-permission": "clients.read",
+          "security": [
+            {
+              "bearerAuth": []
+            },
+            {
+              "dpopAuth": []
+            }
+          ],
+          "parameters": [
+            {
+              "name": "clientId",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "The client",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Client"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "an added security alternative on an operation that takes a credential passes (#525)",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/components/securitySchemes/dpopAuth",
+        "value": {
+          "type": "http",
+          "scheme": "DPoP"
+        }
+      },
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/get/security/-",
+        "value": {
+          "dpopAuth": []
+        }
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "a scheme added into an operation's only security requirement breaks (#525)",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/components/securitySchemes/dpopAuth",
+        "value": {
+          "type": "http",
+          "scheme": "DPoP"
+        }
+      },
+      {
+        "op": "replace",
+        "path": "/paths/~1widgets/get/security",
+        "value": [
+          {
+            "bearerAuth": [],
+            "dpopAuth": []
+          }
+        ]
+      }
+    ],
+    "breaks": ["api-security-added", "api-security-removed"]
+  },
+  {
+    "name": "a removed security alternative breaks (#525)",
+    "format": "openapi",
+    "base": "family",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/paths/~1developer~1v1-rc.0~1clients/get/security",
+        "value": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    ],
+    "breaks": ["api-security-removed"]
   }
 ]

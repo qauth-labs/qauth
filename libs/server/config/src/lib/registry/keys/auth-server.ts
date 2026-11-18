@@ -25,6 +25,6 @@ export const AUTH_SERVER_KEYS = defineKeys([
     owner: 'server',
     default: { computed: '`true`, or `false` when `NODE_ENV=production`' },
     since: '0.1.0',
-    docs: 'Serve the Swagger UI at `/docs`.',
+    docs: "Serve the Swagger UI at `/docs`; the API documents the server publishes, the Interaction API's and the account and developer APIs' `<prefix>/openapi.json`, are served whatever it says, since the docs site publishes the same documents.",
   },
 ]);

@@ -198,10 +198,13 @@ export const envSchema = z
     CORS_ORIGIN: z.string().optional(),
     /**
      * Expose the Swagger UI at `/docs`. Defaults to `true` outside
-     * `production` and `false` in `production` so the API surface is not
-     * advertised to unauthenticated callers in a hardened deployment. An
-     * operator may opt back in by setting `ENABLE_SWAGGER=true` (e.g. for an
-     * internal docs mirror).
+     * `production` and `false` in `production` so the server's whole API
+     * surface is not advertised to unauthenticated callers in a hardened
+     * deployment. An operator may opt back in by setting
+     * `ENABLE_SWAGGER=true` (e.g. for an internal docs mirror). It does not
+     * gate the published API documents: the Interaction API's (#590) and the
+     * account and developer APIs' at `<prefix>/openapi.json` (#525) are served
+     * whatever it says, as the docs site publishes them.
      */
     ENABLE_SWAGGER: z.coerce
       .string()

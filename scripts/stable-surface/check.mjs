@@ -204,7 +204,11 @@ function printAnnotations(report) {
 async function selfTest(root) {
   const differ = oasdiffDiffer(await ensureOasdiff(root));
   const read = (name) => JSON.parse(readFileSync(join(FIXTURES, name), 'utf8'));
-  const bases = { openapi: read('openapi.json'), 'json-schema': read('schema.json') };
+  const bases = {
+    openapi: read('openapi.json'),
+    'json-schema': read('schema.json'),
+    family: read('family-openapi.json'),
+  };
   const cases = read('cases.json');
   let failed = 0;
   for (const testCase of cases) {

@@ -15,7 +15,11 @@ import {
 } from 'fastify-type-provider-zod';
 
 import { env } from '../../config/env';
-import { API_FAMILY_PREFIXES } from '../api-conventions/families';
+import {
+  familyDocument,
+  familyDocumentPath,
+  type OpenApiDocument,
+} from '../api-conventions/family-documents';
 import type { OperationRegistry } from '../helpers/admin-operations';
 import { closeWithApp } from '../helpers/listener-close';
 import { adminAddressRateLimitKey, adminSubjectRateLimitKey } from '../helpers/realm-rate-limit';
@@ -65,7 +69,7 @@ import { userRoutes } from './users/routes';
  */
 
 /** The admin API's OpenAPI document, served on the admin listener only. */
-export const ADMIN_OPENAPI_PATH = `${API_FAMILY_PREFIXES.admin}/openapi.json`;
+export const ADMIN_OPENAPI_PATH = familyDocumentPath('admin');
 
 /**
  * The route modules of the admin API, each registered behind the pipeline:
@@ -338,10 +342,13 @@ export async function installAdminApi(
   });
 
   // The one route no token guards: every call counts against its address.
+  // It serves the admin family's document (#525), cut from the listener's
+  // own once, as the exporter writes it.
+  let document: OpenApiDocument | undefined;
   admin.get(
     ADMIN_OPENAPI_PATH,
     { schema: { hide: true }, config: { rateLimit: ceilings.openapiDocument } },
-    async () => admin.swagger()
+    async () => (document ??= familyDocument(admin.swagger() as OpenApiDocument, 'admin'))
   );
 
   closeWithApp(source, () => closeAdminServer(admin, calls));

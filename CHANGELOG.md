@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Each API family publishes an OpenAPI document of its own, and a break
+  in one fails CI** ([#525], ADR-018 §5, ADR-019 Decision 7). The admin
+  listener serves the admin API's document at `/admin/v1-rc.0/openapi.json`,
+  and the public listener the account and developer APIs' at
+  `/account/v1-rc.0/openapi.json` and `/developer/v1-rc.0/openapi.json`:
+  each the family's operations the server serves, with the family's own
+  `info`, its contract version `v1-rc.0` as `info.version` (the admin
+  document said `1.0.0`), a server entry, and the security schemes its
+  operations take. The account and developer operations now state the
+  DPoP alternative to Bearer that their guard already accepted, as the new
+  `dpopAuth` scheme; the admin API's takes DPoP only. The OpenAPI export
+  writes each document under default flags to `docs/api-baseline/` (the new
+  `auth-server:api-baseline` target regenerates them) and with every
+  experimental switch on beside the docs site's `openapi.json`, as
+  `openapi-<family>.json`. The stable-surface check guards the six files
+  as it guards `openapi.json`: drift, stability tags, and breaks against
+  the last release through oasdiff. It no longer counts a security
+  requirement added beside the ones an operation keeps as a break. The new
+  [Admin API](https://docs.qauth.dev/reference/admin-api/) page lists every
+  admin operation, and the docs site's endpoint-coverage check fails when a
+  family route is missing from its document or its docs page.
 - **An admin the break-glass CLI enrolled registers its first passkey with
   the URL it was given** ([#621], ADR-019 Decision 7). The ceremony app's
   page `/ui/admin-enrolment` posts the URL's token to the new
@@ -4997,6 +5018,7 @@ It adds migrations 0068 and 0069.
 [#523]: https://github.com/qauth-labs/qauth/issues/523
 [#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
+[#525]: https://github.com/qauth-labs/qauth/issues/525
 [#527]: https://github.com/qauth-labs/qauth/issues/527
 [#528]: https://github.com/qauth-labs/qauth/issues/528
 [#529]: https://github.com/qauth-labs/qauth/issues/529

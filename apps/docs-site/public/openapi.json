@@ -12,6 +12,11 @@
         "scheme": "bearer",
         "bearerFormat": "JWT",
         "description": "Access token obtained from login, refresh, or OAuth token endpoint."
+      },
+      "dpopAuth": {
+        "type": "http",
+        "scheme": "DPoP",
+        "description": "An access token bound to a key (RFC 9449): `Authorization: DPoP <token>`, and a `DPoP` header holding a proof signed with the key the token names in `cnf.jkt`, for the request's method and URL. Accepted while DPOP_ENABLED is on."
       }
     },
     "schemas": {
@@ -1107,6 +1112,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -1261,6 +1269,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -1378,6 +1389,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -1524,6 +1538,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -1628,6 +1645,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -1854,6 +1874,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -1991,6 +2014,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -2153,6 +2179,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -2333,6 +2362,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -2514,6 +2546,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -2628,6 +2663,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -2821,6 +2859,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -2971,6 +3012,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -3085,6 +3129,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -3202,6 +3249,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -3350,6 +3400,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -3520,6 +3573,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -3640,6 +3696,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -7018,6 +7077,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -7316,6 +7378,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -7528,6 +7593,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -7881,6 +7949,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -8138,6 +8209,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -8242,6 +8316,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -8486,6 +8563,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -8696,6 +8776,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -8882,6 +8965,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -9065,6 +9151,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",
@@ -9217,6 +9306,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "dpopAuth": []
           }
         ],
         "x-qauth-stability": "stable",

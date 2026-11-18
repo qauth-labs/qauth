@@ -33,6 +33,57 @@
       "maximalOf": "openapi"
     },
     {
+      "name": "openapi-admin",
+      "description": "The admin API's own OpenAPI document as a default deployment serves it (ADR-019 Decision 7, ADR-018 §5, #525): none, since ADMIN_API_ENABLED is off by default, so it lists no operation; every admin operation is experimental, so the break check skips each one until it turns stable. The admin listener serves the document at /admin/v1-rc.0/openapi.json.",
+      "format": "openapi",
+      "generator": "pnpm exec nx run auth-server:openapi-export --skip-nx-cache",
+      "path": "docs/api-baseline/openapi-admin.json",
+      "stability": "stable"
+    },
+    {
+      "name": "openapi-admin-maximal",
+      "description": "The admin API's document with the admin listener and every switch that registers a route on, as the docs site publishes it (#525). Checked for drift and for stability tags, never for breaks.",
+      "format": "openapi",
+      "generator": "pnpm exec nx run auth-server:openapi-export --skip-nx-cache",
+      "path": "apps/docs-site/public/openapi-admin.json",
+      "stability": "experimental",
+      "maximalOf": "openapi-admin"
+    },
+    {
+      "name": "openapi-account",
+      "description": "The account API's own OpenAPI document as a default deployment serves it (ADR-019 Decision 7, ADR-018 §5, #525): the account operations the server serves, with the account family's info, contract version, server entry and security schemes. The public listener serves it at /account/v1-rc.0/openapi.json. The contract, with the operations still to come, is the account-api-v1 surface.",
+      "format": "openapi",
+      "generator": "pnpm exec nx run auth-server:openapi-export --skip-nx-cache",
+      "path": "docs/api-baseline/openapi-account.json",
+      "stability": "stable"
+    },
+    {
+      "name": "openapi-account-maximal",
+      "description": "The account API's document with every switch that registers a route on, as the docs site publishes it (#525). Checked for drift and for stability tags, never for breaks.",
+      "format": "openapi",
+      "generator": "pnpm exec nx run auth-server:openapi-export --skip-nx-cache",
+      "path": "apps/docs-site/public/openapi-account.json",
+      "stability": "experimental",
+      "maximalOf": "openapi-account"
+    },
+    {
+      "name": "openapi-developer",
+      "description": "The developer API's own OpenAPI document as a default deployment serves it (ADR-019 Decision 7, ADR-018 §5, #525), with the developer family's info, contract version, server entry and security schemes. The public listener serves it at /developer/v1-rc.0/openapi.json.",
+      "format": "openapi",
+      "generator": "pnpm exec nx run auth-server:openapi-export --skip-nx-cache",
+      "path": "docs/api-baseline/openapi-developer.json",
+      "stability": "stable"
+    },
+    {
+      "name": "openapi-developer-maximal",
+      "description": "The developer API's document with every switch that registers a route on, as the docs site publishes it (#525). Checked for drift and for stability tags, never for breaks.",
+      "format": "openapi",
+      "generator": "pnpm exec nx run auth-server:openapi-export --skip-nx-cache",
+      "path": "apps/docs-site/public/openapi-developer.json",
+      "stability": "experimental",
+      "maximalOf": "openapi-developer"
+    },
+    {
       "name": "admin-permissions",
       "description": "The admin permission catalog: every permission id, retired ones included, with its class (ADR-019 Decision 7, #507). Custom roles store the ids, so a removed permission or a changed class is a break; a new or retired permission is not.",
       "format": "json-schema",

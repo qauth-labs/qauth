@@ -23,6 +23,7 @@ import type {
   RouteOptions,
 } from 'fastify';
 
+import { DPOP_SECURITY_SCHEME } from '../api-conventions/family-documents';
 import {
   type AdminAuthority,
   adminAuthorityError,
@@ -141,7 +142,7 @@ import { secretMemberSchemaProblem } from './secrets/secret-members';
  * admin document defines: a DPoP-bound access token under the `DPoP`
  * authorization scheme, with a proof in the `DPoP` header (RFC 9449 §7.1).
  */
-export const ADMIN_SECURITY_SCHEME = 'dpopAuth';
+export const ADMIN_SECURITY_SCHEME = DPOP_SECURITY_SCHEME;
 
 /** The admin audit log, as the database plugin builds it. */
 type AdminAuditLog = FastifyInstance['repositories']['adminAuditLog'];

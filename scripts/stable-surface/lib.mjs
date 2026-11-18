@@ -70,7 +70,10 @@ export const LEVEL = Object.freeze({ ERR: 3, WARN: 2, INFO: 1 });
  *     removal still needs an approval;
  *   - a changed type of an object parameter's property (oasdiff: warning);
  *   - a security requirement added to an operation that had none, which makes
- *     a credential (and its scopes) newly required (oasdiff: info).
+ *     a credential (and its scopes) newly required (oasdiff: info). oasdiff
+ *     names a requirement added beside the ones an operation keeps with the
+ *     same rule, though a request that met the operation before still meets
+ *     it; {@link rateFindings} takes that one back to info (#525).
  *
  * oasdiff reads this list as a severity-levels file (`<rule> err` per line).
  */
@@ -479,6 +482,86 @@ export function prepareOpenApiPair({ baseline, current, formerExperimental = [] 
 }
 
 // ---------------------------------------------------------------------------
+// Security alternatives
+// ---------------------------------------------------------------------------
+
+/** The rules oasdiff reports an added security requirement under, raised to a break. */
+const SECURITY_ADDED_RULES = new Set(['api-security-added', 'api-global-security-added']);
+
+/** One security requirement, as a string that ignores key and scope order. */
+function requirementKey(requirement) {
+  if (!isObject(requirement)) return null;
+  const entries = Object.entries(requirement).map(([scheme, scopes]) => [
+    scheme,
+    Array.isArray(scopes) ? [...new Set(scopes.map(String))].sort() : null,
+  ]);
+  if (entries.some(([, scopes]) => scopes === null)) return null;
+  return JSON.stringify(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+/**
+ * Whether `after` keeps every requirement of `before`, which names at least
+ * one, and adds only requirements that name a scheme: OpenAPI security
+ * requirements are alternatives, so a request that met one of `before` still
+ * meets one of `after`. An added empty requirement (`{}`) makes the operation
+ * anonymous, so it is never taken for a compatible alternative: that change
+ * stays a break, which an approval a reviewer sees must cover.
+ */
+function keepsEveryAlternative(before, after) {
+  if (!Array.isArray(before) || before.length === 0 || !Array.isArray(after)) return false;
+  const beforeKeys = before.map(requirementKey);
+  if (beforeKeys.some((key) => key === null)) return false;
+  const afterKeys = after.map(requirementKey);
+  const kept = new Set(afterKeys);
+  if (!beforeKeys.every((key) => kept.has(key))) return false;
+  const known = new Set(beforeKeys);
+  return after.every(
+    (requirement, index) =>
+      known.has(afterKeys[index]) ||
+      (afterKeys[index] !== null && Object.keys(requirement).length > 0)
+  );
+}
+
+/** The security an operation of `doc` is under: its own, else the document's. */
+function effectiveSecurity(doc, path, method) {
+  const operation = doc?.paths?.[path]?.[method];
+  if (!isObject(operation)) return undefined;
+  return Object.hasOwn(operation, 'security') ? operation.security : doc.security;
+}
+
+/**
+ * oasdiff's findings for `base` → `revision`, with one correction to its
+ * levels (#525). It reports a security requirement added beside the ones an
+ * operation keeps as `api-security-added` (`api-global-security-added` for
+ * the document's), the rule {@link RAISED_TO_BREAK} raises because it also
+ * names a credential required on an operation that had none. A requirement
+ * added beside kept ones is an alternative: every request that met the
+ * operation still does, so that finding is info, not a break. Any other case
+ * stays a break: an operation that had no requirement, or an empty list; a
+ * requirement that lost a scheme or changed its scopes, since it is no longer
+ * kept; an added empty requirement, which lets a request in with no
+ * credential; a finding whose operation the documents do not hold.
+ */
+export function rateFindings(findings, base, revision) {
+  return findings.map((finding) => {
+    if (!SECURITY_ADDED_RULES.has(finding.id) || finding.level !== LEVEL.ERR) return finding;
+    let before;
+    let after;
+    if (finding.id === 'api-global-security-added') {
+      before = base?.security;
+      after = revision?.security;
+    } else {
+      const method = typeof finding.operation === 'string' ? finding.operation.toLowerCase() : '';
+      before = effectiveSecurity(base, finding.path, method);
+      after = effectiveSecurity(revision, finding.path, method);
+    }
+    return keepsEveryAlternative(before, after)
+      ? { ...finding, level: LEVEL.INFO, note: 'an added alternative' }
+      : finding;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // JSON Schema surfaces
 // ---------------------------------------------------------------------------
 
@@ -766,19 +849,23 @@ export function applyJsonPatch(doc, operations) {
 }
 
 /**
- * Run one break-rule fixture: patch the base document of its format, compare
- * the two exactly as the break check compares a surface, and report whether
- * the error-level rule ids are the ones the fixture expects (`[]`: the change
- * must pass).
+ * Run one break-rule fixture: patch the base document of its format, or the
+ * one it names (`base`), compare the two exactly as the break check compares
+ * a surface, and report whether the error-level rule ids are the ones the
+ * fixture expects (`[]`: the change must pass).
  *
- * @param {{name: string, format: 'openapi'|'json-schema', role?: string,
+ * @param {{name: string, format: 'openapi'|'json-schema', base?: string, role?: string,
  *   basePatch?: object[], patch: object[], breaks: string[]}} testCase
  *   `basePatch` adjusts the shared base first, for a case that needs a
  *   baseline the base document does not have (a deprecated operation).
- * @param {{openapi: object, 'json-schema': object}} bases
+ *   `base` names another base of the same format: `family`, a document shaped
+ *   like an API family's (#525).
+ * @param {{openapi: object, 'json-schema': object, family?: object}} bases
  */
 export async function runBreakRuleCase(testCase, bases, differ) {
-  const base = applyJsonPatch(bases[testCase.format], testCase.basePatch ?? []);
+  const shared = bases[testCase.base ?? testCase.format];
+  if (shared === undefined) throw new InputError(`${testCase.name}: no base "${testCase.base}"`);
+  const base = applyJsonPatch(shared, testCase.basePatch ?? []);
   const revised = applyJsonPatch(base, testCase.patch);
   const pair =
     testCase.format === 'openapi'
@@ -787,7 +874,7 @@ export async function runBreakRuleCase(testCase, bases, differ) {
           base: wrapJsonSchema(base, { name: 'fixture', role: testCase.role }),
           revision: wrapJsonSchema(revised, { name: 'fixture', role: testCase.role }),
         };
-  const findings = await differ(pair.base, pair.revision);
+  const findings = rateFindings(await differ(pair.base, pair.revision), pair.base, pair.revision);
   const actual = [
     ...new Set(findings.filter((f) => f.level === LEVEL.ERR).map((f) => f.id)),
   ].sort();
@@ -1052,7 +1139,7 @@ async function compareSurface({ surface, formerPath, docs, ref, git, differ, app
       ? prepareOpenApiPair({ baseline, current, formerExperimental: surface.formerExperimental })
       : { base: wrapJsonSchema(baseline, surface), revision: wrapJsonSchema(current, surface) };
 
-  const findings = await differ(pair.base, pair.revision);
+  const findings = rateFindings(await differ(pair.base, pair.revision), pair.base, pair.revision);
   const breaking = findings.filter((f) => f.level === LEVEL.ERR);
   const { approved, unapproved } = matchApprovals(surface.name, breaking, approvals, used);
   return {
