@@ -1,0 +1,21 @@
+{
+  "name": "@qauth-labs/realm-file",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/infra-db": "workspace:*",
+    "@qauth-labs/server-realm-policy": "workspace:*",
+    "@qauth-labs/shared-validation": "workspace:*",
+    "tslib": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "ajv": "catalog:",
+    "ajv-formats": "catalog:",
+    "tsx": "catalog:",
+    "vitest": "catalog:"
+  }
+}

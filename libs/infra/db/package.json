@@ -9,6 +9,7 @@
     "./system-client": "./src/system-client.ts",
     "./grants": "./src/grants.ts",
     "./account-verification": "./src/account-verification.ts",
+    "./seed-manifest": "./src/seed-manifest.ts",
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -24,6 +25,9 @@
       ],
       "account-verification": [
         "src/account-verification.ts"
+      ],
+      "seed-manifest": [
+        "src/seed-manifest.ts"
       ]
     }
   },

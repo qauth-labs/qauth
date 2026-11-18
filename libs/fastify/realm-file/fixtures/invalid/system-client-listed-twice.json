@@ -1,0 +1,15 @@
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "system",
+      "name": "Notes",
+      "grant_types": ["authorization_code"],
+      "redirect_uris": ["https://notes.example.com/callback"]
+    }
+  ],
+  "system_client": {
+    "redirect_uris": ["https://portal.example.com/auth/callback"],
+    "jwks_uri": "https://portal.example.com/.well-known/jwks.json"
+  }
+}

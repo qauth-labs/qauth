@@ -8,6 +8,9 @@ The checks that compare the docs with the code of the libraries (#1044):
 - every realm policy field's docs link names a page of the docs site and a heading on it;
 - the docs pages flagged `experimental: true` and the experimental-feature registry match one to
   one (#477), and the decision records and evidence paths the registry names exist (#476);
+- the example of `reference/realm-file.md` is a valid realm file for the parser and the published
+  JSON Schema of `realm-file`, the page describes every section with its natural key, and every
+  seed manifest example of the docs is a valid realm file (#515);
 - no project but the docs site and this one names a docs file in its Nx inputs, beyond the seven
   generated or checked reference pages a project writes or checks itself, which
   `docs-inputs.test.ts` lists with the reason for each.

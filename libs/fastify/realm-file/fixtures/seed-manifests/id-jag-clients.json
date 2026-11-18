@@ -1,0 +1,22 @@
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "partner-agent",
+      "name": "Partner agent (mints ID-JAGs)",
+      "grant_types": ["urn:ietf:params:oauth:grant-type:token-exchange"],
+      "scopes": ["chat.read"],
+      "token_endpoint_auth_method": "client_secret_basic",
+      "is_agent": true,
+      "id_jag_targets": ["https://auth.partner.example", "https://mcp.partner.example/mcp"]
+    },
+    {
+      "client_id": "enterprise-mcp-client",
+      "name": "MCP client (redeems ID-JAGs)",
+      "grant_types": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
+      "scopes": ["chat.read"],
+      "token_endpoint_auth_method": "client_secret_basic",
+      "id_jag_targets": ["https://mcp.example.com/mcp"]
+    }
+  ]
+}

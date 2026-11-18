@@ -1,0 +1,21 @@
+{
+  "format": "urn:qauth:realm-file:v1-rc.0",
+  "realm": "master",
+  "policies": {
+    "tokens": {
+      "accessTokenLifespanSeconds": 600,
+      "refreshTokenLifespanSeconds": 1209600
+    },
+    "password": {
+      "minLength": 16,
+      "breachListSource": "k_anonymity"
+    },
+    "registration": {
+      "dynamicRegistrationAllowedScopes": ["openid", "profile"],
+      "cimd": {
+        "trustPolicy": "allowlist",
+        "trustedDomains": ["apps.example.com"]
+      }
+    }
+  }
+}

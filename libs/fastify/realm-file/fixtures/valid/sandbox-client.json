@@ -1,0 +1,19 @@
+{
+  "realm": "notes-sandbox",
+  "policies": {
+    "posture": {
+      "maxEnvironmentLaxity": "staging"
+    }
+  },
+  "clients": [
+    {
+      "client_id": "notes-web-staging",
+      "name": "Notes (staging)",
+      "grant_types": ["authorization_code"],
+      "scopes": ["openid", "notes:read"],
+      "redirect_uris": ["https://staging.notes.example.com/callback"],
+      "token_endpoint_auth_method": "none",
+      "environment": "staging"
+    }
+  ]
+}

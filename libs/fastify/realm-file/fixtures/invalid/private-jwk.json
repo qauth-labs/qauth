@@ -1,0 +1,23 @@
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "notes-web",
+      "name": "Notes",
+      "grant_types": ["authorization_code"],
+      "redirect_uris": ["https://notes.example.com/callback"],
+      "token_endpoint_auth_method": "private_key_jwt",
+      "jwks": {
+        "keys": [
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "kid": "backend-2026-11",
+            "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+          }
+        ]
+      }
+    }
+  ]
+}

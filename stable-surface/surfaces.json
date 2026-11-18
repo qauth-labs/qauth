@@ -42,6 +42,15 @@
       "stability": "stable"
     },
     {
+      "name": "realm-file-v1",
+      "description": "The declarative realm file, urn:qauth:realm-file:v1-rc.0: a realm's policies, operator-managed clients, CIMD grants, protected resources and system client, with no secret value (ADR-018 §5, #515). Compared as input: QAuth reads a file, so a new required member, a narrowed enum or a removed section is a break, and a new optional section or field is not.",
+      "format": "json-schema",
+      "role": "input",
+      "generator": "pnpm exec nx run realm-file:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/realm-file-v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-envelope",
       "description": "The envelope every QAuth event carries, of any type (ADR-018 §5, #456). Compared as both: QAuth emits it, and the events it stored under an earlier release must still match it.",
       "format": "json-schema",

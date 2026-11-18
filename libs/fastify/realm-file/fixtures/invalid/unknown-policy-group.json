@@ -1,0 +1,8 @@
+{
+  "realm": "master",
+  "policies": {
+    "sessions": {
+      "idleTimeoutSeconds": 3600
+    }
+  }
+}

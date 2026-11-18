@@ -1,0 +1,12 @@
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "notes-web",
+      "name": "Notes",
+      "grant_types": ["authorization_code"],
+      "redirect_uris": ["https://notes.example.com/callback"],
+      "id": "0193a4b2-7c1e-7d3f-8a9b-1c2d3e4f5a6b"
+    }
+  ]
+}
