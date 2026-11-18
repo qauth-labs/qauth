@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A CI job exchanges its workload token for a service account's admin
+  token, with no stored credential** ([#526], ADR-019 Decision 7). At the
+  operator realm, an RFC 8693 token exchange whose `subject_token_type` is
+  `urn:ietf:params:oauth:token-type:jwt` takes a CI platform's workload
+  token, with a DPoP proof, `resource` the admin API's audience and no
+  client authentication. The realm policy `admin.workloadIssuers` decides
+  which tokens are trusted: each entry names an `issuer` (matched byte for
+  byte), an `audience` the token's `aud` must hold, a `subject` (exact, or a
+  prefix ending in `*`, the only wildcard) and the `serviceAccount` it acts
+  as; the most specific entry wins, and a tie between two service accounts
+  refuses. The issuer's keys come from its discovery document and JWK Set
+  through the egress client, as the ID-JAG issuer keys do (the resolver is
+  now shared, its ID-JAG behaviour unchanged); a token older than ten
+  minutes since `iat`, or whose `jti` was seen, is refused. The answer is
+  the service account's admin token as `client_credentials` gives it: its
+  account as `sub`, its client's `client_id`, bound to the proof's key, the
+  realm's admin token lifetime, the admin scopes its grants allow, no
+  refresh token. A disabled service account gets none, and every refusal of
+  the token or the account answers the same `invalid_request`; the
+  `token.request_failed` event names the reason (`workload_*`). Every other
+  token exchange is the agent exchange, unchanged. Entries of
+  `admin.workloadIssuers` become objects, and the realm policy schema steps
+  to `1-rc.3`: the first boot removes a stored issuer URL alone, which named
+  no service account and was read by nothing; a node of the previous
+  release refuses a realm's policies once an entry is added
+  ([CI token exchange](https://docs.qauth.dev/operate/ci-token-exchange/)).
 - **An import of a realm file shows its plan first** ([#518], ADR-019
   Decisions 7 and 11, ADR-020 fork G). The admin API's new
   `POST /admin/v1-rc.0/realms/{realmId}/imports`, with `mode: "dry-run"`,
@@ -5039,6 +5065,7 @@ It adds migrations 0068 and 0069.
 [#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
 [#525]: https://github.com/qauth-labs/qauth/issues/525
+[#526]: https://github.com/qauth-labs/qauth/issues/526
 [#527]: https://github.com/qauth-labs/qauth/issues/527
 [#528]: https://github.com/qauth-labs/qauth/issues/528
 [#529]: https://github.com/qauth-labs/qauth/issues/529

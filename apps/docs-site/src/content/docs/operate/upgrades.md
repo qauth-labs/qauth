@@ -1701,6 +1701,25 @@ URL it printed, through the Interaction API's `admin_enrolment` step
 - **Passkey sign-in must be on** (`WEBAUTHN_ENABLED=true`). While it is off,
   every enrolment URL is refused, and stays usable until it expires.
 
+### Workload issuers name their audience, subject and service account
+
+The realm policy `admin.workloadIssuers` lists the CI platforms whose
+workload tokens the operator realm exchanges for a service account's admin
+token ([CI token exchange](/operate/ci-token-exchange/),
+[#526](https://github.com/qauth-labs/qauth/issues/526)). Each entry is now an
+object naming the issuer, the audience, the subject and the service account,
+and the realm policy schema version steps to `1-rc.3`. The first boot of the
+new release stores every realm's policies under `1-rc.3`, and removes an
+entry that is an issuer URL alone: such an entry names no service account,
+nothing read the list before, and fewer entries trust fewer tokens. Add the
+entries again in their new shape once every node runs the new release.
+
+- **During a rolling upgrade**, a node of the previous release reads a
+  `1-rc.3` document with its own schema. While the list is empty it reads
+  the realm as before; once an entry is added, it refuses the realm's
+  policies, and the requests of that realm it serves fail. Add the first
+  entry after the last old node is gone.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]
