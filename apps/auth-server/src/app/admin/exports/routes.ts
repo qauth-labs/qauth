@@ -24,8 +24,8 @@ import { exportRealmFile, realmFileDisposition, RealmFileExportError } from './r
  *
  * The answer is the realm file itself (`urn:qauth:realm-file:v1-rc.0`), its
  * canonical text as the format writes it, so two exports of the same state
- * are the same bytes: the handler sends the text, not an object the
- * serializer would write again. `Content-Disposition` names it
+ * are the same bytes: the handler returns the text, which the pipeline and
+ * Fastify send as it is, not an object the serializer would write again. `Content-Disposition` names it
  * `<realm>.realm.json`, so a browser saves it. It reads the realm in the
  * handler's transaction, as an import does (`../imports/state.ts`), writes
  * nothing but the audit row every admin call leaves, and shows no secret.
@@ -120,10 +120,12 @@ export const exportRoutes: FastifyPluginAsync = async (fastify) => {
         .header('cache-control', 'no-store')
         .header('content-disposition', realmFileDisposition(realm.name))
         .type('application/json; charset=utf-8');
-      // The canonical text as it is: Fastify sends a string with a JSON type
-      // unserialized, so the bytes are the file's. The route's type knows
-      // only the object the document describes.
-      return reply.send(text as unknown as z.infer<typeof realmFileResponseSchema>);
+      // The canonical text as it is. An admin handler answers by returning
+      // its body (the pipeline refuses `reply.send`, which would answer
+      // before the audit row commits); a string is sent unserialized, so the
+      // bytes are the file's. The route's type knows only the object the
+      // document describes.
+      return text as unknown as z.infer<typeof realmFileResponseSchema>;
     }
   );
 };
