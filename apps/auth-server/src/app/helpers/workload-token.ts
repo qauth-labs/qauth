@@ -80,6 +80,8 @@ export type WorkloadTokenRejectionReason =
   | 'signature_invalid'
   | 'claims_invalid'
   | 'issuer_invalid'
+  | 'unsupported_confirmation'
+  | 'dpop_key_mismatch'
   | 'too_old'
   | 'issued_in_future'
   | 'audience_invalid'
@@ -129,6 +131,20 @@ const workloadClaimsSchema = z.object({
   nbf: z.number().int().optional(),
   jti: z.string().min(1).max(255),
 });
+
+/**
+ * Whether a `cnf` claim is one the exchange can honour: an object whose only
+ * member is a string `jkt` (RFC 9449 §6.1).
+ */
+function isDpopConfirmation(cnf: unknown): cnf is { readonly jkt: string } {
+  if (typeof cnf !== 'object' || cnf === null || Array.isArray(cnf)) return false;
+  const members = Object.keys(cnf);
+  return (
+    members.length === 1 &&
+    members[0] === 'jkt' &&
+    typeof (cnf as { jkt: unknown }).jkt === 'string'
+  );
+}
 
 /**
  * Whether `subject` matches an entry's `subject`: exactly, or, for a pattern
@@ -319,6 +335,11 @@ export interface ValidateWorkloadTokenOptions {
   readonly realm: string;
   /** A resolver to use instead of the one the entries make (tests). */
   readonly resolver?: AllowlistedIssuerKeyResolver;
+  /**
+   * The RFC 7638 thumbprint of the request's DPoP proof key. A token bound
+   * with `cnf.jkt` is accepted only when this equals it.
+   */
+  readonly dpopThumbprint?: string;
 }
 
 /**
@@ -328,7 +349,7 @@ export interface ValidateWorkloadTokenOptions {
  * In order, all before any write: the `alg` and `typ`, the issuer's listing
  * (before any fetch), the key (one forced refresh on a miss, under the
  * resolver's cooldown), the signature with `exp` and `nbf`, the claims, the
- * age since `iat`, the entry (audience, then subject). The `jti` is burned
+ * age since `iat`, the `cnf` binding, the entry (audience, then subject). The `jti` is burned
  * last, so a token refused for any other reason costs no store write, and a
  * burned token is never exchanged again, whatever the later steps decide.
  *
@@ -387,6 +408,26 @@ export async function validateWorkloadToken(
   const claims = parsed.data;
   if (claims.iss !== resolved.identifier) {
     throw new WorkloadTokenError('issuer_invalid', 'the token iss is not the issuer of its key');
+  }
+
+  // A `cnf` claim binds the token to a key (RFC 7800). The exchange proves a
+  // DPoP key and nothing else, so a binding is honoured only as `jkt` alone,
+  // under the key of the request's proof; any other confirmation method is
+  // refused rather than read as unbound (ADR-011 gate 16, as for an ID-JAG).
+  const cnf = (verified.claims as Record<string, unknown>)['cnf'];
+  if (cnf !== undefined) {
+    if (!isDpopConfirmation(cnf)) {
+      throw new WorkloadTokenError(
+        'unsupported_confirmation',
+        'the token cnf names a confirmation method other than jkt'
+      );
+    }
+    if (options.dpopThumbprint === undefined || options.dpopThumbprint !== cnf.jkt) {
+      throw new WorkloadTokenError(
+        'dpop_key_mismatch',
+        'the DPoP proof is not under the key the token is bound to'
+      );
+    }
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);

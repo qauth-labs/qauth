@@ -2740,6 +2740,7 @@ async function handleWorkloadTokenExchange(
       token: body.subject_token,
       entries,
       realm: realm.name,
+      dpopThumbprint,
     });
   } catch (err) {
     if (!(err instanceof WorkloadTokenError)) throw err;

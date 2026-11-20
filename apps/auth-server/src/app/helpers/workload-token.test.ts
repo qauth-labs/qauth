@@ -241,6 +241,45 @@ describe('validateWorkloadToken (#526)', () => {
     }
   });
 
+  it('honours a cnf binding only as jkt under the proof key, before the jti is burned', async () => {
+    const { fastify, redis } = fastifyStub();
+    const jkt = 'k'.repeat(43);
+    const cases: [unknown, string | undefined, string][] = [
+      [{ jkt }, 'p'.repeat(43), 'dpop_key_mismatch'],
+      [{ jkt }, undefined, 'dpop_key_mismatch'],
+      [{ 'x5t#S256': 'abc' }, jkt, 'unsupported_confirmation'],
+      [{ jkt, kid: 'k1' }, jkt, 'unsupported_confirmation'],
+      ['not-an-object', jkt, 'unsupported_confirmation'],
+    ];
+    for (const [cnf, dpopThumbprint, reason] of cases) {
+      const token = await workloadToken({ cnf });
+      expect(
+        await refusal(
+          validateWorkloadToken(fastify, {
+            token,
+            entries: [ENTRY],
+            realm: REALM,
+            resolver,
+            dpopThumbprint,
+          })
+        ),
+        JSON.stringify({ cnf, dpopThumbprint })
+      ).toBe(reason);
+    }
+    expect(redis.keys().filter((key) => key.startsWith('workload:jti:'))).toEqual([]);
+
+    const token = await workloadToken({ cnf: { jkt } });
+    await expect(
+      validateWorkloadToken(fastify, {
+        token,
+        entries: [ENTRY],
+        realm: REALM,
+        resolver,
+        dpopThumbprint: jkt,
+      })
+    ).resolves.toMatchObject({ serviceAccount: 'ci-realm-import' });
+  });
+
   it('refuses a token without iat, exp, sub or jti', async () => {
     const { fastify } = fastifyStub();
     for (const claim of ['iat', 'exp', 'sub', 'jti']) {

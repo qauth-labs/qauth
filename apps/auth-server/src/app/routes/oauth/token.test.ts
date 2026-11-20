@@ -9685,6 +9685,30 @@ describe('POST /oauth/token — the CI workload token exchange (#526)', () => {
     ]);
   });
 
+  it("honours a token's cnf.jkt binding only under the request's DPoP proof key", async () => {
+    const bound = stub();
+    await expect(
+      run(
+        bound.fastify,
+        bound.ctx,
+        await request({ token: await workloadToken({ cnf: { jkt: PROOF_JKT } }) })
+      )
+    ).resolves.toMatchObject({ token_type: 'DPoP' });
+
+    const other = stub();
+    await expect(
+      run(
+        other.fastify,
+        other.ctx,
+        await request({ token: await workloadToken({ cnf: { jkt: 'x'.repeat(43) } }) })
+      )
+    ).rejects.toThrow(InvalidRequestError);
+    expect(burnedJtis(other.redisStore)).toEqual([]);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ reason: 'workload_dpop_key_mismatch' }),
+    ]);
+  });
+
   it('refuses a replayed workload token', async () => {
     const { fastify, ctx } = stub();
     const token = await workloadToken();
