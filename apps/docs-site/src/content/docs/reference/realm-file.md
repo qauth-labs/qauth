@@ -3,18 +3,20 @@ title: Realm file
 description: The declarative realm file, format urn:qauth:realm-file:v1-rc.0. Its top-level keys and sections, the natural keys an import matches by, what a file never holds, and the rules by which the format grows within version 1.
 sidebar:
   order: 9
-lastVerified: '2026-11-16'
+lastVerified: '2026-11-20'
 ---
 
 A realm file describes one realm's configuration as a JSON document: its
 [policies](/reference/realm-policies/), the clients the operator manages, the
 scopes granted to Client ID Metadata Document (CIMD) clients, the protected
 resources it registers and the developer portal's system client. It holds no
-secret value. The admin API and the CLI will export and import it, and an import
-first shows a dry-run diff of every change, authorized change by change
+secret value. The admin API exports it, the admin API and the CLI will import
+it, and the CLI will export it too; an import first shows a dry-run diff of
+every change, authorized change by change
 ([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/),
-Decision 11). That dry run is served now, for the `policies` and `clients`
-sections ([The import plan](#the-import-plan)); applying an import comes later. The format itself is fixed now, and it is inside the 1.0
+Decision 11). The export and that dry run are served now, for the `policies`
+and `clients` sections ([The export](#the-export),
+[The import plan](#the-import-plan)); applying an import comes later. The format itself is fixed now, and it is inside the 1.0
 stability promise
 ([ADR-018](/reference/records/adr/018-1-0-scope-and-stability/), §5).
 
@@ -263,6 +265,32 @@ checks, before any import:
 The JSON Schema, in turn, reads a URL by RFC 3986, as JSON Schema's `uri`
 format does, where the parser reads it as a URL parser does: an editor may flag
 a URL with a host in Unicode or with a space, which the parser accepts.
+
+## The export
+
+`GET /admin/v1-rc.0/realms/{realmId}/realm-file` answers the realm as a realm
+file (`realms.export`, a read: `qauth:admin:read` is enough). Its
+`Content-Disposition` names it `<realm>.realm.json`, so a browser saves it.
+
+- **What it holds**: `format`, `realm` (the realm's name), `policies` with
+  every field, and `clients`, every client the operator manages; `clients` is
+  `[]` when there is none, so the file describes the whole section. The other
+  sections are written once the import plans them.
+- **No secret**: a secret policy field, such as `mail.smtp.password`, is left
+  out, with no `Set` flag or other marker; no client's secret or private key
+  member is in it. A client a developer owns, one that registered itself, a
+  CIMD client, the system client and a service account's are left out.
+- **Where the realm runs**: fields bound to the environment stay, such as a
+  client's `environment` and `posture.maxEnvironmentLaxity`. The file
+  describes the realm as it is.
+- **Canonical**: members in a fixed order, `clients` sorted by `client_id`,
+  every set sorted, two-space JSON with a final newline. Two exports of the
+  same state are byte-identical, and an import of the file into the same
+  realm plans no change.
+- **Refused** (422): a realm holding a value no realm file can hold, such as
+  a stored URL with a user name or password, or a client the seed
+  manifest's rules refuse. Each issue names the client and member, never the
+  value; no file is written in part.
 
 ## The import plan
 

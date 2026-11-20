@@ -862,7 +862,7 @@ describe('a call the pipeline admits', () => {
   async function admit(
     routes: (scope: FastifyInstance) => void,
     path = ''
-  ): Promise<{ statusCode: number; body: string }> {
+  ): Promise<{ statusCode: number; body: string; headers: Record<string, unknown> }> {
     rows = [];
     await boot(routes, async (app) => {
       app.decorate('jwtUtils', {
@@ -921,7 +921,7 @@ describe('a call the pipeline admits', () => {
       url: `/admin/v1-rc.0/realms/${TARGET.id}${path}`,
       headers: { authorization: 'DPoP token' },
     });
-    return { statusCode: response.statusCode, body: response.body };
+    return { statusCode: response.statusCode, body: response.body, headers: response.headers };
   }
 
   it('runs the handler in its transaction, answers 200 and writes one succeeded row in it', async () => {
@@ -935,6 +935,25 @@ describe('a call the pipeline admits', () => {
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body)).toEqual({ realm: TARGET.id });
     expect(seen).toEqual([TX]);
+    expect(rows).toEqual([{ outcome: 'succeeded', transaction: TX }]);
+  });
+
+  // The realm-file export (#530) answers its canonical text this way: the
+  // bytes are the file's, never serialized again.
+  it('sends a text the handler returns as it is, under the JSON type and headers it set', async () => {
+    const text = '{\n  "realm": "alpha",\n  "clients": []\n}\n';
+    const response = await admit((scope) => {
+      scope.get('/admin/v1-rc.0/realms/:realmId', options, async (_request, reply) => {
+        reply
+          .header('content-disposition', 'attachment; filename="alpha.realm.json"')
+          .type('application/json; charset=utf-8');
+        return text;
+      });
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe(text);
+    expect(response.headers['content-type']).toBe('application/json; charset=utf-8');
+    expect(response.headers['content-disposition']).toBe('attachment; filename="alpha.realm.json"');
     expect(rows).toEqual([{ outcome: 'succeeded', transaction: TX }]);
   });
 

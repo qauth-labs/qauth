@@ -37,6 +37,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no service account and was read by nothing; a node of the previous
   release refuses a realm's policies once an entry is added
   ([CI token exchange](https://docs.qauth.dev/operate/ci-token-exchange/)).
+- **A realm exports as a realm file** ([#530], ADR-018 §5, ADR-019 Decision
+  11, ADR-020 fork G). The admin API's new
+  `GET /admin/v1-rc.0/realms/{realmId}/realm-file` answers the realm's
+  configuration as a realm file: `format`, `realm` (its name), its policies
+  with every field and no secret (a secret field such as
+  `mail.smtp.password` is left out, with no marker), and the clients the
+  operator manages, without a client secret or a private key member. A
+  client a developer owns, a self-registered or CIMD client, the system
+  client and a service account's are left out; fields bound to the
+  environment, such as a client's `environment`, stay. The text is
+  canonical (members in a fixed order, `clients` by `client_id`, every set
+  sorted), so two exports of the same state are byte-identical, and it
+  imports back with an empty plan. `Content-Disposition` names it
+  `<realm>.realm.json`. It is the read operation `realms.export`
+  (`qauth:admin:read`), audited as every admin call is; a realm holding a
+  value no realm file can hold, such as a stored URL with a user name or
+  password, is refused (422) naming the client and member, never the value.
+  A section of the import plan now also writes its part of the export, so
+  an area adds its section to both at once.
+  [Realm file](https://docs.qauth.dev/reference/realm-file/#the-export)
+  describes it.
 - **An import of a realm file shows its plan first** ([#518], ADR-019
   Decisions 7 and 11, ADR-020 fork G). The admin API's new
   `POST /admin/v1-rc.0/realms/{realmId}/imports`, with `mode: "dry-run"`,
@@ -5071,6 +5092,7 @@ It adds migrations 0068 and 0069.
 [#527]: https://github.com/qauth-labs/qauth/issues/527
 [#528]: https://github.com/qauth-labs/qauth/issues/528
 [#529]: https://github.com/qauth-labs/qauth/issues/529
+[#530]: https://github.com/qauth-labs/qauth/issues/530
 [#534]: https://github.com/qauth-labs/qauth/issues/534
 [#535]: https://github.com/qauth-labs/qauth/issues/535
 [#536]: https://github.com/qauth-labs/qauth/issues/536

@@ -6284,6 +6284,135 @@
           }
         }
       }
+    },
+    "/admin/v1-rc.0/realms/{realmId}/realm-file": {
+      "get": {
+        "operationId": "realms.export",
+        "summary": "Export a realm as a realm file",
+        "description": "Answers the realm's configuration as a realm file (urn:qauth:realm-file:v1-rc.0): format, realm (the realm's name), policies (every field, a secret field such as mail.smtp.password left out with no marker) and clients (the clients the operator manages, sorted by client_id, without a client secret or a private key member). A client a developer owns, a self-registered or CIMD client, the system client and a service account's are left out. Fields that describe the realm's environment, such as a client's environment, stay. The text is canonical (members in a fixed order, every set sorted): two exports of the same state are byte-identical, and importing the file into the realm plans no change. Content-Disposition names the file <realm>.realm.json. It needs realms.export; it writes nothing and shows no secret. A realm holding a value no realm file can hold, such as a stored URL with a user name or password, is refused (422), naming each client and member, never a value; so is a realm with more than 10000 clients.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "realmId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "dpopAuth": []
+          }
+        ],
+        "x-qauth-class": "read",
+        "x-qauth-permission": "realms.export",
+        "x-qauth-stability": "experimental",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRealmFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -8839,6 +8968,14 @@
           "changes"
         ],
         "additionalProperties": false
+      },
+      "AdminRealmFile": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {},
+        "description": "The realm file, format urn:qauth:realm-file:v1-rc.0, whose JSON Schema is https://docs.qauth.dev/schemas/realm-file-v1-rc.0.json: the realm's policies, a secret field left out, and the clients the operator manages, in canonical order."
       },
       "AdminPluginKey": {
         "type": "object",

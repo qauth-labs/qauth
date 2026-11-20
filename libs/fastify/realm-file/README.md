@@ -2,8 +2,9 @@
 
 The declarative realm file, format `urn:qauth:realm-file:v1-rc.0` (ADR-018 §5, ADR-019 Decision
 11, ADR-020 fork G, issue #515): a realm's configuration as one JSON document, with no secret value.
-The admin API and the CLI will export and import it; this library fixes the format, parses it and
-publishes its JSON Schema. The docs page is
+The admin API exports it (#530) and plans its import (#518), in
+`apps/auth-server/src/app/admin/exports/` and `.../imports/`; the CLI will be a client of both. This
+library fixes the format, parses it and publishes its JSON Schema. The docs page is
 [`reference/realm-file.md`](../../../apps/docs-site/src/content/docs/reference/realm-file.md).
 
 ```typescript
