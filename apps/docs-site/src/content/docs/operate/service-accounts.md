@@ -3,7 +3,7 @@ title: Service accounts
 description: Create a service account for the admin API, sign it in with client_credentials, private_key_jwt and a DPoP proof, have a human approve its security operations, let it delete one realm's accounts unattended, and disable it.
 sidebar:
   order: 16
-lastVerified: '2026-11-16'
+lastVerified: '2026-11-18'
 ---
 
 A **service account** is automation that calls the admin API as itself: a
@@ -107,6 +107,11 @@ Call the admin API with the token under the `DPoP` scheme and a fresh proof
 for each call, as a person's admin console does
 ([API conventions](/reference/api-conventions/)).
 
+A CI job can get the same token without holding the service account's key:
+it exchanges its CI platform's workload token, which the operator realm's
+policy `admin.workloadIssuers` maps to the service account
+([CI token exchange](/operate/ci-token-exchange/)).
+
 ## Security operations need a human
 
 A service account has no passkey, so it never approves a security
@@ -205,6 +210,8 @@ No path stores or takes an admin credential that outlives a few minutes:
 
 ## See also
 
+- [CI token exchange](/operate/ci-token-exchange/) — a CI job's workload
+  token for a service account's admin token, with no stored credential.
 - [Topology](/operate/topology/#the-operator-realm) — the operator realm.
 - [Upgrades](/operate/upgrades/#service-accounts-and-the-admin-audience-needs-private_key_jwt)
   — migration 0078, its grants, and the `private_key_jwt` rule.

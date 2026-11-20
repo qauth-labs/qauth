@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { SECURITY_EFFECTS, type SecurityEffect } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
-import { type ChangeDirection, compareDirection, sameEntries } from './direction';
+import { type ChangeDirection, compareDirection, entriesOf, sameEntries } from './direction';
 import {
   copyPolicyField,
   directionKind,
@@ -291,8 +291,9 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 /** The name a secret member takes in the representation. */
 const setFlagName = (name: string) => `${name}Set`;
 
+/** Whether a list holds no entry twice: an object entry by its whole value (`entriesOf`). */
 const isUniqueList = (value: unknown) =>
-  !Array.isArray(value) || new Set(value).size === value.length;
+  !Array.isArray(value) || (entriesOf(value) ?? new Set(value)).size === value.length;
 
 /**
  * The class of one change of a field whose rule is `securityWhen`, moving in
@@ -868,6 +869,26 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
     };
   }
 
+  /** Drop `additionalProperties` from every object schema inside a field's JSON Schema. */
+  function openObjects(json: unknown): void {
+    if (Array.isArray(json)) {
+      for (const item of json) openObjects(item);
+      return;
+    }
+    if (typeof json !== 'object' || json === null) return;
+    const node = json as JsonSchemaObject;
+    // Only the closed-object marker: a record's value schema stays.
+    if (node['additionalProperties'] === false) delete node['additionalProperties'];
+    for (const key of ['properties', 'items', 'prefixItems', 'anyOf', 'oneOf', 'allOf']) {
+      const child = node[key];
+      if (key === 'properties' && typeof child === 'object' && child !== null) {
+        for (const member of Object.values(child)) openObjects(member);
+      } else {
+        openObjects(child);
+      }
+    }
+  }
+
   function annotate(json: JsonSchemaObject, node: TreeNode, view: PolicyView): void {
     if (node.kind !== 'group') return;
     if (view === 'representation') delete json['additionalProperties'];
@@ -896,6 +917,9 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
       // The representation's type has no default (every member is present);
       // the keyword still tells a reader which value a value differs from.
       if (view === 'representation') property['default'] = structuredClone(field.default);
+      // Open as the groups are: an object a field holds, such as a trusted
+      // workload issuer (#526), may gain members a reader does not know.
+      if (view === 'representation') openObjects(property);
       if (isSetDirection(field.direction)) property['uniqueItems'] = true;
       if (field.secret) property['writeOnly'] = true;
       property['x-qauth-policy'] = policyAnnotation(field);

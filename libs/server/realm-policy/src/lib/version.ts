@@ -6,6 +6,9 @@
  *   at most 86400 (a day, #517).
  * - `1-rc.2`: the same fields; a stored `ceremonyApp.errorPage` of `null` is
  *   filled once from `CEREMONY_APP_ERROR_PAGE` (#1118).
+ * - `1-rc.3`: an entry of `admin.workloadIssuers` names the issuer, audience
+ *   and subject of a CI workload token and the service account it acts as,
+ *   instead of an issuer URL alone; a stored URL entry is removed (#526).
  *
  * The admin API's realm representation carries it as `policySchemaVersion`,
  * the realm row stores it beside the policies, and the realm file names it
@@ -66,7 +69,7 @@
  *    release boots; only a change the previous release reads as strictly
  *    may roll.
  */
-export const REALM_POLICY_SCHEMA_VERSION = '1-rc.2';
+export const REALM_POLICY_SCHEMA_VERSION = '1-rc.3';
 
 /**
  * The schema version of the first stored policy documents (migration 0046,

@@ -184,6 +184,30 @@ export const REDIS_KEYS = {
    */
   ID_JAG_FETCH_FAILED: (issuer: string) => `id-jag:fetch-failed:${digest(issuer)}`,
   /**
+   * A burned `jti` of a CI workload token exchanged at the token endpoint
+   * (#526): the first exchange wins (`SET NX EX`), a later one is refused.
+   * Keyed by the issuer and the `jti`, both hashed. Lives as long as a token
+   * can be presented: its age bound and twice the clock skew.
+   */
+  WORKLOAD_JTI: (issuer: string, jti: string) => `workload:jti:${digest(issuer)}:${digest(jti)}`,
+  /**
+   * The discovery document of a trusted workload issuer (#526), as one realm
+   * fetched it. Same rules as {@link REDIS_KEYS.ID_JAG_DISCOVERY}, in a
+   * namespace of its own: a realm admin's allowlist never answers for the
+   * operator's, nor the operator's for it.
+   */
+  WORKLOAD_DISCOVERY: (issuer: string, realm: string) =>
+    `workload:discovery:${digest(issuer)}:${digest(realm)}`,
+  /** As {@link REDIS_KEYS.ID_JAG_FETCH_REFUSED}, for a workload issuer (#526). */
+  WORKLOAD_FETCH_REFUSED: (issuer: string, realm: string) =>
+    `workload:fetch-refused:${digest(issuer)}:${digest(realm)}`,
+  /** As {@link REDIS_KEYS.ID_JAG_JWKS}, for a workload issuer (#526). */
+  WORKLOAD_JWKS: (issuer: string) => `workload:jwks:${digest(issuer)}`,
+  /** As {@link REDIS_KEYS.ID_JAG_KEY_REFRESH}, for a workload issuer (#526). */
+  WORKLOAD_KEY_REFRESH: (issuer: string) => `workload:key-refresh:${digest(issuer)}`,
+  /** As {@link REDIS_KEYS.ID_JAG_FETCH_FAILED}, for a workload issuer (#526). */
+  WORKLOAD_FETCH_FAILED: (issuer: string) => `workload:fetch-failed:${digest(issuer)}`,
+  /**
    * A receiver's last verification request (SSF 1.0 §8.1.4.2, #410): set for
    * the stream's `min_verification_interval`, so a request sooner is answered
    * 429. Keyed by the receiver's client row, not the stream, so deleting the

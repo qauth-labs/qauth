@@ -80,7 +80,7 @@ import {
   refreshTokenExpiresAt,
   rotatedRefreshTokenExpiresAt,
 } from '../../helpers/refresh-family';
-import { requestRealm } from '../../helpers/request-realm';
+import { type RealmRow, requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { serviceAccountRefusal } from '../../helpers/service-accounts';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
@@ -92,6 +92,7 @@ import {
   failureData,
   oauthErrorCode,
 } from '../../helpers/user-events';
+import { validateWorkloadToken, WorkloadTokenError } from '../../helpers/workload-token';
 import {
   type IdJagTokenResponse,
   JWT_BEARER_GRANT_TYPE,
@@ -99,6 +100,7 @@ import {
   TOKEN_GRANT_TYPES,
   TOKEN_TYPE_ACCESS_TOKEN,
   TOKEN_TYPE_ID_JAG,
+  TOKEN_TYPE_JWT,
   type TokenEndpointResponse,
   tokenEndpointResponseSchema,
   type TokenExchangeAuthCodeBody,
@@ -258,6 +260,23 @@ export default async function (fastify: FastifyInstance) {
 
         const realm = requestRealm(request);
         realmId = realm.id;
+
+        // A CI job's workload token, exchanged for a service account's admin
+        // token (#526): the operator realm's token exchange of a JWT subject
+        // token. No client authenticates; the workload token is the
+        // credential, and the realm policy names the service account it acts
+        // as. Every other token exchange, in every realm, takes the agent path
+        // below, unchanged.
+        if (isWorkloadTokenExchange(body, realm)) {
+          reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
+          const responseBody = await handleWorkloadTokenExchange(
+            fastify,
+            request as FastifyRequest,
+            realm,
+            body as TokenExchangeTokenExchangeBody
+          );
+          return reply.send(responseBody);
+        }
 
         // Authenticate the client. authorization_code (PKCE) and
         // refresh_token both support public clients
@@ -2566,6 +2585,296 @@ async function handleTokenExchange(
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'token-exchange' });
 
   // RFC 8693 §2.2.1: token-exchange responses MUST include `issued_token_type`.
+  return {
+    access_token: accessToken,
+    issued_token_type: TOKEN_TYPE_ACCESS_TOKEN,
+    expires_in: accessTokenExpiresIn,
+    token_type: tokenTypeFor(ctx),
+    ...(scopeString ? { scope: scopeString } : {}),
+  };
+}
+
+/**
+ * What a CI job is told when its workload token is refused (#526), whatever
+ * the reason: the event and the log say which. A caller that learnt it would
+ * learn which issuers and subjects the realm trusts, which service accounts
+ * exist and are enabled, and whether a `jti` was seen.
+ */
+const WORKLOAD_TOKEN_REFUSED = 'the subject_token is not accepted for a workload token exchange';
+
+/**
+ * Whether a token request is a CI workload exchange (#526, ADR-019 Decision 7):
+ * an RFC 8693 token exchange of a JWT subject token
+ * (`urn:ietf:params:oauth:token-type:jwt`) at the operator realm, where
+ * service accounts live. The agent exchange refuses that subject token type,
+ * and every other realm keeps refusing it there.
+ */
+function isWorkloadTokenExchange(
+  body: { grant_type: string; subject_token_type?: unknown },
+  realm: Pick<RealmRow, 'isOperator'>
+): boolean {
+  return (
+    body.grant_type === TOKEN_EXCHANGE_GRANT_TYPE &&
+    body.subject_token_type === TOKEN_TYPE_JWT &&
+    realm.isOperator
+  );
+}
+
+/**
+ * Handle a CI workload token exchange (#526): a CI job's workload OIDC token
+ * for a DPoP-bound admin token of the service account the operator realm's
+ * policy `admin.workloadIssuers` maps it to. The job holds no stored
+ * credential.
+ *
+ * - No client authenticates: the request carries no client secret, client
+ *   assertion or `Authorization` header. A `client_id`, when sent, must be the
+ *   service account's client's.
+ * - A DPoP proof is required, checked before the workload token, so a request
+ *   without one spends nothing.
+ * - `resource` is the admin API's audience, alone; no `actor_token`;
+ *   `requested_token_type`, when sent, is an access token.
+ * - The workload token is validated by `validateWorkloadToken`: a listed
+ *   issuer, its key, at most ten minutes since `iat`, the entry's audience
+ *   and subject, and its `jti` burned. Every refusal is the same
+ *   `invalid_request` (RFC 8693 §2.2.2); the event names the reason.
+ * - The service account must be able to act now (`serviceAccountRefusal`):
+ *   a disabled one, or one whose account or client is disabled, gets no token.
+ * - The token is the service account's, as its `client_credentials` token
+ *   is: `sub` its account, `client_id` its client's, the admin audience
+ *   alone, `cnf.jkt` the proof's key, the realm's admin token lifetime, and
+ *   the admin scopes its live grants allow of the ones asked for. No refresh
+ *   token. A service account never approves, so a security operation filed
+ *   with it waits for a human admin (API-09).
+ */
+async function handleWorkloadTokenExchange(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  realm: RealmRow,
+  body: TokenExchangeTokenExchangeBody
+): Promise<TokenExchangeResponse> {
+  /** Record the refusal, before a client is known or with the service account's. */
+  const refuse = async (
+    error: string,
+    reason: string,
+    who: { userId?: string; clientId?: string } = {}
+  ): Promise<void> => {
+    await emitUserEvent(
+      request,
+      TOKEN_REQUEST_FAILED,
+      { grantType: body.grant_type, error, reason },
+      { realmId: realm.id, userId: who.userId ?? null, ...who, actor: 'client' }
+    );
+  };
+
+  if (
+    body.client_secret !== undefined ||
+    body.client_assertion !== undefined ||
+    body.client_assertion_type !== undefined ||
+    request.headers.authorization !== undefined
+  ) {
+    await refuse('invalid_request', 'workload_client_authentication');
+    throw new InvalidRequestError(
+      'a workload token exchange takes no client authentication: the subject_token is the credential'
+    );
+  }
+
+  // RFC 9449 §5: the admin token is bound to the proof's key (#520). Checked
+  // first, so a request without a proof neither spends its workload token nor
+  // costs a key lookup.
+  if (!fastify.dpop) {
+    await refuse('invalid_request', 'workload_dpop_disabled');
+    throw new InvalidRequestError('a workload token exchange needs DPoP, which is off');
+  }
+  let dpopThumbprint: string | undefined;
+  try {
+    dpopThumbprint = await verifyTokenRequestProof(fastify, request, {
+      dpopBoundAccessTokens: true,
+    });
+  } catch (err) {
+    if (!(err instanceof DpopProofError)) throw err;
+    fastify.log[err.reason === 'replay-store-unavailable' ? 'error' : 'warn'](
+      { reqId: request.id, grantType: body.grant_type, reason: err.reason },
+      'token endpoint: DPoP proof refused'
+    );
+    await refuse('invalid_dpop_proof', dpopEventReason(err.reason));
+    throw new InvalidDpopProofError();
+  }
+  if (dpopThumbprint === undefined) {
+    // Unreachable while DPoP is on: a proof is required above.
+    await refuse('invalid_dpop_proof', 'dpop_missing_proof');
+    throw new InvalidDpopProofError();
+  }
+
+  const resource = body.resource ?? [];
+  const audience = body.audience ?? [];
+  if (
+    resource.length !== 1 ||
+    resource[0] !== API_FAMILY_AUDIENCES.admin ||
+    audience.some((value) => value !== API_FAMILY_AUDIENCES.admin)
+  ) {
+    await refuse('invalid_target', 'workload_resource_not_admin');
+    throw new InvalidTargetError(
+      `a workload token exchange issues a token for the admin API alone: send resource=${API_FAMILY_AUDIENCES.admin}`
+    );
+  }
+  if (body.actor_token !== undefined || body.actor_token_type !== undefined) {
+    await refuse('invalid_request', 'workload_actor_token');
+    throw new InvalidRequestError('a workload token exchange takes no actor_token');
+  }
+  if (
+    body.requested_token_type !== undefined &&
+    body.requested_token_type !== TOKEN_TYPE_ACCESS_TOKEN
+  ) {
+    await refuse('invalid_request', 'workload_requested_token_type');
+    throw new InvalidRequestError(
+      `a workload token exchange issues an access token (${TOKEN_TYPE_ACCESS_TOKEN})`
+    );
+  }
+
+  // The trusted issuers, from the operator realm's row (#514): a change to
+  // them is a security operation of the realm's admins.
+  const entries = fastify.policyStore.ofRealm(realm).policies.admin.workloadIssuers;
+  let workload;
+  try {
+    workload = await validateWorkloadToken(fastify, {
+      token: body.subject_token,
+      entries,
+      realm: realm.name,
+      dpopThumbprint,
+    });
+  } catch (err) {
+    if (!(err instanceof WorkloadTokenError)) throw err;
+    fastify.log[err.reason === 'replay_store_unavailable' ? 'error' : 'warn'](
+      { reqId: request.id, reason: err.reason },
+      'token endpoint: workload token refused'
+    );
+    await refuse('invalid_request', `workload_${err.reason}`);
+    throw new InvalidRequestError(WORKLOAD_TOKEN_REFUSED);
+  }
+
+  // The service account the entry names, and its client, as the
+  // `client_credentials` grant reads them (`serviceAccountSubject`).
+  const serviceAccount = await fastify.repositories.serviceAccounts.findByName(
+    realm.id,
+    workload.serviceAccount
+  );
+  const client =
+    serviceAccount === undefined
+      ? undefined
+      : await fastify.repositories.oauthClients.findById(realm.id, serviceAccount.clientId);
+  const refused =
+    serviceAccount === undefined
+      ? 'unknown'
+      : serviceAccountRefusal(realm, serviceAccount, client ?? undefined);
+  const user =
+    refused === null && serviceAccount !== undefined
+      ? await fastify.repositories.users.findById(realm.id, serviceAccount.userId)
+      : undefined;
+  // The token's `iat` is in whole seconds: the account must be usable from
+  // that second on, or the admin API would refuse the token it got (#748).
+  const issuedAtMs = Math.floor(Date.now() / 1000) * 1000;
+  const reason =
+    refused ??
+    (user === undefined || accountCredentialRefusal(user, issuedAtMs) !== null
+      ? 'account_inactive'
+      : user.isServiceAccount !== true
+        ? 'account_not_marked'
+        : null);
+  if (reason !== null || serviceAccount === undefined || client === undefined || client === null) {
+    fastify.log.warn(
+      { reqId: request.id, serviceAccount: workload.serviceAccount, reason },
+      'token endpoint: workload token maps to a service account that may not act'
+    );
+    await refuse('invalid_request', `workload_service_account_${reason ?? 'unknown'}`, {
+      ...(serviceAccount === undefined ? {} : { userId: serviceAccount.userId }),
+      ...(client === undefined || client === null ? {} : { clientId: client.clientId }),
+    });
+    throw new InvalidRequestError(WORKLOAD_TOKEN_REFUSED);
+  }
+  const userId = serviceAccount.userId;
+
+  if (body.client_id !== undefined && body.client_id !== client.clientId) {
+    await refuse('invalid_request', 'workload_client_mismatch', {
+      userId,
+      clientId: client.clientId,
+    });
+    throw new InvalidRequestError(WORKLOAD_TOKEN_REFUSED);
+  }
+
+  // From here the request is the service account's client's, as if it had
+  // authenticated: the helpers every grant shares decide the rest.
+  const ctx: HandlerContext<TokenExchangeTokenExchangeBody> = {
+    fastify,
+    request,
+    client,
+    body,
+    policy: resolveEnvironmentPolicy(client, realm),
+    realmId: realm.id,
+    ssoMaxLifespan: realm.ssoMaxLifespan,
+    tokenLifetimes: withClientTokenLifetimes(tokenLifetimesOf(fastify, realm), client),
+    dpopThumbprint,
+  };
+
+  let grantedScopes: string[];
+  try {
+    grantedScopes = validateScopes(body.scope, client.scopes, toAgentScopeContext(client));
+  } catch (err) {
+    await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_not_allowed_for_client', userId);
+    throw err;
+  }
+  if (grantedScopes.length === 0) {
+    await emitRequestFailed(ctx, 'invalid_scope', 'scope_required', userId);
+    throw new InvalidScopeError('a workload token exchange requires at least one scope');
+  }
+
+  const aud = API_FAMILY_AUDIENCES.admin;
+  await assertReservedAudiencesListed(ctx, aud, userId);
+  const issuedScopes = await issuableScopes(ctx, {
+    userId,
+    scopes: grantedScopes,
+    aud,
+    namesUser: false,
+  });
+  const scopeString = issuedScopes.join(' ');
+  // The realm's admin token lifetime (API-08), at most 900 seconds.
+  const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, ctx.policy, aud);
+  const accessToken = await issueAccessToken(fastify, realm, {
+    sub: userId,
+    clientId: client.clientId,
+    ...clientNameClaim(client),
+    scope: scopeString,
+    aud,
+    ...dpopConfirmation(ctx),
+    expiresInOverride: accessTokenExpiresIn,
+  });
+
+  // Which workload the token went to, for the operator: the event records
+  // the service account (its account and client), the log the issuer and
+  // subject that matched.
+  fastify.log.info(
+    {
+      reqId: request.id,
+      serviceAccount: workload.serviceAccount,
+      workloadIssuer: workload.issuer,
+      workloadSubject: workload.subject,
+    },
+    'token endpoint: workload token exchanged'
+  );
+  await emitUserEvent(
+    request,
+    TOKEN_ISSUED,
+    {
+      grantType: body.grant_type,
+      scopes: issuedScopes,
+      audience: [aud],
+      resources: resource,
+      expiresIn: accessTokenExpiresIn,
+      issuedTokenType: TOKEN_TYPE_ACCESS_TOKEN,
+    },
+    { realmId: realm.id, userId, clientId: client.clientId, actor: 'client' }
+  );
+  fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'token-exchange' });
+
   return {
     access_token: accessToken,
     issued_token_type: TOKEN_TYPE_ACCESS_TOKEN,

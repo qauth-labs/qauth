@@ -8,6 +8,7 @@ import {
   type PolicySchemaUpgrade,
   REALM_POLICY_UPGRADES,
   upgradePathsTo,
+  WORKLOAD_ISSUER_ENTRIES_UPGRADE,
 } from './upgrades';
 import {
   compareSchemaVersions,
@@ -134,9 +135,11 @@ describe('the one-time error page fill (1-rc.1 to 1-rc.2, #1118)', () => {
     ...(ceremonyApp === undefined ? {} : { ceremonyApp }),
   });
 
-  it('goes from 1-rc.1 to 1-rc.2, the last step of the list', () => {
+  it('goes from 1-rc.1 to 1-rc.2, the step of the list from 1-rc.1', () => {
     expect(CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE).toMatchObject({ from: '1-rc.1', to: '1-rc.2' });
-    expect(REALM_POLICY_UPGRADES.at(-1)).toBe(CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE);
+    expect(REALM_POLICY_UPGRADES.find((entry) => entry.from === '1-rc.1')).toBe(
+      CEREMONY_APP_ERROR_PAGE_FILL_UPGRADE
+    );
   });
 
   it('drops a stored null, leaving the rest of the document', () => {
@@ -158,5 +161,57 @@ describe('the one-time error page fill (1-rc.1 to 1-rc.2, #1118)', () => {
     for (const ceremonyApp of [{ errorPage: 'https://example.com/x' }, { errorPage: 0 }, 'x']) {
       expect(upgrade(documentWith(ceremonyApp))).toEqual(documentWith(ceremonyApp));
     }
+  });
+});
+
+/**
+ * 1-rc.2 to 1-rc.3 (#526): a trusted workload issuer is an entry naming the
+ * issuer, audience, subject and service account; a stored issuer URL names
+ * none of them and is removed, never read as a looser entry.
+ */
+describe('the workload issuer entries (1-rc.2 to 1-rc.3, #526)', () => {
+  const { upgrade } = WORKLOAD_ISSUER_ENTRIES_UPGRADE;
+  const ENTRY = {
+    issuer: 'https://ci.example.com',
+    audience: 'https://auth.example.com',
+    subject: 'repo:acme/infra:ref:refs/heads/main',
+    serviceAccount: 'ci-realm-import',
+  };
+  /** A 1-rc.2 document with `admin`, and a group the step does not touch. */
+  const documentWith = (admin?: unknown): Record<string, unknown> => ({
+    tokens: { accessTokenLifespanSeconds: 900 },
+    ...(admin === undefined ? {} : { admin }),
+  });
+
+  it('goes from 1-rc.2 to 1-rc.3, the last step of the list', () => {
+    expect(WORKLOAD_ISSUER_ENTRIES_UPGRADE).toMatchObject({ from: '1-rc.2', to: '1-rc.3' });
+    expect(REALM_POLICY_UPGRADES.at(-1)).toBe(WORKLOAD_ISSUER_ENTRIES_UPGRADE);
+  });
+
+  it('removes a stored issuer URL, leaving the rest of the group and the document', () => {
+    const twoAdmin = { twoAdminMandatoryOperations: ['users.delete'] };
+    expect(
+      upgrade(
+        documentWith({
+          ...twoAdmin,
+          workloadIssuers: ['https://ci.example.com', 'https://ci.example.com/oidc'],
+        })
+      )
+    ).toEqual(documentWith({ ...twoAdmin, workloadIssuers: [] }));
+  });
+
+  it('keeps an entry that is not a URL, so an entry is read and one the schema refuses is still refused', () => {
+    expect(
+      upgrade(documentWith({ workloadIssuers: ['https://ci.example.com', ENTRY, 7] }))
+    ).toEqual(documentWith({ workloadIssuers: [ENTRY, 7] }));
+  });
+
+  it('leaves a document without the field, or without the group, and a value that is no list, unchanged', () => {
+    expect(upgrade(documentWith({}))).toEqual(documentWith({}));
+    expect(upgrade(documentWith())).toEqual(documentWith());
+    expect(upgrade(documentWith({ workloadIssuers: 'https://ci.example.com' }))).toEqual(
+      documentWith({ workloadIssuers: 'https://ci.example.com' })
+    );
+    expect(upgrade(documentWith('x'))).toEqual(documentWith('x'));
   });
 });

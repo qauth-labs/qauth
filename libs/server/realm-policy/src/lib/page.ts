@@ -16,7 +16,7 @@ export const REALM_POLICIES_PAGE_PATH =
   'apps/docs-site/src/content/docs/reference/realm-policies.md';
 
 /** The date the page's hand-written prose was last checked; change it with the prose. */
-export const REALM_POLICIES_PAGE_LAST_VERIFIED = '2026-11-14';
+export const REALM_POLICIES_PAGE_LAST_VERIFIED = '2026-11-18';
 
 /** Where the schema lives, as the page names it. */
 const SOURCE_PATH = 'libs/server/realm-policy';
@@ -161,10 +161,14 @@ lifetimes, the verified-account, password and brute-force policy, the environmen
 scopes a dynamically registered client may hold, whether and from which hosts the realm accepts a
 Client ID Metadata Document, the mail transport and sender, whether the hosted sign-in offers a
 passkey after a password sign-in, and the ceremony app's error page. The rest are still read from
-the environment, for every realm: the verification link's lifetime and resend rule. Nothing
-reads the \`admin\` group yet. Once a policy lives on the realm row, the environment only seeds
-the fields that row lacks: a new realm takes every seed, and an existing realm takes the seed of
-each field its stored policies lack at boot, as after a schema upgrade that drops a stored value.
+the environment, for every realm: the verification link's lifetime and resend rule. The
+\`admin\` group, which no environment key seeds, is read from the realm row as well: the two-admin
+rule reads its operations, and the operator realm's token endpoint its trusted workload issuers,
+whose tokens a CI job exchanges for a service account's admin token
+([CI token exchange](/operate/ci-token-exchange/)). Once a policy lives on the realm row, the
+environment only seeds the fields that row lacks: a new realm takes every seed, and an existing
+realm takes the seed of each field its stored policies lack at boot, as after a schema upgrade
+that drops a stored value.
 The realm row owns each stored value from then on.
 
 A secret field, such as the SMTP password, is never in the policies: the realm keeps its value in
@@ -205,7 +209,9 @@ needs what its strictest change needs.
 - The Default column is the value of a realm whose environment does not set the key in Seeded
   from. The environment only seeds: changing a key later changes no value a realm has stored. A
   field the stored policies lack takes the key's value at the next boot, as a field does that a
-  schema upgrade drops (1-rc.2 drops a stored \`null\` of \`ceremonyApp.errorPage\`, once).
+  schema upgrade drops (1-rc.2 drops a stored \`null\` of \`ceremonyApp.errorPage\`, once). 1-rc.3
+  removes a stored \`admin.workloadIssuers\` entry that is an issuer URL alone: an entry names the
+  issuer, audience and subject of a workload token and its service account, which a URL does not.
 - A field added within a schema version always has a default, so a stored document that predates
   it still parses.
 - **Secret** fields, such as the SMTP password, are write-only. Their value is never stored in the

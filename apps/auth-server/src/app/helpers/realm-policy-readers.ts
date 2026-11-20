@@ -88,6 +88,10 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // approval, read when an approval is filed, at the approval gate and in a
   // change preview.
   'admin.twoAdminMandatoryOperations',
+  // The CI workload token exchange (`routes/oauth/token.ts`, #526), which no
+  // environment key seeds: the operator realm's trusted workload issuers,
+  // read for every exchange.
+  'admin.workloadIssuers',
 ]);
 
 /**

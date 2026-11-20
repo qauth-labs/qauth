@@ -9,12 +9,38 @@ export type ChangeDirection = 'tightening' | 'loosening' | 'neutral';
 const isNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
 
-/** The entries of a set-valued field, or `undefined` when the value is not a list of strings. */
-function entriesOf(value: unknown): ReadonlySet<string> | undefined {
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
-    return undefined;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+
+/** The JSON text of `value` with every object's members sorted by name: equal values, equal text. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (isRecord(value)) {
+    const members = Object.keys(value)
+      .sort()
+      .map((name) => `${JSON.stringify(name)}:${canonicalJson(value[name])}`);
+    return `{${members.join(',')}}`;
   }
-  return new Set(value as string[]);
+  return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * The entries of a set-valued field, or `undefined` when the value is not a
+ * list of strings or a list of objects. An object entry, such as a trusted
+ * workload issuer (#526), is one entry by its whole value, whatever the order
+ * of its members. The two kinds never compare equal, and a list that mixes
+ * them is no set.
+ */
+export function entriesOf(value: unknown): ReadonlySet<string> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  if (value.every((entry) => typeof entry === 'string')) {
+    return new Set(value.map((entry) => `s${entry as string}`));
+  }
+  if (value.every(isRecord)) return new Set(value.map((entry) => `o${canonicalJson(entry)}`));
+  return undefined;
 }
 
 function isSubsetOf(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
@@ -35,8 +61,8 @@ export function sameEntries(before: unknown, after: unknown): boolean {
  *
  * FAIL CLOSED: a change this function cannot place counts as a loosening.
  * That covers an unknown direction kind, a value of the wrong type for its
- * direction (a string under `lower-is-stricter`, a list with a non-string
- * entry), and a value outside an `ordered` direction's order. A set change
+ * direction (a string under `lower-is-stricter`, a list that mixes strings
+ * with other entries), and a value outside an `ordered` direction's order. A set change
  * that both adds and removes entries adds one, so it loosens a
  * `subset-is-stricter` field; one that removes an entry loosens a
  * `superset-is-stricter` field whatever else it adds.
