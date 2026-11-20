@@ -23,7 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses. The issuer's keys come from its discovery document and JWK Set
   through the egress client, as the ID-JAG issuer keys do (the resolver is
   now shared, its ID-JAG behaviour unchanged); a token older than ten
-  minutes since `iat`, or whose `jti` was seen, is refused. The answer is
+  minutes since `iat`, or whose `jti` was seen, is refused, and a `cnf` binding
+  is honoured only as `jkt` under the request's proof key. The answer is
   the service account's admin token as `client_credentials` gives it: its
   account as `sub`, its client's `client_id`, bound to the proof's key, the
   realm's admin token lifetime, the admin scopes its grants allow, no

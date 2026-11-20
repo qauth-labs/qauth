@@ -37,6 +37,8 @@ What the job may do is decided in the operator realm
    - it must be at most 10 minutes old, counted from its `iat`;
    - its `aud` must hold the entry's audience;
    - its `sub` must match the entry's subject;
+   - a `cnf` claim, if it carries one, must be `jkt` alone and name the key
+     of the request's DPoP proof; any other confirmation method is refused;
    - its `jti` must be new: a workload token is exchanged once.
 4. The service account the entry names gets an admin token: `sub` its
    account, `client_id` its client's, the admin API's audience alone, bound
@@ -77,10 +79,10 @@ A prefix ends at a separator of the subject, a `:` or a `/`, and names at
 least two segments: `repo:acme/infra:*` matches every job of the repository
 `acme/infra`, while `repo:acme/infra*`, which would also match
 `acme/infra-tools`, and `repo:*`, which would match every repository the
-issuer signs for, are refused. When
-a token matches more than one entry, the most specific wins: an exact subject
-over any prefix, a longer prefix over a shorter. Two entries as specific that
-name different service accounts refuse the token.
+issuer signs for, are refused. When a token matches more than one entry, the
+most specific wins: an exact subject over any prefix, a longer prefix over a
+shorter. Two entries as specific that name different service accounts refuse
+the token.
 
 Choose the subject with care: on an issuer that many tenants share, it is all
 that tells your jobs from theirs, since a job asks for any audience it likes.
@@ -98,8 +100,10 @@ leaves the entry in the list: remove it too, or a later service account
 given the same name takes its trust.
 
 The list is a realm policy, and changing it in any way is a security
-operation (effect `administration`): it needs `qauth:admin:security`, and an
-approval when the realm makes it one
+operation (effect `administration`): it needs `qauth:admin:security` and an
+approval, every time. File the approval for `realms.policies.update` with
+the patch as its body, have it approved (by a second admin where the realm
+makes one mandatory), then send the patch naming it in `QAuth-Approval`
 ([Security operations](/reference/security-operations/)). A JSON Merge Patch
 replaces a list whole, so send every entry the realm should keep:
 
@@ -110,6 +114,7 @@ Authorization: DPoP <admin token>
 DPoP: <proof>
 Content-Type: application/merge-patch+json
 If-Match: "<the realm's ETag>"
+QAuth-Approval: <approval id>
 
 {
   "admin": {
@@ -132,6 +137,11 @@ If-Match: "<the realm's ETag>"
 ```
 
 The list holds at most 20 entries, each issuer, audience and subject once.
+A removed entry stops being trusted on each node once its realm cache
+refreshes, within 30 seconds. To stop a CI job at once, disable its service
+account: it gets no new token, and the tokens it holds make no admin call
+from the next request on
+([Disable a service account](/operate/service-accounts/#disable-a-service-account)).
 The policy is environment-bound: promoting a sandbox configuration leaves it
 out unless it is selected. [Realm policies](/reference/realm-policies/#admin)
 lists it with the others.
@@ -174,6 +184,7 @@ examples:
   `https://token.actions.githubusercontent.com`, and the subject names the
   repository and the branch or environment, such as
   `repo:acme/infra:ref:refs/heads/main` or `repo:acme/infra:environment:production`.
+  The token is minted when the step asks for it.
 
   ```bash
   WORKLOAD_TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -183,7 +194,9 @@ examples:
 - **Example, GitLab CI/CD:** declare an ID token with the entry's audience;
   the job finds it in the variable it names. The issuer is the instance's
   URL, and the subject names the project and the ref, such as
-  `project_path:platform/realms:ref_type:branch:ref:main`.
+  `project_path:platform/realms:ref_type:branch:ref:main`. The token is
+  minted when the job starts, so put the admin step in a job of its own
+  when the work before it could take more than 10 minutes.
 
   ```yaml
   import-realm:
@@ -192,9 +205,8 @@ examples:
         aud: https://auth.example.com/ci
   ```
 
-Run the exchange in the step that needs the admin API, not at the start of a
-long job: the token endpoint refuses a workload token issued more than 10
-minutes earlier.
+Get the workload token close to the exchange: the token endpoint refuses one
+issued more than 10 minutes earlier.
 
 ## Security operations need a human
 
@@ -202,6 +214,11 @@ A service account never approves. A security operation filed with an
 exchanged token waits for a human admin's approval, as one filed with the
 service account's own token does
 ([Security operations need a human](/operate/service-accounts/#security-operations-need-a-human)).
+The same one exception holds: an exchanged token of a service account that
+holds `account-closer` on a realm deletes that realm's accounts
+(`users.delete`) with no approval, unless the realm makes a second admin
+mandatory for it. Give a CI job's service account that role only when the
+job is meant to delete accounts.
 
 ## When the exchange is refused
 
@@ -225,6 +242,9 @@ issuers and subjects are trusted nor which service accounts exist. The
   token's `kid` and algorithm, or the issuer's documents could not be
   fetched or name another issuer; `workload_signature_invalid`: the key found
   does not verify it, or its `exp` or `nbf` does not hold;
+- `workload_unsupported_confirmation`, `workload_dpop_key_mismatch`: its
+  `cnf` names a confirmation method other than `jkt`, or a key other than
+  the one of the request's DPoP proof;
 - `workload_replayed`: its `jti` was exchanged before;
   `workload_replay_store_unavailable`: Redis could not record it, and the
   exchange fails closed;

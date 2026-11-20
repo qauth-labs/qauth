@@ -1717,8 +1717,10 @@ entries again in their new shape once every node runs the new release.
 - **During a rolling upgrade**, a node of the previous release reads a
   `1-rc.3` document with its own schema. While the list is empty it reads
   the realm as before; once an entry is added, it refuses the realm's
-  policies, and the requests of that realm it serves fail. Add the first
-  entry after the last old node is gone.
+  policies, and the requests of that realm it serves fail. It refuses to
+  write a `1-rc.3` document, as any document of a later schema version, so
+  a policy update it serves fails, with or without entries, until the node
+  is replaced. Add the first entry after the last old node is gone.
 
 ## Upgrading within 1.x
 
