@@ -10,8 +10,9 @@ A realm file describes one realm's configuration as a JSON document: its
 [policies](/reference/realm-policies/), the clients the operator manages, the
 scopes granted to Client ID Metadata Document (CIMD) clients, the protected
 resources it registers and the developer portal's system client. It holds no
-secret value. The admin API and the CLI export and import it, and an import
-first shows a dry-run diff of every change, authorized change by change
+secret value. The admin API exports it, the admin API and the CLI will import
+it, and the CLI will export it too; an import first shows a dry-run diff of
+every change, authorized change by change
 ([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/),
 Decision 11). The export and that dry run are served now, for the `policies`
 and `clients` sections ([The export](#the-export),
