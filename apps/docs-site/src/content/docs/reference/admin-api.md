@@ -3,7 +3,7 @@ title: Admin API
 description: Every operation of the admin API, /admin/v1-rc.0, with its operation id, and where the OpenAPI document of each API family is served and published.
 sidebar:
   order: 4
-lastVerified: '2026-11-16'
+lastVerified: '2026-11-20'
 ---
 
 The admin API manages a realm: its policies, its clients and resource servers, its accounts, its
@@ -55,6 +55,7 @@ An admin operation carries the extensions of the
 | `PATCH /admin/v1-rc.0/realms/{realmId}/policies`        | `realms.policies.update`  | Change a realm's policies ([Realm policies](/reference/realm-policies/)).                                                       |
 | `POST /admin/v1-rc.0/realms/{realmId}/policies/preview` | `realms.policies.preview` | Preview a change of a realm's policies: what it changes and which approval it needs. Writes nothing.                            |
 | `POST /admin/v1-rc.0/realms/{realmId}/imports`          | `realms.imports.plan`     | Plan the import of a [realm file](/reference/realm-file/): every change and what it needs (`mode: "dry-run"`). Applies nothing. |
+| `GET /admin/v1-rc.0/realms/{realmId}/realm-file`        | `realms.export`           | Export the realm as a [realm file](/reference/realm-file/#the-export): its policies and operator clients, no secret.            |
 
 `realms.get` and `realms.policies.update` are the reference operations. A new admin operation is
 built on them ([Adding an admin operation](/extend/adding-an-admin-operation/)).
