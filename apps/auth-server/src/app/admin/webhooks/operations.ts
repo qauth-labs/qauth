@@ -463,7 +463,7 @@ function renderWebhookDelete(input: RenderInput): RenderedOperation {
       {
         label: 'effect',
         value:
-          'No event is sent to the URL from now on, and its signing secrets are deleted; deliveries already queued for it are dropped.',
+          'No event is sent to the URL from now on, and its signing secrets are deleted; a delivery already queued for it has no subscription to go to and no secret to sign with.',
       },
     ],
   };
