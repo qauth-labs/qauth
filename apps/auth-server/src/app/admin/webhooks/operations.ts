@@ -496,7 +496,7 @@ function renderWebhookRotateSecret(input: RenderInput): RenderedOperation {
         label: 'overlap',
         value:
           overlap === 0
-            ? 'none: the old secret stops signing at once, as after a leak'
+            ? 'none: the old secret stops signing, as after a leak, within the minute a signer node takes to read the keys again'
             : `${overlap} seconds: the old secret signs beside the new one until then`,
       },
       {
@@ -576,7 +576,7 @@ export const WEBHOOK_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] 
     effects: ['token-content'],
     permissions: ['webhooks.security'],
     description:
-      "Rotate a webhook subscription's signing secret: the new one is answered once, and the old one keeps signing beside it for the overlap the request names, 24 hours by default, or stops at once.",
+      "Rotate a webhook subscription's signing secret: the new one is answered once, and the old one keeps signing beside it for the overlap the request names, 24 hours by default, or stops as soon as each signer node reads the keys again, within a minute.",
     render: renderWebhookRotateSecret,
   },
   {

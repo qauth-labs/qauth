@@ -52,7 +52,9 @@ export interface RotateWebhookSecretInput extends WebhookSecretScope {
   /**
    * Whether the replaced secret keeps signing beside the new one until
    * {@link WebhookSecrets.endOverlap}. `false`: the new secret replaces it
-   * at once, as after a leak.
+   * now, as after a leak; a signer that cached the key list signs with the
+   * old one until it reads the list again (`refreshIntervalMs`, a minute by
+   * default).
    */
   readonly overlap: boolean;
 }
@@ -83,7 +85,8 @@ export interface WebhookSecrets {
    * A `next` secret an earlier rotation left is made `active` first, so at
    * most two secrets ever sign. With `overlap`, the new secret is the
    * subscription's `next` key and signs beside the active one; without, it
-   * becomes the active one at once and the old one is retired.
+   * becomes the active one now and the old one is retired. Signers see
+   * the change when they next read the subscription's key list.
    */
   rotate(input: RotateWebhookSecretInput): Promise<RotatedWebhookSecret>;
   /**

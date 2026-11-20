@@ -9,7 +9,8 @@ export const WEBHOOK_SECRET_OVERLAP_JOB_NAME = 'webhook-secret-overlap';
 /**
  * How often the job looks for an overlap that ran out: every minute. A
  * rotation's previous secret signs at most this long past the end the
- * rotation gave it; it never stops signing early.
+ * rotation gave it, and a signer node that cached the subscription's keys a
+ * minute more; it never stops signing early.
  */
 export const WEBHOOK_SECRET_OVERLAP_INTERVAL_MS = 60_000;
 

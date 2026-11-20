@@ -223,13 +223,15 @@ export const webhookPatchBodySchema = z
 /**
  * The body of a rotation: the overlap, in seconds, during which the old
  * secret signs beside the new one; 86400 (24 hours) when left out, 0 to stop
- * the old one at once. No body is the default overlap.
+ * the old one now. No body is the default overlap. Either way a signer node
+ * sees the change when it next reads the subscription's keys, within a
+ * minute.
  */
 export const webhookRotateBodySchema = z
   .strictObject({
     overlapSeconds: z.int().min(0).max(MAX_SECRET_OVERLAP_SECONDS).optional().meta({
       description:
-        'How long the old secret keeps signing beside the new one, in seconds: 86400 (24 hours) when left out, at most 604800 (7 days); 0 stops it at once, as after a leak.',
+        'How long the old secret keeps signing beside the new one, in seconds: 86400 (24 hours) when left out, at most 604800 (7 days); 0 stops it now, as after a leak. A signer node reads a subscription’s keys again within a minute, so the change reaches every delivery within that minute.',
     }),
   })
   .nullable()
@@ -608,7 +610,7 @@ export const webhookRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: "Rotate a webhook subscription's signing secret",
         description:
-          'Generates a new signing secret in the signer and answers it here once, in the whsec_ form. For the overlap the request names (24 hours by default, at most 7 days) the old secret keeps signing beside the new one, so each delivery carries both signatures and the receiver can switch without a gap; previousSecretExpiresAt says when the old one stops. overlapSeconds 0 stops it at once, as after a leak. A rotation during an overlap ends that overlap first, so at most two secrets ever sign. A security operation: it needs webhooks.security and an approval. 503 when this process holds no signer.',
+          'Generates a new signing secret in the signer and answers it here once, in the whsec_ form. For the overlap the request names (24 hours by default, at most 7 days) the old secret keeps signing beside the new one, so each delivery carries both signatures and the receiver can switch without a gap; previousSecretExpiresAt says when the old one stops. overlapSeconds 0 stops it now, as after a leak. Each signer node reads the subscription’s keys again within a minute, so a delivery signed in that minute may still carry only the old signature: a receiver keeps the old secret that long. A rotation during an overlap ends that overlap first, so at most two secrets ever sign. A security operation: it needs webhooks.security and an approval. 503 when this process holds no signer.',
         'x-qauth-errors': [400, 401, 403, 404, 503],
         params: subscriptionParams,
         body: webhookRotateBodySchema,
@@ -663,7 +665,7 @@ export const webhookRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: 'Send a test event to a webhook subscription',
         description:
-          'Queues a webhook.test event, with no data, for this subscription and no other: it is delivered and signed like every other event, so the receiver can check that it gets and verifies the realm’s webhooks. The answer names the event’s id; the delivery follows. A disabled subscription is refused (409): nothing would be sent. A security operation: it needs webhooks.security and an approval.',
+          'Queues a webhook.test event, with no data, for this subscription and no other: it is delivered and signed like every other event, so the receiver can check that it gets and verifies the realm’s webhooks. The answer names the event’s id; the delivery follows. Until this server sends webhooks (a later release), the delivery waits in the queue, and the realm’s event retention keeps every event from it on. A disabled subscription is refused (409): nothing would be sent. A security operation: it needs webhooks.security and an approval.',
         'x-qauth-errors': [400, 401, 403, 404, 409],
         params: subscriptionParams,
         body: testBody,

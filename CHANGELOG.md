@@ -186,12 +186,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key: `webhooks.create` and `webhooks.rotateSecret` answer it once, and no
   read, list, event or log shows it; the audit row's diff holds `***`. A
   rotation keeps the old secret signing beside the new one for its overlap,
-  24 hours unless `overlapSeconds` says otherwise (0 replaces it at once, at
-  most 7 days), and stores when it ends (`previousSecretExpiresAt`); the new
+  24 hours unless `overlapSeconds` says otherwise (0 replaces it now, at most 7 days; a signer node sees a rotation within the minute it caches a subscription's keys), and stores when it ends (`previousSecretExpiresAt`); the new
   `signer`-role job `webhook-secret-overlap` ends each overlap when its time
   comes. `webhooks.test` emits the new event type `webhook.test` (subject
   type `webhook_subscription`) and queues it for that subscription alone; a
-  disabled one is refused with 409. Sending the queued deliveries is [#538]. A
+  disabled one is refused with 409. Sending the queued deliveries is [#538]; until a release serves the `webhook` delivery kind, a queued test event waits, and the realm's event retention keeps every event from it on. A
   process without the signer answers the operations that make or delete a
   secret 503. The routes are `experimental`, as every admin route is.
 - **Schema**: migration 0083 adds `webhook_subscriptions` ([#537]): the

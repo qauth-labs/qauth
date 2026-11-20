@@ -501,7 +501,7 @@ describe('what an approver is shown of a webhook operation (#537)', () => {
     ]);
     const rotation = render(WEBHOOK_OPERATION_IDS.rotateSecret, { overlapSeconds: 0 });
     expect(rotation.fields?.[0]).toEqual({ label: 'subscription', value: SUBSCRIPTION });
-    expect(rotation.fields?.[1]?.value).toContain('stops signing at once');
+    expect(rotation.fields?.[1]?.value).toContain('the old secret stops signing');
     expect(render(WEBHOOK_OPERATION_IDS.rotateSecret, null).fields?.[1]?.value).toContain(
       '86400 seconds'
     );
