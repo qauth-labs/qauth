@@ -63,6 +63,7 @@ describe('built-in roles (#507)', () => {
       'plugins.read',
       'clients.read',
       'resourceServers.read',
+      'webhooks.read',
       'approvals.read',
     ]);
   });
@@ -79,6 +80,7 @@ describe('built-in roles (#507)', () => {
       'clients.read',
       'clients.write',
       'resourceServers.read',
+      'webhooks.read',
       'approvals.read',
     ]);
   });
@@ -271,6 +273,7 @@ describe('effectivePermissions (#507)', () => {
       'users.delete',
       'clients.security',
       'resourceServers.security',
+      'webhooks.security',
       'approvals.approve',
     ]);
   });

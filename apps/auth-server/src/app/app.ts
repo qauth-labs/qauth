@@ -1079,6 +1079,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     fastify.decorate('upstreamClientKeys', null);
     // Nor any key created: the key rotation job runs on the signer role (#542).
     fastify.decorate('keyRotation', null);
+    // Nor a webhook subscription's secret generated: the admin API's webhook
+    // operations that need one answer 503 on this process (#537).
+    fastify.decorate('webhookSecrets', null);
   }
 
   // Request-id propagation (#128), ahead of the realm resolver below: both
