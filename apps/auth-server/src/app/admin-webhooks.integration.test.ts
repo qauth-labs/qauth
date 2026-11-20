@@ -352,6 +352,10 @@ describe('the admin webhook subscription operations (#537, real containers)', ()
       version: 1,
     });
     expect(response.headers['location']).toBe(subscriptionPath(realm.id, subscription.id));
+    // A UUIDv7, reserved in the transaction of the creation.
+    expect(subscription.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
     const secret = subscription.secret;
     if (secret === undefined) throw new Error('webhooks.create answered no secret');
     // The secret is the one the signer signs with.

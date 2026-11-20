@@ -91,6 +91,12 @@ export interface WebhookSubscriptionsRepository {
     id: string,
     tx: DbClient
   ): Promise<WebhookSubscription | undefined>;
+  /**
+   * A new subscription id, a UUIDv7 from Postgres (`uuidv7()`), as every
+   * primary key of the schema is. A subscription's signing secret is scoped
+   * to its id, so the id is reserved, in `tx`, before either is written.
+   */
+  newId(tx: DbClient): Promise<string>;
   /** Store a new subscription at version 1. */
   create(
     realmId: string,
@@ -236,6 +242,13 @@ export function createWebhookSubscriptionsRepository(
       return row;
     },
 
+    async newId(tx) {
+      const { rows } = await tx.execute<{ id: string }>(sql`select uuidv7()::text as "id"`);
+      const id = rows[0]?.id;
+      if (id === undefined) throw new Error('webhookSubscriptions.newId: uuidv7() returned no row');
+      return id;
+    },
+
     async create(realmId, input, tx) {
       if (!isUuid(realmId) || !isUuid(input.id)) {
         throw new TypeError(
@@ -340,17 +353,18 @@ export function createWebhookSubscriptionsRepository(
       // `events_own_row` returns the event only to the transaction that wrote
       // it (migration 0033), so a subscription cannot be handed another
       // event, and only a subscription of the event's own realm gets the row.
+      // The destination is the stored id, as Postgres prints it, whatever
+      // spelling the caller passed: one subscription is one destination.
       const result = await tx.execute(sql`
         insert into ${eventDeliveries} (destination_kind, destination_id, event_id, realm_id,
           event_xid, event_seq, event_time, next_attempt_at, created_at, updated_at)
-        select ${WEBHOOK_DELIVERY_KIND}, ${request.subscriptionId}, "own"."id", "own"."realm_id",
-          "own"."xid", "own"."seq", "own"."time", ${request.now}, ${request.now}, ${request.now}
+        select ${WEBHOOK_DELIVERY_KIND}, ${webhookSubscriptions.id}::text, "own"."id",
+          "own"."realm_id", "own"."xid", "own"."seq", "own"."time", ${request.now},
+          ${request.now}, ${request.now}
         from events_own_row(${request.eventId}::uuid) as "own"
-        where exists (
-          select 1 from ${webhookSubscriptions}
-          where ${webhookSubscriptions.id} = ${request.subscriptionId}
-            and ${webhookSubscriptions.realmId} = "own"."realm_id"
-        )
+        join ${webhookSubscriptions}
+          on ${webhookSubscriptions.id} = ${request.subscriptionId}
+          and ${webhookSubscriptions.realmId} = "own"."realm_id"
         on conflict on constraint event_deliveries_event_destination_unique do nothing
       `);
       return (result.rowCount ?? 0) > 0;

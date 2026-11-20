@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
 import type { WebhookSecrets } from '@qauth-labs/fastify-plugin-signer';
@@ -444,7 +443,7 @@ export const webhookRoutes: FastifyPluginAsync = async (fastify) => {
       await assertWebhookDestination(request.server, settings.url, realm.name);
 
       const tx = adminTransaction(request);
-      const id = randomUUID();
+      const id = await request.server.repositories.webhookSubscriptions.newId(tx);
       const generated = await secrets.create({ realmId: realm.id, subscriptionId: id, tx });
       const row = await request.server.repositories.webhookSubscriptions.create(
         realm.id,
