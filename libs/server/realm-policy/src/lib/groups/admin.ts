@@ -79,13 +79,16 @@ function isIssuerUrl(value: string): boolean {
  * - `serviceAccount`: the name of the service account the token acts as.
  */
 const workloadIssuerSchema = z.strictObject({
+  // A string checked as written: `z.url()` would first drop a tab or line
+  // break inside it (the URL parser does), so the stored issuer would differ
+  // from the one an approver was shown.
   issuer: z
-    .url({ protocol: /^https$/ })
+    .string()
     .max(2048)
     .refine(isIssuerUrl, {
       message: 'is an https URL with no user info, query or fragment',
     })
-    .meta({ pattern: ISSUER_URL_PATTERN }),
+    .meta({ format: 'uri', pattern: ISSUER_URL_PATTERN }),
   audience: z.string().min(1).max(2048).regex(WORKLOAD_AUDIENCE_PATTERN, {
     message: 'is text with no white space or control character',
   }),

@@ -922,6 +922,8 @@ describe('parseRealmPolicies', () => {
     for (const entry of [
       withoutAccount,
       { ...workloadIssuer(), repository: 'acme/infra' },
+      workloadIssuer({ issuer: 'https://ci.exa\nmple.com' }),
+      workloadIssuer({ issuer: 'https://ci.example.com\t' }),
       workloadIssuer({ audience: 'two words' }),
       workloadIssuer({ audience: '' }),
       workloadIssuer({ subject: 'repo:acme/infra\nmain' }),

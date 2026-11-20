@@ -877,7 +877,8 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
     }
     if (typeof json !== 'object' || json === null) return;
     const node = json as JsonSchemaObject;
-    delete node['additionalProperties'];
+    // Only the closed-object marker: a record's value schema stays.
+    if (node['additionalProperties'] === false) delete node['additionalProperties'];
     for (const key of ['properties', 'items', 'prefixItems', 'anyOf', 'oneOf', 'allOf']) {
       const child = node[key];
       if (key === 'properties' && typeof child === 'object' && child !== null) {
