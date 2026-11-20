@@ -13,6 +13,7 @@ import {
 } from './repository-key-stores';
 import { createScheduledKeyRotation, type ScheduledKeyRotation } from './scheduled-key-rotation';
 import { createUpstreamClientKeys, type UpstreamClientKeys } from './upstream-client-keys';
+import { createWebhookSecrets, type WebhookSecrets } from './webhook-secrets';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -42,6 +43,14 @@ declare module 'fastify' {
      * hold the signer role decorates it `null`.
      */
     keyRotation: ScheduledKeyRotation | null;
+    /**
+     * The signing secrets of the realms' webhook subscriptions (#537):
+     * generate a subscription's secret, rotate it with an overlap, end the
+     * overlap and delete them, sealed under this signer's KEK. The admin
+     * API's webhook operations and the signer role's overlap job call it; a
+     * process that does not hold the signer role decorates it `null`.
+     */
+    webhookSecrets: WebhookSecrets | null;
   }
 }
 
@@ -117,6 +126,16 @@ export const signerPlugin = fp<SignerPluginOptions>(
     fastify.decorate<UpstreamClientKeys | null>(
       'upstreamClientKeys',
       createUpstreamClientKeys({
+        db: options.db,
+        kekProvider,
+        enabledSignatureAlgorithms: options.enabledSignatureAlgorithms,
+        hybridSigning: options.hybridSigning,
+      })
+    );
+
+    fastify.decorate<WebhookSecrets | null>(
+      'webhookSecrets',
+      createWebhookSecrets({
         db: options.db,
         kekProvider,
         enabledSignatureAlgorithms: options.enabledSignatureAlgorithms,

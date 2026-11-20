@@ -7,6 +7,7 @@ export * from './lib/realm-keys';
 export * from './lib/repository-key-stores';
 export * from './lib/scheduled-key-rotation';
 export * from './lib/upstream-client-keys';
+export * from './lib/webhook-secrets';
 export type * from './types';
 // The context prefix the auth server builds an AuthMethod plugin secret's
 // context from (#600), so the app, which may not import server-keys, and the
