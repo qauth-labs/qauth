@@ -132,8 +132,9 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // The retention job's anchor of each realm's admin chain (#536).
   event_chain_anchors: { delivery: SIU },
   // The delivery queue (#460). `api` enqueues the SSF verification event for
-  // a stream and reads a stream's delivery status.
-  event_deliveries: { api: SI, delivery: SIU },
+  // a stream and reads a stream's delivery status; `admin` enqueues a
+  // webhook subscription's test event (`webhooks.test`, #537).
+  event_deliveries: { api: SI, admin: SI, delivery: SIU },
   event_delivery_positions: { delivery: SIUD },
   // The event store (#457): written by `web` and `api`, by `admin` for the
   // events its operations record (`user.verified`, #1052), and by `signer`
@@ -236,6 +237,10 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // `admin` locks and deletes an account only through the functions of
   // migration 0080 (`users.delete`, #681).
   users: { web: SIU, api: SIU, admin: S },
+  // The webhook subscriptions (#537): `admin` creates, changes, rotates and
+  // deletes them; the signer role's job ends a rotation's overlap, which
+  // reads them and clears `previous_secret_expires_at`.
+  webhook_subscriptions: { admin: SIUD, signer: SU },
 });
 
 /**
