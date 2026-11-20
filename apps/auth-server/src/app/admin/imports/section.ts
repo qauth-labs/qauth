@@ -16,6 +16,12 @@ import type { ChangeDirection } from '../change-preview';
  * `IMPORT_SECTIONS` (`./plan.ts`). A file that holds a section the import
  * does not plan yet is refused, naming the section: an import never skips
  * part of a file.
+ *
+ * The same entry writes the section when a realm is exported (#530,
+ * `../exports/realm-file.ts`): its value in a file that describes the
+ * state. An area adds its section to both at once, so the export writes
+ * only what the import plans, and a file the export writes imports back
+ * with no change.
  */
 
 /** What an import's change does to its item. */
@@ -127,6 +133,13 @@ export interface ImportSectionDefinition {
   readonly naturalKey: string | undefined;
   /** How its value in the file differs from the realm's state. */
   readonly diff: (context: ImportSectionContext) => ImportSectionDiff;
+  /**
+   * Its value in a file that describes `state`, which an export writes
+   * (#530): every item of the realm the section holds, an empty list
+   * included, so the file says the whole of it. Never a secret's value. Its
+   * `diff` against `state` finds no change.
+   */
+  readonly export: (state: ImportState) => unknown;
   /** The admin permissions one of its changes needs, from the catalog. */
   readonly permissionsFor: (change: ImportChangeDraft) => readonly string[];
 }

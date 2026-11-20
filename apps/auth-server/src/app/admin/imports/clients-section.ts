@@ -159,6 +159,9 @@ export const CLIENTS_SECTION = defineSection({
   schema: () => realmFileClientSchema,
   naturalKey: 'client_id',
   diff: diffClientSection,
+  // Every client the operator manages, as the state lists it: through the
+  // format's schema already, and never with a secret (`./state.ts`).
+  export: (state) => state.clients.map((entry) => structuredClone(entry)),
   // As the client operations need them: `clients.security` for a security
   // change, `clients.write` for any other (`classificationOfClientField`).
   permissionsFor: (change) =>

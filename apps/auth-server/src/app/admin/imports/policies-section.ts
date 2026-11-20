@@ -30,6 +30,10 @@ import {
  *   secret (`needsSecret`) when the secret would not be needed without it;
  *   a secret no single change accounts for is put on every change of its
  *   group.
+ * - An export (#530) writes the stored document, every field set, a secret
+ *   field replaced by nothing: no value, no `<name>Set` flag, no marker.
+ *   The file says nothing of a secret; an import of it names the secrets
+ *   the target realm lacks (`secretsToSet`).
  */
 
 /** A rule over a whole policy document, as the policy store runs it. */
@@ -138,12 +142,35 @@ function diffPolicySection({ state, file }: ImportSectionContext): ImportSection
   return { changes, secretsToSet };
 }
 
+/** The secret fields of the policies, by their segments. */
+const SECRET_SEGMENTS: readonly (readonly string[])[] = REALM_POLICY_REGISTRY.fields()
+  .filter((entry) => entry.field.secret)
+  .map((entry) => entry.segments);
+
+/**
+ * The `policies` of a file that describes `state`: the stored document with
+ * every secret field left out, whatever it holds, through the format's
+ * `document` view, which fills a field the document lacks with its default.
+ */
+export function exportedPolicies(state: Pick<ImportState, 'policies'>): Record<string, unknown> {
+  const document = structuredClone(state.policies) as Record<string, unknown>;
+  for (const segments of SECRET_SEGMENTS) {
+    let node: unknown = document;
+    for (const segment of segments.slice(0, -1)) {
+      node = isRecord(node) ? node[segment] : undefined;
+    }
+    if (isRecord(node)) delete node[segments[segments.length - 1]];
+  }
+  return REALM_POLICY_REGISTRY.parse(document, 'document');
+}
+
 /** The `policies` section. */
 export const POLICIES_SECTION = defineSection({
   name: 'policies',
   schema: () => REALM_POLICY_REGISTRY.schema('document'),
   naturalKey: undefined,
   diff: diffPolicySection,
+  export: exportedPolicies,
   // As `realms.policies.update` classifies one changed field
   // (`classificationOfPolicyChange`).
   permissionsFor: (change) =>

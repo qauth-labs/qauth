@@ -31,6 +31,7 @@ describe('the section registry (#518)', () => {
     const base = {
       schema: () => z.object({}),
       diff: () => ({ changes: [] }),
+      export: () => undefined,
       permissionsFor: () => [],
     };
     expect(() => defineSection({ ...base, name: 'webhooks', naturalKey: 'url' })).toThrow(
