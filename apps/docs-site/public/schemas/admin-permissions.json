@@ -21,6 +21,8 @@
     "clients.security",
     "resourceServers.read",
     "resourceServers.security",
+    "webhooks.read",
+    "webhooks.security",
     "approvals.read",
     "approvals.approve"
   ],
@@ -242,6 +244,34 @@
       }
     },
     "resourceServers.security": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "security"
+          ]
+        }
+      }
+    },
+    "webhooks.read": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "read"
+          ]
+        }
+      }
+    },
+    "webhooks.security": {
       "type": "object",
       "required": [
         "class"

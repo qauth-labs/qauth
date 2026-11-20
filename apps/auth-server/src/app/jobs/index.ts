@@ -50,6 +50,12 @@ import {
   SSF_SUBJECT_SWEEP_JOB_NAME,
   SSF_SUBJECT_SWEEP_ROLE,
 } from './ssf-subject-sweep';
+import {
+  createWebhookSecretOverlapJob,
+  WEBHOOK_SECRET_OVERLAP_JOB_NAME,
+  WEBHOOK_SECRET_OVERLAP_REPOSITORIES,
+  WEBHOOK_SECRET_OVERLAP_ROLE,
+} from './webhook-secret-overlap';
 
 export * from './advisory-lock';
 export * from './approval-expiry';
@@ -61,6 +67,7 @@ export * from './purge-expired';
 export * from './session-expiry';
 export * from './session-purge';
 export * from './ssf-subject-sweep';
+export * from './webhook-secret-overlap';
 
 /** What the server's jobs need beside the Fastify instance. */
 export interface ServerJobSettings {
@@ -168,6 +175,19 @@ export const SERVER_JOBS: readonly ServerJobPlacement[] = [
         realms: fastify.repositories.realms,
         sessionCookieTtlSeconds:
           settings.sessionCookieTtlSeconds ?? DEFAULT_SESSION_COOKIE_TTL_SECONDS,
+      }),
+  },
+  {
+    // The webhook secret rotations whose overlap ran out (#537): the new
+    // secret becomes the only one, through the signer's webhook secrets.
+    name: WEBHOOK_SECRET_OVERLAP_JOB_NAME,
+    role: WEBHOOK_SECRET_OVERLAP_ROLE,
+    repositories: WEBHOOK_SECRET_OVERLAP_REPOSITORIES,
+    create: (fastify) =>
+      createWebhookSecretOverlapJob({
+        secrets: fastify.webhookSecrets,
+        subscriptions: fastify.repositories.webhookSubscriptions,
+        transaction: (work) => fastify.db.transaction(work),
       }),
   },
   {

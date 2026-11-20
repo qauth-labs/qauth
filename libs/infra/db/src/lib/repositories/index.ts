@@ -38,3 +38,4 @@ export * from './user-recovery-codes.repository';
 export * from './user-required-actions.repository';
 export * from './user-session-epochs.repository';
 export * from './users.repository';
+export * from './webhook-subscriptions.repository';

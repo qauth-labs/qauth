@@ -82,14 +82,15 @@
             "user",
             "client",
             "api_key",
-            "ssf_stream"
+            "ssf_stream",
+            "webhook_subscription"
           ]
         },
         "id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 255,
-          "description": "The subject's identifier: a user id, a client's `client_id`, an API key id or a Shared Signals Framework `stream_id`. It stays valid after the subject is deleted."
+          "description": "The subject's identifier: a user id, a client's `client_id`, an API key id, a Shared Signals Framework `stream_id` or a webhook subscription id. It stays valid after the subject is deleted."
         }
       },
       "required": [

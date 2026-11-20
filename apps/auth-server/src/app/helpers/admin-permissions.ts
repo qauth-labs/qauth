@@ -315,6 +315,20 @@ export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
       'Register, change and delete a resource server of a realm: its scopes, their consent texts and who may ask for them decide what a token for it asserts (#1087).',
   }),
   definePermission({
+    id: 'webhooks.read',
+    class: 'read',
+    resource: 'webhooks',
+    description:
+      'List and read the webhook subscriptions of a realm: each destination URL, the events it receives, whether it is enabled and its delivery failures, never a signing secret (#537).',
+  }),
+  definePermission({
+    id: 'webhooks.security',
+    class: 'security',
+    resource: 'webhooks',
+    description:
+      "Add, change and delete a webhook subscription of a realm, rotate its signing secret and send it a test event: a subscription receives the realm's events at a destination its admin chooses (#537).",
+  }),
+  definePermission({
     id: 'approvals.read',
     class: 'read',
     resource: 'approvals',

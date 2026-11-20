@@ -24,7 +24,13 @@ export const ACTOR_TYPES = ['user', 'client', 'system', 'operator_cli'] as const
 export type ActorType = (typeof ACTOR_TYPES)[number];
 
 /** The kinds of subject an event is about. The set may grow in a minor release. */
-export const SUBJECT_TYPES = ['user', 'client', 'api_key', 'ssf_stream'] as const;
+export const SUBJECT_TYPES = [
+  'user',
+  'client',
+  'api_key',
+  'ssf_stream',
+  'webhook_subscription',
+] as const;
 export type SubjectType = (typeof SUBJECT_TYPES)[number];
 
 /**
@@ -80,7 +86,7 @@ export const subjectSchema = z
       .min(1)
       .max(255)
       .describe(
-        "The subject's identifier: a user id, a client's `client_id`, an API key id or a Shared Signals Framework `stream_id`. It stays valid after the subject is deleted."
+        "The subject's identifier: a user id, a client's `client_id`, an API key id, a Shared Signals Framework `stream_id` or a webhook subscription id. It stays valid after the subject is deleted."
       ),
   })
   .describe('What the event is about.');

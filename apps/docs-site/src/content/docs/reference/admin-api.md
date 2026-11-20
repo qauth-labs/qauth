@@ -96,6 +96,24 @@ The [API conventions](/reference/api-conventions/) say how an approval is filed,
 | `DELETE /admin/v1-rc.0/realms/{realmId}/resource-servers/{resourceServerId}`       | `resourceServers.delete`  | Delete a resource server.                              |
 | `POST /admin/v1-rc.0/realms/{realmId}/resource-servers/{resourceServerId}/preview` | `resourceServers.preview` | Preview a change of a resource server. Writes nothing. |
 
+## Webhook subscriptions
+
+| Operation                                                                      | `operationId`           | What it does                                                                                                      |
+| ------------------------------------------------------------------------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `GET /admin/v1-rc.0/realms/{realmId}/webhooks`                                 | `webhooks.list`         | List the webhook subscriptions of a realm.                                                                        |
+| `POST /admin/v1-rc.0/realms/{realmId}/webhooks`                                | `webhooks.create`       | Create a subscription. The answer carries its signing secret, once.                                               |
+| `GET /admin/v1-rc.0/realms/{realmId}/webhooks/{subscriptionId}`                | `webhooks.get`          | Read a subscription.                                                                                              |
+| `PATCH /admin/v1-rc.0/realms/{realmId}/webhooks/{subscriptionId}`              | `webhooks.update`       | Change a subscription's URL, description, events or enabled flag.                                                 |
+| `DELETE /admin/v1-rc.0/realms/{realmId}/webhooks/{subscriptionId}`             | `webhooks.delete`       | Delete a subscription and its signing secrets.                                                                    |
+| `POST /admin/v1-rc.0/realms/{realmId}/webhooks/{subscriptionId}/rotate-secret` | `webhooks.rotateSecret` | Rotate the signing secret, the old one signing beside it for an overlap. The answer carries the new secret, once. |
+| `POST /admin/v1-rc.0/realms/{realmId}/webhooks/{subscriptionId}/test`          | `webhooks.test`         | Queue a `webhook.test` event for this subscription alone.                                                         |
+
+Reading needs `webhooks.read`; every other operation is a security operation, with
+`webhooks.security` and an approval. A subscription's URL is https, with no user name or
+password, and must pass the egress client: a private address only when the deployment allowlist
+names it. No answer but those of the creation and the rotation shows a secret, and the audit
+row's diff shows it masked. Sending the events is still to come.
+
 ## Accounts
 
 | Operation                                                          | `operationId`  | What it does                       |

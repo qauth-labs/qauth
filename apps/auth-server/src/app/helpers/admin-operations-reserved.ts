@@ -745,20 +745,35 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     `${ADR_019}, #683`,
     'Remove an account from a group.'
   ),
-  reserve('webhooks.create', ['token-content'], '#537', 'Add a webhook subscription.'),
-  reserve('webhooks.update', ['token-content'], '#537', 'Change a webhook subscription.'),
-  reserve('webhooks.delete', ['token-content'], '#537', 'Remove a webhook subscription.'),
+  reserve(
+    'webhooks.create',
+    ['token-content'],
+    `${ADR_019}, #537`,
+    "Add a webhook subscription: the https destination the realm's events are sent to, which of them, and its signing secret, returned once."
+  ),
+  reserve(
+    'webhooks.update',
+    ['token-content'],
+    `${ADR_019}, #537`,
+    'Change a webhook subscription: its destination, the events it receives, its description, or whether it is enabled; a narrowing too.'
+  ),
+  reserve(
+    'webhooks.delete',
+    ['token-content'],
+    `${ADR_019}, #537`,
+    'Remove a webhook subscription and its signing secrets.'
+  ),
   reserve(
     'webhooks.rotateSecret',
     ['token-content'],
-    '#537',
-    "Rotate a webhook subscription's signing secret."
+    `${ADR_019}, #537`,
+    "Rotate a webhook subscription's signing secret, returned once; the old one signs beside it until the overlap ends."
   ),
   reserve(
     'webhooks.test',
     ['token-content'],
-    '#537',
-    "Send a test event to a webhook subscription's destination."
+    `${ADR_019}, #537`,
+    "Send a test event to a webhook subscription's destination, and to no other."
   ),
   reserve('ssfStreams.create', ['token-content'], '#537', 'Add a Shared Signals stream.'),
   reserve(

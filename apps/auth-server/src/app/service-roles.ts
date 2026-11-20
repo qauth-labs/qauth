@@ -135,8 +135,9 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     // realms' secrets through the realm secret store (#529): without it, the
     // policy store refuses a write of a secret, and cannot tell one set.
     summary: 'the admin API and key operations, on the internal listener',
-    // The client operations (#632) hash a new client's secret.
-    plugins: ['jwt', 'password'],
+    // The client operations (#632) hash a new client's secret. The webhook
+    // operations (#537) check a subscription's URL through the egress client.
+    plugins: ['jwt', 'password', 'egress'],
     // The plugin operations (#600) read and write `realmAuthMethodPlugins`.
     // An operator's verification of an account (#1052) reads its
     // credentials and records `user.verified` in `events`. The client
@@ -147,7 +148,8 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     // An admin's deletion of an account (#681) ends its `sessions`, each
     // with its back-channel logout notices, before it deletes the account.
     // The resource server operations (#1087) read and write
-    // `protectedResources`.
+    // `protectedResources`, and the webhook operations (#537)
+    // `webhookSubscriptions`.
     repositories: [
       'users',
       'oauthClients',
@@ -162,6 +164,7 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
       'protectedResources',
       'serviceAccounts',
       'sessions',
+      'webhookSubscriptions',
     ],
   },
   signer: {

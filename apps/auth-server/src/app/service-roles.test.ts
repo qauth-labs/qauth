@@ -138,6 +138,8 @@ describe('what each role loads (the boot-time list)', () => {
       'realmSecrets',
       // The node list every process registers in (#499).
       'deploymentNodes',
+      // The webhook secret rotations whose overlap the signer ends (#537).
+      'webhookSubscriptions',
     ]);
     expect([...pluginsFor(['signer'])]).toEqual([]);
   });
@@ -168,10 +170,13 @@ describe('what each role loads (the boot-time list)', () => {
       'protectedResources',
       // Whether a caller, or a would-be approver, is a service account (#522).
       'serviceAccounts',
+      // The webhook subscription operations (#537).
+      'webhookSubscriptions',
     ]);
     // The token guard verifies with the JWT plugin, which reads `fastify.dpop`;
-    // a client the admin API registers gets its secret hashed (#632).
-    expect([...pluginsFor(['admin'])]).toEqual(['dpop', 'jwt', 'password']);
+    // a client the admin API registers gets its secret hashed (#632); a
+    // webhook subscription's URL is checked through the egress client (#537).
+    expect([...pluginsFor(['admin'])]).toEqual(['dpop', 'jwt', 'password', 'egress']);
   });
 
   it('gives delivery the event store, the SSF streams and the back-channel logout clients, and no identity data', () => {
@@ -257,7 +262,7 @@ describe('what each role loads (the boot-time list)', () => {
 });
 
 describe('the jobs of each role', () => {
-  it('places purge-expired and the SSF subject sweep on api, event retention on delivery, the approval expiry on admin, the interaction sweep and the session expiry and purge on web, and the key rotation on signer', () => {
+  it('places purge-expired and the SSF subject sweep on api, event retention on delivery, the approval expiry on admin, the interaction sweep and the session expiry and purge on web, and the key rotation and the webhook secret overlap on signer', () => {
     expect(Object.fromEntries(SERVER_JOBS.map((job) => [job.name, job.role]))).toEqual({
       'purge-expired': 'api',
       'event-retention': 'delivery',
@@ -267,6 +272,7 @@ describe('the jobs of each role', () => {
       'session-expiry': 'web',
       'session-purge': 'web',
       'key-rotation': 'signer',
+      'webhook-secret-overlap': 'signer',
     });
   });
 
@@ -300,9 +306,29 @@ describe('the jobs of each role', () => {
     } as unknown as FastifyInstance;
     expect(() => serverJobs(withAudit, {}, ['signer'])).toThrow('fastify.keyRotation');
     const withRotation = { ...withAudit, keyRotation: { run: async () => undefined } };
+    // The webhook secret overlap job (#537) runs through the signer plugin's
+    // webhook secrets too, and refuses to be built without them.
+    expect(() =>
+      serverJobs(
+        {
+          ...withRotation,
+          repositories: { ...withAudit.repositories, webhookSubscriptions: {} },
+        } as unknown as FastifyInstance,
+        {},
+        ['signer']
+      )
+    ).toThrow('fastify.webhookSecrets');
+    const withWebhookSecrets = {
+      ...withRotation,
+      repositories: { ...withAudit.repositories, webhookSubscriptions: {} },
+      webhookSecrets: { endOverlap: async () => null },
+      db: {},
+    };
     expect(
-      serverJobs(withRotation as unknown as FastifyInstance, {}, ['signer']).map((job) => job.name)
-    ).toEqual(['key-rotation']);
+      serverJobs(withWebhookSecrets as unknown as FastifyInstance, {}, ['signer']).map(
+        (job) => job.name
+      )
+    ).toEqual(['key-rotation', 'webhook-secret-overlap']);
     // The session jobs read no repository: they run through the session
     // service, and refuse to be built without it.
     const withEvents = {

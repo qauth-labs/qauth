@@ -26,3 +26,4 @@ export * from './upstream-providers';
 export * from './user-recovery-codes';
 export * from './user-required-actions';
 export * from './user-session-epochs';
+export * from './webhook-subscriptions';

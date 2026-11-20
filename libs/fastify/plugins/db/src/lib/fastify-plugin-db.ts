@@ -43,6 +43,7 @@ import {
   createUserRequiredActionsRepository,
   createUserSessionEpochsRepository,
   createUsersRepository,
+  createWebhookSubscriptionsRepository,
   type Database,
   type DatabasePool,
   type DeploymentNodesRepository,
@@ -69,6 +70,7 @@ import {
   type UserRequiredActionsRepository,
   type UserSessionEpochsRepository,
   type UsersRepository,
+  type WebhookSubscriptionsRepository,
 } from '@qauth-labs/infra-db';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
@@ -240,6 +242,12 @@ declare module 'fastify' {
        * service role writes it.
        */
       serviceAccounts: ServiceAccountsRepository;
+      /**
+       * The webhook subscriptions of each realm (#537): the admin API
+       * creates, changes, rotates and deletes them, and queues a test event
+       * for one; the signer role's job ends a secret rotation's overlap.
+       */
+      webhookSubscriptions: WebhookSubscriptionsRepository;
     };
   }
 }
@@ -287,6 +295,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   deploymentNodes: true,
   protectedResources: true,
   serviceAccounts: true,
+  webhookSubscriptions: true,
 };
 
 /** Every repository the plugin can build, in the order of the type above. */
@@ -400,6 +409,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       deploymentNodes: () => createDeploymentNodesRepository(database.db),
       protectedResources: () => createProtectedResourcesRepository(database.db),
       serviceAccounts: () => createServiceAccountsRepository(database.db),
+      webhookSubscriptions: () => createWebhookSubscriptionsRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};
     for (const name of options.repositories ?? REPOSITORY_NAMES) {

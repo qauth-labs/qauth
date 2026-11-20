@@ -38,6 +38,8 @@ describe('the admin permission catalog (#507)', () => {
       ['clients.security', 'security'],
       ['resourceServers.read', 'read'],
       ['resourceServers.security', 'security'],
+      ['webhooks.read', 'read'],
+      ['webhooks.security', 'security'],
       ['approvals.read', 'read'],
       ['approvals.approve', 'security'],
     ]);
@@ -53,6 +55,7 @@ describe('the admin permission catalog (#507)', () => {
       'users.delete',
       'clients.security',
       'resourceServers.security',
+      'webhooks.security',
       'approvals.approve',
     ]);
     expect(security.filter((id) => write.includes(id))).toEqual([]);

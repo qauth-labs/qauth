@@ -732,6 +732,15 @@
       "stability": "stable"
     },
     {
+      "name": "event-webhook-test-v1",
+      "description": "The urn:qauth:event:webhook.test:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #537).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/webhook.test.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "account-api-v1",
       "description": "The account API v1-rc.0 contract: the OpenAPI 3.1 document of /account/v1-rc.0, the API a signed-in person manages their own account with (ADR-019 Decision 7, ADR-018 §5, #588). The typed client in libs/shared/account-client is generated from it.",
       "format": "openapi",

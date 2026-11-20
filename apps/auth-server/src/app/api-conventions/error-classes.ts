@@ -66,6 +66,7 @@ import { InteractionExpiredError } from '../helpers/interaction-expired';
 import { PluginKeyConflictError } from '../helpers/plugin-key-errors';
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import { SsfNotFoundError, SsfStreamExistsError } from '../helpers/ssf-errors';
+import { WebhookSubscriptionDisabledError } from '../helpers/webhook-errors';
 import type { OAuthErrorCode } from './oauth-error';
 import { PROBLEM_CODES, type ProblemCode, problemTypeUri } from './problem';
 
@@ -297,6 +298,12 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // plugin's state do not allow as they stand (#1073).
   {
     errorClass: PluginKeyConflictError,
+    code: 'conflict',
+    oauthError: 'invalid_request',
+  },
+  // A test event for a disabled webhook subscription (#537).
+  {
+    errorClass: WebhookSubscriptionDisabledError,
     code: 'conflict',
     oauthError: 'invalid_request',
   },

@@ -93,6 +93,7 @@ import { RESOURCE_SERVER_OPERATION_DEFINITIONS } from '../admin/resource-servers
 import { SECRET_OPERATION_DEFINITIONS } from '../admin/secrets/operations';
 import { isSecretMemberPattern } from '../admin/secrets/secret-members';
 import { USER_OPERATION_DEFINITIONS } from '../admin/users/operations';
+import { WEBHOOK_OPERATION_DEFINITIONS } from '../admin/webhooks/operations';
 import { classRank, isUnknownFieldError, strictestClass } from './admin-classification';
 import {
   RESERVED_OPERATIONS,
@@ -1122,7 +1123,8 @@ export function createAdminOperationRegistry(
  * (#517, the reference for every later one), the plugin operations (#600)
  * and their client-assertion key operations (#1073), an operator's verification of an account (#1052), the client
  * operations (#632), the resource server operations (#1087), the realm-file
- * import's dry run (#518) and the realm-file export (#530).
+ * import's dry run (#518), the realm-file export (#530) and the webhook
+ * subscription operations (#537).
  */
 export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
   [
@@ -1135,6 +1137,7 @@ export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
     ...RESOURCE_SERVER_OPERATION_DEFINITIONS,
     ...IMPORT_OPERATION_DEFINITIONS,
     ...EXPORT_OPERATION_DEFINITIONS,
+    ...WEBHOOK_OPERATION_DEFINITIONS,
   ].map((operation) => defineOperation(operation))
 );
 

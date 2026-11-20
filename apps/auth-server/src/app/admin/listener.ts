@@ -47,6 +47,7 @@ import { realmRoutes } from './realms/routes';
 import { resourceServerRoutes } from './resource-servers/routes';
 import { secretRoutes } from './secrets/routes';
 import { userRoutes } from './users/routes';
+import { webhookRoutes } from './webhooks/routes';
 
 /**
  * THE ADMIN LISTENER (ADR-019 Decisions 7 and 8, issue #511).
@@ -81,8 +82,8 @@ export const ADMIN_OPENAPI_PATH = familyDocumentPath('admin');
  * update its policies (#517), the AuthMethod plugin routes (#600) and their
  * client-assertion key routes (#1073), the account routes (#1052), the
  * client routes (#632), the resource server routes (#1087), the realm-file
- * import's dry run (#518) and the realm-file export (#530), whose operations
- * `ADMIN_OPERATIONS` holds.
+ * import's dry run (#518), the realm-file export (#530) and the webhook
+ * subscription routes (#537), whose operations `ADMIN_OPERATIONS` holds.
  */
 export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze([
   approvalRoutes,
@@ -95,6 +96,7 @@ export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze(
   resourceServerRoutes,
   importRoutes,
   exportRoutes,
+  webhookRoutes,
 ]);
 
 /**
@@ -313,6 +315,12 @@ export async function installAdminApi(
   // (#1073), `null` on a process that holds no KEK, which the plugin key
   // operations import and switch through.
   admin.decorate('upstreamClientKeys', source.upstreamClientKeys ?? null);
+  // The signer's custody of the webhook subscriptions' secrets (#537),
+  // `null` on a process that holds no KEK, which the webhook operations
+  // generate, rotate and delete them through; and the egress client, which
+  // checks a subscription's URL when an admin sets it.
+  admin.decorate('webhookSecrets', source.webhookSecrets ?? null);
+  admin.decorate('egress', source.egress);
   // The realm policy store and whether a realm secret is set (#516, #529),
   // which the realm operations read and write a realm's policies through
   // (#517). The secret store's values stay with the app's mail sender.
