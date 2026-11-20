@@ -166,6 +166,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   natural keys, what a file never holds and how the format grows
   ([Realm file](https://docs.qauth.dev/reference/realm-file/)). Export and
   import through the admin API and the CLI come later.
+- **Webhook subscriptions in the admin API** ([#537], ADR-019 Decisions 7
+  to 9, ADR-020 §4). Under `/admin/v1-rc.0/realms/{realmId}/webhooks` an
+  admin lists and reads a realm's subscriptions (`webhooks.list`,
+  `webhooks.get`, permission `webhooks.read`, scope `qauth:admin:read`) and
+  creates, changes, deletes, rotates the secret of and tests one
+  (`webhooks.create`, `.update`, `.delete`, `.rotateSecret`, `.test`), each a
+  security operation with an approval (permission `webhooks.security`, scope
+  `qauth:admin:security`); a subscription of another realm is 404. A
+  subscription names an https URL with no user name, password or fragment
+  (400 otherwise), the event categories it receives (`user`, `admin`), the
+  registered event types among them or `all`, and whether it is enabled. Its
+  URL passes the egress client as an admin-set destination of the realm, so
+  only a public address is taken unless the deployment allowlist names it
+  (422, one answer for a private and an unresolvable host); a change of the
+  URL is checked before it is filed and again when it runs. The signing
+  secret, `whsec_` and the base64 of 32 bytes in the Standard Webhooks form,
+  is made and kept by the signer as the subscription's `webhook_signing`
+  key: `webhooks.create` and `webhooks.rotateSecret` answer it once, and no
+  read, list, event or log shows it; the audit row's diff holds `***`. A
+  rotation keeps the old secret signing beside the new one for its overlap,
+  24 hours unless `overlapSeconds` says otherwise (0 replaces it at once, at
+  most 7 days), and stores when it ends (`previousSecretExpiresAt`); the new
+  `signer`-role job `webhook-secret-overlap` ends each overlap when its time
+  comes. `webhooks.test` emits the new event type `webhook.test` (subject
+  type `webhook_subscription`) and queues it for that subscription alone; a
+  disabled one is refused with 409. Sending the queued deliveries is [#538]. A
+  process without the signer answers the operations that make or delete a
+  secret 503. The routes are `experimental`, as every admin route is.
+- **Schema**: migration 0083 adds `webhook_subscriptions` ([#537]): the
+  realm, the URL (https only, checked by the database too), a description,
+  the event types (`null` for all) and categories, the enabled flag and why
+  it is off, the current secret's `kid`, when the previous secret stops
+  signing, the delivery failure counters, who created it and a version. A new
+  empty table: nothing is rewritten, and a release before this one never
+  reads it, so it is safe during a rolling upgrade. The `admin` role's
+  database user gets `SELECT`, `INSERT`, `UPDATE` and `DELETE` on it and
+  `SELECT` and `INSERT` on `event_deliveries`; the `signer` role's gets
+  `SELECT` and `UPDATE`. The migration runner applies them.
 
 ## [0.2.9] - 2026-11-16
 
@@ -5096,6 +5134,8 @@ It adds migrations 0068 and 0069.
 [#534]: https://github.com/qauth-labs/qauth/issues/534
 [#535]: https://github.com/qauth-labs/qauth/issues/535
 [#536]: https://github.com/qauth-labs/qauth/issues/536
+[#537]: https://github.com/qauth-labs/qauth/issues/537
+[#538]: https://github.com/qauth-labs/qauth/issues/538
 [#540]: https://github.com/qauth-labs/qauth/issues/540
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#542]: https://github.com/qauth-labs/qauth/issues/542
