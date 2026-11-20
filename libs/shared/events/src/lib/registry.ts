@@ -21,6 +21,7 @@ import { REQUEST_EVENT_TYPES } from './types/request';
 import { SSF_EVENT_TYPES } from './types/ssf';
 import { USER_EVENT_TYPES } from './types/user';
 import { WALLET_EVENT_TYPES } from './types/wallet';
+import { WEBHOOK_EVENT_TYPES } from './types/webhook';
 
 /**
  * The event type registry: every type QAuth emits, once. A new type is a new
@@ -36,6 +37,7 @@ export const EVENT_TYPES = [
   ...SSF_EVENT_TYPES,
   ...KEY_EVENT_TYPES,
   ...ADMIN_EVENT_TYPES,
+  ...WEBHOOK_EVENT_TYPES,
 ] as const;
 
 /** The identifier of every registered type, as a union. */
