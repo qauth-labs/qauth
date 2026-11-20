@@ -376,12 +376,9 @@ describe('the CI token exchange for the admin API (#526, real containers)', () =
     const verify = (headers: Record<string, string> = {}) =>
       send('POST', verificationUrl, token, {}, { 'if-match': '*', ...headers });
 
-    const unapproved = await verify();
-    expect(unapproved.statusCode).toBe(403);
-    expect(unapproved.json()).toMatchObject({ code: 'approval_required' });
-
-    // A human admin who may approve it: without one, filing is refused, as a
-    // service account never approves its own request.
+    // A human admin who may approve it: without one, the operation and its
+    // filing answer 409 approval_unavailable, as a service account never
+    // approves its own request.
     const approverId = (
       await app().repositories.users.create({ realmId: realm.id }, testPrimaryCredential())
     ).id;
@@ -392,6 +389,10 @@ describe('the CI token exchange for the admin API (#526, real containers)', () =
       createdBy: null,
     });
     await ageAdminAccount(app().dbPool, approverId);
+
+    const unapproved = await verify();
+    expect(unapproved.statusCode).toBe(403);
+    expect(unapproved.json()).toMatchObject({ code: 'approval_required' });
 
     const filed = await send('POST', `/admin/v1-rc.0/realms/${realm.id}/approvals`, token, {
       operation: 'users.verify',
