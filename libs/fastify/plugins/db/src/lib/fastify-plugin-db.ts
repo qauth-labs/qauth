@@ -43,6 +43,7 @@ import {
   createUserRequiredActionsRepository,
   createUserSessionEpochsRepository,
   createUsersRepository,
+  createWebhookSubscriptionsRepository,
   type Database,
   type DatabasePool,
   type DeploymentNodesRepository,
@@ -69,7 +70,6 @@ import {
   type UserRequiredActionsRepository,
   type UserSessionEpochsRepository,
   type UsersRepository,
-  createWebhookSubscriptionsRepository,
   type WebhookSubscriptionsRepository,
 } from '@qauth-labs/infra-db';
 import type { FastifyInstance } from 'fastify';
