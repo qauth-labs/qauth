@@ -84,6 +84,7 @@ import type { FastifyRequest } from 'fastify';
 
 import { approvalOperationDefinitions } from '../admin/approvals/operations';
 import { CLIENT_OPERATION_DEFINITIONS } from '../admin/clients/operations';
+import { EXPORT_OPERATION_DEFINITIONS } from '../admin/exports/operations';
 import { IMPORT_OPERATION_DEFINITIONS } from '../admin/imports/operations';
 import { PLUGIN_KEY_OPERATION_DEFINITIONS } from '../admin/plugins/key-operations';
 import { PLUGIN_OPERATION_DEFINITIONS } from '../admin/plugins/operations';
@@ -1120,8 +1121,8 @@ export function createAdminOperationRegistry(
  * a security operation (#984), reading a realm and patching its policies
  * (#517, the reference for every later one), the plugin operations (#600)
  * and their client-assertion key operations (#1073), an operator's verification of an account (#1052), the client
- * operations (#632), the resource server operations (#1087) and the realm-file
- * import's dry run (#518).
+ * operations (#632), the resource server operations (#1087), the realm-file
+ * import's dry run (#518) and the realm-file export (#530).
  */
 export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
   [
@@ -1133,6 +1134,7 @@ export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
     ...CLIENT_OPERATION_DEFINITIONS,
     ...RESOURCE_SERVER_OPERATION_DEFINITIONS,
     ...IMPORT_OPERATION_DEFINITIONS,
+    ...EXPORT_OPERATION_DEFINITIONS,
   ].map((operation) => defineOperation(operation))
 );
 

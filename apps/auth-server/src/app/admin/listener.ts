@@ -36,6 +36,7 @@ import { requestIdPlugin } from '../plugins/request-id';
 import { securityHeadersPlugin } from '../plugins/security-headers';
 import { approvalRoutes } from './approvals/routes';
 import { clientRoutes } from './clients/routes';
+import { exportRoutes } from './exports/routes';
 import { adminHandlerRepositories } from './handler-scope';
 import { importRoutes } from './imports/routes';
 import { adminOpenapiOptions } from './openapi-options';
@@ -79,9 +80,9 @@ export const ADMIN_OPENAPI_PATH = familyDocumentPath('admin');
  * security operation's secrets (#984), the realm routes that read a realm and
  * update its policies (#517), the AuthMethod plugin routes (#600) and their
  * client-assertion key routes (#1073), the account routes (#1052), the
- * client routes (#632), the resource server routes (#1087) and the
- * realm-file import's dry run (#518), whose operations `ADMIN_OPERATIONS`
- * holds.
+ * client routes (#632), the resource server routes (#1087), the realm-file
+ * import's dry run (#518) and the realm-file export (#530), whose operations
+ * `ADMIN_OPERATIONS` holds.
  */
 export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze([
   approvalRoutes,
@@ -93,6 +94,7 @@ export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze(
   clientRoutes,
   resourceServerRoutes,
   importRoutes,
+  exportRoutes,
 ]);
 
 /**
