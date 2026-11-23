@@ -11,14 +11,15 @@
 # trusted publishing (OIDC, no token); npm attaches provenance on its own. A
 # release candidate goes to the `next` dist-tag, a release to `latest`. A
 # staged version goes live only when a maintainer approves it on npmjs.com
-# with 2FA. The run leaves one draft release with every tarball and QAuth's
-# CHANGELOG section attached as release-notes-<version>.md. Its body is short
+# with 2FA. The run leaves one draft release with every tarball, QAuth's
+# CHANGELOG section attached as release-notes-<version>.md, and the status
+# feed qauth.dev reads, qauth-status.json. Its body is short
 # and links that section: the repository host refuses a release body over
 # 125,000 characters, and a CHANGELOG section can be longer. See RELEASING.md.
 #
 # Every pull request packs, stamps, checks and installs the same way as a dry
-# run, at the newest version CHANGELOG.md names, builds the release body and
-# notes, and publishes nothing.
+# run, at the newest version CHANGELOG.md names, builds the release body,
+# notes and status feed, and publishes nothing.
 #
 # npm's trusted publisher for each @qauth-labs SDK names this file:
 # release-npm.yml, environment npm.
@@ -84,6 +85,10 @@ jobs:
           set -euo pipefail
           node scripts/sdk-release/notes.mjs "$VERSION" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$RUNNER_TEMP/notes"
           cat "$RUNNER_TEMP/notes/release-body.md"
+      - name: Build the release's status feed, so a break fails before anything is staged
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: node scripts/site-status/export.mts "$VERSION" "$RUNNER_TEMP/qauth-status.json"
 
   pack:
     needs: plan
@@ -169,8 +174,10 @@ jobs:
         working-directory: pack
         run: npm stage publish ./*.tgz --tag "$DIST_TAG" --access public
 
-  # One draft release per tag, with every SDK tarball, its checksum and QAuth's
-  # notes in full as a file; the body links the notes.
+  # One draft release per tag, with every SDK tarball, its checksum, QAuth's
+  # notes in full as a file, and the status feed qauth.dev reads
+  # (`qauth-status.json`, scripts/site-status/export.mts); the body links the
+  # notes.
   draft-release:
     needs: [plan, publish]
     if: needs.plan.outputs.publish == 'true'
@@ -194,12 +201,13 @@ jobs:
           pattern: sdk-*
           merge-multiple: true
           path: pack
-      - name: Draft the release with the SDK tarballs and QAuth's notes as a file
+      - name: Draft the release with the SDK tarballs, QAuth's notes and the status feed as files
         run: |
           set -euo pipefail
           notes="$RUNNER_TEMP/notes"
           node scripts/sdk-release/notes.mjs "$VERSION" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$notes"
+          node scripts/site-status/export.mts "$VERSION" "$notes/qauth-status.json"
           prerelease=()
           case "$VERSION" in *-rc.*) prerelease=(--prerelease) ;; esac
           gh release create "$TAG" pack/*.tgz pack/*.sha256 "$notes/release-notes-$VERSION.md" \
-            --draft --verify-tag --title "$TAG" --notes-file "$notes/release-body.md" "${prerelease[@]}"
+            "$notes/qauth-status.json" --draft --verify-tag --title "$TAG" --notes-file "$notes/release-body.md" "${prerelease[@]}"

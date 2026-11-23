@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Each release carries a status feed, which qauth.dev reads.** The draft
+  release a tag starts holds `qauth-status.json` (format
+  `qauth-status/1-rc.0`): every feature of the docs site's status data by a
+  stable id, with its state and the flag that gates it. Publishing a release
+  `X.Y.Z` asks the site to rebuild from that feed (the `site-rebuild`
+  workflow and its `SITE_BUILD_HOOK` secret), so the site no longer keeps a
+  hand-made copy that falls behind; every pull request builds the feed as a
+  dry run. The status data gains a stable id per feature, a `planned` state
+  for work in the 1.0 plan, the first-party provider plugins, and three
+  planned entries: the admin console, My Number Card sign-in and OpenID
+  certification. The issue-state check now reads its summaries too, so an
+  entry that lists a closed issue as open work, a planned one included,
+  fails CI.
+
 - **Each API family publishes an OpenAPI document of its own, and a break
   in one fails CI** ([#525], ADR-018 §5, ADR-019 Decision 7). The admin
   listener serves the admin API's document at `/admin/v1-rc.0/openapi.json`,

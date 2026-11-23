@@ -47,6 +47,7 @@ import {
   findOpenWorkIssueRefs,
   type ScannablePage,
 } from '../apps/docs-site/src/invariants/status-claims.ts';
+import { DELIVERY_TRACKS, FEATURE_STATUS } from '../apps/docs-site/src/lib/status.ts';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OWNER = 'qauth-labs';
@@ -60,6 +61,26 @@ const REPO = 'qauth';
  * status surface and is not scanned.
  */
 const REPO_ROOT_PAGES = ['README.md', 'docs/README.md', 'AGENTS.md'];
+
+/**
+ * The status data behind the docs site's status page and the release's status
+ * feed (`scripts/site-status/export.mts`, which qauth.dev reads). Its
+ * summaries are scanned as text, one page per entry, because the TypeScript
+ * around them would carry a list past the end of its sentence (`.'`) into the
+ * next entry. Each page is padded to its entry's line, so an annotation lands
+ * on that entry. A planned entry names its tracking issue after `Open:`, so
+ * this check fails once that issue closes and the entry has not moved on.
+ */
+const STATUS_DATA = 'apps/docs-site/src/lib/status.ts';
+
+function statusDataPages(): ScannablePage[] {
+  const lines = readFileSync(join(REPO_ROOT, STATUS_DATA), 'utf8').split('\n');
+  return [...DELIVERY_TRACKS, ...FEATURE_STATUS].map((entry) => {
+    const index = lines.findIndex((line) => line.trim() === `id: '${entry.id}',`);
+    if (index === -1) fail(2, `${STATUS_DATA}: no line \`id: '${entry.id}',\``);
+    return { id: STATUS_DATA, content: `${'\n'.repeat(index)}${entry.summary}` };
+  });
+}
 
 function fail(code: number, message: string): never {
   process.stderr.write(`check-issue-state-claims: ${message}\n`);
@@ -79,7 +100,7 @@ function buildScanSet(): ScannablePage[] {
     content: readFileSync(join(REPO_ROOT, rel), 'utf8'),
   }));
 
-  return [...sitePages, ...rootPages];
+  return [...sitePages, ...rootPages, ...statusDataPages()];
 }
 
 async function resolveIssueStates(numbers: number[]): Promise<Map<number, IssueState>> {

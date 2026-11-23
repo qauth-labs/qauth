@@ -50,8 +50,14 @@ export interface DeliveryTrack {
  * decision layered on top of complete code. Do not read `shipped` as
  * "enabled" or `partial` as "flag-gated"; check `flag` for gating and
  * `state` for completeness, independently.
+ *
+ * `planned` — in the 1.0 plan (the `v0.2` … `v1.0` milestones, ADR-018) and
+ * not built yet. Its summary names the tracking issue after `Open:`, so the
+ * issue-state guard (`scripts/check-issue-state-claims.mts`) fails CI once
+ * that issue closes and the entry has not moved on. Work planned after 1.0
+ * is not listed here.
  */
-export type FeatureState = 'shipped' | 'partial';
+export type FeatureState = 'shipped' | 'partial' | 'planned';
 
 export interface FeatureFlag {
   /** The environment variable name, as declared in `apps/auth-server/src/config/env.ts`. */
@@ -60,6 +66,13 @@ export interface FeatureFlag {
 }
 
 export interface FeatureStatus {
+  /**
+   * A stable kebab-case key. The status feed each release carries
+   * (`qauth-status.json`, `scripts/site-status/export.mts`) publishes it,
+   * and qauth.dev keys its copy by it: never rename or reuse one. A feature
+   * that goes away drops its entry.
+   */
+  id: string;
   /** Matches a `feature` name in `status-claims.ts`'s `FEATURE_EVIDENCE` table where one exists. */
   feature: string;
   state: FeatureState;
@@ -139,12 +152,14 @@ export const DELIVERY_TRACKS: DeliveryTrack[] = [
  */
 export const FEATURE_STATUS: FeatureStatus[] = [
   {
+    id: 'identifier-abstraction',
     feature: 'Identifier abstraction (ADR-002)',
     state: 'shipped',
     summary:
       'Epic #224 closed. Migrations 0010–0012 shipped, including the destructive 0011 that dropped `users.email`, `users.email_normalized`, and `users.password_hash`. `users` is now a pure identity anchor; credentials live in `user_credentials`. Not a gate for anything else — done.',
   },
   {
+    id: 'pqc-hybrid-signing',
     feature: 'PQC / hybrid signing',
     state: 'shipped',
     summary:
@@ -152,6 +167,7 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     flag: { name: 'HYBRID_SIGNING_ENABLED', default: 'off' },
   },
   {
+    id: 'wallet-federation',
     feature: 'Wallet federation / OID4VP',
     state: 'partial',
     summary:
@@ -159,36 +175,42 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     flag: { name: 'WALLET_FEDERATION_ENABLED', default: 'off' },
   },
   {
+    id: 'agent-native-authorization',
     feature: 'Agent-native authorization',
     state: 'shipped',
     summary:
       'Agent client type, RFC 8693 on-behalf-of token exchange (`act` claim), scope modes (ReadOnly / Admin / Exec), step-up before dangerous operations, per-agent audit.',
   },
   {
+    id: 'environment-aware-authorization',
     feature: 'Environment-aware authorization',
     state: 'shipped',
     summary:
       '`environment` selects a fail-safe policy profile across token TTLs, PKCE, localhost redirects, rate-limit tier, and agent step-up.',
   },
   {
+    id: 'rp-initiated-logout',
     feature: 'RP-initiated logout',
     state: 'shipped',
     summary:
       'OpenID Connect RP-Initiated Logout 1.0 at `/oauth/end-session` (GET and POST), listed in discovery as `end_session_endpoint`. A valid `id_token_hint` for the signed-in account ends that browser session at once; any other signed-in browser confirms first. The browser goes back only to a `post_logout_redirect_uris` entry the client registered, matched exactly. There is no front-channel logout (ADR-018).',
   },
   {
+    id: 'back-channel-logout',
     feature: 'Back-channel logout',
     state: 'shipped',
     summary:
       'OpenID Connect Back-Channel Logout 1.0: a client registers `backchannel_logout_uri` (an `https` URI on public addresses), and whenever a session ends, by any path, each client it served gets a signed `logout+jwt` logout token at that URI. The token is queued in the transaction that ends the session and sent by the delivery role through the SSRF-safe egress client, with retries; a failed delivery never holds a sign-out back. Discovery lists `backchannel_logout_supported` and `backchannel_logout_session_supported` (#624).',
   },
   {
+    id: 'upstream-oidc-sign-in',
     feature: 'Upstream OpenID Connect sign-in',
     state: 'partial',
     summary:
       "A person signs in, or signs up when the realm allows it (`ALLOW_SIGN_UP`, off by default), through one of the realm's upstream OpenID Connect providers (#639): a button per listed provider on the sign-in page and the `upstream` step of the Interaction API, or `qauth_upstream=<type>` on the authorization request, hidden providers included. The account is found by `(realm, provider type, sub)` and tied to the ID token's issuer, never matched by email; a new one gets the provider's claims as attributes, verified unless the provider's verified switch is off. On the ceremony page an unknown identity first asks whether it starts a new account or joins an existing one, which links it only after a fresh sign-in to that account; a signed-in person links one with `qauth_link=<type>`, and the account API lists and unlinks them (#670). Open: the admin API that manages the providers (#714), which are rows of `realm_upstream_providers` until then; provider icons; and the review-your-details page. An account that holds a passkey is asked for it while passkeys are on (`WEBAUTHN_ENABLED`) and refused otherwise, and while `INTERACTION_UI_ENABLED` is off an unverified account is refused rather than verified inline.",
   },
   {
+    id: 'passkey-sign-in',
     feature: 'Passkey sign-in',
     state: 'partial',
     summary:
@@ -196,12 +218,14 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     flag: { name: 'WEBAUTHN_ENABLED', default: 'off' },
   },
   {
+    id: 'totp-second-factor',
     feature: 'Authenticator app (TOTP) second factor',
     state: 'partial',
     summary:
       'Built (#653): the sign-in engine\'s `totp` step after the first factor of an account that holds one (SHA-1, six digits, 30 seconds, one step of tolerance, a time step never accepted twice), `amr` `["pwd","otp","mfa"]` for a password then a code, and the `totp_setup` step that binds a new secret to a verified account after a first valid code and a fresh factor, with no mailed code, and issues a recovery set at the first binding. The secret is sealed under the realm\'s `data_at_rest` key. Wrong codes count per account on their own failure ladder, a password never clears them, and at 100 in a row the app is turned off only while the hosted pages are on and the account keeps another way in; three notices no realm can switch off. The two `/ui` pages serve the steps, and the account API enrols and removes an app on the same logic (#1109). `/auth/login` and `/ui/login` refuse a right password of an account that holds one. Open: the stored MFA policy that asks for the set-up (the admin console), the FiPA endpoint (#646) and the design-system screens (#654).',
   },
   {
+    id: 'hosted-account-pages',
     feature: 'Hosted account pages',
     state: 'partial',
     summary:
@@ -209,9 +233,39 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     flag: { name: 'INTERACTION_UI_ENABLED', default: 'off' },
   },
   {
+    id: 'api-keys',
     feature: 'API keys',
     state: 'shipped',
     summary:
       'Environment-gated developer API keys (backend + portal UI), governed by the same environment-aware authorization policy rather than a standalone flag.',
+  },
+  {
+    id: 'provider-plugins',
+    feature: 'First-party provider plugins',
+    state: 'shipped',
+    summary:
+      "Sign-in presets for well-known providers, each released as a package from a repository of its own (`qauth-labs/plugin-*`, #672, #1076), on its own version line and built on the published plugin SDK; most are presets on the generic OpenID Connect client. None is on the server's first-party list, so each loads only with the plugin API on, like any package the operator installs; the _Published images_ page shows how to add one to the server image.",
+    flag: { name: 'PLUGIN_API_ENABLED', default: 'off' },
+  },
+  {
+    id: 'admin-console',
+    feature: 'Admin console',
+    state: 'planned',
+    summary:
+      'The design-system admin console and the admin API operations its screens need. Open: the epic (#581).',
+  },
+  {
+    id: 'my-number-card',
+    feature: 'My Number Card sign-in',
+    state: 'planned',
+    summary:
+      "Sign-in with Japan's My Number Card through the Digital Agency's authentication app, as a first-party provider plugin. Open: the plugin (#673) and the API access it needs (#594).",
+  },
+  {
+    id: 'openid-certification',
+    feature: 'OpenID Foundation certification',
+    state: 'planned',
+    summary:
+      'OpenID Provider certification before 1.0. Open: the certification account and the test plans (#744).',
   },
 ];
