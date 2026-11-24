@@ -21,7 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   planned entries: the admin console, My Number Card sign-in and OpenID
   certification. The issue-state check now reads its summaries too, so an
   entry that lists a closed issue as open work, a planned one included,
-  fails CI.
+  fails CI. A `partial` entry, like a `planned` one, must list an open issue
+  after `Open:`, so it becomes `shipped` once the last one closes, and each
+  entry's flag is checked against the config schema's default.
 
 - **Each API family publishes an OpenAPI document of its own, and a break
   in one fails CI** ([#525], ADR-018 §5, ADR-019 Decision 7). The admin

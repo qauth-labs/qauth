@@ -17,6 +17,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { findOpenWorkIssueRefs } from '../../apps/docs-site/src/invariants/status-claims.ts';
 import type { FeatureState, FeatureStatus } from '../../apps/docs-site/src/lib/status.ts';
 import { FEATURE_STATUS } from '../../apps/docs-site/src/lib/status.ts';
 
@@ -25,8 +26,8 @@ export const SITE_STATUS_FORMAT = 'qauth-status/1-rc.0';
 const STATES: readonly FeatureState[] = ['shipped', 'partial', 'planned'];
 const ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/;
-/** A planned entry names its tracking issue after `Open:`, so the issue-state guard can see it close. */
-const PLANNED_OPEN_RE = /\bOpen:[^]*?#\d+/;
+/** The states whose summary must list open work, so the issue-state check can see it close. */
+const UNFINISHED: readonly FeatureState[] = ['partial', 'planned'];
 
 export interface SiteStatusFeature {
   id: string;
@@ -51,8 +52,18 @@ export function siteStatusProblems(features: readonly FeatureStatus[]): string[]
     if (seen.has(feature.id)) problems.push(`${label}: id is used twice`);
     seen.add(feature.id);
     if (!STATES.includes(feature.state)) problems.push(`${label}: unknown state ${feature.state}`);
-    if (feature.state === 'planned' && !PLANNED_OPEN_RE.test(feature.summary)) {
-      problems.push(`${label}: a planned entry names its tracking issue after "Open:"`);
+    // The issue-state check (scripts/check-issue-state-claims.mts) fails CI once
+    // an issue listed here closes, and the entry must then be rewritten. When
+    // its last open issue goes, this rule keeps it from staying unfinished:
+    // it moves to `shipped`, or names the open work that is left.
+    if (
+      UNFINISHED.includes(feature.state) &&
+      findOpenWorkIssueRefs([{ id: label, content: feature.summary }]).length === 0
+    ) {
+      problems.push(
+        `${label}: a ${feature.state} entry lists its open work with an issue, after "Open:" (#N); ` +
+          'if none is left, the feature is shipped'
+      );
     }
   }
   return problems;

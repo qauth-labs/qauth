@@ -45,22 +45,36 @@ describe('siteStatusProblems', () => {
     ]);
   });
 
-  it('refuses a planned entry that names no tracking issue after "Open:"', () => {
-    expect(
-      siteStatusProblems([entry({ state: 'planned', summary: 'Planned for 1.0 (#673).' })])
-    ).toEqual(['passkey-sign-in: a planned entry names its tracking issue after "Open:"']);
-    expect(
-      siteStatusProblems([
-        entry({ state: 'planned', summary: 'Planned. Open: the plugin (#673).' }),
-      ])
-    ).toEqual([]);
+  it.each(['planned', 'partial'] as const)(
+    'refuses a %s entry that lists no open issue after "Open:"',
+    (state) => {
+      const refusal =
+        `passkey-sign-in: a ${state} entry lists its open work with an issue, after "Open:" (#N); ` +
+        'if none is left, the feature is shipped';
+      // An issue outside the open-work list, or open work with no issue, is not enough.
+      expect(siteStatusProblems([entry({ state, summary: 'Built (#651).' })])).toEqual([refusal]);
+      expect(
+        siteStatusProblems([entry({ state, summary: 'Built (#651). Open: provider icons.' })])
+      ).toEqual([refusal]);
+      expect(
+        siteStatusProblems([entry({ state, summary: 'Built (#651). Open: the screens (#652).' })])
+      ).toEqual([]);
+    }
+  );
+
+  it('lets a shipped entry name no open work', () => {
+    expect(siteStatusProblems([entry({ summary: 'Built (#651).' })])).toEqual([]);
   });
 });
 
 describe('buildSiteStatus', () => {
   it('publishes the id, the name, the state and the flag, and not the summary', () => {
     const feed = buildSiteStatus('1.0.0-rc.2', [
-      entry({ state: 'partial', flag: { name: 'WEBAUTHN_ENABLED', default: 'off' } }),
+      entry({
+        state: 'partial',
+        summary: 'Built (#651). Open: the screens (#652).',
+        flag: { name: 'WEBAUTHN_ENABLED', default: 'off' },
+      }),
       entry({ id: 'api-keys', feature: 'API keys' }),
     ]);
     expect(feed).toEqual({
