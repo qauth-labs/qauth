@@ -1,0 +1,579 @@
+[
+  {
+    "group": "surface",
+    "token": "background",
+    "cssVar": "--background",
+    "tailwind": "--color-background",
+    "light": {
+      "oklch": "oklch(1 0 0)",
+      "hex": "#ffffff"
+    },
+    "dark": {
+      "oklch": "oklch(0.113 0.004 260)",
+      "hex": "#040506"
+    },
+    "description": "The page.",
+    "contrast": []
+  },
+  {
+    "group": "surface",
+    "token": "card",
+    "cssVar": "--card",
+    "tailwind": "--color-card",
+    "light": {
+      "oklch": "oklch(1 0 0)",
+      "hex": "#ffffff"
+    },
+    "dark": {
+      "oklch": "oklch(0.138 0.005 260)",
+      "hex": "#08090b"
+    },
+    "description": "A card or panel on the page.",
+    "contrast": []
+  },
+  {
+    "group": "surface",
+    "token": "popover",
+    "cssVar": "--popover",
+    "tailwind": "--color-popover",
+    "light": {
+      "oklch": "oklch(1 0 0)",
+      "hex": "#ffffff"
+    },
+    "dark": {
+      "oklch": "oklch(0.138 0.005 260)",
+      "hex": "#08090b"
+    },
+    "description": "A menu, popover or dialog.",
+    "contrast": []
+  },
+  {
+    "group": "surface",
+    "token": "muted",
+    "cssVar": "--muted",
+    "tailwind": "--color-muted",
+    "light": {
+      "oklch": "oklch(0.97 0.001 106.424)",
+      "hex": "#f5f5f4"
+    },
+    "dark": {
+      "oklch": "oklch(0.2 0.005 260)",
+      "hex": "#151618"
+    },
+    "description": "A quiet fill: a code block, a table header, a disabled field.",
+    "contrast": []
+  },
+  {
+    "group": "surface",
+    "token": "secondary",
+    "cssVar": "--secondary",
+    "tailwind": "--color-secondary",
+    "light": {
+      "oklch": "oklch(0.967 0.001 286.375)",
+      "hex": "#f4f4f5"
+    },
+    "dark": {
+      "oklch": "oklch(0.274 0.006 286.033)",
+      "hex": "#27272a"
+    },
+    "description": "The secondary button.",
+    "contrast": []
+  },
+  {
+    "group": "surface",
+    "token": "accent",
+    "cssVar": "--accent",
+    "tailwind": "--color-accent",
+    "light": {
+      "oklch": "oklch(0.97 0.001 106.424)",
+      "hex": "#f5f5f4"
+    },
+    "dark": {
+      "oklch": "oklch(0.2 0.005 260)",
+      "hex": "#151618"
+    },
+    "description": "The hover and selected fill of a menu item or ghost button. Not the brand accent: that is color.brand.highlight.",
+    "contrast": []
+  },
+  {
+    "group": "surface",
+    "token": "destructive-surface",
+    "cssVar": "--destructive-surface",
+    "tailwind": "--color-destructive-surface",
+    "light": {
+      "oklch": "oklch(0.97 0.015 27.325)",
+      "hex": "#fff2f0"
+    },
+    "dark": {
+      "oklch": "oklch(0.22 0.05 22.216)",
+      "hex": "#2e1010"
+    },
+    "description": "The fill behind an error message or destructive action.",
+    "contrast": []
+  },
+  {
+    "group": "surface",
+    "token": "success-surface",
+    "cssVar": "--success-surface",
+    "tailwind": "--color-success-surface",
+    "light": {
+      "oklch": "oklch(0.97 0.02 149.214)",
+      "hex": "#ecf9ee"
+    },
+    "dark": {
+      "oklch": "oklch(0.22 0.05 149.214)",
+      "hex": "#06210d"
+    },
+    "description": "The fill behind a success message.",
+    "contrast": []
+  },
+  {
+    "group": "surface",
+    "token": "warning-surface",
+    "cssVar": "--warning-surface",
+    "tailwind": "--color-warning-surface",
+    "light": {
+      "oklch": "oklch(0.97 0.03 85)",
+      "hex": "#fef4df"
+    },
+    "dark": {
+      "oklch": "oklch(0.24 0.05 70)",
+      "hex": "#2e1a01"
+    },
+    "description": "The fill behind a warning.",
+    "contrast": []
+  },
+  {
+    "group": "surface",
+    "token": "scrim",
+    "cssVar": "--scrim",
+    "tailwind": "--color-scrim",
+    "light": {
+      "oklch": "oklch(0 0 0 / 0.4)",
+      "hex": "#00000066"
+    },
+    "dark": {
+      "oklch": "oklch(0 0 0 / 0.6)",
+      "hex": "#00000099"
+    },
+    "description": "The shade behind a modal dialog.",
+    "contrast": []
+  },
+  {
+    "group": "text",
+    "token": "foreground",
+    "cssVar": "--foreground",
+    "tailwind": "--color-foreground",
+    "light": {
+      "oklch": "oklch(0.147 0.004 49.25)",
+      "hex": "#0c0a09"
+    },
+    "dark": {
+      "oklch": "oklch(0.97 0.002 90)",
+      "hex": "#f5f5f4"
+    },
+    "description": "Headings and primary text.",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "background",
+          "card",
+          "popover",
+          "muted"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "text",
+    "token": "card-foreground",
+    "cssVar": "--card-foreground",
+    "tailwind": "--color-card-foreground",
+    "light": {
+      "oklch": "oklch(0.147 0.004 49.25)",
+      "hex": "#0c0a09"
+    },
+    "dark": {
+      "oklch": "oklch(0.97 0.002 90)",
+      "hex": "#f5f5f4"
+    },
+    "description": "Text on a card.",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "card"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "text",
+    "token": "popover-foreground",
+    "cssVar": "--popover-foreground",
+    "tailwind": "--color-popover-foreground",
+    "light": {
+      "oklch": "oklch(0.147 0.004 49.25)",
+      "hex": "#0c0a09"
+    },
+    "dark": {
+      "oklch": "oklch(0.97 0.002 90)",
+      "hex": "#f5f5f4"
+    },
+    "description": "Text in a menu, popover or dialog.",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "popover"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "text",
+    "token": "secondary-foreground",
+    "cssVar": "--secondary-foreground",
+    "tailwind": "--color-secondary-foreground",
+    "light": {
+      "oklch": "oklch(0.21 0.006 285.885)",
+      "hex": "#18181b"
+    },
+    "dark": {
+      "oklch": "oklch(0.985 0 0)",
+      "hex": "#fafafa"
+    },
+    "description": "Text on the secondary button.",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "secondary",
+          "accent"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "text",
+    "token": "accent-foreground",
+    "cssVar": "--accent-foreground",
+    "tailwind": "--color-accent-foreground",
+    "light": {
+      "oklch": "oklch(0.216 0.006 56.043)",
+      "hex": "#1c1917"
+    },
+    "dark": {
+      "oklch": "oklch(0.97 0.002 90)",
+      "hex": "#f5f5f4"
+    },
+    "description": "Text on the hover and selected fill.",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "accent"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "text",
+    "token": "body",
+    "cssVar": "--body",
+    "tailwind": "--color-body",
+    "light": {
+      "oklch": "oklch(0.42 0.013 58)",
+      "hex": "#534b46"
+    },
+    "dark": {
+      "oklch": "oklch(0.75 0.008 90)",
+      "hex": "#b0aea8"
+    },
+    "description": "Running text: softer than foreground, stronger than muted.",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "background",
+          "card",
+          "muted"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "text",
+    "token": "muted-foreground",
+    "cssVar": "--muted-foreground",
+    "tailwind": "--color-muted-foreground",
+    "light": {
+      "oklch": "oklch(0.53 0.013 58.071)",
+      "hex": "#726a65"
+    },
+    "dark": {
+      "oklch": "oklch(0.62 0.008 90)",
+      "hex": "#888681"
+    },
+    "description": "Secondary text: hints, captions, placeholders. Light 0.53 (the design system's 0.553 was 4.4:1 on muted).",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "background",
+          "card",
+          "popover",
+          "muted"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "text",
+    "token": "primary-text",
+    "cssVar": "--primary-text",
+    "tailwind": "--color-primary-text",
+    "light": {
+      "oklch": "oklch(0.5 0.15 38)",
+      "hex": "#a73b15"
+    },
+    "dark": {
+      "oklch": "oklch(0.72 0.12 45)",
+      "hex": "#e28b63"
+    },
+    "description": "The brand colour as text: links and text buttons. The fill itself is too dark for text in dark mode.",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "background",
+          "card",
+          "muted"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "primary",
+    "token": "primary",
+    "cssVar": "--primary",
+    "tailwind": "--color-primary",
+    "light": {
+      "oklch": "oklch(0.54 0.15 38)",
+      "hex": "#b44723"
+    },
+    "dark": {
+      "oklch": "oklch(0.54 0.15 38)",
+      "hex": "#b44723"
+    },
+    "description": "The brand colour as a fill: the primary button.",
+    "contrast": []
+  },
+  {
+    "group": "primary",
+    "token": "primary-hover",
+    "cssVar": "--primary-hover",
+    "tailwind": "--color-primary-hover",
+    "light": {
+      "oklch": "oklch(0.49 0.14 38)",
+      "hex": "#9f3c1a"
+    },
+    "dark": {
+      "oklch": "oklch(0.49 0.14 38)",
+      "hex": "#9f3c1a"
+    },
+    "description": "The primary button under the pointer. Darker, so its text keeps its contrast.",
+    "contrast": []
+  },
+  {
+    "group": "primary",
+    "token": "primary-foreground",
+    "cssVar": "--primary-foreground",
+    "tailwind": "--color-primary-foreground",
+    "light": {
+      "oklch": "oklch(0.98 0.016 73.684)",
+      "hex": "#fff7ed"
+    },
+    "dark": {
+      "oklch": "oklch(0.98 0.016 73.684)",
+      "hex": "#fff7ed"
+    },
+    "description": "Text on the primary fill.",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "primary",
+          "primary-hover"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "brand",
+    "token": "highlight",
+    "cssVar": "--highlight",
+    "tailwind": "--color-highlight",
+    "light": {
+      "oklch": "oklch(0.5 0.1324 194.77)",
+      "hex": "#00797a"
+    },
+    "dark": {
+      "oklch": "oklch(0.75 0.15 195)",
+      "hex": "#00cacb"
+    },
+    "description": "The brand accent: emphasis, badges, the selected state. Light 0.5 (the design system's 0.7766 was 1.9:1 on white).",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "background",
+          "card",
+          "muted"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "feedback",
+    "token": "destructive",
+    "cssVar": "--destructive",
+    "tailwind": "--color-destructive",
+    "light": {
+      "oklch": "oklch(0.55 0.22 27.325)",
+      "hex": "#d40c18"
+    },
+    "dark": {
+      "oklch": "oklch(0.704 0.191 22.216)",
+      "hex": "#ff6467"
+    },
+    "description": "Errors and destructive actions. Light 0.55 (0.577 was 4.4:1 on muted).",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "background",
+          "card",
+          "muted",
+          "destructive-surface"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "feedback",
+    "token": "success",
+    "cssVar": "--success",
+    "tailwind": "--color-success",
+    "light": {
+      "oklch": "oklch(0.52 0.17 149.214)",
+      "hex": "#008229"
+    },
+    "dark": {
+      "oklch": "oklch(0.648 0.223 149.214)",
+      "hex": "#00b033"
+    },
+    "description": "Success messages.",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "background",
+          "card",
+          "success-surface"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "feedback",
+    "token": "warning",
+    "cssVar": "--warning",
+    "tailwind": "--color-warning",
+    "light": {
+      "oklch": "oklch(0.5 0.11 65)",
+      "hex": "#8d5406"
+    },
+    "dark": {
+      "oklch": "oklch(0.82 0.13 80)",
+      "hex": "#f0ba59"
+    },
+    "description": "Warnings: a secret shown once, a deprecated grant.",
+    "contrast": [
+      {
+        "min": 4.5,
+        "on": [
+          "background",
+          "card",
+          "warning-surface"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "line",
+    "token": "border",
+    "cssVar": "--border",
+    "tailwind": "--color-border",
+    "light": {
+      "oklch": "oklch(0.923 0.003 48.717)",
+      "hex": "#e7e5e4"
+    },
+    "dark": {
+      "oklch": "oklch(1 0 0 / 0.08)",
+      "hex": "#ffffff14"
+    },
+    "description": "Dividers and card edges. Decorative, so no contrast floor.",
+    "contrast": []
+  },
+  {
+    "group": "line",
+    "token": "input",
+    "cssVar": "--input",
+    "tailwind": "--color-input",
+    "light": {
+      "oklch": "oklch(0.62 0.003 48.717)",
+      "hex": "#888684"
+    },
+    "dark": {
+      "oklch": "oklch(0.5 0.008 90)",
+      "hex": "#65635e"
+    },
+    "description": "The edge of a text field, checkbox or select: 3:1, as WCAG 1.4.11 asks of a control's boundary (the design system's was 1.2:1).",
+    "contrast": [
+      {
+        "min": 3,
+        "on": [
+          "background",
+          "card"
+        ]
+      }
+    ]
+  },
+  {
+    "group": "line",
+    "token": "ring",
+    "cssVar": "--ring",
+    "tailwind": "--color-ring",
+    "light": {
+      "oklch": "oklch(0.5 0.1324 194.77)",
+      "hex": "#00797a"
+    },
+    "dark": {
+      "oklch": "oklch(0.75 0.15 195)",
+      "hex": "#00cacb"
+    },
+    "description": "The focus outline: the teal accent, so focus stands out from the primary orange and the greys. 3:1 or more against what it sits on (WCAG 1.4.11): 4.9:1 on white, 10:1 on the dark page.",
+    "contrast": [
+      {
+        "min": 3,
+        "on": [
+          "background",
+          "card",
+          "muted"
+        ]
+      }
+    ]
+  }
+]
