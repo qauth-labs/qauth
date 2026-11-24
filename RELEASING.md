@@ -75,6 +75,11 @@ OIDC identity, and npm accepts the packages through trusted publishing.
    3. Push the first release tag **within 2 days**: npm lets a new
       trusted-publisher configuration expire if its first publish does not come
       in that time. If it expires, delete it and add it again.
+4. **The site.** qauth.dev reads the status feed of the latest published
+   release. Create a build hook for the site in its host's settings and store
+   its URL as the Actions secret `SITE_BUILD_HOOK` of this repository. Without
+   it, `site-rebuild` fails on each published release and the site keeps
+   showing the previous one.
 
 ## Release
 
@@ -92,9 +97,11 @@ OIDC identity, and npm accepts the packages through trusted publishing.
      attested. The run summary lists the digests.
    - `release-npm`: every SDK is packed at `X.Y.Z`, checked, installed into an
      empty project, and staged on npm with provenance. The run then leaves a
-     draft release holding the SDK tarballs, their `.sha256` checksums and
+     draft release holding the SDK tarballs, their `.sha256` checksums,
      `release-notes-X.Y.Z.md`: the CHANGELOG section in full (for a release
-     candidate, the `Unreleased` section). The release body stays short, since
+     candidate, the `Unreleased` section), and `qauth-status.json`: every
+     feature of `apps/docs-site/src/lib/status.ts` by its stable id, with its
+     state and gating flag, which qauth.dev reads. The release body stays short, since
      the repository host refuses one over 125,000 characters: it names the
      version and the kind of release, links the section in `CHANGELOG.md` at
      the tag and the upgrade guide, and says how the packages are staged.
@@ -109,6 +116,10 @@ OIDC identity, and npm accepts the packages through trusted publishing.
      npm install @qauth-labs/resource-guard@X.Y.Z && npm audit signatures
      ```
 
+   Publishing a release `X.Y.Z` (not a release candidate) starts
+   `site-rebuild`, which asks qauth.dev to rebuild from that release's
+   `qauth-status.json`.
+
 6. After a release tag `vX.Y.Z` (not a release candidate), empty
    `stable-surface/approved-breaks.json` in a pull request. The release is now
    the stable-surface baseline, so every approval it shipped matches no break and
@@ -117,7 +128,8 @@ OIDC identity, and npm accepts the packages through trusted publishing.
 
 Every pull request runs the npm workflow as a dry run: it stamps the newest
 version `CHANGELOG.md` names into each SDK, packs, checks and installs it,
-builds that version's release body and notes file, and publishes nothing.
+builds that version's release body, notes file and status feed, and publishes
+nothing.
 
 ## Rollback
 

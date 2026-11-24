@@ -1,0 +1,37 @@
+name: site-rebuild
+
+# Rebuilds qauth.dev once a release is published, so the site states what that
+# release holds. The site reads the release's status feed, qauth-status.json,
+# which release-npm.yml attaches to the draft (scripts/site-status/export.mts);
+# a draft and a release candidate are never the latest release, so only a
+# published release X.Y.Z moves the site.
+#
+# The build hook URL lives in the SITE_BUILD_HOOK secret. A published release
+# with no hook fails this run on purpose: the site would otherwise keep showing
+# the previous release, and nobody would know. A failed run changes nothing
+# else, so re-run it once the secret is set.
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  rebuild:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Ask the site to rebuild from the latest release's feed
+        env:
+          SITE_BUILD_HOOK: ${{ secrets.SITE_BUILD_HOOK }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SITE_BUILD_HOOK" ]; then
+            echo "::error::SITE_BUILD_HOOK is not set: qauth.dev still shows the previous release. Set the secret, then re-run this job."
+            exit 1
+          fi
+          curl --fail --silent --show-error --max-time 30 --retry 3 \
+            -X POST --data '{}' "$SITE_BUILD_HOOK" > /dev/null
+          echo "Asked qauth.dev to rebuild for $TAG."
