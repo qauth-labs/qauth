@@ -41,7 +41,10 @@ export interface DeliveryTrack {
 /**
  * `shipped` — the described capability's code is complete and present in
  * the tree, in full. `partial` — only some of the described capability
- * shipped; the rest is open work, named in `summary`.
+ * shipped; the rest is open work, named in `summary` after `Open:` with at
+ * least one issue. When the last of those issues closes, the entry moves to
+ * `shipped` (`scripts/site-status/export.mts` refuses a `partial` entry with
+ * no open issue).
  *
  * This says nothing about whether the feature is reachable by default: that
  * is a separate axis, carried by the optional `flag` field below. A feature
@@ -56,6 +59,9 @@ export interface DeliveryTrack {
  * issue-state guard (`scripts/check-issue-state-claims.mts`) fails CI once
  * that issue closes and the entry has not moved on. Work planned after 1.0
  * is not listed here.
+ *
+ * A `flag`'s `default` must match the schema in `libs/server/config`
+ * (`scripts/site-status/flag-defaults.test.ts`).
  */
 export type FeatureState = 'shipped' | 'partial' | 'planned';
 
@@ -229,7 +235,7 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     feature: 'Hosted account pages',
     state: 'partial',
     summary:
-      "Built (#844): `/ui/account`, the signed-in person's own account on the hosted pages, in their current server-rendered style: the sign-in methods, a password change under the realm's password policy, passkeys (add through the sign-in's enrolment step, rename, remove), the authenticator app (set up, turn off), a new recovery code set shown once, linked upstream accounts (link by signing in, unlink) and the sessions (sign one out, sign out everywhere, which tells each relying party with a back-channel logout URI). Every form works without JavaScript and carries a CSRF value, every change asks for the fresh authentication the account API asks of it, a removal never leaves the account without a way in, and each change is a user event. On while the hosted pages are (`INTERACTION_UI_ENABLED`); the routes are experimental. The account API serves the sign-in methods read, the password change, the passkeys (list, read, rename, remove), the authenticator app (enrol, remove), the recovery codes (status, regenerate) and the sessions (list, end one, sign out everywhere) on the same logic, for another app's account pages (#1107, #1108, #1109, #1110); such an app adds a passkey through an authorization request with `qauth_action=setup_passkey`, which the hosted pages run (#1108). The design-system account console replaces them: the overview and the password (#685), the passkeys (#686), the authenticator app and recovery codes (#687), the sessions (#688).",
+      "Built (#844): `/ui/account`, the signed-in person's own account on the hosted pages, in their current server-rendered style: the sign-in methods, a password change under the realm's password policy, passkeys (add through the sign-in's enrolment step, rename, remove), the authenticator app (set up, turn off), a new recovery code set shown once, linked upstream accounts (link by signing in, unlink) and the sessions (sign one out, sign out everywhere, which tells each relying party with a back-channel logout URI). Every form works without JavaScript and carries a CSRF value, every change asks for the fresh authentication the account API asks of it, a removal never leaves the account without a way in, and each change is a user event. On while the hosted pages are (`INTERACTION_UI_ENABLED`); the routes are experimental. The account API serves the sign-in methods read, the password change, the passkeys (list, read, rename, remove), the authenticator app (enrol, remove), the recovery codes (status, regenerate) and the sessions (list, end one, sign out everywhere) on the same logic, for another app's account pages (#1107, #1108, #1109, #1110); such an app adds a passkey through an authorization request with `qauth_action=setup_passkey`, which the hosted pages run (#1108). Open: the design-system account console that replaces them: the overview and the password (#685), the passkeys (#686), the authenticator app and recovery codes (#687), the sessions (#688).",
     flag: { name: 'INTERACTION_UI_ENABLED', default: 'off' },
   },
   {

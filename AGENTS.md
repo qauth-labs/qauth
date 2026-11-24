@@ -104,6 +104,28 @@ site renders stay in `docs/adr/` and `docs/security/` in this repository.
 - **PRs**: small and focused; clear English description; link issues
   (`Fixes #N` / `Closes #N`); ensure CI passes before requesting review.
 
+## Feature status
+
+`apps/docs-site/src/lib/status.ts` is the one record of what ships. The docs
+site's status page renders it, and every release carries it to qauth.dev as
+`qauth-status.json`, which the site builds its feature statuses from. A pull
+request that changes what a feature does keeps that record true itself:
+
+- A new user-facing feature gets an entry, with a new stable kebab-case `id`.
+  Never rename or reuse an id.
+- When the pull request closes an issue that an entry lists after `Open:`,
+  take the issue out of the list. If no open issue is left, the entry becomes
+  `state: 'shipped'`.
+- A gating flag whose default changes, or that is renamed, is updated in the
+  entry's `flag`.
+- Work in the 1.0 plan that is not built yet is `planned`, with its issue
+  after `Open:`.
+
+CI enforces each rule: the issue-state check, the feed's export rules
+(`scripts/site-status/export.mts`) and the flag-default test. Do not open pull
+requests in the marketing repository for this; its copy is written once per
+release.
+
 ## Dependencies & Testing
 
 - Prefer well-maintained libraries; check security advisories before adding;
